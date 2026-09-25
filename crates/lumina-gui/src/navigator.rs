@@ -71,6 +71,13 @@ impl LuminaApp {
     /// aborts. A genuine failure is logged once per (source, recipe) key and
     /// remembered so it cannot spam per frame.
     pub(crate) fn navigator_zoomed_overview(&mut self) -> Option<ImageFrame> {
+        if let Some(reason) = self.local_adjustment_route_reason() {
+            warn!("navigator stand-in refused: {reason}");
+            self.status = reason;
+            self.navigator_overview = None;
+            self.navigator_overview_key = None;
+            return None;
+        }
         let source = self.navigator_frame()?;
         let (width, height) = (source.width, source.height);
         // GUI-SRCACC-1: the zoomed overview is a stand-in, not an exemption.

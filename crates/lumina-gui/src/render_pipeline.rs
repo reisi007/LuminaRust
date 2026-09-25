@@ -10,7 +10,6 @@
 
 use super::*;
 use log::{trace, warn};
-
 impl LuminaApp {
     /// Core render used by both [`Self::render_full`] and [`Self::render_draft`].
     /// `with_masks` enables the sidecar mask planes (skipped for the draft,
@@ -35,9 +34,15 @@ impl LuminaApp {
         source: &ImageFrame,
         with_masks: bool,
         roi: Option<[u32; 4]>,
+        mask_roi: Option<[f32; 4]>,
         generative: GenerativeArtifacts,
         source_actions: ResolvedSourceActions,
     ) -> Result<(), GuiError> {
+        if !with_masks {
+            if let Some(reason) = self.local_adjustment_route_reason() {
+                return Err(GuiError::Io(reason));
+            }
+        }
         // PERF-GUI-5: crop to the visible ROI (when zoomed) before rendering so
         // the full frame is never processed for a magnified view.
         //
@@ -69,14 +74,12 @@ impl LuminaApp {
             env!("CARGO_PKG_VERSION").into()
         };
         let copy_id = self.virtual_copy_id.clone();
-        let mask_hashes = self
-            .document
-            .as_ref()
-            .and_then(|d| {
-                d.virtual_copies
-                    .iter()
-                    .find(|c| c.id == self.virtual_copy_id)
-            })
+        let active_copy = self.document.as_ref().and_then(|d| {
+            d.virtual_copies
+                .iter()
+                .find(|c| c.id == self.virtual_copy_id)
+        });
+        let mask_hashes = active_copy
             .map(|c| {
                 c.mask_library
                     .iter()
@@ -84,6 +87,11 @@ impl LuminaApp {
                     .collect()
             })
             .unwrap_or_default();
+        // MASK-LOCAL-P0: layer order, visibility, modulation and typed local
+        // values are render inputs, not merely UI state.  Keep the complete
+        // state in both preview and export identities.
+        let mask_local_state_digest =
+            active_copy.map(|copy| lumina_sidecar::mask_layers_digest(&copy.mask_layers));
         // Base-stage identity (recipe-blind): source identity + decoder +
         // virtual copy + ROI window + resulting frame geometry. Two recipes
         // that differ only in exposure/color share this digest, which is what
@@ -109,7 +117,6 @@ impl LuminaApp {
         .with_source_action_hashes(source_action_hashes.clone())
         .with_base_roi(effective_roi)
         .stage_digest(CacheStage::Base);
-
         // ---- Base stage (cacheable head of the pipeline) ----
         let mut work = StageWork::default();
         let mut crop_failed = false;
@@ -159,6 +166,10 @@ impl LuminaApp {
         // request + persisted `denoise_rgb` record + producer provenance) once
         // per render, then feed the resolved input into the shared pipeline.
         // The state is computed here, before the shared `masks_context` borrow.
+        // A failed ROI crop deliberately falls back to the full source. The
+        // mask context must make the same choice; retaining the rejected ROI
+        // would align a full frame as if it were a crop.
+        let effective_mask_roi = if crop_failed { None } else { mask_roi };
         let denoise_artifact = if self.denoise_stage_active() {
             self.load_denoise_artifact()
         } else {
@@ -192,6 +203,7 @@ impl LuminaApp {
                         active_copy_id: &self.virtual_copy_id,
                         planes,
                         policy: MaskPolicy::Warn,
+                        source_roi: effective_mask_roi,
                     }),
                 None => None,
             }
@@ -286,7 +298,12 @@ impl LuminaApp {
                     format: "rgba8".into(),
                 },
             )
-            .with_source_action_hashes(source_action_hashes.clone()),
+            .with_source_action_hashes(source_action_hashes.clone())
+            .with_mask_local_state_digest(
+                mask_local_state_digest
+                    .clone()
+                    .unwrap_or_else(|| "no-mask-state".into()),
+            ),
         );
         // GUI-HISTOGRAM-FULL-1 (F-100): one shared pass yields both the tone
         // panel values and the 256-bin histogram feeding the Painter curve.
@@ -377,6 +394,7 @@ impl LuminaApp {
                                     active_copy_id: &self.virtual_copy_id,
                                     planes,
                                     policy: MaskPolicy::Warn,
+                                    source_roi: None,
                                 }),
                             None => None,
                         }

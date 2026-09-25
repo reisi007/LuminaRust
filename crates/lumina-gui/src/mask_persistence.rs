@@ -20,6 +20,7 @@ pub(crate) struct MaskMutationSnapshot {
     mask_rename_input: String,
     mask_rename_inputs: BTreeMap<String, String>,
     pending_history_step: Option<String>,
+    pending_mask_state_before: Option<Vec<MaskLayer>>,
 }
 
 impl LuminaApp {
@@ -31,6 +32,7 @@ impl LuminaApp {
             mask_rename_input: self.mask_rename_input.clone(),
             mask_rename_inputs: self.mask_rename_inputs.clone(),
             pending_history_step: self.pending_history_step.clone(),
+            pending_mask_state_before: self.pending_mask_state_before.clone(),
         }
     }
 
@@ -41,6 +43,7 @@ impl LuminaApp {
         self.mask_rename_input = snapshot.mask_rename_input;
         self.mask_rename_inputs = snapshot.mask_rename_inputs;
         self.pending_history_step = snapshot.pending_history_step;
+        self.pending_mask_state_before = snapshot.pending_mask_state_before;
         self.reset_brush_mask_plane();
     }
 
@@ -90,6 +93,7 @@ impl LuminaApp {
                     density: 1.0,
                     extras: BTreeMap::new(),
                     visible: true,
+                    local_adjustments: None,
                 });
             }
             (name, !already_materialized)

@@ -14,6 +14,7 @@ mod generative_spot;
 mod history_change;
 mod iptc_a;
 mod iptc_b;
+mod local_adjustments;
 mod locks;
 mod mask_graph;
 mod mask_groups;

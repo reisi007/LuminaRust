@@ -108,6 +108,7 @@ pub(crate) fn write_sidecar_with_valid_layer(
         density: 1.0,
         extras: BTreeMap::new(),
         visible: true,
+        local_adjustments: None,
     }];
     save_sidecar(&sidecar_path_for(input), &document).unwrap();
     document
@@ -153,6 +154,9 @@ pub(crate) fn mask_args(input: PathBuf) -> MaskArgs {
         attach_layer: None,
         show_layer: None,
         hide_layer: None,
+        local_layer: None,
+        set_local_adjustments: Vec::new(),
+        reset_local_adjustments: Vec::new(),
     }
 }
 

@@ -19,6 +19,9 @@ use super::{
 pub(crate) struct SidecarRecipeSnapshot {
     pub(crate) recipe: EditRecipe,
     pub(crate) document_identity: FileContentIdentity,
+    /// MASK-LOCAL-P0: stand-in workers must refuse a non-neutral local mask
+    /// state rather than rendering a global-only neighbour/thumbnail.
+    pub(crate) has_local_adjustments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,7 @@ fn read_sidecar_recipe_snapshot_detailed(
             return Ok(SidecarRecipeSnapshot {
                 recipe: EditRecipe::default(),
                 document_identity: FileContentIdentity::Missing,
+                has_local_adjustments: false,
             });
         }
         Err(error) => {
@@ -147,6 +151,16 @@ fn read_sidecar_recipe_snapshot_detailed(
     Ok(SidecarRecipeSnapshot {
         recipe: copy.recipe.clone(),
         document_identity,
+        has_local_adjustments: copy.mask_layers.iter().any(|layer| {
+            if !layer.visible {
+                return false;
+            }
+            match layer.effective_local_adjustments() {
+                Ok(Some(adjustments)) => !adjustments.is_neutral(),
+                Ok(None) => false,
+                Err(_) => true,
+            }
+        }),
     })
 }
 

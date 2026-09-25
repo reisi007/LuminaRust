@@ -26,7 +26,7 @@
 //! the JSON shape exactly the structured object the decision asks for:
 //! `"changes": [{"parameter": "...", "from": "...", "to": "..."}]`.
 
-use crate::{invalid, EditRecipe, Extras, SidecarError};
+use crate::{invalid, EditRecipe, Extras, MaskStateSnapshot, SidecarError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -37,6 +37,11 @@ pub const HISTORY_CHANGES_KEY: &str = "changes";
 /// Upper bound on changes stored per history step (a preset may touch several
 /// controls; an unbounded list would be an injection/DoS vector).
 pub const MAX_HISTORY_CHANGES: usize = 64;
+
+/// Additive history key carrying the complete ordered mask-layer state before
+/// the recorded edit.  Legacy entries may omit it; a present value is parsed
+/// strictly and never silently treated as an empty snapshot.
+pub const HISTORY_MASK_STATE_KEY: &str = "mask_state";
 
 /// Character limit of the control/parameter name.
 pub const MAX_HISTORY_CHANGE_PARAMETER_CHARS: usize = 128;
@@ -165,10 +170,45 @@ impl HistoryEntry {
         self.extras.insert(HISTORY_CHANGES_KEY.to_string(), value);
         Ok(())
     }
+
+    /// Parse the complete mask-layer snapshot stored before a history edit.
+    /// `None` is the valid legacy representation for entries that predate
+    /// MASK-LOCAL-P0; a present but malformed snapshot is always rejected.
+    pub fn mask_state(&self) -> Result<Option<MaskStateSnapshot>, SidecarError> {
+        let Some(value) = self.extras.get(HISTORY_MASK_STATE_KEY) else {
+            return Ok(None);
+        };
+        let snapshot: MaskStateSnapshot =
+            serde_json::from_value(value.clone()).map_err(|error| {
+                SidecarError::Invalid(format!(
+                    "history entry `{}` has invalid `{HISTORY_MASK_STATE_KEY}`: {error}",
+                    self.id
+                ))
+            })?;
+        snapshot.validate()?;
+        Ok(Some(snapshot))
+    }
+
+    /// Store a complete mask-layer snapshot in this history entry.  This is
+    /// intentionally additive: old history rows remain readable, while every
+    /// new local-adjustment step has enough state for an exact restore.
+    pub fn set_mask_state(&mut self, mut snapshot: MaskStateSnapshot) -> Result<(), SidecarError> {
+        for layer in &mut snapshot.layers {
+            layer.normalize_local_adjustments()?;
+        }
+        snapshot.validate()?;
+        let value = serde_json::to_value(snapshot).map_err(|error| {
+            SidecarError::Json(format!("cannot encode history mask state: {error}"))
+        })?;
+        self.extras
+            .insert(HISTORY_MASK_STATE_KEY.to_string(), value);
+        Ok(())
+    }
 }
 
 /// Loud validation hook called by [`crate::SidecarDocument::validate`] for
 /// every persisted history entry of a virtual copy.
 pub fn validate_history_entry(entry: &HistoryEntry) -> Result<(), SidecarError> {
-    entry.changes().map(|_| ())
+    entry.changes().map(|_| ())?;
+    entry.mask_state().map(|_| ())
 }

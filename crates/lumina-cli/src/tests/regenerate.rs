@@ -355,6 +355,7 @@ fn regenerate_collective_marks_only_stale_masks() {
         density: 1.0,
         extras: BTreeMap::new(),
         visible: true,
+        local_adjustments: None,
     });
     let sidecar_path = sidecar_path_for(&input);
     save_sidecar(&sidecar_path, &document).unwrap();

@@ -265,13 +265,13 @@ pub enum Str {
     DrawMaskHint,
     Blur,
     Density,
-
     // Interactions
     BeforeAfter,
     WbEyedropper,
     WbEyedropperActive,
     Cancel,
     Reset,
+    ResetAsShot,
     MatchExposure,
     SyncSettings,
     MatchSelection,
@@ -1039,12 +1039,12 @@ impl Str {
             Str::RedEyeRadiusDefault => "0.05",
             Str::RedEyeDetect => "Detect pupils",
             Str::RedEyeApplyDetected => "Apply detected",
-
             Str::BeforeAfter => "Before / After (Y)",
             Str::WbEyedropper => "WB Eyedropper",
             Str::WbEyedropperActive => "WB Eyedropper (Esc to cancel)",
             Str::Cancel => "Cancel",
             Str::Reset => "Reset",
+            Str::ResetAsShot => "Reset to As Shot",
             Str::MatchExposure => "Match Total Exposure",
             Str::SyncSettings => "Sync Settings",
             Str::MatchSelection => "Match Total Exposures",

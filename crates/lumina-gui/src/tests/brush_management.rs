@@ -244,6 +244,7 @@ fn copy_selection_and_reload_ignore_cross_copy_layers() {
             density: 1.0,
             extras: BTreeMap::new(),
             visible: true,
+            local_adjustments: None,
         };
         copy.mask_layers.insert(0, foreign);
         assert!(copy

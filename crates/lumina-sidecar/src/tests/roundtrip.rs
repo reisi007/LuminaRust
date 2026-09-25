@@ -99,6 +99,7 @@ fn complete_roundtrip() {
             density: 1.0,
             extras: Extras::new(),
             visible: true,
+            local_adjustments: None,
         }],
         history: vec![HistoryEntry {
             id: "h".into(),

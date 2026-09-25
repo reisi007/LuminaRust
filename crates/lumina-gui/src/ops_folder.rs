@@ -131,8 +131,10 @@ impl LuminaApp {
         // at the *current* path before the bundle moves, so the edit travels
         // with the image instead of being written to the old location later.
         // Only the loaded image has an armed edit to flush.
-        if moved_loaded {
-            self.flush_pending_edit();
+        if moved_loaded && !self.flush_pending_edit() {
+            return Err(GuiError::Io(
+                "cannot move the loaded image while its pending edit could not be saved".into(),
+            ));
         }
         move_file_cross_volume(image, &target)
             .map_err(|error| GuiError::Io(format!("cannot move `{}`: {error}", image.display())))?;

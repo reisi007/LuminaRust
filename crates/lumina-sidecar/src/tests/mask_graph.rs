@@ -41,6 +41,7 @@ fn mask_cycles_and_invalid_targets_are_rejected() {
         density: 1.0,
         extras: Extras::new(),
         visible: true,
+        local_adjustments: None,
     });
     assert!(d.validate().unwrap_err().to_string().contains("mask layer"));
 }
@@ -179,6 +180,7 @@ fn collection_ids_must_be_nonempty_and_unique() {
         density: 1.0,
         extras: Extras::new(),
         visible: true,
+        local_adjustments: None,
     };
     d.virtual_copies[0].mask_layers = vec![layer.clone(), layer];
     assert!(d
@@ -278,6 +280,7 @@ fn ids_must_be_nonempty() {
         density: 1.0,
         extras: Extras::new(),
         visible: true,
+        local_adjustments: None,
     });
     assert!(d
         .validate()

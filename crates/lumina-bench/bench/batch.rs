@@ -26,6 +26,7 @@ fn batch_benches(c: &mut Criterion) {
             active_copy_id: "vc-original",
             planes: fixture.planes.clone(),
             policy: MaskPolicy::Warn,
+            source_roi: None,
         };
         let render_ctx = RenderContext {
             recipe: &recipe,

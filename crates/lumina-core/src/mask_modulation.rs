@@ -165,6 +165,7 @@ mod tests {
             density,
             extras: Default::default(),
             visible: true,
+            local_adjustments: None,
         }
     }
 

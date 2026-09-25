@@ -51,7 +51,47 @@ fn mask_add_ai_and_range_roundtrip_through_file() {
     assert!(mask(repeat).is_err());
 }
 
-/// Combinators, duplicate, attach and the visibility eye persist per copy.
+#[test]
+fn mask_local_adjustment_flags_persist_typed_values_and_reject_bad_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = mask_imported_input(directory.path(), "g03-local.png");
+    let mut add = mask_args(input.clone());
+    add.add_ai_select = Some("subject".into());
+    add.name = Some("Subject".into());
+    mask(add).unwrap();
+    let mask_id = mask_library_ids(&input)[0].clone();
+    let mut attach = mask_args(input.clone());
+    attach.attach_layer = Some(mask_id);
+    mask(attach).unwrap();
+    let layer_id = load_sidecar(&sidecar_path_for(&input))
+        .unwrap()
+        .virtual_copies[0]
+        .mask_layers[0]
+        .id
+        .clone();
+
+    let mut set = mask_args(input.clone());
+    set.local_layer = Some(layer_id.clone());
+    set.set_local_adjustments = vec!["exposure=1.25".into(), "highlights=-0.2".into()];
+    mask(set).unwrap();
+    let layer = &load_sidecar(&sidecar_path_for(&input))
+        .unwrap()
+        .virtual_copies[0]
+        .mask_layers[0];
+    let local = layer.local_adjustments.as_ref().unwrap();
+    assert_eq!(local.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
+    assert_eq!(local.exposure, 1.25);
+    assert_eq!(local.highlights, -0.2);
+    assert!(layer.extras.is_empty());
+
+    let before = fs::read(sidecar_path_for(&input)).unwrap();
+    let mut bad = mask_args(input.clone());
+    bad.local_layer = Some(layer_id.clone());
+    bad.set_local_adjustments = vec!["wb_temperature=6500".into()];
+    assert!(mask(bad).is_err());
+    assert_eq!(fs::read(sidecar_path_for(&input)).unwrap(), before);
+}
+
 #[test]
 fn mask_combine_duplicate_layer_visibility_roundtrip() {
     let directory = tempfile::tempdir().unwrap();

@@ -93,6 +93,11 @@ impl LuminaApp {
                     recorded_at: Some(timestamp),
                     extras: BTreeMap::new(),
                 };
+                entry
+                    .set_mask_state(lumina_sidecar::MaskStateSnapshot::new(
+                        copy.mask_layers.clone(),
+                    ))
+                    .map_err(|error| GuiError::Io(error.to_string()))?;
                 if let Err(error) = entry.set_changes(changes) {
                     log::error!("preset history changes rejected: {error}");
                 }
@@ -111,16 +116,33 @@ impl LuminaApp {
             .document
             .as_ref()
             .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
-        let recipe = document
+        let entry = document
             .virtual_copies
             .iter()
             .find(|copy| copy.id == self.virtual_copy_id)
             .and_then(|copy| copy.history.iter().find(|entry| entry.id == entry_id))
-            .map(|entry| entry.recipe.clone())
+            .cloned()
             .ok_or_else(|| GuiError::Io(Str::HistoryEntryMissing.t().to_string()))?;
+        let recipe = entry.recipe.clone();
+        let mask_state = entry
+            .mask_state()
+            .map_err(|error| GuiError::Io(error.to_string()))?;
         trace!("GUI interaction: history restore {}", entry_id);
         self.history_selected = Some(entry_id.to_string());
         self.recipe = recipe;
+        if let Some(state) = mask_state {
+            let copy_id = self.virtual_copy_id.clone();
+            let document = self
+                .document
+                .as_mut()
+                .ok_or_else(|| GuiError::Io(Str::NoSidecarLoaded.t().to_string()))?;
+            let copy = document
+                .virtual_copies
+                .iter_mut()
+                .find(|copy| copy.id == copy_id)
+                .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+            copy.mask_layers = state.layers;
+        }
         self.render()
     }
 }

@@ -251,6 +251,7 @@ fn mask_layer_local_adjustments_are_range_validated() {
             density,
             extras: Extras::new(),
             visible: true,
+            local_adjustments: None,
         });
         d.validate()
     };
@@ -352,6 +353,7 @@ fn rejected_delete_virtual_copy_leaves_document_unchanged() {
         density: 1.0,
         extras: Extras::new(),
         visible: true,
+        local_adjustments: None,
     });
     d.virtual_copies.push(VirtualCopy {
         id: "vc-target".into(),

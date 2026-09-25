@@ -160,6 +160,11 @@ impl LuminaApp {
                 identity_spec(1500.0..=12000.0, 6500.0, 50.0).unit(" K"),
             );
             self.adjustment_slider(ui, "wb_tint", Str::Tint.t(), percent_spec(-1.0..=1.0, 0.0));
+            if ui.button(Str::ResetAsShot.t()).clicked() {
+                if let Err(error) = self.reset_white_balance_to_as_shot() {
+                    self.show_error(error);
+                }
+            }
             if self.wb_pick_mode {
                 ui.horizontal(|ui| {
                     if ui.button(Str::WbEyedropperActive.t()).clicked() {

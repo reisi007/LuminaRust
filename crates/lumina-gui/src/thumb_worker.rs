@@ -99,6 +99,12 @@ fn decode_thumbnail_frame_with_identity(
         THUMB_VIRTUAL_COPY,
         &bytes,
     )?;
+    if snapshot.has_local_adjustments {
+        return Err(format!(
+            "{}: thumbnail stand-in refused because local mask adjustments require a mask-aware render",
+            job.source.display()
+        ));
+    }
     let recipe = snapshot.recipe;
     let has_source_actions = !recipe.source_actions.is_empty();
     let identity_without_actions = crate::source_actions::SidecarBundleIdentity::with_source_image(

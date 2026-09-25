@@ -339,6 +339,52 @@ Jede Stufe ist bei ihrem Identitätswert ein No-op; die Modulation verändert di
 persistierte Maske nicht. 9 Unit-Tests sichern Invert/Feather/Blur/Density und
 die Reihenfolge ab.
 
+## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
+
+**Task-Eintrag 2026-09-25 (Dokument zuerst):** Die erste sichere lokale
+Anpassungsebene wird als versioniertes, typed `MaskLayer`-Objekt umgesetzt und
+nicht als undokumentierte `adjustment_*`-Extras. Die lokale CPU-Schicht ist
+P0; die bestehenden Parent-Gates für echte Hardware/GPU-Parität
+(`GPU-RENDER-MASK-19`, `GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`)
+bleiben offen.
+
+- **Nutzerentscheidungen:** Lokale Layer werden sequenziell auf dem global
+  angepassten Ergebnis angewendet. Globales WB bleibt absolute-only und wird
+  nur durch einen expliziten **Reset to As Shot** zurückgesetzt. Überlappende
+  Layer werden in der persistierten Listenreihenfolge ausgewertet.
+- **P0-Feld und Werte:** `local_adjustments` ist additiv-optional und
+  versioniert. P0 erlaubt ausschließlich `exposure` (`-10..=10` EV),
+  `contrast`, `highlights` und `shadows` (je `-1..=1`), in exakt
+  `exposure → contrast → shadows → highlights`. Lokales WB, Tone und Color
+  sind P1 und dürfen in P0 nicht als persistiertes Alias auftreten.
+- **Legacy/Migration:** Bestehende `adjustment_*`-Extras werden verlustfrei in
+  das typed Objekt überführt, wenn Werte und Reihenfolge eindeutig gültig sind.
+  Ein typed/legacy-Konflikt, unbekannte Version/Regler, NaN/Inf und
+  Bereichsfehler sind harte Fehler; kein stilles Ignorieren, Clipping oder
+  Überschreiben.
+- **Masken-Kontext:** Die matte wird in den tatsächlichen Ausgabe-Raum
+  transformiert. Full-Frame, Zoom-ROI, Crop/Aspect, 90°-Rotation und Spiegel
+  müssen bijektiv und ohne falsche Koordinaten funktionieren. Lens,
+  Perspective, generative Geometrie und inkompatible Dimensionen werden für
+  lokale Edits sichtbar verweigert; es gibt keinen Resize-Fallback.
+- **Render und Persistenz:** Der CPU-Compositor läuft nach dem bestehenden
+  Global-/Geometry-Pfad. `alpha=0` erzeugt outside-mask Byte-Identität,
+  `alpha=1` das vollständige unmaskierte lokale Rezept, partielle Alpha
+  werden fraktional und deterministisch gemischt; Bild-alpha bleibt unverändert.
+  Die lokale Version, persistierte Reihenfolge und Werte gehören in eine
+  kanonische Mask-/Render-Digest. `strict`/`warn`, Draft-/Navigator-/Neighbor-/
+  Thumbnail-Routen sind explizit und dürfen lokale Edits nie still verlieren.
+  History/Reset/Previous speichert einen vollständigen additiven Layer-Snapshot.
+  Cross-image Previous trägt diesen Snapshot nur bei kompatiblem Ziel-Maskkontext
+  vollständig weiter; inkompatible Copy-/Mask-Referenzen werden laut verworfen,
+  während Sync Settings recipe-only bleibt.
+
+**P0-Abnahme:** winzige exakte CPU-Goldens und Tests für Alpha 0/partial/1,
+Outside-Mask-Identität, Layerreihenfolge, ROI/Crop/Aspect/90°-Rotation/Mirror,
+ungültige Schemas, Cache-Identität, Draft-Refusal, CLI/GUI-Parität und
+bestehende Pipeline-Regressionen. P1: lokale WB-/Tone-/Color-Regler; Hardware-
+und GPU-Gates bleiben separat offen.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

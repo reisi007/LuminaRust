@@ -15,6 +15,7 @@
 
 use super::*;
 use log::warn;
+mod local_adjustments;
 
 impl LuminaApp {
     /// GPU-LENSFUN-PARITY-1 (GUI-Wiring): refresh the auto-corrector for exactly
@@ -116,6 +117,11 @@ impl LuminaApp {
         else {
             return Ok(None);
         };
+        if let Some(reason) = self.local_adjustment_route_reason() {
+            return Err(GuiError::Io(format!(
+                "gpu parity readback refused: {reason}"
+            )));
+        }
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
             return Ok(None);
         }
@@ -158,6 +164,11 @@ impl LuminaApp {
     /// could not be bound — never a silent CPU substitution.
     #[cfg(feature = "gpu")]
     pub fn prime_gpu_present(&mut self) -> bool {
+        if let Some(reason) = self.local_adjustment_route_reason() {
+            warn!("gpu parity prime refused: {reason}");
+            self.vram_fresh = false;
+            return false;
+        }
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
             return false;
         }
@@ -308,34 +319,6 @@ impl LuminaApp {
         }
         self.gpu_stage_gate = Some(((key, wb), reasons));
         true
-    }
-
-    /// GUI-LENSFUN-GATE-1: the GPU routing reason list for the current
-    /// recipe/context, mirroring the CLI `gpu_routing_reasons`. Split out so
-    /// the list is directly testable without a bound GPU adapter.
-    ///
-    /// R3-ROUTING-1 (B1): the gate must evaluate the **same recipe the VRAM
-    /// present path actually renders** ([`Self::gpu_present_recipe`]) — while
-    /// the crop tool is armed that is the geometry-free display recipe. Judging
-    /// the committed recipe instead left the crop-tool + lens/perspective +
-    /// committed-crop combination with an empty badge while `render_to_vram`
-    /// refused the display recipe's `default content crop` (silent CPU route).
-    ///
-    /// GPU-LENSFUN-PARITY-1: a non-identity Lensfun corrector is **no longer** a
-    /// reason here. The present path binds its `LensfunMap` on the GPU
-    /// (`lensfun_gpu::bind`); only an unbindable map keeps the exact CPU route,
-    /// and that surfaces through [`Self::vram_render_refusal`] (bind failure) or
-    /// the `lumina-gpu` map guard (`lensfun_map.dimensions` /
-    /// `lensfun_map.default_content_crop`), classified in
-    /// [`Self::classify_vram_refusal`].
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_unsupported_reasons(&self) -> Vec<String> {
-        let recipe = self.gpu_present_recipe();
-        lumina_gpu::unsupported_gpu_stages_with_context(
-            recipe.as_ref(),
-            false,
-            self.camera_white_balance.as_ref(),
-        )
     }
 
     /// R3-ROUTING-1: the recipe the readback-free VRAM present path must

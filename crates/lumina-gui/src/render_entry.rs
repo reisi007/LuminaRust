@@ -94,6 +94,17 @@ impl LuminaApp {
                 self.preview_pane_h,
             )
         });
+        // Preserve the source-space ROI before any preview cap rescales the
+        // frame. The core mask aligner consumes this normalized rectangle and
+        // never guesses it from the displayed texture dimensions.
+        let normalized_mask_roi = roi.map(|rect| {
+            [
+                rect[0] as f32 / original.width.max(1) as f32,
+                rect[1] as f32 / original.height.max(1) as f32,
+                rect[2] as f32 / original.width.max(1) as f32,
+                rect[3] as f32 / original.height.max(1) as f32,
+            ]
+        });
         // GEN-ONNX-1 Welle 2b: a generative canvas is absolute geometry on the
         // full-resolution source (its identity and dimensions are defined
         // there). A zoom ROI crop cannot host it, so the full frame is
@@ -119,15 +130,15 @@ impl LuminaApp {
         let absolute_stage_active = self.generative_stage_active()
             || self.denoise_stage_active()
             || !source_actions.is_empty();
-        let roi = if absolute_stage_active {
+        let (roi, mask_roi) = if absolute_stage_active {
             if roi.is_some() {
                 trace!(
                     "GUI render: absolute-frame stage active (generative/denoise/source action) — zoom ROI disabled"
                 );
             }
-            None
+            (None, None)
         } else {
-            roi
+            (roi, normalized_mask_roi)
         };
         self.preview_is_draft = false;
         self.pending_full_render = false;
@@ -210,7 +221,7 @@ impl LuminaApp {
         // R3-LOG-1: wall time of the committed full render plus the output
         // dimensions — the heavy work behind a module switch / settled edit.
         let render_stopwatch = timing::Stopwatch::now();
-        let result = self.render_from(&source, true, roi, generative, source_actions);
+        let result = self.render_from(&source, true, roi, mask_roi, generative, source_actions);
         let render_ms = render_stopwatch.elapsed_ms();
         self.original = Some(original);
         if result.is_ok() {

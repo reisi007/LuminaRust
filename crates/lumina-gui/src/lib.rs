@@ -60,6 +60,8 @@ mod preset_tree;
 // LRPAR-G08-PREVIOUS / GUI-FILMSTRIP-SYNC-1: the filmstrip selection actions
 // (Lightroom "Sync Settings", "Match Total Exposures", "Previous Image").
 mod selection_actions;
+// MASK-LOCAL-P0: typed full-state transfer for cross-image Previous.
+mod previous_state;
 // SIDECAR-REBASE-1: rebase a losing CAS save onto the current file instead of
 // dropping it on a concurrent change (slider/crop/batch save paths).
 mod sidecar_rebase;
@@ -113,6 +115,8 @@ pub use mask_visibility::MaskOverlayMode;
 // R5-BRUSH-24 follow-up: one checked, rollback-capable transaction for
 // definition + layer + selection management changes.
 mod mask_persistence;
+// MASK-LOCAL-P0: typed local-control transactions live outside the app root.
+mod mask_local_controls;
 // R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
 // size shortcuts).
 mod spot_tool;
@@ -247,11 +251,12 @@ use lumina_sidecar::{
 use lumina_sidecar::{
     load_zdata, zdata_path_for, AiSelect, AiSelectKind, ArtifactStatus, BatchOp, BrushMark,
     BrushMarkSign, CollectionMembership, CoordinateSystem, DecodeFingerprint, GeometryFingerprint,
-    HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
-    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Point2, Preprocessing,
-    PromptTransform, Resolution, SidecarDocument, SmartCollectionDef, SmartRule, SourceFingerprint,
-    SourceIdentity, SourceStatus, VirtualCopy, BW_STASH_KEY, DEVELOP_PROFILES, DEVELOP_PROFILE_KEY,
-    TREATMENT_BW, TREATMENT_COLOR, TREATMENT_KEY,
+    HistoryEntry, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
+    MaskStateSnapshot, MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry,
+    ModelIdentity, Point2, Preprocessing, PromptTransform, Resolution, SidecarDocument,
+    SmartCollectionDef, SmartRule, SourceFingerprint, SourceIdentity, SourceStatus, VirtualCopy,
+    BW_STASH_KEY, DEVELOP_PROFILES, DEVELOP_PROFILE_KEY, TREATMENT_BW, TREATMENT_COLOR,
+    TREATMENT_KEY,
 };
 use lumina_sidecar::{
     AnalysisFingerprint, AspectPreset, BokehShape, ColorGrading, ColorGradingRange, Crop,
@@ -1453,6 +1458,11 @@ pub struct LuminaApp {
     /// each. `None` outside geometry edits: all other sliders keep the
     /// established no-history-commit behaviour.
     pending_history_step: Option<String>,
+    /// MASK-LOCAL-P0: complete mask-layer snapshot from before the pending
+    /// local edit. It is consumed when the debounced sidecar save writes the
+    /// corresponding history step, so Previous/History cannot lose local
+    /// values while the recipe snapshot remains backward-compatible.
+    pending_mask_state_before: Option<Vec<MaskLayer>>,
     /// Effective mask layers of the last [`Self::render`] (F-041): the
     /// measurement domain of `Match Total Exposure` is the rendered preview
     /// weighted by these planes. Empty whenever the render produced no layers.
@@ -2298,15 +2308,18 @@ impl SelectionSyncReport {
     }
 }
 
-/// LRPAR-G08-PREVIOUS: cross-image Previous reference — the image edited
-/// immediately before the current one (path + recipe snapshot taken when the
-/// image was displaced by a successful load). Session-only, never persisted
-/// (like the copy/paste `settings_clipboard`); an explicit Vorbild is chosen
-/// by opening it (open Vorbild, then open the target).
+/// LRPAR-G08-PREVIOUS: cross-image Previous reference — path, recipe, source
+/// copy identity, and the complete typed mask-layer snapshot captured when
+/// the image was displaced. Session-only, never persisted.
 #[derive(Debug, Clone)]
 pub struct PreviousReference {
     pub path: String,
     pub recipe: EditRecipe,
+    /// Stable id of the source virtual copy. It is part of the transfer
+    /// context, not persisted in the target sidecar.
+    pub copy_id: String,
+    /// Complete ordered layer state, including visibility and local values.
+    pub mask_state: MaskStateSnapshot,
 }
 
 /// LRPAR-G08-PREVIOUS: portable history extras for a Previous step —
@@ -2600,6 +2613,7 @@ impl LuminaApp {
             preview_histogram: None,
             pending_slider_commit: None,
             pending_history_step: None,
+            pending_mask_state_before: None,
             loaded_lens_identity: None,
             #[cfg(feature = "lensfun")]
             lensfun_cache: None,
@@ -2870,12 +2884,14 @@ impl LuminaApp {
     /// lose the edit. Flushing here renders the current state and saves it
     /// to the *currently loaded* path (which is still adopted at this
     /// point). No-op unless a commit is armed on a loaded file-backed image.
-    fn flush_pending_edit(&mut self) {
-        if self.pending_slider_commit.is_none()
-            || self.original.is_none()
-            || self.path.trim().is_empty()
-        {
-            return;
+    fn flush_pending_edit(&mut self) -> bool {
+        if self.pending_slider_commit.is_none() && self.pending_history_step.is_none() {
+            return true;
+        }
+        if self.original.is_none() || self.path.trim().is_empty() {
+            // Bytes-only sessions have no persistence target; their documented
+            // source-switch policy drops the armed UI edit on replacement.
+            return true;
         }
         // LRPAR-G01-BASIC: with "Reset Sliders Automatically" armed, an image
         // switch discards the armed-but-uncommitted edit (sliders reset)
@@ -2884,12 +2900,13 @@ impl LuminaApp {
         if self.reset_sliders_automatically {
             self.pending_slider_commit = None;
             self.pending_history_step = None;
+            self.pending_mask_state_before = None;
             info!("{}", Str::ResetSlidersDropped.t());
             self.status = Str::ResetSlidersDropped.t().into();
-            return;
+            return true;
         }
         trace!("GUI save: flushing pending edit before source change");
-        self.commit_pending_slider_save([0, 0]);
+        self.commit_pending_slider_save([0, 0])
     }
 
     /// Navigate to `directory` (folder tree click, `Open`, startup workdir).
@@ -3597,6 +3614,7 @@ impl LuminaApp {
         if index == SECTION_MASKING {
             let id = self.virtual_copy_id.clone();
             let layers = self.mask_baseline.clone();
+            self.arm_mask_state_history("masking.previous")?;
             let document = self
                 .document
                 .as_mut()
@@ -3613,7 +3631,14 @@ impl LuminaApp {
         info!("GUI interaction: restore_section_previous {label}");
         self.status = Str::SectionPreviousPattern.format_arg(label);
         self.mark_recipe_dirty("section_previous", index as f64);
-        self.commit_pending_slider_save([0, 0]);
+        let committed = self.commit_pending_slider_save([0, 0]);
+        if !self.path.trim().is_empty() && !committed {
+            return Err(GuiError::Io(
+                self.error()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "section Previous could not be saved".into()),
+            ));
+        }
         Ok(())
     }
 
@@ -3633,6 +3658,7 @@ impl LuminaApp {
         self.ensure_document_loaded()?;
         if index == SECTION_MASKING {
             let id = self.virtual_copy_id.clone();
+            self.arm_mask_state_history("masking.reset")?;
             let document = self
                 .document
                 .as_mut()
@@ -3649,7 +3675,14 @@ impl LuminaApp {
         info!("GUI interaction: reset_section {label}");
         self.status = Str::SectionResetPattern.format_arg(label);
         self.mark_recipe_dirty("section_reset", index as f64);
-        self.commit_pending_slider_save([0, 0]);
+        let committed = self.commit_pending_slider_save([0, 0]);
+        if !self.path.trim().is_empty() && !committed {
+            return Err(GuiError::Io(
+                self.error()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "section Reset could not be saved".into()),
+            ));
+        }
         Ok(())
     }
 
@@ -5821,90 +5854,6 @@ impl LuminaApp {
         Ok(new_id)
     }
 
-    /// Switch the active virtual copy (REVIEW-GUI-VCSWITCH-1).
-    ///
-    /// Switching adopts the target copy's stored recipe. Session state that
-    /// belonged to the previous copy is reset: the history selection and any
-    /// in-progress mask-tool gesture. Unsaved edits of the previous copy are
-    /// **discarded** by design (the stored recipe is authoritative); this is
-    /// made visible through a distinct status message plus a `warn!` log —
-    /// never silently.
-    ///
-    /// Errors (no sidecar, unknown id) are returned to the caller; UI call
-    /// sites must surface them via `show_error` instead of discarding them.
-    pub fn select_virtual_copy(&mut self, id: &str) -> Result<(), GuiError> {
-        let Some(document) = &self.document else {
-            return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
-        };
-        let copy = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == id)
-            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
-        // Dirty check against the copy we are leaving, BEFORE adopting the new
-        // recipe.
-        let discarded_unsaved = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .is_some_and(|previous| previous.recipe != self.recipe);
-        let previous_id = self.virtual_copy_id.clone();
-        self.virtual_copy_id = copy.id.clone();
-        self.recipe = copy.recipe.clone();
-        // GEN-ONNX-1 Welle 2b: the generative artifacts belong to the previous
-        // copy's recipe/source identity; drop them so the new copy resolves its
-        // own (loudly if none is available).
-        self.generative_artifacts = GenerativeArtifacts::default();
-        self.generative_role_status = [GenerativeRoleStatus::Missing; 2];
-        self.generative_memo = None;
-        // G04-FOLLOWUP-1: per-copy session default — the detect input tracks
-        // the newly adopted recipe's visualize threshold (else 0.5).
-        self.spot_detect_threshold = self.recipe.spot_visualize_threshold().unwrap_or(0.5);
-        self.selected_mask_id = Self::first_local_mask_id(copy);
-        self.mask_rename_input = self
-            .selected_mask_id
-            .as_deref()
-            .and_then(|id| copy.mask_library.iter().find(|mask| mask.id == id))
-            .map(|mask| mask.name.clone())
-            .unwrap_or_default();
-        self.mask_rename_inputs.clear();
-        // R5-DUST-23-FOLLOWUP: the spot selection is per-copy session state
-        // and must never leak into the newly selected copy.
-        self.selected_spot_id = None;
-        // Per-copy session state resets (REVIEW-GUI-VCSWITCH-1): a history
-        // selection or an in-progress drag of the previous copy must never
-        // leak into the newly selected one.
-        {
-            self.history_selected = None;
-            self.pending_brush_marks.clear();
-            self.drag_start = None;
-            self.drag_current = None;
-            self.drawing = false;
-        }
-        self.reset_brush_mask_plane();
-        if discarded_unsaved {
-            warn!(
-                "virtual-copy switch from `{previous_id}` to `{}` discarded unsaved edits",
-                self.virtual_copy_id
-            );
-        }
-        // The status is set *after* `render` because a successful render
-        // overwrites it ("Preview current"); on a render failure the error
-        // path keeps its own visible state.
-        let outcome = self.render();
-        if outcome.is_ok() {
-            self.status = if discarded_unsaved {
-                format!(
-                    "Switched to copy `{}` — unsaved edits of `{previous_id}` were discarded",
-                    self.virtual_copy_id
-                )
-            } else {
-                format!("Switched to copy `{}`", self.virtual_copy_id)
-            };
-        }
-        outcome
-    }
-
     /// Select a mask from the active copy's library and make it the active layer.
     /// The matte is only referenced; no payload is copied or modified.
     pub fn select_mask(&mut self, mask_id: &str) -> Result<(), GuiError> {
@@ -6436,6 +6385,7 @@ impl LuminaApp {
                     blur: 0.0,
                     density: 1.0,
                     visible,
+                    local_adjustments: None,
                     extras: BTreeMap::new(),
                 });
             }
@@ -6560,23 +6510,6 @@ impl LuminaApp {
         // the feather slider commits like any other slider (CAS save at
         // debounce, loud conflicts).
         self.mark_recipe_dirty("mask.feather", f64::from(feather));
-        Ok(())
-    }
-
-    /// Store a local adjustment as declarative layer metadata. Applying it to pixels
-    /// requires the not-yet-implemented masked core pipeline; it is never baked in.
-    pub fn set_mask_local_adjustment(&mut self, key: &str, value: f64) -> Result<(), GuiError> {
-        if !matches!(key, "exposure" | "contrast" | "highlights" | "shadows") || !value.is_finite()
-        {
-            return Err(GuiError::Io(Str::InvalidLocalAdjustment.t().to_string()));
-        }
-        self.active_layer_mut()?
-            .extras
-            .insert(format!("adjustment_{key}"), Value::from(value));
-        // GUI-SLIDER-SAVE-1: a local adjustment is recipe data — it must arm
-        // the re-render AND the debounced save (previously neither happened).
-        self.mark_recipe_dirty(&format!("mask.local.{key}"), value);
-        self.status = Str::LocalAdjustmentSaved.t().to_string();
         Ok(())
     }
 
@@ -8254,6 +8187,7 @@ impl LuminaApp {
         self.preview_histogram = None;
         self.pending_slider_commit = None;
         self.pending_history_step = None;
+        self.pending_mask_state_before = None;
         self.pending_full_render = false;
         self.last_edit_time = 0.0;
         self.original = Some(frame.clone());
@@ -9927,6 +9861,7 @@ impl LuminaApp {
         // re-renders below and persists on the next committed edit.
         self.pending_slider_commit = None;
         self.pending_history_step = None;
+        self.pending_mask_state_before = None;
         if self.original.is_some() {
             // F4/F7: surface a render failure instead of discarding it.
             if let Err(error) = self.render() {
@@ -10419,7 +10354,10 @@ impl LuminaApp {
                 };
                 // GUI-SIDECAR-READ-1: only a validated target may displace the
                 // still-loaded image; flush its armed edit before adoption.
-                self.flush_pending_edit();
+                if !self.flush_pending_edit() {
+                    self.pending_directory_open = None;
+                    return;
+                }
                 // LRPAR-G08-PREVIOUS: a successful switch to a different
                 // image displaces the current one — stash it (path + recipe
                 // snapshot) as the cross-image Previous reference before the
@@ -10427,10 +10365,7 @@ impl LuminaApp {
                 let displaced = (!self.path.trim().is_empty()
                     && self.path != frame.path
                     && self.original.is_some())
-                .then(|| PreviousReference {
-                    path: self.path.clone(),
-                    recipe: self.recipe.clone(),
-                });
+                .then(|| self.previous_reference_for(self.path.clone()));
                 self.path = frame.path.clone();
                 if let Some(reference) = displaced {
                     info!(
@@ -10839,15 +10774,32 @@ impl LuminaApp {
     /// Failures stay loud (`show_error`, no silent loss); the edit itself
     /// remains in the recipe so a retry keeps the value. Zoom/pan state is
     /// deliberately never saved — it is GUI session state, never recipe.
-    fn commit_pending_slider_save(&mut self, viewport: [u32; 2]) {
+    fn commit_pending_slider_save(&mut self, viewport: [u32; 2]) -> bool {
         if let Err(error) = self.render_full(viewport, None) {
             self.show_error(error);
-            return;
+            return false;
         }
-        if let Some((key, value)) = self.pending_slider_commit.take() {
-            self.save_sidecar();
-            if self.error().is_none() {
-                info!("{key}={value} saved");
+        let pending = self.pending_slider_commit.clone();
+        if pending.is_none() && self.pending_history_step.is_none() {
+            return true;
+        }
+        match self.save_sidecar_result() {
+            Ok(()) => {
+                if let Some((key, value)) = pending {
+                    info!("{key}={value} saved");
+                }
+                true
+            }
+            Err(error) => {
+                // The candidate save is retryable. Restore the debounce token
+                // as well as the history/mask fields retained by the checked
+                // save path, so a transient I/O/CAS failure cannot drop the
+                // edit or turn the next commit into a different history step.
+                if let Some(pending) = pending {
+                    self.pending_slider_commit = Some(pending);
+                }
+                self.show_error(error);
+                false
             }
         }
     }
@@ -11059,6 +11011,7 @@ impl LuminaApp {
                         active_copy_id: &self.virtual_copy_id,
                         planes,
                         policy: MaskPolicy::Warn,
+                        source_roi: None,
                     })
             })
         };
@@ -12363,6 +12316,8 @@ mod tests {
     mod library_views;
     // R2-MODSWITCH-1 F7: module-switch latency (off-thread thumbnail cache,
     // metadata-only probe, deferred full render).
+    mod mask_local;
+    mod mask_local_previous;
     mod mask_visibility;
     mod masking_g03;
     mod masking_g11;

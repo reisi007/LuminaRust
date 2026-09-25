@@ -1849,6 +1849,89 @@ Kopie entfernen — explizite Nutzeraktion, laut persistiert).
 (Mapping-Test alle 8 + E2E Basic), Determinismus der Referenzmessung,
 `cargo test`/`clippy`/`fmt` grün.
 
+## P0 SOLL — Mask-Local Adjustments (`MASK-LOCAL-P0`, Release 1.0)
+
+**Task-Status (Dokument zuerst, 2026-09-25):** Dieses Dokument ist die
+verbindliche SOLL für die erste korrekte lokale Adjustment-Schicht. Die
+Implementierung ist atomar und CPU-first; die bestehenden Parent-Gates für
+echte Hardware-/GPU-Parität (`GPU-RENDER-MASK-19`, `GPU-PARITY-HW-28`,
+`R5-BRUSH-24`, `R5-MASKVIS-25`) bleiben offen und werden durch CPU-P0 nicht
+geschlossen.
+
+### Nutzerentscheidungen und Reihenfolge
+
+- Lokale Layer werden **sequenziell auf dem global angepassten Ergebnis**
+  angewendet. Der global verarbeitete Frame (WB, globale Tonwerte und der
+  bestehende Geometry-/Crop-Vertrag) ist die Eingabe des ersten lokalen Layers;
+  ein lokaler Layer verändert nie die globale Rezeptbasis.
+- **Globales WB bleibt absolute-only.** Lokale P0-Adjustments enthalten keinen
+  WB-Regler. Ein expliziter globales **Reset to As Shot** entfernt die globale
+  WB-Abweichung und stellt den dokumentierten As-Shot-Ausgangspunkt her; er
+  wird nicht durch einen impliziten lokalen Reset oder eine Schätzung ersetzt.
+- Überlappende Layer werden in der **persistierten Listenreihenfolge** von
+  Index 0 nach Index `n-1` auf das jeweils bereits bearbeitete Ergebnis
+  angewendet. Eine spätere persistierte reorder-Operation ist eine explizite
+  Reihenfolgeänderung; die sichtbare Reihenfolge ist Teil der
+  Render-Identität.
+- P0 liefert nur die sicheren lokalen Regler `exposure` (`-10..=10` EV),
+  `contrast`, `highlights` und `shadows` (je `-1..=1`) mit exakt der
+  globalen Kernel-Reihenfolge `exposure → contrast → shadows → highlights`.
+  Lokales WB, Tone/Color und alle darüber hinausgehenden Regler bleiben P1.
+
+### Schema, Validierung und Digest
+
+`MaskLayer` erhält ein additiv-optionales, versioniertes
+`local_adjustments`-Objekt. Es verwendet die bestehenden typisierten
+Adjustment-Typen und wird zusammen mit dem Layer in der kanonischen
+Mask-/Render-Identität serialisiert. Legacy-`adjustment_*`-Extras werden
+migriert, sofern jeder Wert typisiert, endlich und im gültigen Bereich ist;
+Konflikte mit dem typed-Objekt, unbekannte Adjustment-Namen, nicht-endliche
+Werte und Werte außerhalb der exakten Bereiche sind harte, sichtbare
+Persistenz-/Renderfehler. Es gibt keine stille Verwerfung, kein Clipping und
+keine unbekannte Schemaform.
+
+Die lokale Auswertung ist eine CPU-Operation **nach** dem bestehenden
+Global-/Geometry-Pfad und vor dem endgültigen Output. Sichtbare Layer werden
+in Listenreihenfolge auf die global adjustierte Ausgabe angewendet. Pro Pixel
+gilt `out = round(base*(1-alpha) + adjusted*alpha)`, wobei `alpha` aus der
+final ausgerichteten u16-Maske stammt; `0` lässt das Byte unverändert, `1`
+liefert das vollständige lokale Rezept, und partielle Alpha werden exakt
+gerundet. Alpha des Bildframes bleibt unverändert. Neutrale Werte (alle
+Regler `0`, leere lokale Liste) sind byte-identisch.
+
+Vor jeder Pixelmutation werden alle Layer, Typen, Wertebereiche, Masken- und
+Geometry-Kontexte validiert. `MaskPolicy::Strict` bricht bei jedem
+fehlenden, stale, ungültigen oder nicht auflösbaren Kontext ab;
+`MaskPolicy::Warn` darf nur den dokumentierten Maskenfehler sichtbar melden
+und den betroffenen Layer nicht still als leere/unveränderte Maske
+verwenden. Die lokale Anpassung wird nicht bei einem ununterstützten
+Routing-Zustand gerendert.
+
+### Output-Space-Masken-Ausrichtung
+
+Die Maske wird aus ihrer persistierten Quell-/Artefakt-Ausrichtung in den
+exakten Ausgabe-Raum des aktuellen Frames transformiert. Unterstützt sind
+Full-Frame, Zoom-ROI, Crop (free/aspect), 90°-Rotation und horizontale/
+vertikale Spiegel. Die Zuordnung ist bijektiv und dimensionsexakt; fehlende
+oder unpassende Dimensionen, Lens-/Perspective-/generative Geometrie und
+nicht-auflösbare Perspektive werden für lokale Adjustments sichtbar mit
+`unsupported geometry` verweigert. Es gibt insbesondere keinen
+wrong-coordinate-Resize-Fallback. Preview, Export, Navigator, Neighbor und
+Thumbnail müssen denselben Kontextauflösen oder dieselbe sichtbare
+Verweigerung erzeugen; lokale Edits dürfen nie stillschweigend verworfen
+werden.
+
+### P0-Abnahme und bewusst offene Gates
+
+P0 verlangt CPU-exakte Goldens für Alpha `0`, partial und `1`, Outside-Mask-
+Byte-Identität, überlappende Reihenfolge, Full-Frame/ROI/Crop/Aspect/
+90°-Rotation/Mirror, ungültige Schemata, Cache-Identität, Draft-Refusal,
+CLI/GUI-Parität und Regressionen der globalen Pipeline. Drafts und nicht
+unterstützte GPU-Routen dürfen nur mit sichtbarem Grund abgelehnt werden.
+History/Undo/Reset/Previous umfasst den kompletten additiven
+`local_adjustments`-Snapshot (atomar, ohne Lücke). P1 bleibt WB, Tone und Color
+als lokale Regler; Parent-Hardware-/GPU-Gates bleiben unabhängig davon offen.
+
 ## Abnahme
 
 - CPU und CLI liefern für identische Eingaben reproduzierbare Ergebnisse mit

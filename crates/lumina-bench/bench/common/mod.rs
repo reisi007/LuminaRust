@@ -204,6 +204,7 @@ pub fn make_mask_fixture(size: u32) -> MaskFixture {
             density: 1.0,
             extras: default_extras(),
             visible: true,
+            local_adjustments: None,
         }],
         history: vec![],
         export_records: vec![],

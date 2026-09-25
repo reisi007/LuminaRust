@@ -1,7 +1,7 @@
 use blake3::Hasher;
 use lumina_sidecar::EditRecipe;
 use serde_json::Value;
-
+mod local_state;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineFormat {
     EncodedSource,
@@ -142,6 +142,8 @@ pub struct RenderKey {
     pub recipe_hash: String,
     mask_recipe_hash: String,
     pub mask_artifact_hashes: Vec<String>,
+    /// MASK-LOCAL-P0: canonical digest of the active copy's ordered mask layers.
+    mask_local_state_digest: Option<String>,
     /// REVIEW-CORE-SRCACC-1: checksums of the resolved source-action
     /// (repair-region) artifacts that the render actually applied. The recipe
     /// hash covers the persisted *references*; these hashes cover the resolved
@@ -223,6 +225,7 @@ impl RenderKey {
             recipe_hash,
             mask_recipe_hash,
             mask_artifact_hashes,
+            mask_local_state_digest: None,
             // REVIEW-CORE-SRCACC-1 / REVIEW-CORE-EXPORTKEY-1: neutral defaults
             // keep the existing constructor call sites compiling. Callers that
             // apply source-action artifacts or encode with explicit export
@@ -335,6 +338,7 @@ impl RenderKey {
                 hasher.update(value.as_bytes());
                 hasher.update(&[0]);
             }
+            local_state::update_digest(&mut hasher, self.mask_local_state_digest.as_deref());
             // REVIEW-CORE-SRCACC-1: resolved source-action artifacts composite
             // right after decode and before every downstream stage, so every
             // non-decode stage digest covers their checksums. A changed repair
@@ -438,6 +442,8 @@ mod tests {
             .recipe_hash
         );
     }
+    #[path = "local_state_tests.rs"]
+    mod local_state_tests;
     #[test]
     fn pipeline_order_and_formats_are_explicit() {
         let pipeline = Pipeline::default();
@@ -460,7 +466,6 @@ mod tests {
         );
         assert!(pipeline.validate());
     }
-
     #[test]
     fn downstream_recipe_options_do_not_change_decode_or_mask_digest() {
         let mut first_recipe = EditRecipe::default();
@@ -513,7 +518,6 @@ mod tests {
         );
         assert_ne!(first.digest(), second.digest());
     }
-
     #[test]
     fn geometry_changes_render_but_not_source_sized_mask_digest() {
         let base = EditRecipe::default();
@@ -565,7 +569,6 @@ mod tests {
         );
         assert_ne!(first.digest(), second.digest());
     }
-
     #[test]
     fn sharpening_render_scale_changes_render_only() {
         let recipe = EditRecipe {
@@ -619,7 +622,6 @@ mod tests {
             large.stage_digest(crate::cache::CacheStage::Preview)
         );
     }
-
     #[test]
     fn lens_and_perspective_change_render_not_decode_or_mask_digest() {
         let base = EditRecipe::default();
@@ -825,7 +827,6 @@ mod tests {
             "same window size at a different offset is a different base"
         );
     }
-
     #[test]
     fn base_stage_digest_separates_source_actions_geometry_and_identity() {
         let key = RenderKey::new(
@@ -1287,7 +1288,6 @@ mod tests {
             ..EditRecipe::default()
         }
     }
-
     #[test]
     fn denoise_ai_fields_change_render_and_mask_digests_but_not_decode() {
         let output = OutputSpec {

@@ -20,7 +20,9 @@ impl LuminaApp {
         // phantom target behind. The path is committed only on decode success.
         // GUI-SIDECAR-READ-1: flush an armed commit to A before switching, or
         // `apply_decoded_frame` would discard the pending edit.
-        self.flush_pending_edit();
+        if !self.flush_pending_edit() {
+            return;
+        }
         self.prepare_open_directory(&path);
         self.begin_load_path(path);
     }
@@ -31,7 +33,9 @@ impl LuminaApp {
         log::trace!("GUI interaction: deferred open_file {}", path);
         // Editing still flushes to A, but directory/listing/selection remain
         // untouched until B has decoded successfully.
-        self.flush_pending_edit();
+        if !self.flush_pending_edit() {
+            return;
+        }
         self.begin_load_path_deferred(path);
     }
 

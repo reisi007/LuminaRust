@@ -15,12 +15,10 @@
 
 use super::*;
 use log::{error, trace, warn};
-
 /// Idle-debounce window (seconds) before the pending full-quality render is
 /// committed after the last edit (PERF-GUI-3/4). Moved here from the crate root
 /// with [`full_render_debounce_remaining`] (cohesive with the tick hot path).
 const FULL_RENDER_DEBOUNCE_SECONDS: f64 = 0.150;
-
 /// REVIEW-GUI-DEBOUNCE-1: pure decision helper for the debounced full render.
 ///
 /// Returns `Some(remaining_seconds)` while the wait window is still open (the
@@ -51,7 +49,6 @@ pub struct DragTickTimings {
     pub gpu_ms: f64,
     pub analyse_ms: f64,
 }
-
 impl LuminaApp {
     /// R2-GUIMOD-04a: timings of the last instrumented drag tick, if any.
     pub fn last_drag_tick(&self) -> Option<DragTickTimings> {
@@ -82,8 +79,11 @@ impl LuminaApp {
             || self.denoise_stage_active()
             || !self.recipe.source_actions.is_empty()
             || self.sidecar_resolution_pending()
+            || self.has_visible_local_adjustments()
         {
-            trace!("GUI render: absolute-frame stage active — draft upgraded to full render");
+            trace!(
+                "GUI render: absolute-frame or local-mask stage active — draft upgraded to full render"
+            );
             return self.render_full(_viewport, roi);
         }
         // Take the pre-allocated draft source so `render_from` borrows a local
@@ -127,6 +127,7 @@ impl LuminaApp {
             &source,
             false,
             roi,
+            None,
             GenerativeArtifacts::default(),
             ResolvedSourceActions::default(),
         );

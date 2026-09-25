@@ -253,7 +253,61 @@ Merge-Ergebnis ist ein neues lineares DNG plus eigenes Sidecar-Bundle.
   `merge unsupported:` (Decode-, Geometrie-, Belichtungs-, Dimensions- oder
   Writer-Grenze); `2` bei clap-Benutzungsfehlern.
 
-## Desktop-GUI
+## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
+
+**Dokument-first 2026-09-25:** GUI und CLI müssen lokale Mask-Adjustments
+über denselben typisierten Core-Renderer ausführen. P0 ist CPU-first; die
+bestehenden Hardware-/GPU-Paritäts-Gates bleiben offen und werden nicht durch
+diese Route als bestanden behauptet.
+
+- **Semantik:** Jeder sichtbare lokale Layer wird sequenziell auf dem global
+  angepassten Ergebnis angewendet. Globales WB ist absolute-only und hat einen
+  expliziten, sichtbaren **Reset to As Shot**; P0 fügt kein lokales WB hinzu.
+  Überlappende Layer verwenden exakt die persistierte Listenreihenfolge.
+- **P0-Regler:** Nur Exposure (`-10..=10` EV), Contrast, Highlights und
+  Shadows (`-1..=1`) mit der globalen Kernel-Reihenfolge
+  `exposure → contrast → shadows → highlights`. WB/Tone/Color bleiben P1.
+- **Gemeinsamer Kontext:** Preview, Export, CLI, Navigator, Neighbor und
+  Thumbnail lösen denselben Masken-/Geometry-Raum auf. Full-Frame, Zoom-ROI,
+  Crop/Aspect, 90°-Rotation und Mirror sind unterstützt. Lens, Perspective,
+  generative Geometrie, unpassende Dimensionen oder nicht auflösbare
+  Koordinaten werden sichtbar verweigert; kein wrong-coordinate-Resize und
+  kein stilles Droppen lokaler Edits.
+- **Fehler/Policy:** `strict` und `warn` bleiben getrennt. Ungültige Versionen,
+  unbekannte Felder/Regler, Konflikte mit Legacy-`adjustment_*`-Extras,
+  nicht-endliche oder außerhalb des Bereichs liegende Werte sowie widersprüchliche
+  Layerdaten werden vor jeder Pixelmutation laut abgelehnt. `warn` kompromittiert
+  keine lokale Änderung durch einen leeren Ersatz.
+- **CPU-Vertrag:** Der lokale Compositor arbeitet nach Global-/Geometry-Pfad
+  mit fraktionalem Alpha; Alpha `0` ist byte-identisch, Alpha `1` entspricht
+  dem unmaskierten lokalen Rezept, partielle Werte werden deterministisch
+  gerundet. Drafts, GPU-only-Routen und nicht unterstützte Stand-ins zeigen
+  einen sichtbaren Route-Grund und verweigern die lokale Darstellung, statt
+  sie als Parität auszugeben.
+- **Persistenz/History:** `MaskLayer.local_adjustments` ist additiv,
+  versioniert und wird in der kanonischen Mask-/Render-Digest-Identität
+  geführt. Jeder lokale Edit erzeugt einen vollständigen additiven
+  Masken-Zustands-Snapshot; Undo, Reset und Previous restaurieren ihn ohne
+  Lücke. CLI und GUI nutzen dieselben CPU-Goldens.
+- **CLI-Persistenz:** `mask --set-local-adjustment KEY=VALUE` und
+  `mask --reset-local-adjustment KEY` validieren alle Flags vor der Mutation,
+  legen den kompletten vorherigen `mask_layers`-Snapshot plus strukturierten
+  `HistoryEntry` in den Kandidaten und speichern erst danach per Revision-CAS.
+  Ein CAS-/I/O-Fehler publiziert keinen Erfolg; nach Beheben der Ursache kann
+  derselbe Befehl erneut ausgeführt werden.
+- **CLI-Statusvertrag:** Der menschenlesbare Layer-Status verwendet die
+  dokumentierte Reihenfolge
+  `v1 exposure=<number> contrast=<number> highlights=<number> shadows=<number>`
+  (ohne `Debug`-Struct-Layout). `mask --list --json` behält dagegen das
+  strukturierte `local_adjustments`-Objekt mit allen typisierten Feldern.
+
+**Abnahme:** CPU-Goldens für `alpha=0/partial/1`, Outside-Mask-Identität,
+überlappende Reihenfolge, ROI/Crop/Aspect/Rotation/Mirror, ungültige
+Schemas, Cache-Identität, Draft-Refusal und CLI/GUI-Parität; keine
+Regressionsverwechslung mit globalen Anpassungen. P1 umfasst ausschließlich
+die noch offenen lokalen WB-/Tone-/Color-Regler und weitere
+Hardware-/GPU-Nachweise.
+
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau
 und Histogramm gehören zu einem konkreten Renderstand. Veraltete parallele
@@ -1537,20 +1591,32 @@ bleiben daneben unverändert bestehen).
 Normative GUI-/CLI-Fläche für `.goal/Goal.md` G-08 (Ein-Klick-Vorbild-
 Übernahme, zusätzlich zu Sync/Match, klar davon abgegrenzt):
 
-- **Semantik:** Voll-Rezept-Copy vom Vorbild auf Zielbild(er) — exakt der
-  Sync-Mechanismus (`copy.recipe = Rezept-Clone`, keine Subset-Auswahl, kein
-  Zweit-Mechanismus): je Zielbild eigenes Sidecar (CAS), genau ein sichtbarer
-  History-Eintrag (`previous`, GUI zusätzlich `previous-{n}`-Zähler bei
-  Mehrfachzielen) je Zielbild, Fehler pro Zielbild isoliert laut
-  (`error!` + Report-Eintrag, Rest läuft weiter), `info!`-Log je Bild,
-  `preview_generation`-Bump je angewandtem Bild, kein stiller Fallback,
+- **Semantik:** Previous übernimmt das vollständige Rezept **und** den
+  typisierten `MaskStateSnapshot` der aktiven Quellkopie (Reihenfolge,
+  Sichtbarkeit, Layerparameter und lokale Werte). Sync Settings bleibt
+  ausdrücklich recipe-only (`copy.recipe = Rezept-Clone`, keine
+  Mask-Layer-Übertragung). Previous ist damit eine sichere Full-State-
+  Übernahme, kein stiller Recipe-only-Fallback: Ist die Zielkopie bzw. ein
+  referenzierter Mask-Kontext nicht kompatibel, wird der Zielschritt laut mit
+  einem Fehler abgewiesen und nicht geschrieben. Je Zielbild eigenes Sidecar
+  (CAS), genau ein sichtbarer History-Eintrag (`previous`, GUI zusätzlich
+  `previous-{n}`-Zähler bei Mehrfachzielen) je Zielbild, Fehler pro Zielbild
+  isoliert laut (`error!` + Report-Eintrag, Rest läuft weiter), `info!`-Log je
+  Bild, `preview_generation`-Bump je angewandtem Bild, kein stiller Fallback,
   keine Original-Mutation, keine absoluten Pfade in persistenten Daten
   (History-`extras` tragen höchstens den Dateinamen, nie Pfade).
+- **Lokale Masken:** Recipe-only Previous ist nur zulässig, wenn Quell- und
+  Zielkopie keine nicht-neutralen lokalen Mask-Adjustments enthalten. Eine
+  nicht-neutrale lokale Maske auf der Quelle ist ein harter Exit-1-Fehler vor
+  jedem Zielzugriff; ein inkompatibles Ziel ist ein isolierter Exit-3-Fehler.
+  Der ausgelassene maskenspezifische Transfer wird somit laut verweigert, nie
+  als scheinbar erfolgreicher Rezept-Copy mit verlorenem lokalem Zustand.
 - **Vorbild-Quelle:** Das zuletzt bearbeitete Bild. GUI: Sitzungs-Referenz
   (`previous_reference`, session-only, nie persistiert) — beim erfolgreichen
-  Bildwechsel wird das abgelöste Bild (Pfad + Rezept-Snapshot) als Referenz
-  festgehalten; ein explizites Vorbild wird durch Öffnen gewählt (Vorbild
-  öffnen, dann Ziel öffnen). CLI: explizit per `--from` (keine Sitzung).
+  Bildwechsel wird das abgelöste Bild (Pfad + Rezept- und
+  `MaskStateSnapshot`-Referenz) festgehalten; ein explizites Vorbild wird
+  durch Öffnen gewählt (Vorbild öffnen, dann Ziel öffnen). CLI: explizit per
+  `--from` (keine Sitzung).
   Ohne Referenz scheitert die Aktion laut (kein No-op, keine Defaults).
 - **Ziele:** GUI wendet auf die Filmstreifen-Auswahl an (wie Sync); bei
   leerer Auswahl auf das aktuell geladene Bild (Lightroom-„Previous auf
@@ -1618,9 +1684,11 @@ Maskierungs-Parität“):
   UND-verknüpft mit dem G-11-`OverlayMode`.
 - **CLI:** `lumina mask --list` (Status je Kopie), `--add-ai-select`,
   `--add-color-range`, `--add-luminance-range`, `--combine`,
-  `--duplicate`, `--show-layer`/`--hide-layer`, `--attach-layer`; Roundtrip über
-  `save_sidecar`/`load_sidecar`, laute Fehler (Exit 1 Benutzungs-/Laufzeit-
-  fehler wie Bestand, kein stiller Fallback, keine absoluten Pfade).
+  `--duplicate`, `--show-layer`/`--hide-layer`, `--attach-layer`,
+  `--local-layer` mit `--set-local-adjustment`/`--reset-local-adjustment`;
+  Roundtrip über `save_sidecar`/`load_sidecar`, laute Fehler (Exit 1
+  Benutzungs-/Laufzeitfehler wie Bestand, kein stiller Fallback, keine
+  absoluten Pfade).
 
 ### Remove-Parität G-04 (LRPAR-G04-REMOVE, Release 1.0)
 

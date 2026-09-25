@@ -111,6 +111,9 @@ use thiserror::Error;
 // LRPAR-G09-CULL-IMPL-25: live-source persistence guard extracted from the
 // oversized CLI entrypoint (file-size ratchet; orchestration remains in main).
 mod cull_cli;
+// MASK-LOCAL-P0: typed local-adjustment flag parsing and mutation.
+mod mask_local;
+use mask_local::{mask_copy_mut, require_mask_name, resolve_mask_copy};
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
 // (orchestration; alignment/merge/DNG live in `lumina-merge`).
 mod merge;
@@ -875,6 +878,17 @@ struct MaskArgs {
     /// Set a layer invisible (eye closed) by layer id.
     #[arg(long, value_name = "LAYER")]
     hide_layer: Option<String>,
+    /// Target layer for the P0 local-adjustment flags. If omitted, a copy with
+    /// exactly one layer is accepted; ambiguous copies fail loudly.
+    #[arg(long, value_name = "LAYER")]
+    local_layer: Option<String>,
+    /// Set one P0 local control (`exposure|contrast|highlights|shadows=value`).
+    /// Repeatable; all values are validated before the sidecar is written.
+    #[arg(long = "set-local-adjustment", value_name = "KEY=VALUE")]
+    set_local_adjustments: Vec<String>,
+    /// Reset one P0 local control to zero. Repeatable.
+    #[arg(long = "reset-local-adjustment", value_name = "KEY")]
+    reset_local_adjustments: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1195,7 +1209,8 @@ struct MetaPasteArgs {
 }
 /// of `--from` onto every `--to` target sidecar (same full-recipe Sync
 /// mechanism, one `previous` history step per target, per-target failures
-/// isolated and loud). No schema change — only recipe assignment.
+/// isolated and loud). Non-neutral local-mask state is refused rather than
+/// silently omitted; no-local-mask recipes retain the historical copy path.
 #[derive(Debug, Args)]
 struct PreviousArgs {
     /// Reference image whose virtual-copy recipe is the Previous source.
@@ -2442,6 +2457,7 @@ fn regenerate(args: RegenerateArgs) -> Result<(), CliError> {
                     active_copy_id: &copy_id,
                     planes: loaded_planes,
                     policy: MaskPolicy::Warn,
+                    source_roi: None,
                 }),
                 depth: None,
                 #[cfg(feature = "lensfun")]
@@ -2523,7 +2539,10 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         || args.duplicate.is_some()
         || args.attach_layer.is_some()
         || args.show_layer.is_some()
-        || args.hide_layer.is_some();
+        || args.hide_layer.is_some()
+        || args.local_layer.is_some()
+        || !args.set_local_adjustments.is_empty()
+        || !args.reset_local_adjustments.is_empty();
     if args.list && !wants_mutation {
         return mask_list(&args, &document);
     }
@@ -2532,6 +2551,16 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         return mask_list(&args, &document);
     }
     let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
+    let local_transaction =
+        if args.set_local_adjustments.is_empty() && args.reset_local_adjustments.is_empty() {
+            None
+        } else {
+            Some(mask_local::LocalAdjustmentTransaction::capture(
+                &document,
+                &copy_id,
+                args.local_layer.as_deref(),
+            )?)
+        };
     let mut actions: Vec<String> = Vec::new();
     // Decode once for every mutation that mints a mask definition
     // (dimensions for the geometry context); a loud error instead of
@@ -2623,6 +2652,14 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         info!("mask: layer `{layer}` hidden on copy `{copy_id}`");
         actions.push(format!("hide-layer:{layer}"));
     }
+    mask_local::apply_local_adjustment_flags(
+        &mut document,
+        &copy_id,
+        args.local_layer.as_deref(),
+        &args.set_local_adjustments,
+        &args.reset_local_adjustments,
+        &mut actions,
+    )?;
     if args.update_masks {
         let copies = if let Some(id) = args.virtual_copy.as_deref() {
             document
@@ -2653,10 +2690,17 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         info!("mask: marked masks pending (update_masks)");
         actions.push("update-masks".into());
     }
+    if let Some(transaction) = local_transaction.as_ref() {
+        transaction.append_history_entry(&mut document, &copy_id, &actions)?;
+    }
     // Loud gate: arity, unknown references, cycles, ranges and ai_select
     // placement are rejected before anything is written.
     document.validate()?;
-    save_sidecar(&path, &document)?;
+    if let Some(transaction) = local_transaction.as_ref() {
+        save_sidecar_if_unchanged(&path, &document, Some(transaction.expected_revision()))?;
+    } else {
+        save_sidecar(&path, &document)?;
+    }
     emit(
         args.json,
         serde_json::json!({"command":"mask", "input":args.input, "copy":copy_id, "actions":actions, "status":"ok"}),
@@ -2700,6 +2744,7 @@ fn mask_list(args: &MaskArgs, document: &SidecarDocument) -> Result<(), CliError
                         "id": layer.id,
                         "mask": format!("{}/{}", layer.mask.copy_id, layer.mask.mask_id),
                         "visible": layer.visible,
+                        "local_adjustments": layer.local_adjustments,
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -2736,8 +2781,15 @@ fn mask_list(args: &MaskArgs, document: &SidecarDocument) -> Result<(), CliError
             }
             for layer in &copy.mask_layers {
                 println!(
-                    "  layer: {} -> {}/{} visible={}",
-                    layer.id, layer.mask.copy_id, layer.mask.mask_id, layer.visible
+                    "  layer: {} -> {}/{} visible={} local={}",
+                    layer.id,
+                    layer.mask.copy_id,
+                    layer.mask.mask_id,
+                    layer.visible,
+                    layer
+                        .local_adjustments
+                        .map(|adjustments| adjustments.to_string())
+                        .unwrap_or_else(|| "none".into())
                 );
             }
         }
@@ -2766,46 +2818,6 @@ fn unix_now() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".into())
-}
-
-fn require_mask_name(name: Option<&str>) -> Result<&str, CliError> {
-    match name {
-        Some(name) if !name.trim().is_empty() => Ok(name),
-        _ => Err(CliError::Message(
-            "this mask operation requires --name <NAME>".into(),
-        )),
-    }
-}
-
-fn resolve_mask_copy(
-    document: &SidecarDocument,
-    requested: Option<&str>,
-) -> Result<String, CliError> {
-    if let Some(id) = requested {
-        if document.virtual_copies.iter().any(|copy| copy.id == id) {
-            return Ok(id.into());
-        }
-        return Err(CliError::Message(format!("unknown virtual copy `{id}`")));
-    }
-    if let Some(default) = document.virtual_copies.iter().find(|copy| copy.is_default) {
-        return Ok(default.id.clone());
-    }
-    document
-        .virtual_copies
-        .first()
-        .map(|copy| copy.id.clone())
-        .ok_or_else(|| CliError::Message("sidecar has no virtual copies".into()))
-}
-
-fn mask_copy_mut<'a>(
-    document: &'a mut SidecarDocument,
-    copy_id: &str,
-) -> Result<&'a mut lumina_sidecar::VirtualCopy, CliError> {
-    document
-        .virtual_copies
-        .iter_mut()
-        .find(|copy| copy.id == copy_id)
-        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))
 }
 
 /// Parses a mask reference as `mask-id` (same copy) or `copy-id/mask-id`.
@@ -3156,6 +3168,7 @@ fn mask_attach_layer(
         blur: 0.0,
         density: 1.0,
         visible: true,
+        local_adjustments: None,
         extras: BTreeMap::new(),
     });
     Ok(())
@@ -5003,7 +5016,7 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
     let from_sidecar = sidecar_path_for(&args.from);
     let from_document = load_sidecar(&from_sidecar).map_err(CliError::from)?;
     let from_id = args.from_copy.as_deref().unwrap_or("vc-original");
-    let reference = from_document
+    let reference_copy = from_document
         .virtual_copies
         .iter()
         .find(|copy| copy.id == from_id)
@@ -5012,9 +5025,15 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
                 "unknown virtual copy `{from_id}` in `{}`",
                 from_sidecar.display()
             ))
-        })?
-        .recipe
-        .clone();
+        })?;
+    let local_layers = mask_local::non_neutral_local_layer_ids(reference_copy)?;
+    if !local_layers.is_empty() {
+        return Err(CliError::Message(format!(
+            "previous refused recipe-only transfer from copy `{from_id}`: non-neutral local mask adjustments exist on layer(s) {}; cross-image mask state transfer is unsafe",
+            local_layers.join(", ")
+        )));
+    }
+    let reference = reference_copy.recipe.clone();
     info!(
         "previous: reference `{}` copy `{from_id}`",
         args.from.display()
@@ -5024,7 +5043,7 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
     let mut failures: Vec<String> = Vec::new();
     let mut items = Vec::with_capacity(args.to.len());
     for target in &args.to {
-        match apply_previous_to_target(target, to_id, &reference, &args.from) {
+        match mask_local::apply_previous_to_target(target, to_id, &reference, &args.from) {
             Ok(()) => {
                 info!(
                     "previous: `{}` updated from `{}`",
@@ -5161,44 +5180,6 @@ fn relocate(args: RelocateArgs) -> Result<(), CliError> {
         &text,
     )?;
     info!("{text}");
-    Ok(())
-}
-
-/// Write the Previous `reference` recipe into the `copy_id` copy of
-/// `target`'s sidecar (which must already exist — like `develop`, no silent
-/// sidecar creation), tag one `previous` history step and save atomically.
-fn apply_previous_to_target(
-    target: &Path,
-    copy_id: &str,
-    reference: &EditRecipe,
-    from: &Path,
-) -> Result<(), CliError> {
-    let sidecar = sidecar_path_for(target);
-    let mut document = load_sidecar(&sidecar)?;
-    let copy = document
-        .virtual_copies
-        .iter_mut()
-        .find(|copy| copy.id == copy_id)
-        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))?;
-    copy.recipe = reference.clone();
-    // Portable by construction: only the reference file name (no paths —
-    // absolute paths are forbidden in persistent recipe data).
-    let source_name = from
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("reference")
-        .to_string();
-    let mut extras = BTreeMap::new();
-    extras.insert("step".into(), serde_json::Value::String("previous".into()));
-    extras.insert("source".into(), serde_json::Value::String(source_name));
-    copy.history.push(HistoryEntry {
-        id: "previous".into(),
-        recipe: reference.clone(),
-        recorded_at: None,
-        extras,
-    });
-    document.validate()?;
-    save_sidecar(&sidecar, &document)?;
     Ok(())
 }
 
@@ -9517,6 +9498,7 @@ fn process_selected(
             active_copy_id: &active_copy.id,
             planes: mask_planes.clone(),
             policy,
+            source_roi: None,
         }),
         // F-098-N2: pass a Lensfun corrector when one was built from EXIF
         // (otherwise `None` → manual LuminaRust model / identity fallback).
@@ -9611,6 +9593,7 @@ fn process_selected(
                     // Reuse the same planes captured for the warning render above.
                     planes: mask_planes.clone(),
                     policy,
+                    source_roi: None,
                 }),
                 #[cfg(feature = "lensfun")]
                 lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),

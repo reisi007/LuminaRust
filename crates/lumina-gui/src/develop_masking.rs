@@ -213,12 +213,19 @@ impl LuminaApp {
                     }
                 }
                 ui.label(Str::LocalAdjustments.t());
-                for (key, label) in [("exposure", Str::Exposure), ("contrast", Str::Contrast)] {
-                    let stored = self
-                        .selected_mask_layer()
-                        .and_then(|layer| layer.extras.get(&format!("adjustment_{key}")))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0);
+                for (key, label) in [
+                    ("exposure", Str::Exposure),
+                    ("contrast", Str::Contrast),
+                    ("highlights", Str::Highlights),
+                    ("shadows", Str::Shadows),
+                ] {
+                    let stored = match self.selected_mask_local_adjustment(key) {
+                        Ok(value) => value.unwrap_or(0.0),
+                        Err(error) => {
+                            self.show_error(error);
+                            0.0
+                        }
+                    };
                     let range = if key == "exposure" {
                         -10.0..=10.0
                     } else {
@@ -230,6 +237,13 @@ impl LuminaApp {
                         .changed()
                     {
                         if let Err(e) = self.set_mask_local_adjustment(key, value) {
+                            self.show_error(e);
+                        }
+                    }
+                }
+                if ui.button(Str::Reset.t()).clicked() {
+                    for key in ["exposure", "contrast", "highlights", "shadows"] {
+                        if let Err(e) = self.reset_mask_local_adjustment(key) {
                             self.show_error(e);
                         }
                     }

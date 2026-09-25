@@ -745,9 +745,9 @@ mod tests {
             density: 1.0,
             extras: Extras::new(),
             visible: true,
+            local_adjustments: None,
         }
     }
-
     fn frame() -> ImageFrame {
         ImageFrame::new(4, 4, vec![100; 64]).unwrap()
     }

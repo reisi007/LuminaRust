@@ -292,7 +292,7 @@ impl LuminaApp {
         let expected_revision = self.sidecar_revision.clone();
         let mut document = self
             .document
-            .take()
+            .clone()
             .unwrap_or_else(|| SidecarDocument::new(self.source_identity(frame), "raster-mvp-1"));
         let base_document = document.clone();
         let Some(copy) = document
@@ -300,12 +300,17 @@ impl LuminaApp {
             .iter_mut()
             .find(|copy| copy.id == self.virtual_copy_id)
         else {
-            self.document = Some(document);
             return Err(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
         };
         let previous_recipe = copy.recipe.clone();
+        // Keep the pending transaction intact until the CAS write succeeds.
+        // A failed save must be retryable with the original pre-edit mask
+        // snapshot, rather than silently turning the next retry into a
+        // history entry for the already-mutated layer state.
+        let pending_mask_state_before = self.pending_mask_state_before.clone();
+        let pending_history_step = self.pending_history_step.clone();
         copy.recipe = self.recipe.clone();
-        if let Some(step) = self.pending_history_step.take() {
+        if let Some(step) = pending_history_step {
             let mut counter = copy.history.len() + 1;
             while copy
                 .history
@@ -316,13 +321,22 @@ impl LuminaApp {
             }
             let mut extras = BTreeMap::new();
             extras.insert("step".into(), Value::String("geometry".into()));
-            extras.insert("action".into(), Value::String(step));
+            extras.insert("action".into(), Value::String(step.clone()));
             let mut entry = HistoryEntry {
                 id: format!("geometry-{counter}"),
                 recipe: copy.recipe.clone(),
                 recorded_at: Some(self.history_timestamp()),
                 extras,
             };
+            // MASK-LOCAL-P0: local edits store the complete layer state from
+            // before the mutation. Other history steps use the current layer
+            // state so restoring them never clears unrelated local edits.
+            let mask_state = pending_mask_state_before
+                .clone()
+                .unwrap_or_else(|| copy.mask_layers.clone());
+            entry
+                .set_mask_state(lumina_sidecar::MaskStateSnapshot::new(mask_state))
+                .map_err(|error| GuiError::Io(error.to_string()))?;
             if let Err(error) = entry.set_changes(history_changes::recipe_changes(
                 &previous_recipe,
                 &self.recipe,
@@ -339,12 +353,17 @@ impl LuminaApp {
             MAX_REBASE_ATTEMPTS,
         ) {
             Ok(saved) => {
+                self.pending_history_step = None;
+                self.pending_mask_state_before = None;
+                self.pending_slider_commit = None;
                 self.finish_sidecar_save(&path, saved);
                 Ok(())
             }
             Err(save_error) => {
                 log::error!("sidecar save failed for {}: {save_error}", path.display());
-                self.document = Some(document);
+                // `document` was only a candidate clone. Keep the live unsaved
+                // document and every pending field intact so the user can
+                // retry the exact same transaction.
                 Err(save_error.into())
             }
         }

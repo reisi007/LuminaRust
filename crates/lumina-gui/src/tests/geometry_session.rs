@@ -269,7 +269,7 @@ fn successful_save_keeps_loaded_source_identity_instead_of_recomputing_it() {
 // ---- REVIEW-GUI-VCSWITCH-1: copy switch resets state, surfaces errors ----
 
 #[test]
-fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
+fn select_virtual_copy_resets_session_state_and_flushes_pending_edits() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("photo.png");
     save_png(&source);
@@ -285,7 +285,7 @@ fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
     app.drag_start = Some(Point2 { x: 0.2, y: 0.2 });
     app.drag_current = Some(Point2 { x: 0.4, y: 0.4 });
     app.drawing = true;
-    // Unsaved edit relative to vc-original.
+    // Pending edit relative to vc-original.
     app.set_adjustment("exposure", 3.0);
 
     app.select_virtual_copy("vc-2").unwrap();
@@ -294,8 +294,8 @@ fn select_virtual_copy_resets_session_state_and_notes_discarded_edits() {
     assert_eq!(app.drag_start, None, "drag gesture state must reset");
     assert!(!app.drawing, "in-progress drag flag must reset");
     assert!(
-        app.status().contains("discarded"),
-        "discarding unsaved edits must be stated, got {:?}",
+        app.status().contains("saved first"),
+        "pending edits must be flushed before a copy switch, got {:?}",
         app.status()
     );
 

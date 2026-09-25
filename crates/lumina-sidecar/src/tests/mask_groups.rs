@@ -21,6 +21,7 @@ fn layer(copy_id: &str, mask_id: &str) -> MaskLayer {
         blur: 0.0,
         density: 1.0,
         visible: true,
+        local_adjustments: None,
         extras: Extras::new(),
     }
 }

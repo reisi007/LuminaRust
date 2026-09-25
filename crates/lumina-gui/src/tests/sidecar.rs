@@ -350,8 +350,10 @@ fn local_mask_adjustments_roundtrip_through_sidecar() {
     let mut reopened = new_app();
     open_and_decode(&mut reopened, source.display().to_string());
     let layer = &reopened.document.as_ref().unwrap().virtual_copies[0].mask_layers[0];
-    assert_eq!(layer.extras["adjustment_exposure"].as_f64(), Some(1.25));
-    assert_eq!(layer.extras["adjustment_contrast"].as_f64(), Some(-0.35));
+    let local = layer.local_adjustments.as_ref().unwrap();
+    assert_eq!(local.exposure, 1.25);
+    assert_eq!(local.contrast, -0.35);
+    assert_eq!(local.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
 }
 
 /// SIDECAR-REBASE-1: a face-section write on a stale revision rebases onto the

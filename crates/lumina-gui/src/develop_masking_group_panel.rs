@@ -221,6 +221,7 @@ pub(crate) fn set_mask_visible_on_copy(
             blur: 0.0,
             density: 1.0,
             visible,
+            local_adjustments: None,
             extras: BTreeMap::new(),
         });
     }

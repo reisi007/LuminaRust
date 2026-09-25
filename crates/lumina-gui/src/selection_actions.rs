@@ -167,18 +167,13 @@ impl LuminaApp {
 
     /// LRPAR-G08-PREVIOUS: apply the Previous reference (the image edited
     /// immediately before the current one, Lightroom "Previous") to the
-    /// filmstrip selection — the same full-recipe Sync mechanism as
-    /// [`Self::sync_settings_to_selection`] (each target keeps its own
-    /// sidecar written via CAS, one `previous-{index}` history step each,
-    /// per-image failures loud via `error!` + report entry, never aborting
-    /// the rest). With an empty selection the currently loaded image is the
-    /// single target (Previous on the active photo); with neither selection
-    /// nor loaded image — or without any reference — the call is a loud
-    /// no-op (empty report + visible error, no sidecar write). Every applied
-    /// image logs `info!` and bumps `preview_generation`. Unlike Sync, the
-    /// currently loaded target additionally adopts the reference in memory
-    /// (recipe + document + baseline + re-render) so preview and sidecar
-    /// stay consistent.
+    /// filmstrip selection. Sync Settings remains recipe-only; Previous also
+    /// carries the complete typed mask-layer state when the target context
+    /// supports it. Each target keeps its own CAS sidecar, one
+    /// `previous-{index}` history step, and per-image failures remain loud.
+    /// With an empty selection the currently loaded image is the single target
+    /// (Previous on the active photo); with neither selection nor loaded image
+    /// — or without any reference — the call is a loud no-op.
     pub fn apply_previous_to_selection(&mut self) -> SelectionSyncReport {
         instrument_gui_action!(self, GuiAction::ApplyPreviousToSelection);
         let mut report = SelectionSyncReport::default();
@@ -204,9 +199,15 @@ impl LuminaApp {
             let history_extras = previous_history_extras(&reference.path);
             let generation_before = self.preview_generation;
             let applied = if *target == self.path && self.original.is_some() {
-                self.apply_previous_to_current(&reference.recipe, &history_id, history_extras)
+                self.apply_previous_state_to_current(&reference, &history_id, history_extras)
             } else {
-                self.apply_recipe_to_path(target, &reference.recipe, &history_id, history_extras)
+                self.apply_recipe_to_path_with_mask_state(
+                    target,
+                    &reference.recipe,
+                    &history_id,
+                    history_extras,
+                    Some((&reference.copy_id, &reference.mask_state)),
+                )
             };
             match applied {
                 Ok(()) => {
@@ -297,73 +298,9 @@ impl LuminaApp {
         Ok(changed)
     }
 
-    /// Write the Previous `reference` recipe into the currently loaded image:
-    /// same disk write as [`Self::apply_recipe_to_path`] (CAS sidecar +
-    /// history step), then adopt the persisted state in memory (recipe +
-    /// document + revision + Previous baseline) and re-render, so the visible
-    /// preview matches the sidecar. A save that did not land is a loud
-    /// per-target failure, never a silent divergence.
-    fn apply_previous_to_current(
-        &mut self,
-        recipe: &EditRecipe,
-        history_id: &str,
-        history_extras: BTreeMap<String, Value>,
-    ) -> Result<(), String> {
-        self.ensure_document_loaded()
-            .map_err(|error| error.to_string())?;
-        self.recipe = recipe.clone();
-        let id = self.virtual_copy_id.clone();
-        let timestamp = self.history_timestamp();
-        let document = self
-            .document
-            .as_mut()
-            .ok_or_else(|| "no sidecar document loaded".to_string())?;
-        let copy = document
-            .virtual_copies
-            .iter_mut()
-            .find(|copy| copy.id == id)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        let before = copy.recipe.clone();
-        copy.recipe = recipe.clone();
-        let mut entry = HistoryEntry {
-            id: history_id.into(),
-            recipe: recipe.clone(),
-            recorded_at: Some(timestamp),
-            extras: history_extras,
-        };
-        if let Err(error) = entry.set_changes(history_changes::recipe_changes(&before, recipe)) {
-            error!("previous history changes rejected: {error}");
-        }
-        copy.history.push(entry);
-        self.mark_dirty();
-        self.save_sidecar();
-        self.render().map_err(|error| error.to_string())?;
-        // Reload anchor: the sidecar on disk is the truth — confirm the write
-        // landed and adopt it, so a failed save can never leave preview and
-        // sidecar silently diverged.
-        let sidecar_path = lumina_sidecar::sidecar_path_for(Path::new(&self.path));
-        let document =
-            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?;
-        let revision =
-            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
-        let persisted = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == self.virtual_copy_id)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        if persisted.recipe != *recipe {
-            return Err("sidecar save did not persist the previous recipe".to_string());
-        }
-        self.recipe = persisted.recipe.clone();
-        self.sidecar_revision = Some(revision);
-        self.document = Some(document);
-        self.capture_section_baselines();
-        Ok(())
-    }
-
-    /// Write `recipe` into the default copy of `target`'s sidecar (creating
-    /// the sidecar when missing) through the CAS API. The source is decoded
-    /// first so a missing/unreadable image fails loudly before any write.
+    /// Write a recipe to a file target through the shared CAS helper. This is
+    /// intentionally recipe-only: Sync Settings leaves target mask layers
+    /// untouched.
     fn apply_recipe_to_path(
         &self,
         target: &str,
@@ -371,54 +308,7 @@ impl LuminaApp {
         history_id: &str,
         history_extras: BTreeMap<String, Value>,
     ) -> Result<(), String> {
-        let path = PathBuf::from(target);
-        let sidecar_path = lumina_sidecar::sidecar_path_for(&path);
-        let (bytes, frame, orientation) = decode_selection_frame(&path)?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(target);
-        let mut document = if sidecar_path.exists() {
-            lumina_sidecar::load_sidecar(&sidecar_path).map_err(|error| error.to_string())?
-        } else {
-            SidecarDocument::new(
-                selection_source_identity(name, &bytes, &frame, orientation, is_raw_name(name)),
-                "raster-mvp-1",
-            )
-        };
-        let expected =
-            lumina_sidecar::document_revision(&document).map_err(|error| error.to_string())?;
-        // CAS against the revision just read: an external modification between
-        // our load and this write surfaces as a loud conflict instead of being
-        // silently overwritten. A missing file expects `None` (fresh lineage).
-        let expected_revision = if sidecar_path.exists() {
-            Some(expected)
-        } else {
-            None
-        };
-        let base = document.clone();
-        let copy = default_copy_mut(&mut document)
-            .ok_or_else(|| "sidecar has no virtual copies".to_string())?;
-        let before = copy.recipe.clone();
-        copy.recipe = recipe.clone();
-        let mut entry = HistoryEntry {
-            id: history_id.into(),
-            recipe: recipe.clone(),
-            recorded_at: Some(self.history_timestamp()),
-            extras: history_extras,
-        };
-        if let Err(error) = entry.set_changes(history_changes::recipe_changes(&before, recipe)) {
-            error!("sync history changes rejected: {error}");
-        }
-        copy.history.push(entry);
-        save_rebased_unit(
-            &sidecar_path,
-            &base,
-            &document,
-            expected_revision.as_deref(),
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(())
+        self.apply_recipe_to_path_with_mask_state(target, recipe, history_id, history_extras, None)
     }
 
     /// Add `delta` to the current exposure of `target`'s default copy and tag

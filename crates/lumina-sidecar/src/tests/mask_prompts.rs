@@ -480,6 +480,7 @@ fn mask_layer_visible_defaults_true_and_roundtrips() {
         blur: 0.0,
         density: 1.0,
         visible: false,
+        local_adjustments: None,
         extras: BTreeMap::new(),
     });
     assert!(d.validate().is_ok());

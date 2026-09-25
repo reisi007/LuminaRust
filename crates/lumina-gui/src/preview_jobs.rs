@@ -127,6 +127,12 @@ pub(crate) fn worker_preview_with_identity(
         &job.virtual_copy,
         &bytes,
     )?;
+    if sidecar.has_local_adjustments {
+        return Err(format!(
+            "{}: neighbor-preview stand-in refused because local mask adjustments require a mask-aware render",
+            job.source.display()
+        ));
+    }
     let recipe = sidecar.recipe;
     let decoded = if crate::is_raw_name(&job.name) {
         lumina_raw::decode_bytes(&bytes, &job.name)

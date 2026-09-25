@@ -22,10 +22,7 @@ fn mask_layer_sliders_commit_and_reload() {
     assert_eq!(layer.feather, 0.5);
     assert_eq!(layer.blur, 0.2);
     assert_eq!(layer.density, 0.8);
-    assert_eq!(
-        layer.extras.get("adjustment_exposure"),
-        Some(&serde_json::Value::from(0.7))
-    );
+    assert_eq!(layer.local_adjustments.as_ref().unwrap().exposure, 0.7);
     let reopened = reopen_app(&source);
     let rlayer = &reopened
         .document
@@ -34,10 +31,7 @@ fn mask_layer_sliders_commit_and_reload() {
         .virtual_copies[0]
         .mask_layers[0];
     assert_eq!(rlayer.feather, 0.5);
-    assert_eq!(
-        rlayer.extras.get("adjustment_exposure"),
-        Some(&serde_json::Value::from(0.7))
-    );
+    assert_eq!(rlayer.local_adjustments.as_ref().unwrap().exposure, 0.7);
 }
 
 /// GUI-SLIDER-SAVE-1: tool-only settings (brush size, spot defaults)

@@ -65,8 +65,16 @@ pub use merge_recipe::{
 // additively as typed extras; loud validation (see module docs).
 mod history;
 pub use history::{
-    validate_history_entry, HistoryChange, HistoryEntry, HISTORY_CHANGES_KEY, MAX_HISTORY_CHANGES,
-    MAX_HISTORY_CHANGE_PARAMETER_CHARS, MAX_HISTORY_CHANGE_VALUE_CHARS,
+    validate_history_entry, HistoryChange, HistoryEntry, HISTORY_CHANGES_KEY,
+    HISTORY_MASK_STATE_KEY, MAX_HISTORY_CHANGES, MAX_HISTORY_CHANGE_PARAMETER_CHARS,
+    MAX_HISTORY_CHANGE_VALUE_CHARS,
+};
+
+// MASK-LOCAL-P0: typed local mask adjustments and the loud legacy migration.
+mod local_adjustments;
+pub use local_adjustments::{
+    mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskStateSnapshot,
+    LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES, MAX_MASK_STATE_LAYERS,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -987,7 +995,7 @@ pub enum MaskPrompt {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MaskLayer {
     pub id: String,
     pub mask: MaskReference,
@@ -999,16 +1007,14 @@ pub struct MaskLayer {
     /// Absent in older sidecars reads as `true` (legacy identity). An
     /// invisible layer is skipped by the render mask stage (explicit user
     /// choice, no warning).
-    #[serde(default = "mask_layer_visible_default")]
     pub visible: bool,
+    /// MASK-LOCAL-P0: typed, versioned local controls.  The custom
+    /// `Deserialize` implementation in `local_adjustments` migrates valid
+    /// legacy `adjustment_*` entries here and rejects conflicts loudly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_adjustments: Option<LocalAdjustments>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Extras,
-}
-
-/// Serde default for [`MaskLayer::visible`]: legacy sidecars without the key
-/// behave as if every layer were visible.
-fn mask_layer_visible_default() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3548,11 +3554,6 @@ impl SidecarDocument {
         }
     }
 
-    pub fn to_json(&self) -> Result<String, SidecarError> {
-        self.validate()?;
-        serde_json::to_string_pretty(self).map_err(|e| SidecarError::Json(e.to_string()))
-    }
-
     pub fn from_json(json: &str) -> Result<Self, SidecarError> {
         if json.len() > MAX_SIDECAR_BYTES {
             return Err(SidecarError::Invalid("sidecar exceeds size limit".into()));
@@ -3582,8 +3583,9 @@ impl SidecarDocument {
                 "unsupported schema_version {version}; explicit migration is required"
             )));
         }
-        let document: Self =
+        let mut document: Self =
             serde_json::from_value(value).map_err(|e| SidecarError::Json(e.to_string()))?;
+        document.normalize_legacy_local_adjustments()?;
         document.validate()?;
         Ok(document)
     }
@@ -3864,6 +3866,8 @@ impl SidecarDocument {
             validate_unique_ids("export record", &copy.export_records, |export| &export.id)?;
             for layer in &copy.mask_layers {
                 validate_name("mask layer id", &layer.id)?;
+                validate_mask_layer_local_state(layer)
+                    .map_err(|error| SidecarError::Invalid(error.to_string()))?;
                 // REVIEW-SIDECAR-N3: local adjustment parameters were persisted
                 // without any finite/range validation. feather/blur are
                 // radii-like quantities (>= 0), density is a normalized

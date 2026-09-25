@@ -8,10 +8,14 @@
 //! (F-041); this entry point applies the (possibly auto-toned) recipe. GUI and
 //! CLI use the same entry point.
 
-use crate::masks::{MaskGraph, MaskPlane};
+use crate::masks::MaskPlane;
 use crate::{CoreError, ImageFrame};
-use lumina_sidecar::{EditRecipe, MaskDefinition, MaskReference, MaskStatus, VirtualCopy};
+use lumina_sidecar::{EditRecipe, VirtualCopy};
 use std::collections::BTreeMap;
+
+mod local_adjustments;
+mod mask_evaluation;
+use mask_evaluation::{evaluate_layer, LayerFailure};
 
 /// A source-sized repair artifact: a u16 region plane (`0..=u16::MAX`) and an
 /// RGBA8 replacement image with identical dimensions.  Applied after decode
@@ -41,6 +45,11 @@ pub struct MaskContext<'a> {
     pub active_copy_id: &'a str,
     pub planes: BTreeMap<(String, String), MaskPlane>,
     pub policy: MaskPolicy,
+    /// Normalized source-space zoom ROI `[x, y, width, height]` used by the
+    /// interactive preview. `None` is the full source frame. The value is
+    /// consumed by the explicit local-adjustment alignment; it is never used
+    /// as an implicit wrong-coordinate resize fallback.
+    pub source_roi: Option<[f32; 4]>,
 }
 
 /// Feature-uniform borrow of a Lensfun corrector.
@@ -549,6 +558,16 @@ pub fn render_frame_from_base_with_generative_and_denoise(
     generative: crate::generative::GenerativeCanvasInput<'_>,
     denoise: &crate::DenoiseStageInput<'_>,
 ) -> Result<RenderOutput, CoreError> {
+    // MASK-LOCAL-P0: validate every persisted local layer and the geometry
+    // contract before *any* pixel mutation.  This is deliberately separate
+    // from mask artifact policy: a bad range/version/conflict is never a
+    // recoverable warning, and a local edit is never silently turned into a
+    // global-only render.
+    local_adjustments::prevalidate_local_adjustments(context)?;
+    let local_adjustment_mode =
+        local_adjustments::has_visible_local_adjustments(context.masks.as_ref());
+    let mask_input_width = base.width;
+    let mask_input_height = base.height;
     apply_spot_heals_from_recipe(&mut base, context.recipe)?;
     base.apply_recipe_with_scale_white_balance_and_denoise(
         context.recipe,
@@ -621,8 +640,24 @@ pub fn render_frame_from_base_with_generative_and_denoise(
         crate::lens_blur::apply_lens_blur(&mut base, blur, context.depth)?;
     }
 
-    let (mask_layers, mask_warnings) =
-        evaluate_mask_stage(context.masks.as_ref(), base.width, base.height, work)?;
+    let (mask_layers, mask_warnings) = evaluate_mask_stage(
+        context.masks.as_ref(),
+        MaskStageGeometry {
+            recipe: context.recipe,
+            input_width: mask_input_width,
+            input_height: mask_input_height,
+            frame_width: base.width,
+            frame_height: base.height,
+            local_adjustment_mode,
+        },
+        work,
+    )?;
+    local_adjustments::apply_local_adjustments(
+        &mut base,
+        context.masks.as_ref(),
+        &mask_layers,
+        local_adjustment_mode,
+    )?;
 
     Ok(RenderOutput {
         frame: base,
@@ -631,12 +666,22 @@ pub fn render_frame_from_base_with_generative_and_denoise(
     })
 }
 
+/// Geometry and local-mode inputs shared by mask evaluation and alignment.
+#[derive(Clone, Copy)]
+struct MaskStageGeometry<'a> {
+    recipe: &'a EditRecipe,
+    input_width: u32,
+    input_height: u32,
+    frame_width: u32,
+    frame_height: u32,
+    local_adjustment_mode: bool,
+}
+
 /// Shared mask-stage evaluation used by both render entry points (verbatim
 /// code motion from the original [`render_frame`] body).
 fn evaluate_mask_stage(
     masks: Option<&MaskContext<'_>>,
-    frame_width: u32,
-    frame_height: u32,
+    geometry: MaskStageGeometry<'_>,
     work: &mut StageWork,
 ) -> Result<(Vec<MaskLayerResult>, Vec<String>), CoreError> {
     let mut mask_layers = Vec::new();
@@ -651,7 +696,7 @@ fn evaluate_mask_stage(
                     continue;
                 }
                 work.mask_layers_evaluated += 1;
-                match evaluate_layer(masks, layer, frame_width, frame_height) {
+                match evaluate_layer(masks, layer, geometry) {
                     Ok(plane) => {
                         mask_layers.push(MaskLayerResult {
                             layer_id: layer.id.clone(),
@@ -694,112 +739,6 @@ fn evaluate_mask_stage(
     }
 
     Ok((mask_layers, mask_warnings))
-}
-
-enum LayerFailure {
-    /// The referenced definition is missing or not `MaskStatus::Valid`.
-    Unavailable {
-        copy_id: String,
-        mask_id: String,
-        status: String,
-        message: String,
-    },
-    /// `MaskGraph` evaluation or the frame-resize guard failed.
-    Evaluation {
-        copy_id: String,
-        mask_id: String,
-        reason: String,
-        message: String,
-    },
-}
-
-fn evaluate_layer(
-    masks: &MaskContext<'_>,
-    layer: &lumina_sidecar::MaskLayer,
-    frame_width: u32,
-    frame_height: u32,
-) -> Result<MaskPlane, LayerFailure> {
-    let definition = find_definition(masks.copies, &layer.mask);
-    let available = definition
-        .map(|d| matches!(d.status, MaskStatus::Valid))
-        .unwrap_or(false);
-    if !available {
-        let status = definition
-            .map(|d| format!("{:?}", d.status))
-            .unwrap_or_else(|| "Missing".into());
-        let message = format!(
-            "mask layer `{}` references unavailable mask `{}/{}` (status {status}); layer skipped",
-            layer.id, layer.mask.copy_id, layer.mask.mask_id
-        );
-        return Err(LayerFailure::Unavailable {
-            copy_id: layer.mask.copy_id.clone(),
-            mask_id: layer.mask.mask_id.clone(),
-            status,
-            message,
-        });
-    }
-    let graph = MaskGraph::new(masks.copies, masks.planes.clone());
-    let plane = match graph.evaluate(&layer.mask) {
-        Ok(plane) => plane,
-        Err(error) => {
-            let message = format!(
-                "mask layer `{}` could not be evaluated (`{}/{}`): {error}; layer skipped",
-                layer.id, layer.mask.copy_id, layer.mask.mask_id
-            );
-            return Err(LayerFailure::Evaluation {
-                copy_id: layer.mask.copy_id.clone(),
-                mask_id: layer.mask.mask_id.clone(),
-                reason: error.to_string(),
-                message,
-            });
-        }
-    };
-    // A degenerate (zero-dimension) plane cannot be resampled or composited
-    // meaningfully; refuse deterministically instead of panicking or silently
-    // falling back to an empty mask.
-    if plane.width == 0 || plane.height == 0 {
-        let message = format!(
-            "mask layer `{}` evaluated to a zero-dimension plane (`{}/{}`); layer skipped",
-            layer.id, layer.mask.copy_id, layer.mask.mask_id
-        );
-        return Err(LayerFailure::Evaluation {
-            copy_id: layer.mask.copy_id.clone(),
-            mask_id: layer.mask.mask_id.clone(),
-            reason: "invalid zero-dimension plane".into(),
-            message,
-        });
-    }
-    let mut plane = resample_plane_bilinear(&plane, frame_width, frame_height);
-    // F-049: apply the per-layer modulation (invert → feather → blur → density)
-    // to the resolved, frame-sized plane before it weights the adjustments.
-    // REVIEW-MASK-N2: an invalid modulation (e.g. a density outside 0..=1) is
-    // an evaluation failure like any other — Strict aborts the render, Warn
-    // skips the layer with a recorded message. No silent fallback.
-    if let Err(error) = crate::mask_modulation::modulate_mask_plane(&mut plane, layer) {
-        let message = format!(
-            "mask layer `{}` could not be modulated (`{}/{}`): {error}; layer skipped",
-            layer.id, layer.mask.copy_id, layer.mask.mask_id
-        );
-        return Err(LayerFailure::Evaluation {
-            copy_id: layer.mask.copy_id.clone(),
-            mask_id: layer.mask.mask_id.clone(),
-            reason: error.to_string(),
-            message,
-        });
-    }
-    Ok(plane)
-}
-
-/// Finds the `MaskDefinition` referenced by `reference` across all copies
-/// (mirrors `MaskGraph`'s `(copy_id, mask_id)` keying).
-fn find_definition<'a>(
-    copies: &'a [VirtualCopy],
-    reference: &MaskReference,
-) -> Option<&'a MaskDefinition> {
-    copies
-        .iter()
-        .find(|c| c.id == reference.copy_id)
-        .and_then(|c| c.mask_library.iter().find(|m| m.id == reference.mask_id))
 }
 
 /// Deterministic inverse bilinear resample of a u16 mask plane to the target
@@ -901,8 +840,8 @@ mod tests {
     use crate::tone::{analyze_tone, match_total_exposure, suggest_auto_tone, AutoToneConfig};
     use lumina_sidecar::{
         AnalysisFingerprint, AutoFeatures, CoordinateSystem, DecodeFingerprint, Extras,
-        GeometryFingerprint, MaskLayer, MaskOperation, ModelIdentity, Preprocessing, Resolution,
-        SourceFingerprint,
+        GeometryFingerprint, MaskDefinition, MaskLayer, MaskOperation, MaskStatus, ModelIdentity,
+        Preprocessing, Resolution, SourceFingerprint,
     };
 
     fn mask_definition(
@@ -1003,6 +942,7 @@ mod tests {
             density: 1.0,
             extras: Extras::new(),
             visible: true,
+            local_adjustments: None,
         }
     }
 
@@ -1169,6 +1109,7 @@ mod tests {
             active_copy_id,
             planes,
             policy,
+            source_roi: None,
         }
     }
 
@@ -1211,7 +1152,8 @@ mod tests {
         assert!(output.mask_warnings.is_empty());
     }
 
-    // ----- G-03: visibility eye + range planes in the render stage -----
+    #[path = "local_adjustments_tests.rs"]
+    mod local_adjustments;
 
     #[test]
     fn invisible_layer_is_skipped_silently() {

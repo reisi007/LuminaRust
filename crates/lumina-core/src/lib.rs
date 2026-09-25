@@ -1,5 +1,4 @@
 //! Small, portable raster MVP shared by the native CLI and GUI.
-
 use image::{
     codecs::jpeg::JpegEncoder, codecs::png::PngEncoder, codecs::webp::WebPEncoder, ColorType,
     ImageEncoder,
@@ -7,7 +6,6 @@ use image::{
 use lumina_sidecar::EditRecipe;
 use std::io::Cursor;
 use thiserror::Error;
-
 pub mod cache;
 pub mod crop_max_rect;
 pub mod denoise;
@@ -15,6 +13,7 @@ pub mod generative;
 pub mod histogram;
 pub mod lens_blur;
 pub mod lensfun_map;
+pub(crate) mod mask_alignment;
 pub mod mask_loader;
 pub mod mask_modulation;
 pub mod mask_tiles;
@@ -102,14 +101,12 @@ pub use upright::{
     analyze_upright, upright_analysis, upright_input_fingerprint, UprightSuggestion,
     UPRIGHT_ALGORITHM, UPRIGHT_ALGORITHM_VERSION,
 };
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFileFormat {
     Png,
     Jpeg,
     WebP,
 }
-
 impl ImageFileFormat {
     /// Parse a file extension (without the leading dot) into an export format.
     /// Recognises `png`, `jpg`, `jpeg` and `webp` (case-insensitive). Returns
@@ -123,7 +120,6 @@ impl ImageFileFormat {
             _ => None,
         }
     }
-
     /// Canonical file extension (without the leading dot) for this format.
     /// `Jpeg` maps to `jpg` so saved files match the CLI's `format_extension`
     /// convention and the byte-identical export contract.
@@ -332,6 +328,10 @@ pub enum CoreError {
     },
     #[error("mask re-inference failed: {reason}")]
     MaskInference { reason: String },
+    #[error("local mask adjustment unsupported: {reason}")]
+    LocalAdjustmentUnsupported { reason: String },
+    #[error("invalid local mask adjustment: {reason}")]
+    InvalidLocalAdjustment { reason: String },
     /// LRPAR-G14-DENOISE-IMPL-20: an active `denoise_ai` stage whose artifact/
     /// model is not usable under [`crate::DenoisePolicy::Strict`]. `status` is
     /// the visible §6 state (`unavailable`/`stale`/`missing`/`corrupt`).
@@ -1852,7 +1852,7 @@ fn apply_perspective(
     Ok(out)
 }
 
-fn crop_rect(
+pub(crate) fn crop_rect(
     width: u32,
     height: u32,
     crop: Option<&lumina_sidecar::Crop>,
