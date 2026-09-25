@@ -80,6 +80,9 @@ mod draft_throttle;
 // GUI-REFACTOR-W1-20 S1.3: recipe invalidation (`mark_dirty`/`mark_recipe_dirty`)
 // and the single-adjustment default/reset path.
 mod dirty;
+// MASK-LOCAL-P1.1: capture lifecycle of the post-global/post-geometry stage that
+// the mask-local white-balance picker samples (store + paired invalidation).
+mod effective_source_stage;
 // GUI-REFACTOR-W1-20 S1.4a: preview texture upload, the readback-free VRAM
 // present path and the present target/source identity.
 #[cfg(all(feature = "janklog", debug_assertions))]
@@ -229,13 +232,13 @@ use lumina_core::{
     analyze_tone, analyze_tone_with_histogram, analyze_upright, apply_visualize_overlay,
     detect_red_eyes, detect_spots_heuristic, distraction_candidates, generative_input_frames,
     generative_variant_seed, has_transparent_pixels, match_total_exposure_masked,
-    prepare_source_base, render_frame_from_base_with_generative_and_denoise, suggest_auto_tone,
-    tone_fingerprint, upright_analysis, upright_input_fingerprint, AutoToneConfig, AutoToneResult,
-    CacheStage, DetectedRedEye, DetectedSpot, DistractionKind, DistractionSetting,
-    DistractionStatus, GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput,
-    GenerativeIdentity, ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext,
-    MaskLayerResult, MaskPlane, OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork,
-    RED_EYE_DETECT_ID_PREFIX,
+    prepare_source_base, render::render_frame_from_base_with_source_stage,
+    render_frame_from_base_with_generative_and_denoise, suggest_auto_tone, tone_fingerprint,
+    upright_analysis, upright_input_fingerprint, AutoToneConfig, AutoToneResult, CacheStage,
+    DetectedRedEye, DetectedSpot, DistractionKind, DistractionSetting, DistractionStatus,
+    GenerativeCacheKey, GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeIdentity,
+    ImageFileFormat, ImageFrame, LuminanceHistogram, MaskContext, MaskLayerResult, MaskPlane,
+    OutputSpec, RenderContext, RenderKey, StageFrameCache, StageWork, RED_EYE_DETECT_ID_PREFIX,
 };
 use lumina_core::{
     export_image_with_generative, masks::rasterize_prompt, range_masks, ExportOptions,
@@ -1328,6 +1331,12 @@ pub enum GuiError {
 pub struct LuminaApp {
     original: Option<ImageFrame>,
     preview: Option<ImageFrame>,
+    /// Post-global/post-geometry frame captured by the core before local mask
+    /// recipes. It is the only valid source for the local WB picker.
+    effective_source_stage: Option<ImageFrame>,
+    /// Render identity that produced `effective_source_stage`; a mismatch is
+    /// reported as stale instead of silently sampling an older stage.
+    effective_source_stage_digest: Option<String>,
     source_bytes: Option<Vec<u8>>,
     source_is_raw: bool,
     raw_orientation: u8,
@@ -1699,8 +1708,11 @@ pub struct LuminaApp {
     /// LRPAR-G01-BASIC: mask-layer baseline of the active virtual copy for
     /// the Masking section Previous/Reset (same capture points as above).
     mask_baseline: Vec<MaskLayer>,
-    /// White-balance eyedropper armed state.
+    /// White-balance eyedropper armed state (global absolute picker).
     wb_pick_mode: bool,
+    /// Local relative-WB picker armed state. It is intentionally separate from
+    /// `wb_pick_mode` so a local sample can never mutate global WB fields.
+    local_wb_pick_mode: bool,
     /// LRPAR-G14-REDEYE-15: red-eye region picker armed state (click the
     /// preview to mark a pupil; regions are persisted explicitly).
     red_eye_pick_mode: bool,
@@ -2581,6 +2593,8 @@ impl LuminaApp {
         Self {
             original: None,
             preview: None,
+            effective_source_stage: None,
+            effective_source_stage_digest: None,
             source_bytes: None,
             source_is_raw: false,
             raw_orientation: 1,
@@ -2729,6 +2743,7 @@ impl LuminaApp {
             recipe_baseline: None,
             mask_baseline: Vec::new(),
             wb_pick_mode: false,
+            local_wb_pick_mode: false,
             red_eye_pick_mode: false,
             red_eye_detect_status: String::new(),
             thumbnails: ThumbnailManager::new(),
@@ -6658,6 +6673,7 @@ impl LuminaApp {
         if tool != MaskTool::None {
             self.spot_tool = SpotTool::None;
             self.wb_pick_mode = false;
+            self.local_wb_pick_mode = false;
             self.red_eye_pick_mode = false;
         }
         self.clear_mask_gesture();
@@ -6670,6 +6686,7 @@ impl LuminaApp {
     fn arm_wb_picker(&mut self) {
         instrument_gui_action!(self, GuiAction::ArmWbEyedropper);
         self.wb_pick_mode = true;
+        self.local_wb_pick_mode = false;
         self.red_eye_pick_mode = false;
         self.mask_tool = MaskTool::None;
         self.spot_tool = SpotTool::None;
@@ -6684,6 +6701,7 @@ impl LuminaApp {
         self.red_eye_pick_mode = armed;
         if armed {
             self.wb_pick_mode = false;
+            self.local_wb_pick_mode = false;
             self.mask_tool = MaskTool::None;
             self.spot_tool = SpotTool::None;
             self.clear_mask_gesture();
@@ -6695,6 +6713,7 @@ impl LuminaApp {
     /// persisted state are never touched.
     fn disarm_preview_pickers(&mut self) {
         self.wb_pick_mode = false;
+        self.local_wb_pick_mode = false;
         self.red_eye_pick_mode = false;
     }
 
@@ -6719,6 +6738,7 @@ impl LuminaApp {
         if tool != SpotTool::None {
             self.mask_tool = MaskTool::None;
             self.wb_pick_mode = false;
+            self.local_wb_pick_mode = false;
             self.red_eye_pick_mode = false;
             self.clear_mask_gesture();
         }
@@ -8183,6 +8203,8 @@ impl LuminaApp {
         self.generative_role_status = [GenerativeRoleStatus::Missing; 2];
         self.generative_memo = None;
         self.render_key = None;
+        self.effective_source_stage = None;
+        self.effective_source_stage_digest = None;
         self.tone_analysis = None;
         self.preview_histogram = None;
         self.pending_slider_commit = None;
@@ -8253,6 +8275,8 @@ impl LuminaApp {
         // recipe-blind, so the next render hits it and recomputes exactly the
         // Adjustments(+geometry/masks) stages.
         self.render_key = None;
+        self.effective_source_stage = None;
+        self.effective_source_stage_digest = None;
         self.tone_analysis = None;
         // Coalesce: the slider drag renders a draft live; the full render is
         // deferred to pointer release (PERF-GUI-3/4).
@@ -11203,6 +11227,7 @@ impl LuminaApp {
             .insert("wb_temperature".into(), temp);
         self.recipe.adjustments.insert("wb_tint".into(), tint);
         self.wb_pick_mode = false;
+        self.local_wb_pick_mode = false;
         // GUI-SLIDER-SAVE-1: the eyedropper pick commits like a slider (both
         // fields persist; the temperature is the log representative).
         // GUI-SIDECAR-READ-1: commit synchronously — a bare `render()` would

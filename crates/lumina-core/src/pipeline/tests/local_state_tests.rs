@@ -28,7 +28,11 @@ fn local_mask_state_digest_invalidates_mask_and_render_but_not_decode() {
     let recipe = EditRecipe::default();
     let first = RenderKey::new("s", "d", "p", "vc", &recipe, vec![], output.clone())
         .with_mask_local_state_digest(lumina_sidecar::mask_layers_digest(&[layer.clone()]));
-    layer.local_adjustments.as_mut().unwrap().exposure = 0.5;
+    layer
+        .local_adjustments
+        .as_mut()
+        .unwrap()
+        .temperature_delta_k = 500.0;
     let second = RenderKey::new("s", "d", "p", "vc", &recipe, vec![], output)
         .with_mask_local_state_digest(lumina_sidecar::mask_layers_digest(&[layer]));
     assert_ne!(

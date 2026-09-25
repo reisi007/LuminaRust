@@ -70,11 +70,13 @@ pub use history::{
     MAX_HISTORY_CHANGE_VALUE_CHARS,
 };
 
-// MASK-LOCAL-P0: typed local mask adjustments and the loud legacy migration.
+// MASK-LOCAL-P0/P1.1: typed local mask recipes and the loud legacy migration.
 mod local_adjustments;
 pub use local_adjustments::{
-    mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskStateSnapshot,
-    LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES, MAX_MASK_STATE_LAYERS,
+    mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe,
+    MaskStateSnapshot, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENTS_VERSION,
+    LOCAL_ADJUSTMENT_RANGES, LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
+    MAX_MASK_STATE_LAYERS,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -1008,9 +1010,10 @@ pub struct MaskLayer {
     /// invisible layer is skipped by the render mask stage (explicit user
     /// choice, no warning).
     pub visible: bool,
-    /// MASK-LOCAL-P0: typed, versioned local controls.  The custom
+    /// MASK-LOCAL-P0/P1.1: typed, versioned local controls. The custom
     /// `Deserialize` implementation in `local_adjustments` migrates valid
-    /// legacy `adjustment_*` entries here and rejects conflicts loudly.
+    /// legacy `adjustment_*` entries and v1 recipes, and rejects conflicts or
+    /// absolute/local aliases loudly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_adjustments: Option<LocalAdjustments>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]

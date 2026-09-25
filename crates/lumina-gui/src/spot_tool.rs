@@ -101,6 +101,7 @@ impl LuminaApp {
         if self.spot_tool == SpotTool::None
             || self.mask_tool != MaskTool::None
             || self.wb_pick_mode
+            || self.local_wb_pick_mode
             || self.red_eye_pick_mode
             || self.crop_mode
         {

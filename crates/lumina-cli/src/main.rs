@@ -322,6 +322,9 @@ fn render_best_effort(
                 .map_err(|error| CliError::Message(error.to_string()))?;
             Ok((
                 RenderOutput {
+                    // MASK-LOCAL-P1.1: the CLI has no local-WB picker, so it
+                    // never asks for (and never pays for) the pre-local stage.
+                    effective_source_stage: None,
                     frame,
                     mask_layers: Vec::new(),
                     mask_warnings: Vec::new(),
@@ -882,11 +885,12 @@ struct MaskArgs {
     /// exactly one layer is accepted; ambiguous copies fail loudly.
     #[arg(long, value_name = "LAYER")]
     local_layer: Option<String>,
-    /// Set one P0 local control (`exposure|contrast|highlights|shadows=value`).
-    /// Repeatable; all values are validated before the sidecar is written.
+    /// Set one local control (`exposure|contrast|highlights|shadows|
+    /// temperature_delta_k|tint_delta=value`). Repeatable; all values are
+    /// validated before the sidecar is written.
     #[arg(long = "set-local-adjustment", value_name = "KEY=VALUE")]
     set_local_adjustments: Vec<String>,
-    /// Reset one P0 local control to zero. Repeatable.
+    /// Reset one local control to zero. Repeatable.
     #[arg(long = "reset-local-adjustment", value_name = "KEY")]
     reset_local_adjustments: Vec<String>,
 }
@@ -1210,7 +1214,8 @@ struct MetaPasteArgs {
 /// of `--from` onto every `--to` target sidecar (same full-recipe Sync
 /// mechanism, one `previous` history step per target, per-target failures
 /// isolated and loud). Non-neutral local-mask state is refused rather than
-/// silently omitted; no-local-mask recipes retain the historical copy path.
+/// silently omitted or copied; no-local-mask recipes retain the historical
+/// copy path.
 #[derive(Debug, Args)]
 struct PreviousArgs {
     /// Reference image whose virtual-copy recipe is the Previous source.
@@ -2551,16 +2556,17 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         return mask_list(&args, &document);
     }
     let copy_id = resolve_mask_copy(&document, args.virtual_copy.as_deref())?;
-    let local_transaction =
-        if args.set_local_adjustments.is_empty() && args.reset_local_adjustments.is_empty() {
-            None
-        } else {
-            Some(mask_local::LocalAdjustmentTransaction::capture(
-                &document,
-                &copy_id,
-                args.local_layer.as_deref(),
-            )?)
-        };
+    let local_set_specs = &args.set_local_adjustments;
+    let local_reset_specs = &args.reset_local_adjustments;
+    let local_transaction = if local_set_specs.is_empty() && local_reset_specs.is_empty() {
+        None
+    } else {
+        Some(mask_local::LocalAdjustmentTransaction::capture(
+            &document,
+            &copy_id,
+            args.local_layer.as_deref(),
+        )?)
+    };
     let mut actions: Vec<String> = Vec::new();
     // Decode once for every mutation that mints a mask definition
     // (dimensions for the geometry context); a loud error instead of
@@ -2656,8 +2662,8 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
         &mut document,
         &copy_id,
         args.local_layer.as_deref(),
-        &args.set_local_adjustments,
-        &args.reset_local_adjustments,
+        local_set_specs,
+        local_reset_specs,
         &mut actions,
     )?;
     if args.update_masks {
@@ -5002,11 +5008,20 @@ fn smart_collections(args: SmartCollectionsArgs) -> Result<(), CliError> {
 /// sidecar is missing/invalid or the copy id is unknown, so no target is
 /// touched without a valid source. Each target is then handled in isolation:
 /// load, assign recipe, one `previous` history step, validate, atomic save.
-/// A missing/invalid target sidecar or unknown target copy marks only its
-/// item as `failed` (stderr line + `info!` log); the remaining targets still
-/// run. Exit `0` on full success, `3` on partial failure (analog `batch` /
-/// `batch-meta`), `1` on hard errors. The original images are never modified;
-/// history `extras` carry only the reference file name, never paths.
+/// A missing/invalid target sidecar, an unknown target copy, or non-neutral
+/// local-mask state on that target marks only its item as `failed` (stderr
+/// line + `info!` log); the remaining targets still run. Exit `0` on full
+/// success, `3` on partial failure (analog `batch` / `batch-meta`), `1` on
+/// hard errors. The original images are never modified; history `extras` carry
+/// only the reference file name, never paths.
+///
+/// MASK-LOCAL-P0/P1.1: `previous` is a **recipe-only** cross-image transfer.
+/// A non-neutral local mask state on the *reference* copy aborts the whole
+/// command loudly (exit 1, no target touched); a non-neutral local mask state
+/// on a *target* copy fails only that target (exit 3, target bytes unchanged).
+/// Mask layers and their P0/P1.1 deltas are never transferred automatically —
+/// an explicit full-look/mask copy is a separate, later action and is not part
+/// of P1.1.
 fn previous(args: PreviousArgs) -> Result<(), CliError> {
     if args.to.is_empty() {
         return Err(CliError::Message(

@@ -1,4 +1,4 @@
-//! CPU composition of typed local mask adjustments.
+//! CPU composition of typed local mask recipes (P0 Basic + P1.1 relative WB).
 
 use super::{MaskContext, MaskLayerResult, RenderContext};
 use crate::masks::MaskPlane;
@@ -145,7 +145,12 @@ pub(super) fn apply_local_adjustments(
             });
         }
         let mut adjusted = working.clone();
-        adjusted.apply_recipe(&adjustments.as_recipe())?;
+        // P1.1 uses a dedicated local kernel: relative WB is evaluated after
+        // the already-global frame and before the P0 Basic controls.  When a
+        // delta is present the kernel keeps float gains through the whole
+        // local pass and quantizes once; neutral recipes retain the exact P0
+        // byte path above.
+        adjusted.apply_mask_local_recipe(&adjustments)?;
         blend_local_layer(&mut working, &adjusted, &result.plane);
     }
     *frame = working;

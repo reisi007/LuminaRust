@@ -72,7 +72,12 @@ fn mask_local_adjustment_flags_persist_typed_values_and_reject_bad_input() {
 
     let mut set = mask_args(input.clone());
     set.local_layer = Some(layer_id.clone());
-    set.set_local_adjustments = vec!["exposure=1.25".into(), "highlights=-0.2".into()];
+    set.set_local_adjustments = vec![
+        "exposure=1.25".into(),
+        "highlights=-0.2".into(),
+        "temperature_delta_k=1100".into(),
+        "tint_delta=-0.25".into(),
+    ];
     mask(set).unwrap();
     let layer = &load_sidecar(&sidecar_path_for(&input))
         .unwrap()
@@ -82,6 +87,8 @@ fn mask_local_adjustment_flags_persist_typed_values_and_reject_bad_input() {
     assert_eq!(local.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
     assert_eq!(local.exposure, 1.25);
     assert_eq!(local.highlights, -0.2);
+    assert_eq!(local.temperature_delta_k, 1100.0);
+    assert_eq!(local.tint_delta, -0.25);
     assert!(layer.extras.is_empty());
 
     let before = fs::read(sidecar_path_for(&input)).unwrap();

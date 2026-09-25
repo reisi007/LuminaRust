@@ -481,6 +481,8 @@ fn diagnostic_gpu_routes_refuse_local_mask_pixels_before_gpu_work() {
     app.load_bytes(png(), "diagnostic-local-mask.png").unwrap();
     app.create_mask("Diagnostic").unwrap();
     app.set_mask_local_adjustment("exposure", 1.0).unwrap();
+    app.set_mask_local_adjustment("temperature_delta_k", 1100.0)
+        .unwrap();
 
     let error = app
         .render_gpu_readback_frame()

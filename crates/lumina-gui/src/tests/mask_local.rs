@@ -11,26 +11,85 @@ fn local_app() -> (tempfile::TempDir, LuminaApp, std::path::PathBuf) {
 }
 
 #[test]
-fn gui_exposes_all_p0_local_controls_and_validates_exact_ranges() {
+fn gui_exposes_all_p0_p11_local_controls_and_validates_exact_ranges() {
     let (_directory, mut app, _source) = local_app();
     app.set_mask_local_adjustment("exposure", 10.0).unwrap();
     app.set_mask_local_adjustment("contrast", -1.0).unwrap();
     app.set_mask_local_adjustment("highlights", 1.0).unwrap();
     app.set_mask_local_adjustment("shadows", -1.0).unwrap();
+    app.set_mask_local_adjustment("temperature_delta_k", 1100.0)
+        .unwrap();
+    app.set_mask_local_adjustment("tint_delta", -0.25).unwrap();
     assert_eq!(
         app.selected_mask_local_adjustment("exposure").unwrap(),
         Some(10.0)
     );
+    assert_eq!(app.selected_mask_local_wb_delta().unwrap(), (1100.0, -0.25));
     assert!(app.set_mask_local_adjustment("exposure", 10.01).is_err());
+    assert!(app
+        .set_mask_local_adjustment("temperature_delta_k", 5000.1)
+        .is_err());
     assert!(app
         .set_mask_local_adjustment("wb_temperature", 6500.0)
         .is_err());
 }
 
 #[test]
+fn local_wb_setter_and_picker_use_selected_layer_without_global_mutation() {
+    let (_directory, mut app, _source) = local_app();
+    let before_recipe = app.recipe().clone();
+    app.set_mask_local_wb_delta(1100.0, -0.25).unwrap();
+    assert_eq!(app.selected_mask_local_wb_delta().unwrap(), (1100.0, -0.25));
+    assert_eq!(app.recipe(), &before_recipe);
+    assert!(app.set_mask_local_wb_delta(5000.1, 0.0).is_err());
+
+    let layer_id = app.selected_mask_layer().unwrap().id.clone();
+    let stage = app.original.clone().unwrap();
+    let key = RenderKey::new(
+        "source",
+        "decode",
+        "pipeline",
+        &app.virtual_copy_id,
+        &EditRecipe::default(),
+        Vec::new(),
+        OutputSpec {
+            profile: "sRGB".into(),
+            width: stage.width,
+            height: stage.height,
+            format: "rgba8".into(),
+        },
+    );
+    app.render_key = Some(key.clone());
+    app.effective_source_stage_digest = Some(app.render_key.as_ref().unwrap().digest());
+    app.effective_source_stage = Some(stage.clone());
+    app.render_mask_layers = vec![MaskLayerResult {
+        layer_id: layer_id.clone(),
+        plane: MaskPlane::new(
+            stage.width,
+            stage.height,
+            vec![u16::MAX; (stage.width * stage.height) as usize],
+        )
+        .unwrap(),
+    }];
+    app.pick_mask_local_white_balance_at(0.5, 0.5).unwrap();
+    assert!(!app.recipe().adjustments.contains_key("wb_temperature"));
+    assert!(!app.recipe().adjustments.contains_key("wb_tint"));
+    assert!(!app.local_wb_pick_mode());
+
+    app.render_mask_layers[0].plane.values.fill(0);
+    app.render_key = Some(key);
+    app.effective_source_stage_digest = Some(app.render_key.as_ref().unwrap().digest());
+    app.effective_source_stage = Some(stage);
+    let error = app.pick_mask_local_white_balance_at(0.5, 0.5).unwrap_err();
+    assert!(error.to_string().contains("outside selected mask"));
+    assert!(!app.recipe().adjustments.contains_key("wb_temperature"));
+}
+
+#[test]
 fn local_history_snapshot_restores_previous_values_and_reset_is_explicit() {
     let (_directory, mut app, source) = local_app();
     app.set_mask_local_adjustment("exposure", 1.0).unwrap();
+    app.set_mask_local_wb_delta(1250.0, 0.25).unwrap();
     app.save_sidecar();
     let first_history = app.document.as_ref().unwrap().virtual_copies[0]
         .history
@@ -51,6 +110,7 @@ fn local_history_snapshot_restores_previous_values_and_reset_is_explicit() {
         app.selected_mask_local_adjustment("exposure").unwrap(),
         Some(1.0)
     );
+    assert_eq!(app.selected_mask_local_wb_delta().unwrap(), (1250.0, 0.25));
 
     app.reset_mask_local_adjustment("exposure").unwrap();
     assert_eq!(
@@ -78,11 +138,158 @@ fn local_draft_route_upgrades_to_mask_aware_cpu_and_navigator_refusal_is_visible
 #[test]
 fn reset_to_as_shot_removes_absolute_wb_keys() {
     let (_directory, mut app, _source) = local_app();
+    app.set_mask_local_wb_delta(1100.0, 0.25).unwrap();
     app.set_white_balance_from_point(1.0, 0.5, 0.25).unwrap();
     assert!(app.recipe().adjustments.contains_key("wb_temperature"));
     app.reset_white_balance_to_as_shot().unwrap();
     assert!(!app.recipe().adjustments.contains_key("wb_temperature"));
     assert!(!app.recipe().adjustments.contains_key("wb_tint"));
+    assert_eq!(app.selected_mask_local_wb_delta().unwrap(), (1100.0, 0.25));
+}
+
+#[test]
+fn captured_local_wb_stage_is_pinned_to_its_render_identity_and_cleared_on_edit() {
+    let (_directory, mut app, _source) = local_app();
+    let stage = app.original.clone().unwrap();
+
+    // Storing derives the identity from the *current* render key, so a stage
+    // can never be recorded against a render that did not produce it.
+    app.render_key = Some(RenderKey::new(
+        "source",
+        "decode",
+        "pipeline",
+        &app.virtual_copy_id,
+        &EditRecipe::default(),
+        Vec::new(),
+        OutputSpec {
+            profile: "sRGB".into(),
+            width: stage.width,
+            height: stage.height,
+            format: "rgba8".into(),
+        },
+    ));
+    let pinned = app.render_key.as_ref().unwrap().digest();
+    app.set_effective_source_stage(Some(stage.clone()));
+    assert_eq!(
+        app.effective_source_stage_digest.as_deref(),
+        Some(pinned.as_str())
+    );
+
+    // A different identity is detectable rather than silently accepted: the
+    // stored digest no longer matches the live render identity, so the picker
+    // refuses to sample instead of trusting a stage from another render.
+    let other = RenderKey::new(
+        "other-source",
+        "decode",
+        "pipeline",
+        &app.virtual_copy_id,
+        &EditRecipe::default(),
+        Vec::new(),
+        OutputSpec {
+            profile: "sRGB".into(),
+            width: stage.width,
+            height: stage.height,
+            format: "rgba8".into(),
+        },
+    );
+    app.render_key = Some(other);
+    let live = app.render_key.as_ref().unwrap().digest();
+    assert_ne!(live, pinned);
+    assert_ne!(
+        app.effective_source_stage_digest.as_deref(),
+        Some(live.as_str())
+    );
+
+    // Any recipe edit drops stage and identity together, so the picker demands
+    // a fresh render instead of sampling the previous identity's pixels.
+    app.mark_dirty();
+    assert!(app.effective_source_stage.is_none());
+    assert!(app.effective_source_stage_digest.is_none());
+}
+
+/// MASK-LOCAL-P1.1: the pre-local stage is captured lazily. A render that is
+/// not part of a local-WB sampling session must not retain one at all, and a
+/// render hub that produced none must leave both the stage and its digest
+/// cleared (never half-updated).
+#[test]
+fn no_local_work_means_no_effective_source_stage_capture() {
+    let (_directory, mut app, _source) = local_app();
+    app.render().unwrap();
+
+    // A P0-only local recipe and no armed picker: the copy is not requested.
+    app.set_mask_local_adjustment("exposure", 0.75).unwrap();
+    app.render().unwrap();
+    assert!(
+        !app.wants_effective_source_stage(),
+        "P0-only local work must not request the stage"
+    );
+    assert!(app.effective_source_stage.is_none());
+    assert!(app.effective_source_stage_digest.is_none());
+
+    // Arming the picker requests the stage, and the hub then stores it with the
+    // digest of the render that produced it.
+    app.arm_mask_local_wb_picker();
+    assert!(app.wants_effective_source_stage());
+    app.render().unwrap();
+    let stage = app.effective_source_stage.as_ref().expect("stage captured");
+    assert_eq!(
+        (stage.width, stage.height),
+        app.image_dims().expect("image loaded")
+    );
+    let digest = app.render_key.as_ref().expect("render identity").digest();
+    assert_eq!(
+        app.effective_source_stage_digest.as_deref(),
+        Some(digest.as_str())
+    );
+    // The synthetic test image has no model matte, so the picker still fails
+    // loudly on the missing evaluation — but only *after* accepting the stage,
+    // which proves the captured stage is usable.
+    let error = app.local_wb_sample_provenance().unwrap_err().to_string();
+    assert!(error.contains("no evaluated matte"), "{error}");
+    let layer_id = app
+        .selected_mask_layer()
+        .expect("selected layer")
+        .id
+        .clone();
+    let (width, height) = app.image_dims().expect("image loaded");
+    app.render_mask_layers = vec![MaskLayerResult {
+        layer_id,
+        plane: MaskPlane::new(width, height, vec![u16::MAX; (width * height) as usize]).unwrap(),
+    }];
+    app.local_wb_sample_provenance()
+        .expect("armed picker with a fresh stage and matte must have provenance");
+
+    // A non-neutral P1.1 delta keeps requesting it so a later pick has a fresh
+    // stage, and a render that retained none clears the pair completely.
+    app.set_mask_local_wb_delta(1100.0, -0.25).unwrap();
+    assert!(app.wants_effective_source_stage());
+    app.set_effective_source_stage(None);
+    assert!(app.effective_source_stage.is_none());
+    assert!(app.effective_source_stage_digest.is_none());
+    let error = app.local_wb_sample_provenance().unwrap_err().to_string();
+    assert!(error.contains("missing"), "{error}");
+}
+
+/// The local WB commit is one transaction over *both* deltas, so its log
+/// action label must name that transaction instead of a single control: a
+/// tint-only pick must not be reported as a temperature change.
+#[test]
+fn local_wb_commit_labels_both_delta_axes_in_the_log_action() {
+    let (_directory, mut app, _source) = local_app();
+    app.set_mask_local_wb_delta(0.0, -0.4).unwrap();
+    let (key, value) = app.pending_slider_commit.clone().expect("commit armed");
+    assert_eq!(key, "mask.local.white_balance");
+    assert_eq!(value, 0.0);
+    assert_eq!(
+        app.pending_history_step.as_deref(),
+        Some("mask.local.white_balance")
+    );
+
+    // The individual sliders keep their own precise per-control label.
+    app.set_mask_local_adjustment("tint_delta", 0.2).unwrap();
+    let (key, value) = app.pending_slider_commit.clone().expect("commit armed");
+    assert_eq!(key, "mask.local.tint_delta");
+    assert_eq!(value, 0.2);
 }
 
 #[test]

@@ -262,11 +262,16 @@ diese Route als bestanden behauptet.
 
 - **Semantik:** Jeder sichtbare lokale Layer wird sequenziell auf dem global
   angepassten Ergebnis angewendet. Globales WB ist absolute-only und hat einen
-  expliziten, sichtbaren **Reset to As Shot**; P0 fügt kein lokales WB hinzu.
-  Überlappende Layer verwenden exakt die persistierte Listenreihenfolge.
-- **P0-Regler:** Nur Exposure (`-10..=10` EV), Contrast, Highlights und
-  Shadows (`-1..=1`) mit der globalen Kernel-Reihenfolge
-  `exposure → contrast → shadows → highlights`. WB/Tone/Color bleiben P1.
+  expliziten, sichtbaren **Reset to As Shot**. P1.1 ergänzt ein separates
+  relatives Masken-WB-Delta; es wird nach dem globalen Ergebnis und vor local
+  Basic angewendet. Überlappende Layer verwenden exakt die persistierte
+  Listenreihenfolge.
+- **P0/P1.1-Regler:** P0 behält Exposure (`-10..=10` EV), Contrast, Highlights
+  und Shadows (`-1..=1`) mit der Reihenfolge
+  `exposure → contrast → shadows → highlights`. Version 2 der typed Recipe
+  ergänzt ausschließlich `temperature_delta_k` (`-5000..=5000`) und
+  `tint_delta` (`-1..=1`), beide endlich und relativ. Absolute `wb_temperature`/
+  `wb_tint` sowie lokale Tone/Color/Presence/Detail/Optics bleiben disabled.
 - **Gemeinsamer Kontext:** Preview, Export, CLI, Navigator, Neighbor und
   Thumbnail lösen denselben Masken-/Geometry-Raum auf. Full-Frame, Zoom-ROI,
   Crop/Aspect, 90°-Rotation und Mirror sind unterstützt. Lens, Perspective,
@@ -290,23 +295,50 @@ diese Route als bestanden behauptet.
   Masken-Zustands-Snapshot; Undo, Reset und Previous restaurieren ihn ohne
   Lücke. CLI und GUI nutzen dieselben CPU-Goldens.
 - **CLI-Persistenz:** `mask --set-local-adjustment KEY=VALUE` und
-  `mask --reset-local-adjustment KEY` validieren alle Flags vor der Mutation,
-  legen den kompletten vorherigen `mask_layers`-Snapshot plus strukturierten
-  `HistoryEntry` in den Kandidaten und speichern erst danach per Revision-CAS.
-  Ein CAS-/I/O-Fehler publiziert keinen Erfolg; nach Beheben der Ursache kann
-  derselbe Befehl erneut ausgeführt werden.
+  `mask --reset-local-adjustment KEY` akzeptieren die sechs exakten local
+  Keys (`temperature_delta_k`/`tint_delta` eingeschlossen). Alle Flags werden vor
+  der Mutation validiert, legen den kompletten vorherigen
+  `mask_layers`-Snapshot plus strukturierten `HistoryEntry` in den Kandidaten
+  und speichern erst danach per Revision-CAS. Ein CAS-/I/O-Fehler publiziert
+  keinen Erfolg; nach Beheben der Ursache kann derselbe Befehl erneut
+  ausgeführt werden.
 - **CLI-Statusvertrag:** Der menschenlesbare Layer-Status verwendet die
   dokumentierte Reihenfolge
-  `v1 exposure=<number> contrast=<number> highlights=<number> shadows=<number>`
-  (ohne `Debug`-Struct-Layout). `mask --list --json` behält dagegen das
-  strukturierte `local_adjustments`-Objekt mit allen typisierten Feldern.
+  `v2 exposure=<number> contrast=<number> highlights=<number> shadows=<number>
+  temperature_delta_k=<number> tint_delta=<number>` (ohne `Debug`-Struct-
+  Layout). `mask --list --json` behält dagegen das strukturierte
+  `local_adjustments`-Objekt mit allen typisierten Feldern.
+- **P1.1-Picker/Parität:** Die GUI-Pipette setzt nur den ausgewählten Layer
+  aus dem effektiven Post-Global/Geometry-Sample; Provenance/Staleness und
+  Outside-Mask-Fehler sind sichtbar. CLI und GUI verwenden denselben
+  typisierten Setter. GPU-/Stand-ins CPU-routen/verweigern bis zur Parität;
+  kein Auto-WB und kein globaler Fallback.
+- **Lazy Source-Stage (P1.1):** `RenderOutput::effective_source_stage` ist ein
+  `Option` und wird nur für die lokale WB-Pick-Session der GUI befüllt.
+  CLI-Render (`render`, `export`, Batch) und reine Global-/Stand-in-Routen
+  zahlen keine Full-Frame-Kopie. Stage und Render-Digest werden immer
+  paarweise gesetzt bzw. verworfen.
+- **CLI-Cross-image Previous bleibt recipe-only (P0-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt keine lokalen Masken-Layer und
+  keine P0-/P1.1-Deltas. Ein nicht-neutraler lokaler Zustand auf der
+  Quell-Kopie bricht den Lauf mit Exit 1 ab, ohne ein Ziel anzufassen; ein
+  nicht-neutraler Zustand auf einem Ziel markiert nur dieses Ziel als `failed`
+  (Exit 3) und lässt seine Bytes unverändert. Sync Settings bleibt
+  recipe-only. Ein expliziter Full-Look-/Masken-Kopiervorgang ist eine spätere,
+  getrennte Aktion. Das **GUI**-Previous auf eine Auswahl im selben Lauf
+  überträgt den vollständigen Masken-Snapshot weiterhin bei kompatiblem
+  Ziel-Maskkontext und verweigert inkompatible Referenzen laut — dieser
+  bestehende GUI-Vertrag bleibt unverändert.
 
 **Abnahme:** CPU-Goldens für `alpha=0/partial/1`, Outside-Mask-Identität,
-überlappende Reihenfolge, ROI/Crop/Aspect/Rotation/Mirror, ungültige
-Schemas, Cache-Identität, Draft-Refusal und CLI/GUI-Parität; keine
-Regressionsverwechslung mit globalen Anpassungen. P1 umfasst ausschließlich
-die noch offenen lokalen WB-/Tone-/Color-Regler und weitere
-Hardware-/GPU-Nachweise.
+überlappende Reihenfolge (inklusive zwei überlappender Layer mit Temperatur-
+und Tint-Delta in persistierter Reihenfolge), ROI/Crop/Aspect/Rotation/Mirror,
+ungültige Schemas, relative WB-Delta/Tint-/Temperature-only, lokale
+Reihenfolge, Global/Reset, Cache-Identität, Draft-Refusal,
+Picker-Provenance/Staleness, ein No-Local-Pfad-Nachweis ohne Stage-Kopie und
+CLI/GUI-Parität; keine Regressionsverwechslung mit globalen Anpassungen.
+P1.2 Tone/Color/Presence/Detail/Optics und weitere Hardware-/GPU-Nachweise
+bleiben offen.
 
 
 Die GUI zeigt Datei-, Sidecar-, Offline-, Masken- und Konfliktstatus. Vorschau

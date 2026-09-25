@@ -173,7 +173,8 @@ impl HistoryEntry {
 
     /// Parse the complete mask-layer snapshot stored before a history edit.
     /// `None` is the valid legacy representation for entries that predate
-    /// MASK-LOCAL-P0; a present but malformed snapshot is always rejected.
+    /// MASK-LOCAL-P0; v1 snapshots migrate to the current typed version and a
+    /// present but malformed snapshot is always rejected.
     pub fn mask_state(&self) -> Result<Option<MaskStateSnapshot>, SidecarError> {
         let Some(value) = self.extras.get(HISTORY_MASK_STATE_KEY) else {
             return Ok(None);

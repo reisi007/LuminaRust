@@ -214,7 +214,7 @@ fn local_history_snapshot_restores_complete_state_and_reset_preserves_prior_snap
     let listed = mask_list(&input, false);
     assert_success(&listed, "list restored state");
     assert!(String::from_utf8_lossy(&listed.stdout)
-        .contains("local=v1 exposure=0.5 contrast=0.25 highlights=0 shadows=0"));
+        .contains("local=v2 exposure=0.5 contrast=0.25 highlights=0 shadows=0 temperature_delta_k=0 tint_delta=0"));
 
     let reset = reset_local(&input, &layer_id, "contrast");
     assert_success(&reset, "reset local adjustment");
@@ -280,7 +280,7 @@ fn local_status_text_is_stable_while_json_stays_structured() {
     let text_output = mask_list(&input, false);
     assert_success(&text_output, "list local adjustments as text");
     let stdout = String::from_utf8_lossy(&text_output.stdout);
-    assert!(stdout.contains("local=v1 exposure=1.25 contrast=0 highlights=-0.2 shadows=0"));
+    assert!(stdout.contains("local=v2 exposure=1.25 contrast=0 highlights=-0.2 shadows=0 temperature_delta_k=0 tint_delta=0"));
     assert!(!stdout.contains("LocalAdjustments {"));
     assert!(!stdout.contains("version:"));
 
@@ -289,11 +289,63 @@ fn local_status_text_is_stable_while_json_stays_structured() {
     let document: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
     let local = &document["copies"][0]["layers"][0]["local_adjustments"];
     assert!(local.is_object());
-    assert_eq!(local["version"], 1);
+    assert_eq!(local["version"], 2);
+    assert_eq!(local["temperature_delta_k"], 0.0);
+    assert_eq!(local["tint_delta"], 0.0);
     assert_eq!(local["exposure"], 1.25);
     assert_eq!(local["contrast"], 0.0);
     assert_eq!(local["highlights"], -0.2);
     assert_eq!(local["shadows"], 0.0);
+}
+
+#[test]
+fn previous_never_transfers_local_mask_state_between_images() {
+    // MASK-LOCAL-P0/P1.1: cross-image `previous` is recipe-only. It must not
+    // copy the reference's local mask layers — with or without P1.1 relative
+    // WB deltas — and the refusal stays loud with unchanged target bytes.
+    let directory = tempfile::tempdir().unwrap();
+    let (source, source_layer) = imported_local_image(&directory, "source-wb.png", 70);
+    assert_success(
+        &set_local(&source, &source_layer, "temperature_delta_k=1250"),
+        "set source temperature delta",
+    );
+    assert_success(
+        &set_local(&source, &source_layer, "tint_delta=0.25"),
+        "set source tint delta",
+    );
+    let (target, target_layer) = imported_local_image(&directory, "target-wb.png", 80);
+    assert_success(
+        &set_local(&target, &target_layer, "temperature_delta_k=-500"),
+        "set target local state",
+    );
+    let target_before = fs::read(sidecar_path_for(&target)).unwrap();
+
+    let output = cli()
+        .args([
+            "previous",
+            "--from",
+            source.to_str().unwrap(),
+            "--to",
+            target.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refused recipe-only transfer"), "{stderr}");
+    assert!(
+        stderr.contains("cross-image mask state transfer is unsafe"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sidecar_path_for(&target)).unwrap(), target_before);
+    let document = load_sidecar(&sidecar_path_for(&target)).unwrap();
+    let local = document.virtual_copies[0].mask_layers[0]
+        .local_adjustments
+        .as_ref()
+        .unwrap();
+    assert_eq!(local.temperature_delta_k, -500.0);
+    assert_eq!(local.tint_delta, 0.0);
 }
 
 #[test]
@@ -303,6 +355,12 @@ fn previous_refuses_recipe_only_local_mask_transfer_on_source_or_target() {
     let (local_source, source_layer) = imported_local_image(&directory, "local-source.png", 70);
     let set = set_local(&local_source, &source_layer, "exposure=1.0");
     assert_success(&set, "set source local adjustment");
+    // A P1.1 relative-WB delta alone is already a refusal reason: a
+    // tint-only local state must not cross images either.
+    assert_success(
+        &set_local(&local_source, &source_layer, "tint_delta=-0.4"),
+        "set source tint delta",
+    );
     let clean_target = write_png(&directory, "clean-target.png", 80);
     import_image(&clean_target);
     let target_before = fs::read(sidecar_path_for(&clean_target)).unwrap();

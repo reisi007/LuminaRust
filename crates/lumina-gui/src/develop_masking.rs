@@ -241,8 +241,73 @@ impl LuminaApp {
                         }
                     }
                 }
+                ui.separator();
+                ui.label(Str::WhiteBalance.t());
+                let local_temp = self
+                    .selected_mask_local_wb_delta()
+                    .map(|(temperature, _)| temperature)
+                    .unwrap_or(0.0);
+                let mut temperature_delta_k = local_temp;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut temperature_delta_k, -5000.0..=5000.0)
+                            .text(Str::Temperature.t())
+                            .suffix(" K Δ"),
+                    )
+                    .changed()
+                {
+                    if let Err(e) =
+                        self.set_mask_local_adjustment("temperature_delta_k", temperature_delta_k)
+                    {
+                        self.show_error(e);
+                    }
+                }
+                let local_tint = self
+                    .selected_mask_local_wb_delta()
+                    .map(|(_, tint)| tint)
+                    .unwrap_or(0.0);
+                let mut tint_delta = local_tint;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut tint_delta, -1.0..=1.0)
+                            .text(Str::Tint.t())
+                            .suffix(" Δ"),
+                    )
+                    .changed()
+                {
+                    if let Err(e) = self.set_mask_local_adjustment("tint_delta", tint_delta) {
+                        self.show_error(e);
+                    }
+                }
+                if self.local_wb_pick_mode() {
+                    ui.horizontal(|ui| {
+                        if ui.button(Str::WbEyedropperActive.t()).clicked()
+                            || ui.button(Str::Cancel.t()).clicked()
+                        {
+                            self.local_wb_pick_mode = false;
+                        }
+                    });
+                    ui.label(Str::PickWhiteBalanceHint.t());
+                } else if ui.button(Str::WbEyedropper.t()).clicked() {
+                    self.arm_mask_local_wb_picker();
+                }
+                match self.local_wb_sample_provenance() {
+                    Ok(provenance) => {
+                        ui.colored_label(egui::Color32::GREEN, provenance);
+                    }
+                    Err(error) => {
+                        ui.colored_label(egui::Color32::YELLOW, error.to_string());
+                    }
+                }
                 if ui.button(Str::Reset.t()).clicked() {
-                    for key in ["exposure", "contrast", "highlights", "shadows"] {
+                    for key in [
+                        "exposure",
+                        "contrast",
+                        "highlights",
+                        "shadows",
+                        "temperature_delta_k",
+                        "tint_delta",
+                    ] {
                         if let Err(e) = self.reset_mask_local_adjustment(key) {
                             self.show_error(e);
                         }

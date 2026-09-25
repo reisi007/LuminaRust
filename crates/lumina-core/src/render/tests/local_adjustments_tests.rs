@@ -13,7 +13,7 @@ fn local_layer(id: &str, mask: lumina_sidecar::MaskReference, exposure: f64) -> 
     layer
 }
 
-fn local_render(
+pub(super) fn local_render(
     frame: &ImageFrame,
     copies: &[VirtualCopy],
     planes: BTreeMap<(String, String), MaskPlane>,

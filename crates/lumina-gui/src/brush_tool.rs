@@ -432,6 +432,7 @@ impl LuminaApp {
     pub(crate) fn interactive_cursor_allowed(&self, ui: &egui::Ui) -> bool {
         !ui.ctx().egui_wants_keyboard_input()
             && !self.wb_pick_mode
+            && !self.local_wb_pick_mode
             && !self.red_eye_pick_mode
             && !self.crop_mode
     }

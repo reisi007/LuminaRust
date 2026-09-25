@@ -33,6 +33,7 @@ impl LuminaApp {
         scale: f32,
     ) {
         if self.wb_pick_mode
+            || self.local_wb_pick_mode
             || self.red_eye_pick_mode
             || self.spot_tool != SpotTool::None
             || self.crop_mode
@@ -42,7 +43,11 @@ impl LuminaApp {
         if self.mask_tool == MaskTool::None {
             // Pins remain selectable even while no paint tool is armed, except
             // when another image-click picker (Spot/Red-eye) owns the gesture.
-            if self.spot_tool == SpotTool::None && !self.red_eye_pick_mode && response.clicked() {
+            if self.spot_tool == SpotTool::None
+                && !self.red_eye_pick_mode
+                && !self.local_wb_pick_mode
+                && response.clicked()
+            {
                 if let Some(pos) = response.interact_pointer_pos() {
                     let full = self.image_dims().unwrap_or((1, 1));
                     let roi = self.preview_roi.map(|roi| {

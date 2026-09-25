@@ -1865,9 +1865,10 @@ geschlossen.
   bestehende Geometry-/Crop-Vertrag) ist die Eingabe des ersten lokalen Layers;
   ein lokaler Layer verändert nie die globale Rezeptbasis.
 - **Globales WB bleibt absolute-only.** Lokale P0-Adjustments enthalten keinen
-  WB-Regler. Ein expliziter globales **Reset to As Shot** entfernt die globale
-  WB-Abweichung und stellt den dokumentierten As-Shot-Ausgangspunkt her; er
-  wird nicht durch einen impliziten lokalen Reset oder eine Schätzung ersetzt.
+  WB-Regler (das relative lokale Delta kommt erst mit P1.1). Ein expliziter
+  globales **Reset to As Shot** entfernt die globale WB-Abweichung und stellt
+  den dokumentierten As-Shot-Ausgangspunkt her; er wird nicht durch einen
+  impliziten lokalen Reset oder eine Schätzung ersetzt.
 - Überlappende Layer werden in der **persistierten Listenreihenfolge** von
   Index 0 nach Index `n-1` auf das jeweils bereits bearbeitete Ergebnis
   angewendet. Eine spätere persistierte reorder-Operation ist eine explizite
@@ -1876,7 +1877,9 @@ geschlossen.
 - P0 liefert nur die sicheren lokalen Regler `exposure` (`-10..=10` EV),
   `contrast`, `highlights` und `shadows` (je `-1..=1`) mit exakt der
   globalen Kernel-Reihenfolge `exposure → contrast → shadows → highlights`.
-  Lokales WB, Tone/Color und alle darüber hinausgehenden Regler bleiben P1.
+  Lokales relatives WB ist der getrennte Schnitt **P1.1** (siehe unten);
+  Tone/Color/Presence/Detail/Optics und alle darüber hinausgehenden Regler
+  bleiben P1.2.
 
 ### Schema, Validierung und Digest
 
@@ -1890,7 +1893,7 @@ Werte und Werte außerhalb der exakten Bereiche sind harte, sichtbare
 Persistenz-/Renderfehler. Es gibt keine stille Verwerfung, kein Clipping und
 keine unbekannte Schemaform.
 
-Die lokale Auswertung ist eine CPU-Operation **nach** dem bestehenden
+Die lokale P0-Auswertung ist eine CPU-Operation **nach** dem bestehenden
 Global-/Geometry-Pfad und vor dem endgültigen Output. Sichtbare Layer werden
 in Listenreihenfolge auf die global adjustierte Ausgabe angewendet. Pro Pixel
 gilt `out = round(base*(1-alpha) + adjusted*alpha)`, wobei `alpha` aus der
@@ -1898,6 +1901,52 @@ final ausgerichteten u16-Maske stammt; `0` lässt das Byte unverändert, `1`
 liefert das vollständige lokale Rezept, und partielle Alpha werden exakt
 gerundet. Alpha des Bildframes bleibt unverändert. Neutrale Werte (alle
 Regler `0`, leere lokale Liste) sind byte-identisch.
+
+### P1.1 — relative lokale WB-Erweiterung
+
+**Nutzerentscheidung (2026-09-25):** Globales WB bleibt absolute-only und wird
+nur durch **Reset to As Shot** gelöscht. `local_adjustments` version 2 ergänzt
+`temperature_delta_k` (`-5000..=5000`) und `tint_delta` (`-1..=1`) als
+**relative** Deltas. Absolute/local Aliasnamen wie `wb_temperature` oder
+`wb_tint` sind in der lokalen Typed Recipe ungültig. Version-1-Typed-Objekte
+und P0-`adjustment_*`-Legacy-Extras migrieren mit neutralen Deltas; Konflikte,
+Unknowns, NaN/Inf und Bereichsfehler bleiben loud.
+
+Pro persistiertem Layer gilt deterministisch:
+`globaler Result-Frame → lokale relative WB → local Basic
+(exposure → contrast → shadows → highlights) → fractional u16-Mask-Blend`.
+Die WB-Gains werden als `f64` aus dem Delta berechnet und zusammen mit den
+lokalen Basic-Stufen nur an der abschließenden RGBA8-Grenze quantisiert. Die
+per Layer und persistierte Reihenfolge bleiben Teil der Mask-/Render-Digest.
+Alpha-0/Outside-Mask-Bytes bleiben identisch, Alpha-1 übernimmt das lokale
+Rezept, partielle Alpha bleiben fraktional; Strict/Warn-Atomizität bleibt wie
+P0. GPU-/Stand-in-Routen müssen relative WB bis zur echten Parität sichtbar
+CPU-routen oder verweigern.
+
+Die lokale WB-Pipette liest nur den expliziten effektiven Source-Stage nach
+Global/Geometry und nur im ausgewählten Layer. Sample-Provenance und
+Staleness werden ausgewiesen; Outside-Mask, stale/missing sample und fehlende
+Layer schlagen sichtbar fehl. Es gibt keinen globalen Fallback und kein
+Auto-WB. CLI/GUI nutzen denselben typisierten Setter. P1.2 Tone/Color/
+Presence/Detail/Optics bleiben deaktiviert.
+
+Der Source-Stage ist **lazy**: `RenderOutput::effective_source_stage` ist ein
+`Option` und bleibt `None`, solange keine lokale WB-Pick-Session läuft. Das
+behält den bisherigen Full-Frame-`memcpy` aus dem Render-Hub heraus; CLI-,
+Export- und reine Global-Routen zahlen ihn nie. Stage und Render-Digest werden
+immer paarweise gesetzt bzw. verworfen, damit kein Zustand halb aktualisiert
+zurückbleibt.
+
+**CLI-Cross-image Previous bleibt recipe-only (P0-Vertrag).** Der dateibasierte
+CLI-Befehl `previous` überträgt keine lokalen Layer und keine Deltas auf ein
+anderes Bild. Ein nicht-neutraler lokaler Zustand auf der Quell-Kopie bricht
+den Lauf laut ab (kein Ziel angefasst), ein nicht-neutraler Zustand auf einem
+Ziel schlägt nur dieses Ziel fehl, ohne seine Bytes zu verändern; Sync Settings
+bleibt recipe-only. Ein expliziter Full-Look-/Masken-Kopiervorgang ist eine
+spätere, getrennte Aktion und nicht Teil von P1.1. Das GUI-Previous auf eine
+Auswahl im selben Lauf überträgt den vollständigen Masken-Snapshot weiterhin
+bei kompatiblem Ziel-Maskkontext und verweigert inkompatible Copy-/Mask-
+Referenzen laut — dieser bestehende GUI-Vertrag bleibt unverändert.
 
 Vor jeder Pixelmutation werden alle Layer, Typen, Wertebereiche, Masken- und
 Geometry-Kontexte validiert. `MaskPolicy::Strict` bricht bei jedem
@@ -1928,9 +1977,10 @@ Byte-Identität, überlappende Reihenfolge, Full-Frame/ROI/Crop/Aspect/
 90°-Rotation/Mirror, ungültige Schemata, Cache-Identität, Draft-Refusal,
 CLI/GUI-Parität und Regressionen der globalen Pipeline. Drafts und nicht
 unterstützte GPU-Routen dürfen nur mit sichtbarem Grund abgelehnt werden.
-History/Undo/Reset/Previous umfasst den kompletten additiven
-`local_adjustments`-Snapshot (atomar, ohne Lücke). P1 bleibt WB, Tone und Color
-als lokale Regler; Parent-Hardware-/GPU-Gates bleiben unabhängig davon offen.
+History/Undo/Reset/Previous der aktiven virtuellen Kopie umfasst den kompletten
+additiven `local_adjustments`-Snapshot (atomar, ohne Lücke), einschließlich
+P1.1-WB-Delta. P1.2 Tone/Color/Presence/Detail/Optics bleiben deaktiviert;
+Parent-Hardware-/GPU-Gates bleiben unabhängig davon offen.
 
 ## Abnahme
 

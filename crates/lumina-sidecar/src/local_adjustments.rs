@@ -1,55 +1,74 @@
-//! Versioned local mask adjustments (`MASK-LOCAL-P0`).
+//! Versioned local mask recipes (`MASK-LOCAL-P0/P1.1`).
 //!
-//! This module is deliberately small and sidecar-only.  It owns the typed P0
-//! values, the one loud migration from the historical flattened
-//! `adjustment_*` entries, and the canonical state digest used by render/cache
-//! identities.  Pixel evaluation lives in `lumina-core`; keeping the schema and
-//! the migration together prevents the GUI, CLI and core from inventing three
-//! subtly different interpretations of the same layer.
+//! This module is deliberately small and sidecar-only. It owns the typed P0
+//! controls, the P1.1 relative-WB delta, the loud migrations from v1 and the
+//! historical flattened `adjustment_*` entries, and the canonical state digest
+//! used by render/cache identities. Pixel evaluation lives in `lumina-core`;
+//! keeping schema and migration together prevents GUI, CLI and core from
+//! inventing subtly different interpretations of the same layer.
 
-use super::{Extras, MaskLayer, MaskReference, SidecarDocument};
+use super::{Extras, MaskLayer, MaskReference};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::{EditRecipe, SidecarError};
 
+mod migration;
+mod wire;
+use migration::normalize_legacy_layer_extras;
+pub use migration::validate_mask_layer_local_state;
+
 /// Current version of the typed local-adjustment object.
-pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 1;
+///
+/// Version 1 is the P0 object (the four scalar local controls only). Version 2
+/// adds the explicitly relative white-balance delta; loading version 1 is an
+/// explicit, lossless migration with both new deltas set to zero.
+pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 2;
+/// The last accepted P0-only typed version.
+pub const LEGACY_LOCAL_ADJUSTMENTS_VERSION: u8 = 1;
 
 /// Maximum number of layer snapshots retained in one history entry.  The
 /// active-copy validator has its own copy/layer limits; this smaller bound
 /// keeps hostile history payloads from becoming unbounded allocations.
 pub const MAX_MASK_STATE_LAYERS: usize = 4096;
 
-/// P0 scalar controls.  The ranges intentionally mirror the global raster
-/// controls, while the kernel order is owned by the core compositor.
-pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 4] = [
+/// Local scalar controls.  The P0 ranges intentionally mirror the global
+/// raster controls, while the kernel order is owned by the core compositor.
+/// The two WB entries are *relative deltas*, never absolute WB values.
+pub const LOCAL_ADJUSTMENT_RANGES: [(&str, f64, f64); 6] = [
     ("exposure", -10.0, 10.0),
     ("contrast", -1.0, 1.0),
     ("highlights", -1.0, 1.0),
     ("shadows", -1.0, 1.0),
+    ("temperature_delta_k", -5000.0, 5000.0),
+    ("tint_delta", -1.0, 1.0),
 ];
 
-/// A typed, versioned P0 local adjustment set.
-///
-/// `0.0` is the identity for every field.  There is deliberately no local WB,
-/// tone-curve, HSL or colour field in this version; adding one requires a new
-/// version and a corresponding core/GPU decision rather than an untyped extra.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Named range aliases for callers that need to render/document the local WB
+/// contract without duplicating magic numbers.
+pub const LOCAL_WB_TEMPERATURE_DELTA_RANGE: (f64, f64) = (-5000.0, 5000.0);
+pub const LOCAL_WB_TINT_DELTA_RANGE: (f64, f64) = (-1.0, 1.0);
+
+/// A typed, versioned local recipe.  The P0 scalar fields are retained and
+/// version 2 adds only an explicitly relative WB delta.  In particular, this
+/// type has no absolute `wb_temperature`/`wb_tint` fields: those names belong
+/// to the global recipe and are rejected here rather than being ambiguous
+/// aliases.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct LocalAdjustments {
     pub version: u8,
-    #[serde(default)]
     pub exposure: f64,
-    #[serde(default)]
     pub contrast: f64,
-    #[serde(default)]
     pub highlights: f64,
-    #[serde(default)]
     pub shadows: f64,
+    pub temperature_delta_k: f64,
+    pub tint_delta: f64,
 }
+
+/// The task-facing name for the typed local recipe.  Keep the P0 name as an
+/// alias so existing sidecar/GUI/CLI integrations remain source compatible.
+pub type MaskLocalRecipe = LocalAdjustments;
 
 impl Default for LocalAdjustments {
     fn default() -> Self {
@@ -59,22 +78,31 @@ impl Default for LocalAdjustments {
             contrast: 0.0,
             highlights: 0.0,
             shadows: 0.0,
+            temperature_delta_k: 0.0,
+            tint_delta: 0.0,
         }
     }
 }
 
 /// Stable human-readable representation used by CLI status output.
 ///
-/// The documented grammar is `v1 exposure=<number> contrast=<number>
-/// highlights=<number> shadows=<number>`, always in that field order. It is a
-/// presentation contract independent of the derived `Debug` layout; JSON
-/// consumers should continue to use the structured object instead.
+/// The documented grammar is `v2 exposure=<number> contrast=<number>
+/// highlights=<number> shadows=<number> temperature_delta_k=<number>
+/// tint_delta=<number>`, always in that field order. It is a presentation
+/// contract independent of the derived `Debug` layout; JSON consumers should
+/// continue to use the structured object instead.
 impl fmt::Display for LocalAdjustments {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "v1 exposure={} contrast={} highlights={} shadows={}",
-            self.exposure, self.contrast, self.highlights, self.shadows
+            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={}",
+            self.version,
+            self.exposure,
+            self.contrast,
+            self.highlights,
+            self.shadows,
+            self.temperature_delta_k,
+            self.tint_delta
         )
     }
 }
@@ -82,22 +110,34 @@ impl fmt::Display for LocalAdjustments {
 impl LocalAdjustments {
     /// Validate the typed object without clipping or defaulting any value.
     pub fn validate(&self) -> Result<(), SidecarError> {
-        if self.version != LOCAL_ADJUSTMENTS_VERSION {
+        if self.version != LOCAL_ADJUSTMENTS_VERSION
+            && self.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+        {
             return Err(SidecarError::Invalid(format!(
-                "unsupported local_adjustments version {} (expected {LOCAL_ADJUSTMENTS_VERSION})",
+                "unsupported local_adjustments version {} (expected {LEGACY_LOCAL_ADJUSTMENTS_VERSION} or {LOCAL_ADJUSTMENTS_VERSION})",
                 self.version
             )));
+        }
+        if self.version == LEGACY_LOCAL_ADJUSTMENTS_VERSION
+            && (self.temperature_delta_k != 0.0 || self.tint_delta != 0.0)
+        {
+            return Err(SidecarError::Invalid(
+                "local_adjustments version 1 cannot contain relative white-balance delta fields"
+                    .into(),
+            ));
         }
         for (name, value) in [
             ("exposure", self.exposure),
             ("contrast", self.contrast),
             ("highlights", self.highlights),
             ("shadows", self.shadows),
+            ("temperature_delta_k", self.temperature_delta_k),
+            ("tint_delta", self.tint_delta),
         ] {
             let (_, minimum, maximum) = LOCAL_ADJUSTMENT_RANGES
                 .iter()
                 .find(|(key, _, _)| *key == name)
-                .expect("P0 local adjustment range is statically defined");
+                .expect("local adjustment range is statically defined");
             if !value.is_finite() || !(*minimum..=*maximum).contains(&value) {
                 return Err(SidecarError::Invalid(format!(
                     "local adjustment `{name}` must be finite and in {minimum}..={maximum}, got {value}"
@@ -107,6 +147,12 @@ impl LocalAdjustments {
         Ok(())
     }
 
+    fn normalized_version(mut self) -> Result<Self, String> {
+        self.validate().map_err(|error| error.to_string())?;
+        self.version = LOCAL_ADJUSTMENTS_VERSION;
+        Ok(self)
+    }
+
     /// True when applying this object cannot change a pixel.
     #[must_use]
     pub fn is_neutral(&self) -> bool {
@@ -114,9 +160,11 @@ impl LocalAdjustments {
             && self.contrast == 0.0
             && self.highlights == 0.0
             && self.shadows == 0.0
+            && self.temperature_delta_k == 0.0
+            && self.tint_delta == 0.0
     }
 
-    /// Return one scalar value by its stable P0 key.
+    /// Return one scalar value by its stable local key.
     #[must_use]
     pub fn value(&self, key: &str) -> Option<f64> {
         match key {
@@ -124,11 +172,13 @@ impl LocalAdjustments {
             "contrast" => Some(self.contrast),
             "highlights" => Some(self.highlights),
             "shadows" => Some(self.shadows),
+            "temperature_delta_k" => Some(self.temperature_delta_k),
+            "tint_delta" => Some(self.tint_delta),
             _ => None,
         }
     }
 
-    /// Set one scalar value by its stable P0 key.  Unknown keys and invalid
+    /// Set one scalar value by its stable local key.  Unknown keys and invalid
     /// values fail before mutation, so callers can retain their old state.
     pub fn set_value(&mut self, key: &str, value: f64) -> Result<(), String> {
         let (_, minimum, maximum) = LOCAL_ADJUSTMENT_RANGES
@@ -146,6 +196,8 @@ impl LocalAdjustments {
             "contrast" => self.contrast = value,
             "highlights" => self.highlights = value,
             "shadows" => self.shadows = value,
+            "temperature_delta_k" => self.temperature_delta_k = value,
+            "tint_delta" => self.tint_delta = value,
             _ => unreachable!("validated local adjustment key"),
         }
         Ok(())
@@ -153,7 +205,8 @@ impl LocalAdjustments {
 
     /// Build a minimal global-recipe-shaped object for the shared core kernel.
     /// The core compositor uses this rather than reimplementing exposure,
-    /// contrast, shadows or highlights arithmetic.
+    /// contrast, shadows or highlights arithmetic.  Relative WB is deliberately
+    /// absent: it is applied by the core's post-global local WB pass.
     #[must_use]
     pub fn as_recipe(&self) -> EditRecipe {
         let mut adjustments = BTreeMap::new();
@@ -168,6 +221,19 @@ impl LocalAdjustments {
             adjustments,
             ..EditRecipe::default()
         }
+    }
+
+    /// Deterministic float gains for the relative local WB delta.  This is
+    /// deliberately derived from the delta alone, never from the global
+    /// absolute temperature/tint recipe fields.
+    #[must_use]
+    pub fn relative_white_balance_gains(&self) -> [f64; 3] {
+        let warmth = self.temperature_delta_k / 5500.0;
+        [
+            1.0 - warmth * 0.35,
+            1.0 - self.tint_delta * 0.20,
+            1.0 + warmth * 0.35,
+        ]
     }
 
     /// Canonical digest of this typed object.  JSON object key ordering and
@@ -188,18 +254,52 @@ pub fn mask_layers_digest(layers: &[MaskLayer]) -> String {
     let value = serde_json::to_value(layers).expect("MaskLayer is serializable");
     let bytes = serde_json::to_vec(&value).expect("canonical mask state is serializable");
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lumina-mask-state-v1\0");
+    hasher.update(b"lumina-mask-state-v2\0");
     hasher.update(&(bytes.len() as u64).to_le_bytes());
     hasher.update(&bytes);
     format!("blake3:{}", hasher.finalize().to_hex())
 }
 
 /// A complete additive mask-state snapshot for a history entry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MaskStateSnapshot {
     pub version: u8,
     pub layers: Vec<MaskLayer>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaskStateSnapshotWire {
+    version: u8,
+    layers: Vec<MaskLayer>,
+}
+
+impl<'de> Deserialize<'de> for MaskStateSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MaskStateSnapshotWire::deserialize(deserializer)?;
+        if wire.version != LOCAL_ADJUSTMENTS_VERSION
+            && wire.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+        {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported mask state snapshot version {} (expected {LEGACY_LOCAL_ADJUSTMENTS_VERSION} or {LOCAL_ADJUSTMENTS_VERSION})",
+                wire.version
+            )));
+        }
+        // A v1 snapshot is normalized at the input boundary.  Its P0 layers
+        // are already migrated by MaskLayer's deserializer, and v1 has no WB
+        // delta by definition.
+        let snapshot = Self {
+            version: LOCAL_ADJUSTMENTS_VERSION,
+            layers: wire.layers,
+        };
+        snapshot
+            .validate()
+            .map_err(|error| serde::de::Error::custom(error.to_string()))?;
+        Ok(snapshot)
+    }
 }
 
 impl MaskStateSnapshot {
@@ -211,8 +311,19 @@ impl MaskStateSnapshot {
         }
     }
 
+    /// Canonical digest for a complete history/Previous snapshot. It includes
+    /// the snapshot version and persisted layer order, including the new WB
+    /// delta fields.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        let bytes = serde_json::to_vec(self).expect("MaskStateSnapshot is serializable");
+        format!("blake3:{}", blake3::hash(&bytes).to_hex())
+    }
+
     pub fn validate(&self) -> Result<(), SidecarError> {
-        if self.version != LOCAL_ADJUSTMENTS_VERSION {
+        if self.version != LOCAL_ADJUSTMENTS_VERSION
+            && self.version != LEGACY_LOCAL_ADJUSTMENTS_VERSION
+        {
             return Err(SidecarError::Invalid(format!(
                 "unsupported mask state snapshot version {}",
                 self.version
@@ -286,195 +397,4 @@ impl<'de> Deserialize<'de> for MaskLayer {
         normalize_legacy_layer_extras(&mut layer).map_err(serde::de::Error::custom)?;
         Ok(layer)
     }
-}
-
-/// Validate a layer's typed/legacy local state without changing it.
-pub fn validate_mask_layer_local_state(layer: &MaskLayer) -> Result<(), SidecarError> {
-    if let Some(adjustments) = &layer.local_adjustments {
-        adjustments.validate()?;
-    }
-    let legacy_keys: Vec<&String> = layer
-        .extras
-        .keys()
-        .filter(|key| key.starts_with("adjustment_"))
-        .collect();
-    if !legacy_keys.is_empty() && layer.local_adjustments.is_some() {
-        return Err(SidecarError::Invalid(format!(
-            "mask layer `{}` has both typed local_adjustments and legacy adjustment_* extras",
-            layer.id
-        )));
-    }
-    for key in legacy_keys {
-        let name = key
-            .strip_prefix("adjustment_")
-            .expect("filtered adjustment_ key");
-        if !LOCAL_ADJUSTMENT_RANGES
-            .iter()
-            .any(|(known, _, _)| *known == name)
-        {
-            return Err(SidecarError::Invalid(format!(
-                "mask layer `{}` has unknown legacy local adjustment `{name}`",
-                layer.id
-            )));
-        }
-        let value = layer
-            .extras
-            .get(key)
-            .and_then(Value::as_f64)
-            .ok_or_else(|| {
-                SidecarError::Invalid(format!(
-                    "mask layer `{}` legacy local adjustment `{name}` must be a number",
-                    layer.id
-                ))
-            })?;
-        // Use the same range checker as the typed object, without clipping.
-        let mut probe = LocalAdjustments::default();
-        probe.set_value(name, value).map_err(|message| {
-            SidecarError::Invalid(format!("mask layer `{}`: {message}", layer.id))
-        })?;
-    }
-    Ok(())
-}
-
-/// Normalize valid legacy `adjustment_*` entries into the typed object and
-/// remove the migrated keys.  A typed/legacy conflict is always loud; even
-/// identical values are rejected because accepting them would leave two
-/// sources of truth in a persisted layer.
-pub(crate) fn normalize_legacy_layer_extras(layer: &mut MaskLayer) -> Result<(), String> {
-    let legacy_keys: Vec<String> = layer
-        .extras
-        .keys()
-        .filter(|key| key.starts_with("adjustment_"))
-        .cloned()
-        .collect();
-    if legacy_keys.is_empty() {
-        if let Some(adjustments) = &layer.local_adjustments {
-            adjustments.validate().map_err(|error| error.to_string())?;
-        }
-        return Ok(());
-    }
-    if layer.local_adjustments.is_some() {
-        return Err(format!(
-            "mask layer `{}` has conflicting typed local_adjustments and legacy adjustment_* extras",
-            layer.id
-        ));
-    }
-    let mut migrated = LocalAdjustments::default();
-    for key in &legacy_keys {
-        let name = key
-            .strip_prefix("adjustment_")
-            .expect("filtered adjustment_ key");
-        let value = layer
-            .extras
-            .get(key)
-            .and_then(Value::as_f64)
-            .ok_or_else(|| {
-                format!(
-                    "mask layer `{}` legacy local adjustment `{name}` must be a number",
-                    layer.id
-                )
-            })?;
-        migrated
-            .set_value(name, value)
-            .map_err(|message| format!("mask layer `{}`: {message}", layer.id))?;
-    }
-    migrated.validate().map_err(|error| error.to_string())?;
-    // Commit only after every legacy value parsed and validated. A malformed
-    // later key therefore cannot leave the layer half-migrated.
-    for key in legacy_keys {
-        layer.extras.remove(&key);
-    }
-    layer.local_adjustments = Some(migrated);
-    Ok(())
-}
-
-impl MaskLayer {
-    /// Normalize this in-memory layer after a caller constructed or loaded it
-    /// through a non-Serde API.  This is the explicit migration primitive used
-    /// by sidecar writers and GUI transactions.
-    pub fn normalize_local_adjustments(&mut self) -> Result<(), SidecarError> {
-        normalize_legacy_layer_extras(self).map_err(SidecarError::Invalid)
-    }
-
-    /// Resolve the typed object, including a valid legacy value that has not
-    /// yet been normalized in memory.  The returned value is owned so callers
-    /// can evaluate without mutating the sidecar model.
-    pub fn effective_local_adjustments(&self) -> Result<Option<LocalAdjustments>, SidecarError> {
-        validate_mask_layer_local_state(self)?;
-        if let Some(adjustments) = self.local_adjustments {
-            return Ok(Some(adjustments));
-        }
-        let legacy_keys: Vec<&String> = self
-            .extras
-            .keys()
-            .filter(|key| key.starts_with("adjustment_"))
-            .collect();
-        if legacy_keys.is_empty() {
-            return Ok(None);
-        }
-        let mut migrated = LocalAdjustments::default();
-        for key in legacy_keys {
-            let name = key
-                .strip_prefix("adjustment_")
-                .expect("filtered adjustment_ key");
-            let value = layer_value(self, key).ok_or_else(|| {
-                SidecarError::Invalid(format!(
-                    "mask layer `{}` legacy local adjustment `{name}` must be a number",
-                    self.id
-                ))
-            })?;
-            migrated.set_value(name, value).map_err(|message| {
-                SidecarError::Invalid(format!("mask layer `{}`: {message}", self.id))
-            })?;
-        }
-        Ok(Some(migrated))
-    }
-}
-
-fn layer_value(layer: &MaskLayer, key: &str) -> Option<f64> {
-    layer.extras.get(key).and_then(Value::as_f64)
-}
-
-impl SidecarDocument {
-    /// Normalize valid legacy `adjustment_*` layer extras into the typed
-    /// MASK-LOCAL-P0 object. Invalid/conflicting values return an error and
-    /// leave the document untouched.
-    pub fn normalize_legacy_local_adjustments(&mut self) -> Result<(), SidecarError> {
-        // Normalize a clone and commit only after every layer and history
-        // snapshot succeeded. This makes the documented no-partial-migration
-        // guarantee hold for the whole document, not just one layer.
-        let mut normalized = self.clone();
-        normalize_document_local_adjustments(&mut normalized)?;
-        *self = normalized;
-        Ok(())
-    }
-
-    pub fn to_json(&self) -> Result<String, SidecarError> {
-        // Normalize a clone so a legacy in-memory model cannot leak old extras
-        // into a newly written sidecar, and never partially mutate the caller.
-        let mut normalized = self.clone();
-        normalize_document_local_adjustments(&mut normalized)?;
-        normalized.validate()?;
-        serde_json::to_string_pretty(&normalized).map_err(|e| SidecarError::Json(e.to_string()))
-    }
-}
-
-fn normalize_document_local_adjustments(
-    document: &mut SidecarDocument,
-) -> Result<(), SidecarError> {
-    for copy in document
-        .virtual_copies
-        .iter_mut()
-        .chain(document.deleted_virtual_copies.iter_mut())
-    {
-        for layer in &mut copy.mask_layers {
-            layer.normalize_local_adjustments()?;
-        }
-        for entry in &mut copy.history {
-            if let Some(snapshot) = entry.mask_state()? {
-                entry.set_mask_state(snapshot)?;
-            }
-        }
-    }
-    Ok(())
 }

@@ -226,24 +226,27 @@ impl LuminaApp {
             // clear competitors, and this defensive gate also keeps a stale
             // flag from making two handlers consume the same click.
             let owner_free = !self.crop_mode;
-            let pick = self.wb_pick_mode
+            let pick = (self.wb_pick_mode || self.local_wb_pick_mode)
                 && !self.red_eye_pick_mode
                 && self.mask_tool == MaskTool::None
                 && self.spot_tool == SpotTool::None
                 && owner_free;
             let red_eye_pick = self.red_eye_pick_mode
                 && !self.wb_pick_mode
+                && !self.local_wb_pick_mode
                 && self.mask_tool == MaskTool::None
                 && self.spot_tool == SpotTool::None
                 && owner_free;
             let armed = self.mask_tool != MaskTool::None
                 && self.spot_tool == SpotTool::None
                 && !self.wb_pick_mode
+                && !self.local_wb_pick_mode
                 && !self.red_eye_pick_mode
                 && owner_free;
             let spot_armed = self.spot_tool != SpotTool::None
                 && self.mask_tool == MaskTool::None
                 && !self.wb_pick_mode
+                && !self.local_wb_pick_mode
                 && !self.red_eye_pick_mode
                 && owner_free;
 
@@ -367,14 +370,26 @@ impl LuminaApp {
                 // hard-lock is replaced by the tool switch committing the active
                 // crop/straighten draft; the pick is no longer refused.
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let full = self.image_dims().unwrap_or((1, 1));
-                    // GUI-DRAFT-JUMP-1: map through the full-space ROI so the
-                    // pick lands on the same source pixel on both paths.
-                    let roi = self.preview_roi.map(|r| {
-                        Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src)
-                    });
-                    let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
-                    self.pick_white_balance_at(nx as f64, ny as f64);
+                    if self.local_wb_pick_mode {
+                        // The local picker samples the effective post-global
+                        // stage in display/output coordinates. It deliberately
+                        // does not reuse the global raw-source mapping.
+                        let nx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                        let ny = ((pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                        if let Err(error) = self.pick_local_wb_at(nx as f64, ny as f64) {
+                            self.show_error(error);
+                        }
+                    } else {
+                        let full = self.image_dims().unwrap_or((1, 1));
+                        // GUI-DRAFT-JUMP-1: map through the full-space ROI so
+                        // the global pick lands on the same source pixel on
+                        // both paths.
+                        let roi = self.preview_roi.map(|r| {
+                            Self::roi_in_full_pixels(r, full.0, full.1, self.preview_render_src)
+                        });
+                        let (nx, ny) = Self::to_normalized(pos, rect, roi, full);
+                        self.pick_white_balance_at(nx as f64, ny as f64);
+                    }
                 }
             }
             if pick {

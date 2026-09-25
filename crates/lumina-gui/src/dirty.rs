@@ -40,6 +40,10 @@ impl LuminaApp {
         // documented pipeline order). A new SOURCE clears the cache in
         // `apply_decoded_frame`; nothing here can ever serve stale pixels.
         self.render_key = None;
+        // Any recipe/source/geometry edit makes the captured pre-local stage
+        // stale. The local WB picker must ask for a fresh render instead of
+        // silently sampling pixels from the prior identity.
+        self.clear_effective_source_stage();
         self.tone_analysis = None;
         self.error = None;
         // An edit occurred: a full-quality render will be needed (debounced on

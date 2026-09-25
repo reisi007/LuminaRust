@@ -2,11 +2,11 @@
 //! both `render_full` (see `render_entry.rs`) and the interactive draft path,
 //! extracted verbatim from `lib.rs`.
 //!
-//! This is the 472-line staged pipeline hub: base-stage cache lookup →
+//! This is the staged pipeline hub: base-stage cache lookup →
 //! adjustments/geometry/masks → histogram analysis → present bookkeeping. It
 //! is `pub(crate)` because the entry module and the draft tick in
-//! `render_tick.rs` call it. No behaviour changes — the base-stage invalidation
-//! contract (PERF-GUI-1) and every trace/warn are byte-identical.
+//! `render_tick.rs` call it. The base-stage invalidation contract (PERF-GUI-1)
+//! and every trace/warn are unchanged.
 
 use super::*;
 use log::{trace, warn};
@@ -226,7 +226,7 @@ impl LuminaApp {
         } else {
             &self.recipe
         };
-        let output = render_frame_from_base_with_generative_and_denoise(
+        let output = self.render_preview_frame(
             base_frame,
             &RenderContext {
                 recipe: render_recipe,
@@ -439,11 +439,10 @@ impl LuminaApp {
             trace!("GUI render: spot visualize overlay t={threshold} tinted {tinted}px");
         }
         self.preview = Some(preview);
+        self.set_effective_source_stage(output.effective_source_stage);
         // R2-GUIMOD-02: new preview content — any CPU-present identity cached
         // in `texture_identity` is now stale and will re-upload once.
-        {
-            self.preview_generation += 1;
-        }
+        self.preview_generation += 1;
         // R2-GUIMOD-01 (MVP-blocking): a completed **full-quality** CPU render
         // supersedes whatever sits in VRAM. During a drag the VRAM result was
         // rendered from the *draft* source; after mouse-up the debounced full

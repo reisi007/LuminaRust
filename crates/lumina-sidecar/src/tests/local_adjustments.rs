@@ -52,6 +52,107 @@ fn legacy_adjustment_extras_migrate_without_loss_and_roundtrip() {
 }
 
 #[test]
+fn typed_v1_migrates_to_relative_wb_v2_with_neutral_deltas() {
+    let mut typed_layer = layer_with_legacy();
+    typed_layer.local_adjustments = None;
+    typed_layer.extras.clear();
+    let document = document_with_layer(typed_layer);
+    let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+    value["virtual_copies"][0]["mask_layers"][0]["local_adjustments"] = json!({
+        "version": 1,
+        "exposure": 0.75,
+        "contrast": -0.25,
+        "highlights": 0.0,
+        "shadows": 0.5
+    });
+    let loaded = SidecarDocument::from_json(&serde_json::to_string(&value).unwrap()).unwrap();
+    let local = loaded.virtual_copies[0].mask_layers[0]
+        .effective_local_adjustments()
+        .unwrap()
+        .unwrap();
+    assert_eq!(local.version, LOCAL_ADJUSTMENTS_VERSION);
+    assert_eq!(local.exposure, 0.75);
+    assert_eq!(local.temperature_delta_k, 0.0);
+    assert_eq!(local.tint_delta, 0.0);
+    let json = loaded.to_json().unwrap();
+    assert!(json.contains("\"version\": 2"));
+    assert!(json.contains("temperature_delta_k"));
+}
+
+#[test]
+fn relative_wb_fields_are_relative_only_and_finite_range_checked() {
+    let mut local = LocalAdjustments::default();
+    assert!(local.set_value("temperature_delta_k", 5000.0).is_ok());
+    assert!(local.set_value("tint_delta", -1.0).is_ok());
+    assert!(local.set_value("wb_temperature", 6500.0).is_err());
+    assert!(local.set_value("wb_tint", 0.0).is_err());
+    assert!(local.set_value("temperature_delta_k", 5000.1).is_err());
+    assert!(local.set_value("tint_delta", f64::NAN).is_err());
+
+    let tint_only: LocalAdjustments = serde_json::from_value(json!({
+        "version": LOCAL_ADJUSTMENTS_VERSION,
+        "tint_delta": 0.3
+    }))
+    .unwrap();
+    assert_eq!(tint_only.temperature_delta_k, 0.0);
+    assert_eq!(tint_only.tint_delta, 0.3);
+    let temperature_only: LocalAdjustments = serde_json::from_value(json!({
+        "version": LOCAL_ADJUSTMENTS_VERSION,
+        "temperature_delta_k": -900
+    }))
+    .unwrap();
+    assert_eq!(temperature_only.temperature_delta_k, -900.0);
+    assert_eq!(temperature_only.tint_delta, 0.0);
+
+    let mut value = serde_json::to_value(local).unwrap();
+    value["temperature_delta_k"] = json!(f64::INFINITY);
+    assert!(serde_json::from_value::<LocalAdjustments>(value).is_err());
+}
+
+#[test]
+fn explicit_non_number_wb_deltas_are_loud_never_a_silent_zero() {
+    // An absent delta is the neutral zero. Every *explicit* non-number — JSON
+    // `null`, a string, and the former internal object sentinel — must stay a
+    // loud parse error instead of coercing to `0.0`.
+    for sentinel in [
+        json!({ "__lumina_missing_local_delta__": true }),
+        json!(true),
+        json!("0.5"),
+        json!([0.0]),
+        Value::Null,
+    ] {
+        let decoded: Result<LocalAdjustments, _> = serde_json::from_value(json!({
+            "version": LOCAL_ADJUSTMENTS_VERSION,
+            "temperature_delta_k": sentinel.clone(),
+        }));
+        assert!(
+            decoded.is_err(),
+            "explicit non-number must be rejected: {sentinel}"
+        );
+        let decoded_tint: Result<LocalAdjustments, _> = serde_json::from_value(json!({
+            "version": LOCAL_ADJUSTMENTS_VERSION,
+            "tint_delta": sentinel,
+        }));
+        assert!(decoded_tint.is_err(), "tint_delta must reject it too");
+    }
+
+    // The absent-field case still migrates to the neutral zero.
+    let absent: LocalAdjustments = serde_json::from_value(json!({
+        "version": LOCAL_ADJUSTMENTS_VERSION,
+    }))
+    .unwrap();
+    assert_eq!(absent.temperature_delta_k, 0.0);
+    assert_eq!(absent.tint_delta, 0.0);
+
+    // A v1 payload must not smuggle either delta field in.
+    let smuggled: Result<LocalAdjustments, _> = serde_json::from_value(json!({
+        "version": LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+        "tint_delta": 0.25,
+    }));
+    assert!(smuggled.is_err(), "v1 must not accept a v2 delta field");
+}
+
+#[test]
 fn typed_legacy_conflict_unknown_key_and_invalid_range_are_loud() {
     let base = document_with_layer(layer_with_legacy());
     let mut value: Value = serde_json::from_str(&base.to_json().unwrap()).unwrap();
@@ -101,7 +202,7 @@ fn typed_legacy_conflict_unknown_key_and_invalid_range_are_loud() {
         .local_adjustments
         .as_mut()
         .unwrap()
-        .version = 2;
+        .version = 3;
     assert!(version
         .to_json()
         .unwrap_err()
@@ -142,6 +243,11 @@ fn canonical_mask_digest_covers_typed_values_and_persisted_order() {
     let mut second = first.clone();
     second.id = "layer-other".into();
     second.local_adjustments.as_mut().unwrap().contrast = 0.25;
+    second
+        .local_adjustments
+        .as_mut()
+        .unwrap()
+        .temperature_delta_k = 250.0;
 
     let a = mask_layers_dcore(&[first.clone()]);
     let b = mask_layers_dcore(&[second.clone()]);
@@ -149,8 +255,11 @@ fn canonical_mask_digest_covers_typed_values_and_persisted_order() {
     assert_eq!(a, mask_layers_dcore(&[first.clone()]));
     assert_ne!(
         mask_layers_dcore(&[first.clone(), second.clone()]),
-        mask_layers_dcore(&[second, first])
+        mask_layers_dcore(&[second.clone(), first.clone()])
     );
+    let snapshot_a = MaskStateSnapshot::new(vec![first.clone()]);
+    let snapshot_b = MaskStateSnapshot::new(vec![second]);
+    assert_ne!(snapshot_a.digest(), snapshot_b.digest());
 }
 
 fn mask_layers_dcore(layers: &[MaskLayer]) -> String {

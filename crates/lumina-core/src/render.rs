@@ -14,8 +14,12 @@ use lumina_sidecar::{EditRecipe, VirtualCopy};
 use std::collections::BTreeMap;
 
 mod local_adjustments;
+mod local_wb;
 mod mask_evaluation;
+mod source_stage;
 use mask_evaluation::{evaluate_layer, LayerFailure};
+pub use source_stage::render_frame_from_base_with_source_stage;
+use source_stage::EffectiveSourceStage;
 
 /// A source-sized repair artifact: a u16 region plane (`0..=u16::MAX`) and an
 /// RGBA8 replacement image with identical dimensions.  Applied after decode
@@ -100,6 +104,18 @@ pub struct MaskLayerResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderOutput {
     pub frame: ImageFrame,
+    /// The post-global, post-geometry frame immediately before local mask
+    /// recipes are composited, or `None` when the caller did not ask for it.
+    ///
+    /// MASK-LOCAL-P1.1: retaining this stage costs a full-frame `memcpy`, so it
+    /// is **opt-in**. Only callers that sample from it (the GUI mask-local
+    /// white-balance picker) request it through
+    /// [`render_frame_from_base_with_source_stage`]; every other render entry
+    /// point leaves it `None` instead of cloning a frame nobody reads. When
+    /// present, GUI white-balance sampling uses this explicit effective source
+    /// stage; it is never reconstructed from a final local preview or silently
+    /// replaced by the raw decode.
+    pub effective_source_stage: Option<ImageFrame>,
     /// Effective layers after resample (valid layers under `Warn`, all layers
     /// that evaluated under `Strict`).
     pub mask_layers: Vec<MaskLayerResult>,
@@ -552,11 +568,33 @@ pub fn render_frame_from_base_with_generative(
 /// the manual F-096 noise reduction (see
 /// [`ImageFrame::apply_recipe_with_scale_white_balance_and_denoise`]).
 pub fn render_frame_from_base_with_generative_and_denoise(
+    base: ImageFrame,
+    context: &RenderContext<'_>,
+    work: &mut StageWork,
+    generative: crate::generative::GenerativeCanvasInput<'_>,
+    denoise: &crate::DenoiseStageInput<'_>,
+) -> Result<RenderOutput, CoreError> {
+    render_frame_from_base_impl(
+        base,
+        context,
+        work,
+        generative,
+        denoise,
+        EffectiveSourceStage::Skip,
+    )
+}
+
+/// MASK-LOCAL-P1.1: the shared hub behind the staged entry points. It runs the
+/// identical stage sequence in every case; the only difference is whether the
+/// pre-local frame is cloned into [`RenderOutput::effective_source_stage`]
+/// (see [`source_stage`]).
+pub(super) fn render_frame_from_base_impl(
     mut base: ImageFrame,
     context: &RenderContext<'_>,
     work: &mut StageWork,
     generative: crate::generative::GenerativeCanvasInput<'_>,
     denoise: &crate::DenoiseStageInput<'_>,
+    effective_source_stage: EffectiveSourceStage,
 ) -> Result<RenderOutput, CoreError> {
     // MASK-LOCAL-P0: validate every persisted local layer and the geometry
     // contract before *any* pixel mutation.  This is deliberately separate
@@ -652,6 +690,15 @@ pub fn render_frame_from_base_with_generative_and_denoise(
         },
         work,
     )?;
+    // MASK-LOCAL-P1.1: keep the exact post-global/geometry stage available to
+    // an explicit sampler (the GUI local WB picker) only when the caller asked
+    // for it. Every other path skips the full-frame copy entirely.
+    let effective_source_stage = match effective_source_stage {
+        EffectiveSourceStage::Skip => None,
+        // This clone is taken before any local layer can mutate the working
+        // frame.
+        EffectiveSourceStage::Capture => Some(base.clone()),
+    };
     local_adjustments::apply_local_adjustments(
         &mut base,
         context.masks.as_ref(),
@@ -661,6 +708,7 @@ pub fn render_frame_from_base_with_generative_and_denoise(
 
     Ok(RenderOutput {
         frame: base,
+        effective_source_stage,
         mask_layers,
         mask_warnings,
     })
@@ -1154,6 +1202,9 @@ mod tests {
 
     #[path = "local_adjustments_tests.rs"]
     mod local_adjustments;
+
+    #[path = "local_white_balance_tests.rs"]
+    mod local_white_balance;
 
     #[test]
     fn invisible_layer_is_skipped_silently() {

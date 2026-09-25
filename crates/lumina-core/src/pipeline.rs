@@ -142,7 +142,7 @@ pub struct RenderKey {
     pub recipe_hash: String,
     mask_recipe_hash: String,
     pub mask_artifact_hashes: Vec<String>,
-    /// MASK-LOCAL-P0: canonical digest of the active copy's ordered mask layers.
+    /// MASK-LOCAL-P0/P1.1: canonical ordered mask-layer digest including relative WB.
     mask_local_state_digest: Option<String>,
     /// REVIEW-CORE-SRCACC-1: checksums of the resolved source-action
     /// (repair-region) artifacts that the render actually applied. The recipe

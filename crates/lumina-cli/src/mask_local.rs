@@ -1,8 +1,9 @@
-//! MASK-LOCAL-P0 CLI mutation helpers.
+//! MASK-LOCAL-P0/P1.1 CLI mutation helpers.
 //!
 //! The `mask` command keeps orchestration in `main`; parsing, target
 //! resolution and the typed local-state transaction live here so validation
-//! happens before the sidecar write.
+//! happens before the sidecar write. Cross-image `previous` stays a
+//! recipe-only transfer and refuses non-neutral local mask state.
 
 use super::CliError;
 use lumina_sidecar::{
@@ -52,7 +53,7 @@ pub(crate) fn resolve_mask_copy(
         .ok_or_else(|| CliError::Message("sidecar has no virtual copies".into()))
 }
 
-/// Apply the repeatable local P0 flags as one prevalidated transaction.
+/// Apply the repeatable local P0/P1.1 flags as one prevalidated transaction.
 pub(crate) fn apply_local_adjustment_flags(
     document: &mut SidecarDocument,
     copy_id: &str,
@@ -223,7 +224,12 @@ pub(crate) fn non_neutral_local_layer_ids(copy: &VirtualCopy) -> Result<Vec<Stri
 }
 
 /// Write one Previous recipe with a checked target transaction. A target with
-/// non-neutral local mask state is rejected before its recipe/history changes.
+/// non-neutral local mask state is rejected before its recipe/history changes,
+/// so the target bytes stay byte-identical.
+///
+/// MASK-LOCAL-P0/P1.1: this stays a recipe-only transfer. It never copies the
+/// source's mask layers or their P0/P1.1 deltas onto the target; an explicit
+/// full-look/mask copy is a separate, later action.
 pub(crate) fn apply_previous_to_target(
     target: &Path,
     copy_id: &str,

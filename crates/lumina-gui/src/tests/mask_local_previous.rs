@@ -1,4 +1,4 @@
-//! Cross-image Previous and Sync regressions for MASK-LOCAL-P0.
+//! Cross-image Previous and Sync regressions for MASK-LOCAL-P0/P1.1.
 
 use super::*;
 
@@ -23,6 +23,7 @@ fn previous_transfers_full_local_state_but_sync_keeps_target_layers() {
     open_and_decode(&mut app, source.display().to_string());
     app.create_mask("Shared").unwrap();
     app.set_mask_local_adjustment("exposure", 0.75).unwrap();
+    app.set_mask_local_wb_delta(1250.0, 0.25).unwrap();
     app.save_sidecar();
     open_and_decode_switch(&mut app, &target.display().to_string());
     assert_eq!(
@@ -53,6 +54,13 @@ fn previous_transfers_full_local_state_but_sync_keeps_target_layers() {
             .map(|value| value.exposure),
         Some(0.75)
     );
+    assert_eq!(
+        target_copy.mask_layers[0]
+            .local_adjustments
+            .as_ref()
+            .map(|value| (value.temperature_delta_k, value.tint_delta)),
+        Some((1250.0, 0.25))
+    );
     assert!(target_copy
         .history
         .last()
@@ -66,6 +74,7 @@ fn previous_transfers_full_local_state_but_sync_keeps_target_layers() {
         app.selected_mask_local_adjustment("exposure").unwrap(),
         None
     );
+    assert_eq!(app.selected_mask_local_wb_delta().unwrap(), (0.0, 0.0));
 
     // Sync Settings remains recipe-only: it must not erase a target's local
     // layer state.

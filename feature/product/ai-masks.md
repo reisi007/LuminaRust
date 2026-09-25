@@ -355,8 +355,10 @@ bleiben offen.
 - **P0-Feld und Werte:** `local_adjustments` ist additiv-optional und
   versioniert. P0 erlaubt ausschließlich `exposure` (`-10..=10` EV),
   `contrast`, `highlights` und `shadows` (je `-1..=1`), in exakt
-  `exposure → contrast → shadows → highlights`. Lokales WB, Tone und Color
-  sind P1 und dürfen in P0 nicht als persistiertes Alias auftreten.
+  `exposure → contrast → shadows → highlights`. Lokales WB/Tone/Color sind in
+  **P0** nicht enthalten und dürfen dort nicht als persistiertes Alias
+  auftreten; lokales relatives WB ist der getrennte Schnitt **P1.1**
+  (siehe unten), Tone/Color/Presence/Detail/Optics bleiben P1.2.
 - **Legacy/Migration:** Bestehende `adjustment_*`-Extras werden verlustfrei in
   das typed Objekt überführt, wenn Werte und Reihenfolge eindeutig gültig sind.
   Ein typed/legacy-Konflikt, unbekannte Version/Regler, NaN/Inf und
@@ -375,15 +377,89 @@ bleiben offen.
   kanonische Mask-/Render-Digest. `strict`/`warn`, Draft-/Navigator-/Neighbor-/
   Thumbnail-Routen sind explizit und dürfen lokale Edits nie still verlieren.
   History/Reset/Previous speichert einen vollständigen additiven Layer-Snapshot.
-  Cross-image Previous trägt diesen Snapshot nur bei kompatiblem Ziel-Maskkontext
-  vollständig weiter; inkompatible Copy-/Mask-Referenzen werden laut verworfen,
-  während Sync Settings recipe-only bleibt.
+  Das GUI-Previous auf eine Auswahl im selben Lauf trägt diesen Snapshot nur
+  bei kompatiblem Ziel-Maskkontext vollständig weiter; inkompatible Copy-/Mask-
+  Referenzen werden laut verworfen, während Sync Settings recipe-only bleibt.
+  Der dateibasierte CLI-Befehl `previous` bleibt davon unberührt **recipe-only**
+  und verweigert nicht-neutralen lokalen Maskenzustand laut.
 
 **P0-Abnahme:** winzige exakte CPU-Goldens und Tests für Alpha 0/partial/1,
 Outside-Mask-Identität, Layerreihenfolge, ROI/Crop/Aspect/90°-Rotation/Mirror,
 ungültige Schemas, Cache-Identität, Draft-Refusal, CLI/GUI-Parität und
 bestehende Pipeline-Regressionen. P1: lokale WB-/Tone-/Color-Regler; Hardware-
 und GPU-Gates bleiben separat offen.
+
+## P1.1 SOLL — mask-local relative White Balance (`MASK-LOCAL-P1.1`)
+
+**User-Entscheidung (2026-09-25, verbindlich):** Globales WB bleibt
+absolute-only. Es wird ausschließlich über **Reset to As Shot** gelöscht; es
+gibt keine relative Umrechnung oder stilles Zurückfallen auf einen globalen
+Regler. Das lokale Masken-WB ist ein eigener relativer Delta-Wert und wird nach
+dem globalen Ergebnis, vor den lokalen Basic-Stufen dieses Layers, angewendet.
+Layer werden weiterhin in der persistierten Listenreihenfolge ausgewertet.
+
+- **Typed Schema und Version:** `local_adjustments` wird als versioniertes
+  `MaskLocalRecipe` (Kompatibilitätsname `LocalAdjustments`) version 2
+  persistiert. Die P0-Felder `exposure`, `contrast`, `highlights` und `shadows`
+  bleiben unverändert erhalten. Neu sind ausschließlich
+  `temperature_delta_k` (`-5000..=5000`, Kelvin) und `tint_delta`
+  (`-1..=1`); beide sind endlich und werden ohne Clipping validiert. Fehlende
+  Delta-Felder bedeuten `0` (Tint-only/Temperature-only sind gültig). Ein
+  lokales `wb_temperature`, `wb_tint`, `temperature` oder `tint` ist kein
+  gültiger Alias und wird laut abgewiesen. Version-1-Typed-Objekte und die
+  historischen `adjustment_*`-Extras migrieren verlustfrei in version 2 mit
+  neutralen Deltas; Typ/Version, unbekannte Felder, Konflikte, NaN/Inf und
+  Bereichsfehler bleiben harte Fehler.
+- **Deterministische Reihenfolge:** Für jede persistierte Layer gilt
+  `global result → local relative WB → local Basic (exposure → contrast →
+  shadows → highlights) → fractional mask blend`. Die WB-Werte werden als
+  `f64`-Gains aus dem Delta berechnet und zusammen mit den Basic-Stufen in
+  genau einer abschließenden RGBA8-Quantisierung ausgewertet; es gibt keine
+  Zwischen-Quantisierung und keine Ganzzahl-Näherung. Alpha-0 lässt alle
+  Bytes unverändert, Alpha-1 übernimmt das vollständige lokale Rezept und
+  partielle Alpha bleiben deterministisch fraktional. Ein lokaler Layer darf
+  keine globalen Rezeptfelder verändern.
+- **Picker/Setter/CLI:** Die lokale WB-Pipette arbeitet nur mit der ausgewählten
+  Maske und dem effektiven, bereits global verarbeiteten Quell-/Vorschau-
+  Sample. Provenienz und Staleness werden explizit ausgewiesen; ein Sample
+  außerhalb der Maske, ein fehlender Layer, ein nicht aktueller/ungültiger
+  Sample oder ein nicht auflösbarer Quellstand schlägt sichtbar fehl. Es gibt
+  keinen globalen Fallback. CLI und GUI verwenden dieselben typisierten
+  Setter und Reset-/History-Transaktionen. **Auto-WB wird nicht eingeführt.**
+- **Identität/Persistenz:** Version und beide relativen Deltas gehören in die
+  kanonische Local-/Mask-/Render-Digest. History, Reset und Previous der
+  **aktuellen** virtuellen Kopie übernehmen den vollständigen additiven
+  Layer-Snapshot. GPU-/Stand-in-Pfade müssen lokales WB bis zur echten Parität
+  sichtbar CPU-routen oder verweigern.
+- **Cross-image Previous bleibt recipe-only (P0-Vertrag):** Der dateibasierte
+  CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer und keine
+  P0-/P1.1-Deltas auf andere Bilder. Ein nicht-neutraler lokaler Maskenzustand —
+  auf der Quell-Kopie oder auf dem Ziel — wird laut verweigert: die Quelle
+  bricht den gesamten Lauf ab (Exit 1, kein Ziel angefasst), ein betroffenes
+  Ziel schlägt isoliert fehl (Exit 3, Ziel-Bytes unverändert). Sync Settings
+  bleibt recipe-only. Ein expliziter Full-Look-/Masken-Kopiervorgang ist eine
+  **spätere, getrennte** Aktion und ausdrücklich nicht Teil von P1.1. Ein Delta
+  allein (Tint-only oder Temperature-only) ist bereits ein Verweigerungsgrund;
+  es gibt keine „nur P0"-Ausnahme. Das GUI-Previous auf eine Auswahl im selben
+  Lauf (inklusive des vollständigen Masken-Snapshots bei kompatiblem
+  Ziel-Maskkontext) ist davon unberührt und bleibt der bestehende GUI-Vertrag.
+- **Lazy effektive Quellstage:** Das Post-Global/Geometry-Quellstadium wird
+  **nicht** bei jedem Render behalten. `RenderOutput::effective_source_stage`
+  ist `Option`; nur die GUI-Route, die die lokale WB-Pipette versorgt, fordert
+  es an. CLI, Export und jede globale/Stand-in-Route zahlen keine
+  Full-Frame-Kopie. Fehlt die Stage, gilt das als „keine laufende Pick-Session"
+  und nie als veraltetes Sample.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Delta-only, Tint-only,
+  Temperature-only, Reihenfolge (inklusive zwei überlappender Layer mit
+  Temperatur- **und** Tint-Delta in persistierter Reihenfolge), Full/Half/Zero-
+  Mask, Basic-Nachweis, Global-Absolut/Reset-to-As-Shot, Alpha/Outside-Mask,
+  Legacy-v1/Deltas, explizite Nicht-Zahlen (u. a. ein `null` oder ein
+  sentinel-ähnliches Objekt) als lauter Fehler statt stillem `0`, Digest/
+  History/Reload, CLI/GUI-Parität, Picker-Provenance/Staleness sowie ein
+  No-Local-Pfad-Nachweis, dass ohne Pick-Session keine Stage behalten wird und
+  die Pixel identisch bleiben. P1.2 Tone/Color/Presence/Detail/Optics bleiben
+  deaktiviert; der lokale Renderer darf sie weder aktivieren noch als Stub
+  vortäuschen.
 
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
