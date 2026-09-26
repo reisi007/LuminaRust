@@ -1,6 +1,6 @@
 # golden_ref.lock - gepinnter Golden-Referenz-Fingerabdruck (GOLDEN-REF-30).
 # Erzeugt von: sh scripts/golden_ref.sh record --confirm "<reason>"
-# Grund: GOLDEN-REF-30 Verifikationsrunde: kanonische Form erzwungen, record-Diff + min. Grundlaenge, pre-commit Re-Pin-Gate ergaenzt; Baseline-Erneuerung folgt in GOLDEN-BASELINE-32
+# Grund: GUI-INT-MASKLOCAL-38: vier neue mask-local Editor-Goldens (tone_curve, color, presence, detail), Klasse C/S2, byte-stabil auf dieser Plattform. fixtures.count 16->4 aus GOLDEN-FIXT-31 (11 synthetische .arw entfernt) und goldens.count 62->66 werden hiermit mitgepinnt. Keine bestehende Golden-Datei wurde veraendert; die 13 als stale bekannten Goldens bleiben unberuehrt und gehoeren weiter zu GOLDEN-BASELINE-32.
 #
 # Format: eine Zeile pro Schluessel als <key>=<value>, '#'-Zeilen sind
 # Kommentar, Schluesselreihenfolge ist Teil des Formats (kanonisch, von
@@ -25,7 +25,7 @@ font.egui=0.36.2
 ui.golden_px=1024x720
 ui.scale_factor=1.0
 libraw.version=0.22.2
-fixtures.count=16
-fixtures.digest=git:bcfe04b1d5bc21948f71659926393c42ad900a01bebcdd63243bbe5fae365bd0
-goldens.count=62
-goldens.digest=git:6410887849032701227c53a55bb2c65d2d4a5c7d8e9ad926e72cc465d8bbbdef
+fixtures.count=4
+fixtures.digest=git:e949f6835ed1e4de980934547a995d96e122dba495f97e6a36e9a285226fea4a
+goldens.count=66
+goldens.digest=git:507558ec0f6374ff250359e5310b50d09b5a3358ac0fa0d15aabcbf2298d835e

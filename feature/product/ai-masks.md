@@ -11,6 +11,7 @@
 - [Benutzergeführte Segmentierung](#benutzergeführte-segmentierung)
 - [Status und Wiederverwendung](#status-und-wiederverwendung)
 - [Lokale Anpassungen](#lokale-anpassungen)
+- [GUI- und kittest-Vertrag der mask-local Editoren (P1.2a–d)](#gui--und-kittest-vertrag-der-mask-local-editoren-p12ad)
 - [Abnahme](#abnahme)
 
 ## Ziel
@@ -530,7 +531,12 @@ sichtbar CPU-routen oder verweigern.
   bleibt recipe-only.
 - **GUI/CLI:** Die GUI erhält einen lokalen Kurven-Editor (Kanalwahl
   Master/R/G/B, Punkt setzen/verschieben/löschen, Reset pro Kanal und für alle
-  lokalen Curves) mit **keiner** globalen Rezeptmutation. Die CLI nutzt keine
+  lokalen Curves) mit **keiner** globalen Rezeptmutation. Der
+  **Interaktionsvertrag** (geteilter Gesten-Decoder mit dem globalen Graphen,
+  Pflicht-Endpunkte, eigene Widget-Id, Reset-Transaktionen) und die geforderten
+  Testanker sind in
+  [§ GUI- und kittest-Vertrag der mask-local Editoren](#gui--und-kittest-vertrag-der-mask-local-editoren-p12ad)
+  normativ festgeschrieben. Die CLI nutzt keine
   zweite, fast identische Flag-Partei, sondern den bestehenden generischen
   Kanal: `--set-local-adjustment 'curves.<master|red|green|blue>=I,O;I,O;...'`
   (dieselbe Punkt-Syntax wie das globale `--curve-points`) und
@@ -636,7 +642,9 @@ Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
   Hue/Saturation/Luminance, Vibrance/Saturation, Point-Color-Einträge mit
   Hinzufügen/Entfernen, Grading-Ranges mit `balance`/`blending`, Reset pro
   Bereich und für den ganzen lokalen Color-Block) mit **keiner** globalen
-  Rezeptmutation. Die CLI nutzt keine zweite, fast identische Flag-Partei,
+  Rezeptmutation; Interaktionsvertrag und Testanker siehe
+  [§ GUI- und kittest-Vertrag der mask-local Editoren](#gui--und-kittest-vertrag-der-mask-local-editoren-p12ad).
+  Die CLI nutzt keine zweite, fast identische Flag-Partei,
   sondern den bestehenden generischen Kanal:
   `--set-local-adjustment 'hsl.<channel>.<hue|saturation|luminance>=<n>'`,
   `--set-local-adjustment 'vibrance=<n>'` / `'saturation=<n>'`,
@@ -778,7 +786,9 @@ Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
   Settings bleibt recipe-only.
 - **GUI/CLI:** Die GUI erhält einen lokalen Presence-Editor (Texture, Klarheit,
   Dehaze und Reset gesamt) mit **keiner** globalen `EditRecipe::presence`-
-  Mutation. Die CLI nutzt keine zweite, fast identische Flag-Partei, sondern den
+  Mutation; Interaktionsvertrag und Testanker siehe
+  [§ GUI- und kittest-Vertrag der mask-local Editoren](#gui--und-kittest-vertrag-der-mask-local-editoren-p12ad).
+  Die CLI nutzt keine zweite, fast identische Flag-Partei, sondern den
   bestehenden generischen Kanal:
   `--set-local-adjustment 'presence.texture=<n>'` /
   `'presence.clarity=<n>'` / `'presence.dehaze=<n>'` und
@@ -963,7 +973,10 @@ sichtbar CPU-routen oder verweigern.
 - **GUI/CLI:** Die GUI erhält einen lokalen Detail-Editor (Sharpening
   amount/radius/detail/masking, Noise Reduction luminance/color, Reset pro
   Bereich und gesamt) mit **keiner** globalen
-  `EditRecipe::sharpening`/`noise_reduction`-Mutation. Die CLI nutzt keine
+  `EditRecipe::sharpening`/`noise_reduction`-Mutation; Interaktionsvertrag und
+  Testanker siehe
+  [§ GUI- und kittest-Vertrag der mask-local Editoren](#gui--und-kittest-vertrag-der-mask-local-editoren-p12ad).
+  Die CLI nutzt keine
   zweite, fast identische Flag-Partei, sondern den bestehenden generischen
   Kanal: `--set-local-adjustment 'sharpening.<field>=<n>'` /
   `'noise_reduction.<field>=<n>'` und
@@ -977,6 +990,174 @@ sichtbar CPU-routen oder verweigern.
   von AI-Denoise und Optics, CLI/GUI-Parität und History/Previous/Reset. Die
   **globalen** Sharpening-/Noise-Reduction-Goldens müssen **unverändert** grün
   bleiben. AI-Denoise und Optics bleiben deaktiviert.
+
+## GUI- und kittest-Vertrag der mask-local Editoren (P1.2a–d)
+
+**Feature-ID:** `GUI-INT-MASKLOCAL-38` · Stand 2026-09-26 · Release 1.0
+
+> **Warum dieser Abschnitt existiert.** P1.2a–d wurden **headless** geliefert
+> (Schema, `lumina-core`, `lumina-cli`, `lumina-sidecar`). Die mask-local
+> Editoren sind aber sichtbare Funktionen, und `Agents.md` verlangt für jede
+> sichtbare Funktion einen klickbaren headless GUI-Test **und** einen
+> kittest-Golden. Dieser Abschnitt legt den GUI- und kittest-Vertrag fest, **bevor**
+> die Integration implementiert wird — die Semantik oben (Reihenfolge, Versionen,
+> Reset, Persistenz) bleibt davon unberührt.
+
+### 1. Verdrahtung: ein Modul ohne `draw_`-Aufruf ist nicht integriert
+
+- Jeder der vier mask-local Editoren hat **genau einen** `draw_*`-Pfad, und der
+  wird aus **derselben** aufrufenden Stelle in `develop_masking.rs`
+  (`LuminaApp::draw_masking`, innerhalb des `selected_mask_id.is_some()`-Zweigs)
+  aufgerufen — in dieser Reihenfolge und mit `ui.separator()` dazwischen:
+  `draw_mask_local_tone_curve` (P1.2a) → `draw_mask_local_color` (P1.2b) →
+  `draw_mask_local_presence` (P1.2c) → `draw_mask_local_detail` (P1.2d). Die
+  Reihenfolge der vier Aufrufe folgt der **Kernel-Reihenfolge** der Maske
+  (Presence → Kurve → Color → Detail ist die Render-Reihenfolge; die Panel-
+  Reihenfolge ist eine reine Lese-Reihenfolge und darf die Kernel-Reihenfolge
+  nicht suggerieren, indem sie sie umstellt — sie steht deshalb in der
+  historischen Panel-Reihenfolge Tone Curve → Color → Presence → Detail und ist
+  als reine Anzeigereihenfolge dokumentiert).
+- **Ohne ausgewählte Maske** wird kein mask-local Block gezeichnet. Das ist der
+  einzige Sichtbarkeits-Gate; es ist derselbe Gate, den die übrigen lokalen
+  Regler (Exposure/Contrast/…) benutzen, und kein stilles Leerenzeichen.
+- Kein mask-local Block ist ein `#[cfg(test)]`-Pfad und keiner malt in einen
+  Frame, der nicht die reale `draw_masking`-Kette durchläuft.
+
+### 2. Interaktionsvertrag: anklickbar, nicht nur paintbar
+
+Für **jede** sichtbare Bedienung eines der vier Editoren gilt: der Bedienweg ist
+ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
+**produktiven Setter** (`set_mask_local_curve_channel` /
+`set_mask_local_hsl_band` / `set_mask_local_vibrance_saturation` /
+`add_mask_local_point_color` / `set_mask_local_grading_field` /
+`set_mask_local_presence` / `set_mask_local_sharpening` /
+`set_mask_local_noise_reduction` bzw. der jeweilige `reset_*`) in das Rezept der
+**ausgewählten Masken-Layer**. Konkret normativ:
+
+- **Kurvengraph (P1.2a)** — der mask-local Graph benutzt **denselben
+  Gesten-Decoder** wie der globale (`curve_graph_gesture`), dieselbe
+  Hit-Radius-/Mindestabstands-Regel und dieselben Pflicht-Endpunkte
+  `(0,0)`/`(1,1)`. Damit gilt der globale UXG-16-Vertrag wortgleich:
+  * **Setzen:** ein Klick auf die gezeichnete Kurve fügt an der geklickten
+    Input-Position einen Stützpunkt ein (die Kurve bleibt visuell zunächst
+    unverändert); ein Klick **abseits** der Kurve ist ein No-Op.
+  * **Verschieben:** ein Drag auf einem inneren Punkt verschiebt ihn; der Input
+    wird strikt zwischen den Nachbarn geklemmt, der Output auf `0..=1`.
+  * **Löschen:** ein Doppelklick auf einem inneren Punkt entfernt ihn.
+  * **Endpunkte** sind weder verschiebbar noch löschbar; jeder Versuch wird
+    **laut** verweigert (Statuszeile, kein Save) — nie stillschweigend ignoriert.
+  * Der mask-local Graph hat eine **eigene, stabile Widget-Id**
+    (`lumina.local_tone_curve_graph.<channel>`), damit er im selben UI-Baum
+    neben dem globalen Graph keine egui-Interaktionszustände teilt.
+  * Die **Kanalwahl** Master/R/G/B ist eine echte Auswahl-Reihe
+    (`selectable_label`) und schaltet den dargestellten und bearbeiteten Kanal
+    um; ein Kanalwechsel ist eine reine Ansichtsumschaltung und schreibt
+    **nicht** in das Rezept.
+  * **Reset** existiert zweimal: pro Kanal und für alle lokalen Curves. Beide
+    sind vollständige Editor-Transaktionen (History + Save), keine
+    Anzeige-Aktion.
+- **Regler und Buttons (P1.2b/c/d)** — HSL-Bandwahl, Grading-Range-Wahl,
+  Vibrance/Saturation, Point-Color-Hinzufügen/Entfernen, Presence
+  (Texture/Klarheit/Dehaze), Sharpening (Amount/Radius/Detail/Masking),
+  Noise Reduction (Luminance/Color) sowie alle Reset-Buttons sind echte
+  egui-Widgets mit obigem Schreibpfad. Die angebotenen Wertebereiche sind
+  **exakt** die globalen Bereiche (siehe die Area-SOLL), damit der Editor nie
+  einen Wert anbieten kann, den der Validator verweigert.
+- **Kein globaler Seiteneffekt:** nach jedem mask-local Klick gilt
+  `recipe().curves.is_none()`-entsprechend: das globale Rezept
+  (`EditRecipe::curves`/`hsl`/`point_color`/`color_grading`/`presence`/
+  `sharpening`/`noise_reduction`/`adjustments`) ist byteweise unverändert. Das ist
+  eine **Zusicherung**, keine Beobachtung — ein Test, der sie nicht prüft,
+  deckt die Editor-Transaktion nicht ab.
+- **Lauter Fehler statt stillem No-Op:** ein Refused Edit (unbekannter Kanal,
+  Endpunkt, ungültige Punktliste) verlässt Layer und ausstehenden
+  History-Snapshot byteweise unverändert und setzt eine sichtbare Statuszeile.
+
+### 3. Testabdeckung: zwei Anker je sichtbarer Fläche
+
+Je mask-local Editor gilt verbindlich **beides**:
+
+0. **Zwei Ansprüche, zwei Testziele.** „Wird gezeichnet" (Paint-Provenienz:
+   jeder Editor wird von seinem **eigenen** `draw_*`-Pfad aus der echten
+   `draw_masking`-Kette gezeichnet, und die zum Ansteuern benutzten Labels
+   gehören dem **lokalen** Editor, nicht dem globalen Develop-Abschnitt) und
+   „ist anklickbar" (Eingabevertrag) sind verschiedene Ansprüche und liegen
+   deshalb in verschiedenen Zielen: `tests/mask_local_editors_wiring.rs`
+   (Paint-Provenienz plus der Graph-Vertrag UXG-16, dessen Wert eine Punktliste
+   und kein Skalar ist) und `tests/mask_local_editors.rs` (Presence/Color/Detail,
+   deren Wert ein Skalar ist). Ein Miswire bricht das eine Ziel, ein nicht
+   anklickbares Widget das andere. Geteilte Testhilfen liegen in
+   `tests/mask_local_editors_support/` (Harness, Frame-Uhr, Label-Lookups),
+   `tests/mask_local_slider_support/` (Regler-Drags) und
+   `tests/mask_local_curve_graph_support/` (Graph-Geometrie und -Gesten); keine
+   Datei dieser drei Module wird von `#[allow(dead_code)]` am Liveness-Gate
+   vorbeigetragen, jede wird nur von ihrem Verbraucher deklariert.
+1. **Klickbarer headless Test** (läuft in `cargo test -p lumina-gui`, **ohne**
+   GPU): `egui::Context` + `LuminaApp` im tempdir bzw. der 4×3-Smoke-PNG, echte
+   Zeiger-Events auf die echten Widgets der echten `draw_masking`-Kette, und
+   danach die **persistierte** Lage über die öffentlichen Getter
+   (`selected_mask_local_*` / `has_mask_local_*` / `recipe()`). Ein reiner
+   „das Widget wurde gepaint"-Test ist **kein** Interaktionsnachweis und deckt
+   Abschnitt 2 nicht ab.
+2. **kittest-Golden** im feature-spezifischen Target
+   `crates/lumina-gui/tests/kittest_mask_local.rs` bei `1024 × 720`, mit dem
+   `#[ignore]`-Grund `headless GPU required; …` — also **lokal**es macOS-Gate
+   über den wgpu-Adapter und in CI **nie** verifiziert (kein GPU-Runner). Kein
+   Golden schreibt einen Decode-Fehler als Soll fest (Wächter
+   `assert_no_raw_decode_failure`); die Mask-local-Editoren laufen auf der
+   S2-Smoke-Fixture und sind damit **Chrome-/Layout-Invarianten der Klasse C**,
+   **keine** Render-Invarianten und **kein** Beleg für eine Bildpipeline-
+   Regression.
+
+### 4. Aktions-Audit
+
+Die mask-local Editoren armieren **keine** neue `GuiAction`-Variante: sie laufen
+über die vorhandenen typisierten Setter und den bestehenden `instrument_gui_action!`-
+Pfad der Maskenaktionen. Führt eine Änderung an diesem Vertrag eine neue Variante
+ein, ist `ALL_GUI_ACTIONS` (aktuell 110 Aktionen, gepinnt in
+`gpu_audit_exception_table_is_complete_without_gpu`) mitzupflegen; der
+F-100-Button-Audit (`f100_shortcut_audit_every_action_has_a_button`) muss
+ebenfalls grün bleiben.
+
+### 5. Ausdrückliche Grenze der Prüfbarkeit
+
+Es gibt **keinen** echten Fenster-/Interaktions-Test, und keiner wird verlangt:
+kein Abnahmekriterium darf ein real gerendertes Fenster, echte Maus-/Zeiger-
+ereignisse auf dem Desktop, DPI- oder Multi-Monitor-Verhalten oder einen
+Sichtcheck durch einen Menschen voraussetzen. Geprüft wird headless
+(`egui Context` + `LuminaApp`) und pixelweise (`egui_kittest` + wgpu-Adapter).
+Der einzige Weg zu einem real gestarteten Prozess ist der manuelle
+Akzeptanz-Run nach R5-LOG-1 (`RUST_LOG=trace`, genau eine App-Instanz,
+Log-Redirect) — das ist eine User-Aktion und **kein** Ersatz für die
+headless-Anker. Was headless prinzipiell nicht belegt, ist als **laut
+benannte Lücke** zu führen, nicht zu beschönigen.
+
+### 6. Erreichter Stand und bekannte Grenzen (Stand 2026-09-26)
+
+- **Verdrahtung war kein offener Punkt.** `draw_mask_local_tone_curve` ist
+  bereits aufgerufen (`develop_masking.rs`, Commit `1c490b7`); es fehlten
+  ausschließlich der klickbare Nachweis und die Goldens. Die Nicht-Vakuums-
+  Gegenprobe (alle vier `draw_mask_local_*`-Aufrufe auskommentiert) lässt alle
+  vier Interaktionstests rot werden.
+- **Geteilte Testhilfen ohne Liveness-Ausnahme** (Modulgrenze, siehe Punkt 0):
+  Der erste Entwurf hatte eine Support-Datei mit allen Helfern; die beiden
+  Testziele ließen 13 bzw. 6 Helfer ungenutzt, was das Clippy-Gate
+  `-D warnings` reißt. Die Aufteilung folgt der tatsächlichen Nutzung, nicht
+  einer `allow`-Regel.
+- **Bekannte Grenze der Goldens (Klasse C, Layout):** bei `1024 × 720` fallen
+  die Color-Grading-Zeilen und die Reset-Buttons der unteren Blöcke unter den
+  Fold. Sie werden nicht per Golden, sondern im Interaktionsziel geprüft
+  (Viewport bewusst `1100 × 3600`, siehe `PANEL_VIEWPORT`).
+- **Folgekonflikt, nicht mask-local-spezifisch (nicht hier behoben):** ein
+  Slider-Drag, der seinen Wert in **einzelnen** Frame ändert, strandet den
+  debounced Sidecar-Save — `render_schedule.rs` nimmt im `!pointer_down`-Zweig
+  den Zweig mit `last_edit_time` auf dem Vor-Drag-Wert, der scharfwertende
+  `pending_slider_commit` wird erst von einer **späteren**, fremden Änderung
+  geflusht (gemessen: Grading-Hue kam im Speicher an, nie ins Sidecar;
+  `set_rating(3)` flushte ihn nach). Der Drag-Helper
+  `mask_local_slider_support::drag_slider` umgeht das mit mehreren
+  Zwischenpositionen, der Bug selbst liegt im gemeinsamen Render-Pfad und
+  braucht eine eigene Aufgabe.
 
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
