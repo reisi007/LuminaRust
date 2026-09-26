@@ -1187,6 +1187,31 @@ Was der Code tatsächlich tut:
   und erfüllt `GUI-SLIDER-SAVE-1` (CAS, entprellter Save, reine View-Edits
   schreiben nichts).
 
+- **`GUI-SLIDER-SAVE-1`, Zusatzklausel (2026-09-26, `SIDECAR-SAVE-STRAND-39`):
+  ein normaler Render entlastet keinen offenen Save.** `schedule_render` haengt
+  den einzigen Commit-Pfad an `pending_full_render`. Jeder Vollrender, der
+  nicht durch `commit_pending_slider_save` laeuft — der Fusszeilen-Button
+  `Render / Apply` und ~20 weitere `render()`-Aufrufstellen — loescht dieses Flag
+  in seinem Frame. Ohne die Zusatzklausel waere der bewaffnete Token danach fuer
+  den Rest der Session unerreichbar: der Edit lebt nur im Speicher, die Sidecar
+  traegt den alten Wert, und **nichts** sagt es. Kein Fehler, kein Badge, kein
+  Log — stiller Verlust einer Nutzereingabe.
+
+  Der Scheduler **bewaffnet das Flag deshalb neu**, aber nur solange eine
+  Drag-Uhr laeuft (`last_edit_time > 0.0`) **und** ein Commit-Token armiert ist.
+  Die Drag-Uhr macht das Rewind **one-shot**: sie steht auf `0.0` bei einem
+  Edit ohne Drag (der committet sofort, es gibt kein Fenster zu stornieren) und
+  nach **jedem** Commit-Versuch. Ein erfolgreicher Save wird nie wiederholt; ein
+  fehlgeschlagener behaelt das bisherige Verhalten (laut, und von der naechsten
+  User-Aktion erneut angestossen) statt einen modalen Fehler pro Frame neu zu
+  oeffnen. Reine View-Edits (Zoom/Pan) armieren keinen Token und schreiben
+  damit weiterhin nichts.
+
+  **Anker:** `tests/slider_sidecar_save.rs::a_render_apply_click_inside_the_debounce_window_does_not_strand_the_save`
+  (rot ohne den Fix) und
+  `src/tests/render_dirty.rs::the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs`
+  (pinnt beide Richtungen, auch die Antiretry-).
+
 **Warum der Ausschluss gewollt ist.** `GuiAction`/`ALL_GUI_ACTIONS` ist die
 **globale Kommandofläche** (Tastatur-Shortcut + Button je Aktion, F-100). Ein
 mask-local Regler ist kein Kommando, sondern ein Panel-lokales Widget an genau
