@@ -10,37 +10,16 @@ use lumina_mcp::tools::edit::validate_adjustments;
 use lumina_mcp::util::{detect_format, downscale_bilinear, recipe_hash};
 use lumina_mcp::Server;
 use serde_json::{json, Value};
+
+// The documented tool set and its drift guard live in their own module: the list
+// grew by five names in MCP-PARITY-B and this file is baseline-listed, so the
+// list was extracted rather than appended (see `tool_names/mod.rs`).
+#[path = "tool_names/mod.rs"]
+mod tool_names;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-const TOOL_NAMES: &[&str] = &[
-    // Editing session tools (original F-101 scope).
-    "lumina_load",
-    "lumina_edit",
-    "lumina_get_recipe",
-    "lumina_save",
-    "lumina_preview",
-    "lumina_list_virtual_copies",
-    "lumina_inspect",
-    "lumina_analyze",
-    // F-101-F1: full CLI coverage (path-based bulk tools).
-    "lumina_import",
-    "lumina_batch",
-    "lumina_reindex",
-    "lumina_dust_removal",
-    // LRPAR-G15-IPTC-S7: path-based metadata tools.
-    "lumina_get_metadata_draft",
-    "lumina_update_metadata_draft",
-    "lumina_apply_meta_preset",
-    "lumina_batch_sync_metadata",
-    "lumina_trigger_export",
-    // MCP-PARITY-A: the four session-based recipe stage editors.
-    "lumina_spot",
-    "lumina_lens_blur",
-    "lumina_geometry",
-    "lumina_upright",
-];
+use tool_names::TOOL_NAMES;
 
 fn new_server(preview_dir: &Path) -> Server {
     // Race-free injection: `Server::new` resolves the process-global
@@ -220,13 +199,10 @@ fn tools_list_returns_every_registered_tool_with_a_valid_schema() {
     let response = call(&mut server, "tools/list", json!({}));
     let tools = response["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    // The name claims full coverage, so pin the drift in both directions: a
-    // registered tool absent from the listing, or a listed tool absent from
-    // `TOOL_NAMES`, must be a deliberate edit here, not silent staleness.
+    // The documented membership is pinned by `tool_names::tools_list_reports_exactly_the_documented_tool_names`
+    // (and a second time over the real protocol by `mcp_onnx.rs`); this test keeps
+    // the schema-shape half.
     assert_eq!(names.len(), TOOL_NAMES.len(), "tool set drifted: {names:?}");
-    for name in &names {
-        assert!(TOOL_NAMES.contains(name), "`{name}` is not in TOOL_NAMES");
-    }
     for (name, tool) in names.iter().zip(tools) {
         // Schema validation: every tool declares an object inputSchema with a
         // required-array and a properties map (MCP `tools/list` shape).

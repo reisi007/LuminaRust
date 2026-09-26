@@ -2324,6 +2324,7 @@ dependencies = [
  "blake3",
  "log",
  "lumina-core",
+ "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
  "serde",

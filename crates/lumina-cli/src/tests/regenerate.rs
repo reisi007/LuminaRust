@@ -1,6 +1,6 @@
 use super::*;
-use crate::auto_tone_cli::auto_tone_input_fingerprint;
 use lumina_sidecar::AnalysisFingerprint;
+use lumina_stages::auto_tone::auto_tone_input_fingerprint;
 
 /// Explicit `--module auto-tone` writes the full six-slider contract and
 /// leaves the mask artifacts and the matching value untouched.

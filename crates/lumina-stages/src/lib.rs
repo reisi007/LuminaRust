@@ -36,14 +36,47 @@
 //! that used an out-of-range value, an unknown copy, an unknown field, an
 //! inverted focal range or a non-portable artifact path still aborts loudly and
 //! still writes zero bytes.
+//!
+//! # MCP-PARITY-B: the path-based and artefact commands
+//!
+//! The same one-implementation rule extends to the five remaining counted gaps
+//! `collections`, `smart-collections`, `relocate`, `generative` and
+//! `regenerate`. They are **path-based** (one call = one path, no `image_id`,
+//! the existing bulk-tool pattern) or artefact-based, and they live here too:
+//!
+//! | command | module | CLI adapter | MCP tool |
+//! | --- | --- | --- | --- |
+//! | `collections` | [`collections`] | `crates/lumina-cli/src/library.rs` | `lumina_collections` |
+//! | `smart-collections` | [`smart_collections`] | `crates/lumina-cli/src/library.rs` | `lumina_smart_collections` |
+//! | `relocate` | [`relocate`] | `crates/lumina-cli/src/library.rs` | `lumina_relocate` |
+//! | `generative` | [`generative`] | `crates/lumina-cli/src/library.rs` | `lumina_generative` |
+//! | `regenerate` | [`regenerate`] | `crates/lumina-cli/src/library.rs` | `lumina_regenerate` |
+//!
+//! [`generative`] and [`regenerate`] stay behind their artefact gates: when the
+//! model/artefact a module needs cannot be produced or resolved, both
+//! transports abort with the **same** error and write no sidecar bytes — never a
+//! faked result. [`auto_tone`] is here for the same reason as in the CLI: the
+//! `regenerate --module auto-tone` freshness predicate and the single write path
+//! are one function, so a second copy in the MCP layer could not stay
+//! consistent with the writer.
 
+pub mod auto_tone;
+pub mod collections;
 pub mod copy;
 pub mod decode;
 pub mod error;
+pub mod generative;
+pub mod generative_artifact;
+pub mod generative_status;
 pub mod geometry;
 pub mod geometry_fields;
 pub mod lens_blur;
+pub mod paths;
+pub mod pipeline;
+pub mod regenerate;
+pub mod relocate;
 pub mod report;
+pub mod smart_collections;
 pub mod spot;
 pub mod spot_ops;
 #[cfg(test)]
@@ -51,8 +84,10 @@ mod tests;
 pub mod upright;
 
 pub use error::StageError;
+pub use generative::GenerativeRequest;
 pub use geometry::GeometryRequest;
 pub use lens_blur::LensBlurRequest;
-pub use report::{Persist, StageReport, StageRun};
+pub use regenerate::{RegenerateModule, RegenerateRequest, RegenerateRun};
+pub use report::{BulkReport, BulkRun, Persist, StageReport, StageRun};
 pub use spot::SpotRequest;
 pub use upright::UprightRequest;

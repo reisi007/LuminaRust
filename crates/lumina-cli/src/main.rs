@@ -17,12 +17,6 @@ use lumina_core::{
 // default builds (no `onnx-rt`); it is never substituted for a requested real
 // engine. `birefnet_manifest` is the model identity/contract both paths share.
 use lumina_onnx::birefnet_manifest;
-// GEN-ONNX-1 Welle 1: deterministic generative canvas producer (fixture model)
-// and the documented real-model attachment surface.
-use lumina_onnx::generative::{
-    produce_canvas, GenerativeCanvasOutput, GenerativeModelSource,
-    GenerativeRole as OnnxGenerativeRole,
-};
 // LRPAR-G12-FACE-IMPL-20 / S4: the `face` command resolves the real face
 // engine loudly (`try_load_face_engine`) — never a silent stub fallback — and
 // evaluates a persisted analysis against the live source/decode/model context.
@@ -63,24 +57,20 @@ use lumina_sidecar::{
 // the `onnx-rt` build (the only build that can produce real vectors).
 use lumina_sidecar::{
     apply_batch_op, artifact_status, default_meta_presets_dir, document_revision,
-    generative_artifact_status, is_metadata_field, load_meta_preset_file, load_sidecar,
-    now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_denoise_rgb,
-    save_generative_canvas, save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir,
-    sidecar_path_for, validate_metadata_field_value, validate_smart_collection_def, AiSelect,
-    AiSelectKind, ArtifactStatus, BatchOp, CollectionMembership, ColorGrading, ColorGradingRange,
-    CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves, DecodeFingerprint, DenoiseAi,
-    DenoiseArtifactKind, DenoiseArtifactRef, DenoiseModelIdentity,
-    DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, EditRecipe, ExportRecord, FaceAnalysis,
-    FaceArtifactStatus, GenerativeArtifactRef, GenerativeArtifactStatus, GenerativeCanvas,
-    GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit, Geometry,
-    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, MaskDefinition, MaskLayer,
-    MaskOperation, MaskPrompt, MaskReference, MaskStatus, MetaPresetEntry, MetaPresetFile,
-    MetadataHistoryEntry, ModelIdentity, PointColor, PointColorEntry, Preprocessing,
-    PromptTransform, RecordSpec, RedEyeCorrection, RedEyeRegion, Resolution, SidecarDocument,
-    SmartCollectionDef, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
-    SourceFingerprint, SourceIdentity, DENOISE_AI_VERSION, MAX_KEYWORDS_PER_DOCUMENT,
-    MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS,
-    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
+    is_metadata_field, load_meta_preset_file, load_sidecar, now_rfc3339_utc, render_meta_preset,
+    resolve_meta_preset_path, save_denoise_rgb, save_sidecar, save_sidecar_if_unchanged,
+    scan_meta_presets_dir, sidecar_path_for, validate_metadata_field_value, AiSelect, AiSelectKind,
+    ArtifactStatus, BatchOp, ColorGrading, ColorGradingRange, CoordinateSystem, CurveChannels,
+    CurvePoint, Curves, DecodeFingerprint, DenoiseAi, DenoiseArtifactKind, DenoiseArtifactRef,
+    DenoiseModelIdentity, DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, EditRecipe,
+    ExportRecord, FaceAnalysis, FaceArtifactStatus, GeometryFingerprint, HistoryEntry,
+    HslAdjustments, HslChannel, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt,
+    MaskReference, MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry,
+    ModelIdentity, PointColor, PointColorEntry, Preprocessing, PromptTransform, RecordSpec,
+    RedEyeCorrection, RedEyeRegion, Resolution, SidecarDocument, SourceActionArtifactRef,
+    SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity, DENOISE_AI_VERSION,
+    MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
+    RED_EYE_MAX_REGIONS, SOURCE_ACTION_VERSION,
 };
 #[cfg(feature = "onnx-rt")]
 use lumina_sidecar::{save_face_embeddings, FaceEmbeddingArtifact as SidecarFaceEmbeddingArtifact};
@@ -120,10 +110,14 @@ use lensfun_cli::build_lensfun_corrector;
 // `process_selected` for the file-size ratchet; the normative contract is
 // `feature/architecture/pipeline.md` § Auto-Tone.
 mod auto_tone_cli;
-use auto_tone_cli::{
-    apply_auto_tone_result, apply_explicit_slider_values, apply_preset_layer,
-    auto_tone_input_fingerprint, auto_tone_is_fresh, PersistedAutoTone,
-};
+use auto_tone_cli::{apply_explicit_slider_values, apply_preset_layer};
+// MCP-PARITY-B: the Auto-Tone **write path** and the `regenerate` freshness
+// predicate moved to `crates/lumina-stages/src/auto_tone.rs`, because
+// `lumina-mcp` now reaches them through `lumina_regenerate op="auto_tone"` and
+// a second copy could not stay consistent with the single writer. What stays in
+// `auto_tone_cli` is the CLI-only preset/explicit-slider layering of
+// `process --auto-tone`.
+use lumina_stages::auto_tone::{apply_auto_tone_result, PersistedAutoTone};
 // MASK-LOCAL-P0/P1.2a: typed local-adjustment flag parsing and mutation.
 mod mask_local;
 mod mask_local_color;
@@ -156,6 +150,50 @@ use stages::{
 // shared stage code (`lumina-cli` and `lumina-mcp` must agree on the source
 // identity that `upright --analyze` persists).
 use lumina_stages::decode::{is_raw_path, timestamp};
+// MCP-PARITY-B: the five path-based / artefact commands (`collections`,
+// `smart-collections`, `relocate`, `generative`, `regenerate`). Their logic
+// lives in `lumina-stages` together with the stage editors, so the MCP tools
+// reach the same implementation; this crate keeps only the `clap` argument
+// structs, the `*Args -> *Request` mapping and the report printing.
+mod library;
+use library::{
+    collections, generative, regenerate, relocate, smart_collections, CollectionsArgs,
+    GenerativeArgs, RegenerateArgs, RelocateArgs, SmartCollectionsArgs,
+};
+// The shared path / render-context substrate (`require_sidecar`,
+// `collect_target_sidecars`, `collect_sidecars`, `collect_tree_files`,
+// `move_file_cross_volume`, `load_smart_catalog`, `resolve_source_actions`,
+// `load_persisted_mask_planes`, `sanitize_camera_white_balance`) moved to
+// `lumina-stages` with the commands that need it: a second copy on the MCP side
+// would have to re-derive the same target list, the same cycle-safe walk and
+// the same source-action checks.
+use lumina_stages::paths::{collect_sidecars, collect_target_sidecars, require_sidecar};
+use lumina_stages::pipeline::{
+    load_persisted_mask_planes, resolve_source_actions, sanitize_camera_white_balance,
+};
+// The generative artefact helpers are shared with the render path, which still
+// resolves the render-time artifacts in this file (`resolve_generative_artifacts`).
+use lumina_stages::generative_artifact::{
+    generative_expand_input, generative_identity, resolve_generative_role, stage_generative_input,
+};
+// MCP-PARITY-B: the Auto-Tone freshness predicate and its analysis fingerprint
+// moved with `regenerate`; the in-crate tests address them directly.
+#[cfg(test)]
+use lumina_stages::auto_tone::{auto_tone_input_fingerprint, auto_tone_is_fresh};
+// MCP-PARITY-B: the `--module` value set moved with `regenerate`.
+#[cfg(test)]
+use crate::library::ModuleArg;
+#[cfg(test)]
+use lumina_stages::regenerate::RegenerateModule;
+// MCP-PARITY-B: the sidecar types the generative/membership tests build by hand
+// used to be imported by the entry point; they now come from their own crate.
+#[cfg(test)]
+use lumina_sidecar::{Crop, GenerativeCanvas, GenerativeEdit};
+// MCP-PARITY-B: the shared move/walk/tile-id helpers the in-crate tests call
+// directly.
+#[cfg(test)]
+use lumina_stages::{paths::move_file_cross_volume, pipeline::zdata_mask_tile_id};
+
 // `geometry --lensfun-status` report helper; reached from the tests only.
 #[cfg(test)]
 use stages::resolve_lensfun_report;
@@ -704,60 +742,6 @@ struct DevelopArgs {
     json: bool,
 }
 
-/// GUI-GEN-GRANULAR-10 (F-100, Release 1.0): the derivable AI/analysis values
-/// present in 1.0 that each have their own explicit regeneration action. The
-/// list is the `--module` value set of `lumina regenerate`; later modules
-/// (denoise/face/cull/merge) extend it without changing the convention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum RegenerateModule {
-    /// AI mask inference. Regeneration is an explicit refresh request
-    /// (status `Pending`) consumed by the next render; the `.lumina.zdata`
-    /// artifact persistence is the documented F-082 open item, so no stub
-    /// matte is ever persisted as a valid artifact.
-    Masks,
-    /// Auto-Tone: the six sliders (`exposure`/`contrast` plus the AUTO-TONE-2
-    /// end/balance mirrors) and the `analysis_fingerprint`.
-    #[value(name = "auto-tone")]
-    AutoTone,
-    /// F-008 Exposure Matching (the persisted `matched_exposure`).
-    Matching,
-}
-
-impl RegenerateModule {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Masks => "masks",
-            Self::AutoTone => "auto-tone",
-            Self::Matching => "matching",
-        }
-    }
-}
-
-/// GUI-GEN-GRANULAR-10 (F-100): explicit per-module regeneration of the 1.0
-/// derivable AI/analysis values.
-///
-/// Without `--module` the command is the F-100 **collective default** and
-/// regenerates only stale or missing values (independent per module). An
-/// explicit `--module` **forces** exactly that module, even when its current
-/// value looks fresh, and leaves every other persisted artifact untouched.
-/// Nothing is ever recomputed implicitly; the sidecar is written atomically
-/// and only when something actually changed.
-#[derive(Debug, Args)]
-struct RegenerateArgs {
-    #[arg(long)]
-    input: PathBuf,
-    #[arg(long)]
-    virtual_copy: Option<String>,
-    /// Modules to regenerate (repeatable): `masks`, `auto-tone`, `matching`.
-    /// Omitted = regenerate every stale/missing module.
-    #[arg(long = "module", value_enum)]
-    modules: Vec<RegenerateModule>,
-    #[arg(long, default_value_t = 0.5)]
-    target_luminance: f64,
-    #[arg(long)]
-    json: bool,
-}
-
 /// R2-CLI-10: slim argument set for `import` — only the flags the command
 /// actually consumes. Import writes/validates a sidecar; it never renders, so
 /// render-only flags would be silently ignored (see [`Command::Import`]).
@@ -953,23 +937,6 @@ struct KeywordsArgs {
     json: bool,
 }
 
-/// G-15 META-MVP (Slice 2): list or mutate static collection memberships of
-/// one image sidecar. `--add-to` takes `id=name` (split at the first `=`);
-/// `--remove-from` takes the membership `id`.
-#[derive(Debug, Args)]
-struct CollectionsArgs {
-    #[arg(long)]
-    input: PathBuf,
-    /// Memberships to add/rename as `id=name` (repeatable, in order).
-    #[arg(long = "add-to")]
-    add_to: Vec<String>,
-    /// Membership ids to remove (repeatable, in order after `--add-to`).
-    #[arg(long = "remove-from")]
-    remove_from: Vec<String>,
-    #[arg(long)]
-    json: bool,
-}
-
 /// G-15 META-MVP (Slice 2): apply exactly one `BatchOp` (JSON in the
 /// `BatchOp` serde form) over every sidecar found under `--input`.
 /// Exactly one of `--op` / `--op-file` is required.
@@ -984,21 +951,6 @@ struct BatchMetaArgs {
     /// Path to a file containing the batch operation JSON.
     #[arg(long)]
     op_file: Option<PathBuf>,
-    #[arg(long)]
-    json: bool,
-}
-
-/// G-15 META-MVP (Slice 2): evaluate a portable smart-collection catalog file
-/// against every sidecar found under `--input` (read-only).
-#[derive(Debug, Args)]
-struct SmartCollectionsArgs {
-    #[arg(long)]
-    input: PathBuf,
-    /// Path to the catalog file
-    /// (`{"format":"lumina-smart-catalog","version":1,"collections":[...]}`).
-    /// A plain CLI argument, never persisted into recipe data.
-    #[arg(long)]
-    catalog: PathBuf,
     #[arg(long)]
     json: bool,
 }
@@ -1262,22 +1214,6 @@ struct PreviousArgs {
     /// `vc-original`).
     #[arg(long)]
     to_copy: Option<String>,
-    #[arg(long)]
-    json: bool,
-}
-
-/// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its sidecar
-/// companions. The destination is the full target image path (rename and
-/// folder move in one); companions keep their sidecar-derived file names
-/// next to the target. No schema change — only filesystem moves.
-#[derive(Debug, Args)]
-struct RelocateArgs {
-    /// Source image to move (must exist).
-    #[arg(long)]
-    from: PathBuf,
-    /// Destination image path (must not exist; parent must exist).
-    #[arg(long)]
-    to: PathBuf,
     #[arg(long)]
     json: bool,
 }
@@ -1943,332 +1879,6 @@ fn mark_masks_pending_refresh(input: &Path, virtual_copy: Option<&str>) -> Resul
         .insert("update_masks".into(), "true".into());
     save_sidecar(&path, &document)?;
     Ok(())
-}
-
-/// GUI-GEN-GRANULAR-10 (F-100): does this source mask need a fresh artifact?
-///
-/// Conservative pre-filter for the *collective* default only; an explicit
-/// `--module masks` forces the refresh regardless (range prompts excluded by
-/// the caller, see `regenerate`). It checks the cheap, CLI-owned parts of the
-/// decision-layer validity rule (status, source content hash, artifact
-/// availability). The **authoritative** identity check stays in
-/// `lumina-core::mask_loader` — decode context, model identity and plane
-/// dimensions are deliberately *not* duplicated here, because that module is
-/// the single owner of the inference contract. A fresh-looking value that is
-/// actually stale on those dimensions is still caught (and reported loudly) by
-/// the decision layer at render time.
-fn mask_needs_regeneration(
-    root: &Path,
-    current: &lumina_sidecar::SourceIdentity,
-    mask: &lumina_sidecar::MaskDefinition,
-) -> bool {
-    if !matches!(mask.status, MaskStatus::Valid) {
-        return true;
-    }
-    if mask.source_fingerprint.content_hash != current.content_hash {
-        return true;
-    }
-    match mask.artifact.as_ref() {
-        None => true,
-        Some(artifact) => artifact_status(root, artifact) != ArtifactStatus::Available,
-    }
-}
-
-/// GUI-GEN-GRANULAR-10: explicit per-module regeneration of the 1.0 derivable
-/// AI/analysis values (F-100). See [`RegenerateArgs`] and
-/// `feature/platform/cli-gui-wasm.md` § F-100.
-///
-/// The three modules are handled in dependency order (masks, auto-tone,
-/// matching) and each one is independent: a single-module call never touches
-/// another module's persisted state, the collective call only touches
-/// stale/missing values, and nothing is recomputed without an explicit request.
-fn regenerate(args: RegenerateArgs) -> Result<(), CliError> {
-    if !args.target_luminance.is_finite() || !(0.0..=1.0).contains(&args.target_luminance) {
-        return Err(CliError::Message(
-            "invalid target-luminance: must be finite and in 0..=1".into(),
-        ));
-    }
-    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
-    let wb = raw_metadata.as_ref().and_then(|m| {
-        let sanitized = sanitize_camera_white_balance(m.camera_white_balance);
-        if sanitized.is_none() {
-            eprintln!(
-                "lumina: warning: As-Shot white balance invalid {:?} for `{}` — dropping to None (recipe WB remains, image renders)",
-                m.camera_white_balance,
-                args.input.display()
-            );
-        }
-        sanitized
-    });
-    #[cfg(feature = "lensfun")]
-    let (_lensfun_db, lensfun_corrector) = build_lensfun_corrector(raw_metadata.as_ref())
-        .map(|(db, corrector)| (Some(db), Some(corrector)))
-        .unwrap_or((None, None));
-    let sidecar_path = sidecar_path_for(&args.input);
-    // Current source identity, reused for a freshly created sidecar and for
-    // the mask stale pre-filter (N1).
-    let current_identity = source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?;
-    let mut document = match load_sidecar(&sidecar_path) {
-        Ok(document) => document,
-        Err(lumina_sidecar::SidecarError::Missing(_)) => {
-            SidecarDocument::new(current_identity.clone(), "raster-mvp-1")
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let copy_index = args
-        .virtual_copy
-        .as_deref()
-        .map(|id| {
-            document
-                .virtual_copies
-                .iter()
-                .position(|copy| copy.id == id)
-                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let copy_id = document.virtual_copies[copy_index].id.clone();
-    // `all` = collective default (no `--module`); otherwise only the named
-    // modules run, and those are forced (the explicit user request).
-    let collective = args.modules.is_empty();
-    let selected = |module: RegenerateModule| args.modules.contains(&module);
-    let wants = |module: RegenerateModule| collective || selected(module);
-    let forced = |module: RegenerateModule| selected(module);
-    let mut changed = false;
-    let mut report: Vec<serde_json::Value> = Vec::new();
-
-    // ---- Module `masks` ----
-    if wants(RegenerateModule::Masks) {
-        let root = args.input.parent().unwrap_or_else(|| Path::new("."));
-        let mask_ids: Vec<String> = document.virtual_copies[copy_index]
-            .mask_library
-            .iter()
-            // N2: deterministic range prompts carry no artifact and are always
-            // reproducible from pixels — they are excluded even by the forced
-            // `--module masks` path (a refresh request for them is meaningless).
-            .filter(|mask| {
-                matches!(mask.operation, MaskOperation::Source)
-                    && !lumina_core::range_masks::is_range_prompt(mask.prompt.as_ref())
-            })
-            .filter(|mask| {
-                forced(RegenerateModule::Masks)
-                    || mask_needs_regeneration(root, &current_identity, mask)
-            })
-            .map(|mask| mask.id.clone())
-            .collect();
-        if mask_ids.is_empty() {
-            report.push(serde_json::json!({
-                "module": RegenerateModule::Masks.as_str(),
-                "action": "skipped",
-                "reason": if forced(RegenerateModule::Masks) {
-                    "no source masks"
-                } else {
-                    "fresh"
-                },
-            }));
-        } else {
-            let mut masks_changed = false;
-            for mask in document.virtual_copies[copy_index].mask_library.iter_mut() {
-                if mask_ids.contains(&mask.id) && mask.status != MaskStatus::Pending {
-                    // An explicit, persisted refresh request. The actual
-                    // re-inference is consumed by the next render; the zdata
-                    // artifact persistence is the documented F-082 open item,
-                    // so no stub matte is ever written as a valid artifact.
-                    mask.status = MaskStatus::Pending;
-                    masks_changed = true;
-                }
-            }
-            // M2: an explicit `--module masks` additionally arms the copy-wide
-            // ONE-SHOT refresh in the recipe so the next render's decision layer
-            // re-infers the complete module with `refresh == true` and does NOT
-            // report the deliberately requested work as an implicit
-            // re-inference. `process_selected` consumes and removes the flag
-            // after the successful render (REVIEW-CLI-MASKFLAG-1).
-            //
-            // M2b: the collective default deliberately does NOT arm it. The
-            // copy-wide flag overrides the persisted-valid fastpath for *every*
-            // reachable source mask, so arming it here would also re-infer fresh
-            // `Valid` masks — contradicting "nur veraltete oder fehlende" and
-            // the GUI (`regenerate_stale` marks only stale masks). The `Pending`
-            // markers set above are the per-mask refresh request; the decision
-            // layer treats a persisted `Pending` marker as explicitly requested
-            // and stays quiet for it.
-            if forced(RegenerateModule::Masks) {
-                let options = &mut document.virtual_copies[copy_index].recipe.options;
-                if options.get("update_masks").map(String::as_str) != Some("true") {
-                    options.insert("update_masks".into(), "true".into());
-                    masks_changed = true;
-                }
-            }
-            // An already-outstanding `Pending` request is idempotent: the
-            // sidecar is not rewritten when nothing transitions.
-            changed |= masks_changed;
-            report.push(serde_json::json!({
-                "module": RegenerateModule::Masks.as_str(),
-                "action": "requested",
-                "reason": if forced(RegenerateModule::Masks) { "explicit" } else { "stale-or-missing" },
-                "masks": mask_ids,
-            }));
-        }
-    }
-
-    // ---- Module `auto-tone` ----
-    if wants(RegenerateModule::AutoTone) {
-        let current = &document.virtual_copies[copy_index].recipe.auto_features;
-        // Fresh = enabled AND the *full* AUTO-TONE-2 contract is persisted:
-        // all six sliders, all six `auto_features` mirrors and the analysis
-        // fingerprint. AUTO-TONE-CLI-6: the predicate is the shared
-        // `auto_tone_is_fresh`, which `process --auto-tone` satisfies as well —
-        // a recipe written by `process` is therefore fresh and is NOT
-        // overwritten here. An incomplete contract (the historic two-slider
-        // `exposure`/`contrast` subset, a missing mirror or slider, or a
-        // non-matching fingerprint) is stale and regenerated.
-        let fingerprint = auto_tone_input_fingerprint(&frame, args.target_luminance);
-        let fresh = auto_tone_is_fresh(&document.virtual_copies[copy_index].recipe, &fingerprint);
-        if fresh && !forced(RegenerateModule::AutoTone) {
-            report.push(serde_json::json!({
-                "module": RegenerateModule::AutoTone.as_str(),
-                "action": "skipped",
-                "reason": "fresh",
-            }));
-        } else if !current.enable_auto_tone && !forced(RegenerateModule::AutoTone) {
-            // Deliberately disabled by the user: the collective default never
-            // turns it on behind their back.
-            report.push(serde_json::json!({
-                "module": RegenerateModule::AutoTone.as_str(),
-                "action": "skipped",
-                "reason": "not-enabled",
-            }));
-        } else {
-            let mut recipe = document.virtual_copies[copy_index].recipe.clone();
-            // Always recompute: an explicit regeneration must derive the values
-            // from the frame again, never reproduce a persisted one.
-            apply_auto_tone_result(
-                &mut recipe,
-                &frame,
-                args.target_luminance,
-                PersistedAutoTone::AlwaysRecompute,
-                None,
-            )?;
-            document.virtual_copies[copy_index].recipe = recipe;
-            changed = true;
-            report.push(serde_json::json!({
-                "module": RegenerateModule::AutoTone.as_str(),
-                "action": "generated",
-                "reason": if forced(RegenerateModule::AutoTone) { "explicit" } else { "stale-or-missing" },
-            }));
-        }
-    }
-
-    // ---- Module `matching` ----
-    if wants(RegenerateModule::Matching) {
-        let current = &document.virtual_copies[copy_index].recipe.auto_features;
-        let fresh = current.match_total_exposure && current.matched_exposure.is_some();
-        if fresh && !forced(RegenerateModule::Matching) {
-            report.push(serde_json::json!({
-                "module": RegenerateModule::Matching.as_str(),
-                "action": "skipped",
-                "reason": "fresh",
-            }));
-        } else if !current.match_total_exposure && !forced(RegenerateModule::Matching) {
-            report.push(serde_json::json!({
-                "module": RegenerateModule::Matching.as_str(),
-                "action": "skipped",
-                "reason": "not-enabled",
-            }));
-        } else {
-            let mut recipe = document.virtual_copies[copy_index].recipe.clone();
-            let zdata_path = zdata_path_for(&args.input);
-            let mut ignored_warnings = Vec::new();
-            // Deliberately no mask decision layer here: regenerating the
-            // matching value must not re-infer masks (that is the `masks`
-            // module). All persisted planes are handed to the render, but
-            // `MaskContext`/`render_frame` evaluates only `MaskStatus::Valid`
-            // definitions, so stale/missing masks are skipped (with a
-            // `MaskPolicy::Warn` note) instead of being recomputed.
-            let loaded_planes =
-                load_persisted_mask_planes(&document, &zdata_path, &mut ignored_warnings);
-            let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
-            let copies = document.virtual_copies.clone();
-            let render_ctx = RenderContext {
-                recipe: &recipe,
-                camera_white_balance: wb,
-                source_actions: &source_actions,
-                masks: Some(MaskContext {
-                    copies: &copies,
-                    active_copy_id: &copy_id,
-                    planes: loaded_planes,
-                    policy: MaskPolicy::Warn,
-                    source_roi: None,
-                }),
-                depth: None,
-                #[cfg(feature = "lensfun")]
-                lensfun: lensfun_corrector.as_ref().map(LensfunCorrectorRef),
-                #[cfg(not(feature = "lensfun"))]
-                lensfun: None,
-            };
-            let output = render_standard_with_generative(
-                &frame,
-                &recipe,
-                &render_ctx,
-                GenerativeCanvasInput::default(),
-            )?;
-            let mask_planes: Vec<MaskPlane> = output
-                .mask_layers
-                .iter()
-                .map(|layer| layer.plane.clone())
-                .collect();
-            let matching =
-                match_total_exposure_masked(&output.frame, args.target_luminance, &mask_planes)?;
-            recipe.auto_features.match_total_exposure = true;
-            recipe.auto_features.target_luminance = args.target_luminance;
-            recipe.auto_features.matched_exposure = Some(matching);
-            let total_exposure = (recipe.adjustments.get("exposure").copied().unwrap_or(0.0)
-                + matching)
-                .clamp(-10.0, 10.0);
-            recipe.adjustments.insert("exposure".into(), total_exposure);
-            document.virtual_copies[copy_index].recipe = recipe;
-            changed = true;
-            report.push(serde_json::json!({
-                "module": RegenerateModule::Matching.as_str(),
-                "action": "generated",
-                "reason": if forced(RegenerateModule::Matching) { "explicit" } else { "stale-or-missing" },
-                "matched_exposure": matching,
-            }));
-        }
-    }
-
-    if changed {
-        document.validate()?;
-        save_sidecar(&sidecar_path, &document)?;
-    }
-    let text = report
-        .iter()
-        .map(|entry| {
-            format!(
-                "{}={}",
-                entry["module"].as_str().unwrap_or("?"),
-                entry["action"].as_str().unwrap_or("?")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    info!(
-        "regenerate: copy `{copy_id}` {} [{text}]",
-        if changed { "updated" } else { "unchanged" }
-    );
-    emit(
-        args.json,
-        serde_json::json!({
-            "command": "regenerate",
-            "input": args.input,
-            "virtual_copy": copy_id,
-            "status": if changed { "updated" } else { "unchanged" },
-            "modules": report,
-        }),
-        &format!("regenerated: {text}"),
-    )
 }
 
 fn mask(args: MaskArgs) -> Result<(), CliError> {
@@ -2952,86 +2562,6 @@ fn validate(args: IndexArgs) -> Result<(), CliError> {
         serde_json::json!({"command":"validate", "sidecar":path, "status":"valid"}),
         "valid",
     )
-}
-
-/// Requires the sidecar of `input`, failing loudly when none exists instead
-/// of silently operating on default contents.
-fn require_sidecar(input: &Path) -> Result<(PathBuf, SidecarDocument), CliError> {
-    let path = sidecar_path_for(input);
-    match load_sidecar(&path) {
-        Ok(document) => Ok((path, document)),
-        Err(lumina_sidecar::SidecarError::Missing(_)) => Err(CliError::Message(format!(
-            "no sidecar for `{}`; run `import` first",
-            input.display()
-        ))),
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Resolves `--input` of the multi-sidecar metadata commands to the sidecar
-/// files to process, in deterministic (sorted) order: a `*.lumina.json` file
-/// is used directly, any other file maps to its sidecar path, and a
-/// directory is scanned recursively (symlink-/loop-safe, same walk as
-/// `reindex`).
-fn collect_target_sidecars(input: &Path) -> Result<Vec<PathBuf>, CliError> {
-    if input.is_file() {
-        if input.to_string_lossy().ends_with(".lumina.json") {
-            return Ok(vec![input.to_path_buf()]);
-        }
-        return Ok(vec![sidecar_path_for(input)]);
-    }
-    let mut files = Vec::new();
-    collect_sidecars(input, &mut files)?;
-    files.sort();
-    Ok(files)
-}
-
-/// Portable smart-collection catalog file (G-15 META-MVP, Slice 2). The file
-/// holds versioned rule data only — never absolute paths — and is validated
-/// with the same rules as the sidecar slice.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct SmartCatalogFile {
-    format: String,
-    version: u8,
-    collections: Vec<SmartCollectionDef>,
-}
-
-/// Loads and validates a smart-collection catalog file. Every deviation
-/// (unreadable file, invalid JSON, wrong format/version marker, invalid
-/// definition) is a loud error; there is no silent fallback to an empty
-/// catalog.
-fn load_smart_catalog(path: &Path) -> Result<Vec<SmartCollectionDef>, CliError> {
-    let json = fs::read_to_string(path).map_err(|error| io_error(path, error))?;
-    let catalog: SmartCatalogFile = serde_json::from_str(&json).map_err(|error| {
-        CliError::Message(format!(
-            "invalid smart-collection catalog `{}`: {error}",
-            path.display()
-        ))
-    })?;
-    if catalog.format != "lumina-smart-catalog" {
-        return Err(CliError::Message(format!(
-            "invalid smart-collection catalog `{}`: expected format \"lumina-smart-catalog\", got \"{}\"",
-            path.display(),
-            catalog.format
-        )));
-    }
-    if catalog.version != SMART_COLLECTION_VERSION {
-        return Err(CliError::Message(format!(
-            "invalid smart-collection catalog `{}`: unsupported version {}, expected {SMART_COLLECTION_VERSION}",
-            path.display(),
-            catalog.version
-        )));
-    }
-    for def in &catalog.collections {
-        validate_smart_collection_def(def).map_err(|error| {
-            CliError::Message(format!(
-                "invalid smart-collection definition `{}` in catalog `{}`: {error}",
-                def.id,
-                path.display()
-            ))
-        })?;
-    }
-    Ok(catalog.collections)
 }
 
 fn keywords(args: KeywordsArgs) -> Result<(), CliError> {
@@ -4495,79 +4025,6 @@ fn format_keywords_text(keywords: &[String]) -> String {
     }
 }
 
-/// Splits an `--add-to` value at the first `=` into `(id, name)`.
-fn split_collection_assignment(value: &str) -> Result<(String, String), CliError> {
-    value.split_once('=').map_or_else(
-        || {
-            Err(CliError::Message(format!(
-                "invalid collection assignment `{value}`: expected `id=name`"
-            )))
-        },
-        |(id, name)| Ok((id.to_string(), name.to_string())),
-    )
-}
-
-fn collections(args: CollectionsArgs) -> Result<(), CliError> {
-    let (path, mut document) = require_sidecar(&args.input)?;
-    let original_bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    let mut ops = Vec::with_capacity(args.add_to.len() + args.remove_from.len());
-    for assignment in &args.add_to {
-        let (id, name) = split_collection_assignment(assignment)?;
-        ops.push(BatchOp::AddToCollection { id, name });
-    }
-    for id in &args.remove_from {
-        ops.push(BatchOp::RemoveFromCollection { id: id.clone() });
-    }
-    let mut changed = false;
-    for op in &ops {
-        changed |= apply_batch_op(&mut document, op).map_err(|error| {
-            CliError::Message(format!(
-                "collections for `{}` rejected: {error}",
-                args.input.display()
-            ))
-        })?;
-    }
-    if changed {
-        document.validate()?;
-        save_sidecar(&path, &document)?;
-        info!(
-            "collections for `{}` updated ({} operation(s), {} membership(s))",
-            args.input.display(),
-            ops.len(),
-            document.collections.len()
-        );
-    } else if ops.is_empty() {
-        info!("collections for `{}` listed", args.input.display());
-    } else {
-        info!(
-            "collections for `{}` unchanged (idempotent no-op)",
-            args.input.display()
-        );
-    }
-    debug_assert_eq!(
-        fs::read(&args.input).map_err(|error| io_error(&args.input, error))?,
-        original_bytes
-    );
-    let memberships: Vec<CollectionMembership> = document.collections.clone();
-    emit(
-        args.json,
-        serde_json::json!({"command":"collections", "input":args.input, "collections":memberships, "changed":changed, "status":"ok"}),
-        &format_collections_text(&memberships),
-    )
-}
-
-fn format_collections_text(memberships: &[CollectionMembership]) -> String {
-    if memberships.is_empty() {
-        "collections: (none)".into()
-    } else {
-        let entries = memberships
-            .iter()
-            .map(|m| format!("{} ({})", m.name, m.id))
-            .collect::<Vec<_>>();
-        format!("collections: {}", entries.join(", "))
-    }
-}
-
 /// Parses the single `BatchOp` of `batch-meta` from exactly one of `--op` /
 /// `--op-file`. Anything else (neither, both, invalid JSON, unknown variant)
 /// is a loud error; the operation language itself is owned by
@@ -4667,79 +4124,6 @@ fn batch_meta(args: BatchMetaArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn smart_collections(args: SmartCollectionsArgs) -> Result<(), CliError> {
-    let defs = load_smart_catalog(&args.catalog)?;
-    let targets = collect_target_sidecars(&args.input)?;
-    if targets.is_empty() {
-        return Err(CliError::Message(format!(
-            "no sidecars found under `{}`",
-            args.input.display()
-        )));
-    }
-    let mut matched_files = 0usize;
-    let mut failures: Vec<String> = Vec::new();
-    let mut items = Vec::with_capacity(targets.len());
-    for sidecar in &targets {
-        match load_sidecar(sidecar).map_err(CliError::from) {
-            Err(error) => {
-                let message = format!("{}: {error}", sidecar.display());
-                eprintln!("error: smart-collections: {message}");
-                info!("smart-collections: `{}` failed", sidecar.display());
-                failures.push(message);
-                items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
-            }
-            Ok(document) => {
-                let mut matched: Vec<String> = Vec::new();
-                let mut item_failed: Option<String> = None;
-                for def in &defs {
-                    match def.matches_any_copy(&document) {
-                        Ok(true) => matched.push(def.id.clone()),
-                        Ok(false) => {}
-                        Err(error) => {
-                            item_failed = Some(format!("{}: {error}", sidecar.display()));
-                            break;
-                        }
-                    }
-                }
-                if let Some(message) = item_failed {
-                    eprintln!("error: smart-collections: {message}");
-                    info!("smart-collections: `{}` failed", sidecar.display());
-                    failures.push(message);
-                    items.push(serde_json::json!({"sidecar":sidecar, "status":"failed"}));
-                } else {
-                    if !matched.is_empty() {
-                        matched_files += 1;
-                    }
-                    info!(
-                        "smart-collections: `{}` matches {} collection(s)",
-                        sidecar.display(),
-                        matched.len()
-                    );
-                    items.push(
-                        serde_json::json!({"sidecar":sidecar, "status":"ok", "matches":matched}),
-                    );
-                }
-            }
-        }
-    }
-    let failed = failures.len();
-    let text = format!(
-        "smart-collections: {} of {} sidecar(s) match, {failed} failed",
-        matched_files,
-        targets.len()
-    );
-    emit(
-        args.json,
-        serde_json::json!({"command":"smart-collections", "input":args.input, "catalog":args.catalog, "matched_files":matched_files, "sidecars":targets.len(), "failed":failed, "errors":failures, "items":items, "status": if failed == 0 { "ok" } else { "partial" }}),
-        &text,
-    )?;
-    info!("{text}");
-    if failed != 0 {
-        return Err(CliError::BatchPartial { failed });
-    }
-    Ok(())
-}
-
 /// G-08 Previous-Übernahme (LRPAR-G08-PREVIOUS): copy the full recipe of one
 /// reference image onto N target sidecars — the same full-recipe Sync
 /// mechanism the GUI uses (no second mechanism, no subset selection). The
@@ -4830,110 +4214,6 @@ fn previous(args: PreviousArgs) -> Result<(), CliError> {
     if failed != 0 {
         return Err(CliError::BatchPartial { failed });
     }
-    Ok(())
-}
-
-/// Move one file to `target`, tolerating a cross-filesystem move: `rename`
-/// fails with `CrossesDevices` (EXDEV) when source and target live on
-/// different volumes, so fall back to copy + remove. Loud on error; a failed
-/// source removal cleans up the copied target again (the source still exists,
-/// so no data is lost).
-fn move_file_cross_volume(source: &Path, target: &Path) -> std::io::Result<()> {
-    match fs::rename(source, target) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-            fs::copy(source, target)?;
-            if let Err(remove_error) = fs::remove_file(source) {
-                let _ = fs::remove_file(target);
-                return Err(remove_error);
-            }
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// G-09 Library-Parität (LRPAR-G09-LIB): move one image with its sidecar
-/// companions (`.lumina.json`, `.lumina.zdata` when present) to `--to`.
-/// Companion targets are derived from the TARGET image path
-/// (`sidecar_path_for(&args.to)` / `zdata_path_for(&args.to)`), so renames
-/// keep the recipe attached to the new name. An existing target (image or
-/// companion) aborts loudly before anything is moved (exit 1, never a
-/// silent overwrite); a missing source is a loud error as well. The image
-/// moves first, then each present companion. A failed companion move is
-/// loud (exit 1) and names the step reached — the image may already sit at
-/// the target, which the error text says explicitly (no silent half state,
-/// no data loss by overwrite).
-fn relocate(args: RelocateArgs) -> Result<(), CliError> {
-    if !args.from.is_file() {
-        return Err(CliError::Message(format!(
-            "relocate: source `{}` does not exist",
-            args.from.display()
-        )));
-    }
-    if args.to.exists() {
-        return Err(CliError::Message(format!(
-            "relocate: target `{}` already exists; refusing to overwrite",
-            args.to.display()
-        )));
-    }
-    if let Some(parent) = args
-        .to
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        if !parent.is_dir() {
-            return Err(CliError::Message(format!(
-                "relocate: target parent `{}` is no directory",
-                parent.display()
-            )));
-        }
-    }
-    let moves = [
-        (sidecar_path_for(&args.from), sidecar_path_for(&args.to)),
-        (zdata_path_for(&args.from), zdata_path_for(&args.to)),
-    ];
-    for (source, target) in &moves {
-        if source.is_file() && target.exists() {
-            return Err(CliError::Message(format!(
-                "relocate: companion target `{}` already exists; refusing to overwrite",
-                target.display()
-            )));
-        }
-    }
-    move_file_cross_volume(&args.from, &args.to).map_err(|error| io_error(&args.from, error))?;
-    info!(
-        "relocate: image `{}` -> `{}`",
-        args.from.display(),
-        args.to.display()
-    );
-    for (source, target) in &moves {
-        if source.is_file() {
-            move_file_cross_volume(source, target).map_err(|error| {
-                CliError::Message(format!(
-                    "relocate: image moved to `{}` but companion `{}` failed: {error}",
-                    args.to.display(),
-                    source.display()
-                ))
-            })?;
-            info!(
-                "relocate: companion `{}` -> `{}`",
-                source.display(),
-                target.display()
-            );
-        }
-    }
-    let text = format!(
-        "relocated `{}` -> `{}`",
-        args.from.display(),
-        args.to.display()
-    );
-    emit(
-        args.json,
-        serde_json::json!({"command":"relocate", "from":args.from, "to":args.to, "status":"ok"}),
-        &text,
-    )?;
-    info!("{text}");
     Ok(())
 }
 
@@ -6049,57 +5329,6 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     )
 }
 
-/// Resolves the recipe's persisted source actions into runtime artifacts by
-/// reading the `.lumina.zdata` bundle. A malformed path/version, missing bundle,
-/// missing artifact id, or checksum mismatch is a hard error — there is no
-/// silent fallback (reproducibility over convenience).
-fn resolve_source_actions(
-    recipe: &EditRecipe,
-    zdata_path: &Path,
-) -> Result<Vec<SourceActionArtifact>, CliError> {
-    if recipe.source_actions.is_empty() {
-        return Ok(Vec::new());
-    }
-    let container =
-        load_validated_source_action_bundle(recipe, zdata_path).map_err(CliError::Message)?;
-    let mut artifacts = Vec::with_capacity(recipe.source_actions.len());
-    for spec in &recipe.source_actions {
-        let region = container
-            .repair_region(&spec.artifact.id)
-            .map_err(|error| {
-                CliError::Message(format!(
-                    "source action `{}` artifact missing from bundle: {error}",
-                    spec.artifact.id
-                ))
-            })?;
-        if region.checksum() != spec.artifact.checksum {
-            return Err(CliError::Message(format!(
-                "source action `{}` checksum mismatch: recipe and bundle disagree (stale or corrupted artifact)",
-                spec.artifact.id
-            )));
-        }
-        let mask_plane =
-            MaskPlane::new(region.width, region.height, region.region).map_err(|error| {
-                CliError::Message(format!(
-                    "source action `{}` has an invalid region plane: {error}",
-                    spec.artifact.id
-                ))
-            })?;
-        let replacement = ImageFrame::new(region.width, region.height, region.replacement)
-            .map_err(|error| {
-                CliError::Message(format!(
-                    "source action `{}` has an invalid replacement image: {error}",
-                    spec.artifact.id
-                ))
-            })?;
-        artifacts.push(SourceActionArtifact {
-            region: mask_plane,
-            replacement,
-        });
-    }
-    Ok(artifacts)
-}
-
 fn reindex(args: IndexArgs) -> Result<(), CliError> {
     let mut files = Vec::new();
     collect_sidecars(&args.input, &mut files)?;
@@ -6422,53 +5651,12 @@ fn batch_one(
     })
 }
 
-/// Shared recursive directory walk behind `collect_images` and
-/// `collect_sidecars` (REVIEW-CLI-N5 / REVIEW-CLI-FOLLOWUP-1): the visited set
-/// holds canonical directory identities so filesystem cycles (symlink loops,
-/// bind mounts) terminate instead of overflowing the stack, directory symlinks
-/// are never followed and every directory level is walked in deterministic
-/// (sorted) order.
-fn collect_tree_files<F>(path: &Path, output: &mut Vec<PathBuf>, keep: F) -> Result<(), CliError>
-where
-    F: Fn(&Path) -> bool,
-{
-    let mut visited = BTreeSet::new();
-    collect_tree_files_inner(path, output, &mut visited, &keep)
-}
-
-fn collect_tree_files_inner<F>(
-    path: &Path,
-    output: &mut Vec<PathBuf>,
-    visited: &mut BTreeSet<PathBuf>,
-    keep: &F,
-) -> Result<(), CliError>
-where
-    F: Fn(&Path) -> bool,
-{
-    let identity = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if !visited.insert(identity) {
-        return Ok(());
-    }
-    let mut entries: Vec<std::fs::DirEntry> = fs::read_dir(path)
-        .map_err(|e| io_error(path, e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| io_error(path, e))?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let p = entry.path();
-        // `entry.file_type()` never follows symlinks: a symlinked directory is
-        // never recursed into, which removes symlink loops by construction.
-        if entry.file_type().map_err(|e| io_error(&p, e))?.is_dir() {
-            collect_tree_files_inner(&p, output, visited, keep)?;
-        } else if keep(&p) && p.is_file() {
-            output.push(p);
-        }
-    }
-    Ok(())
-}
-
 fn collect_images(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
-    collect_tree_files(path, output, has_image_extension)
+    Ok(lumina_stages::paths::collect_tree_files(
+        path,
+        output,
+        has_image_extension,
+    )?)
 }
 
 /// Supported input extensions for batch collection (R2-CLI-01): raster
@@ -6487,15 +5675,6 @@ fn has_image_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn collect_sidecars(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), CliError> {
-    // REVIEW-CLI-FOLLOWUP-1: same symlink-/loop-safe walk as `collect_images`
-    // (see `collect_tree_files`) so reindex cannot cycle through directory
-    // symlinks either. Regular-file-only collection also keeps dangling or
-    // special (FIFO) `.lumina.json` entries out of the scan.
-    collect_tree_files(path, output, |p| {
-        p.to_string_lossy().ends_with(".lumina.json")
-    })
-}
 fn emit(json: bool, value: serde_json::Value, text: &str) -> Result<(), CliError> {
     if json {
         println!("{}", value);
@@ -6522,85 +5701,6 @@ fn process(args: ProcessArgs) -> Result<(), CliError> {
     // `process_selected` (bake-in outcome lands in the sidecar record).
     process_selected(args, 90, None, MaskPolicy::Warn, &mut Vec::new())?;
     Ok(())
-}
-
-/// Composite zdata record id for a persisted mask plane (REVIEW-CLI-N1).
-///
-/// Tiles inside the `.lumina.zdata` bundle are stored under the composite
-/// record id `<copy_id>/<mask_id>` so two virtual copies may carry same-named
-/// masks (`subject`) without silently sharing one matte. Field order and the
-/// `/` separator are normative: `lumina-gui` must adopt this exact convention
-/// when it reads/writes mask tiles.
-fn zdata_mask_tile_id(copy_id: &str, mask_id: &str) -> String {
-    format!("{copy_id}/{mask_id}")
-}
-
-/// Loads every persisted source-mask plane from the optional `.lumina.zdata`
-/// bundle, keyed by `(copy_id, mask_id)` (REVIEW-CLI-N1). A MISSING bundle
-/// yields an empty map without any warning (nothing was persisted); missing
-/// per-key tiles are decided by the F-051 decision layer in lumina-core
-/// (cache, re-inference or a loud error — never a silent fallback).
-///
-/// R2-CLI-05: a bundle that EXISTS but cannot be read (truncated, malformed,
-/// unsupported version, checksum mismatch) is no longer treated silently like
-/// a missing bundle — that masked data loss as an ordinary "missing mask"
-/// situation. The load failure surfaces as an explicit
-/// "unreadable or corrupt" warning on stderr AND in `warnings_out` (the same
-/// channel the render's mask warnings travel through). Per-tile lookups after
-/// a clean load need no extra corruption handling: `load_zdata` already
-/// verifies every record checksum up front (REVIEW-SIDECAR-ZDATA-1), so a
-/// surviving tile miss is plain absence.
-fn load_persisted_mask_planes(
-    document: &SidecarDocument,
-    zdata_path: &Path,
-    warnings_out: &mut Vec<String>,
-) -> BTreeMap<(String, String), MaskPlane> {
-    let mut planes: BTreeMap<(String, String), MaskPlane> = BTreeMap::new();
-    if !zdata_path.exists() {
-        return planes;
-    }
-    let container = match lumina_sidecar::load_zdata(zdata_path) {
-        Ok(container) => container,
-        Err(error) => {
-            let warning = format!(
-                "mask/source-action bundle `{}` is unreadable or corrupt ({error}); persisted mask planes are treated as missing and will be re-decided by the mask layer",
-                zdata_path.display()
-            );
-            eprintln!("warning: {warning}");
-            warnings_out.push(warning);
-            return planes;
-        }
-    };
-    for copy in &document.virtual_copies {
-        for mask in copy
-            .mask_library
-            .iter()
-            .filter(|m| matches!(m.operation, MaskOperation::Source))
-        {
-            let Ok(tile) = container.tile(&zdata_mask_tile_id(&copy.id, &mask.id), 0, 0) else {
-                continue;
-            };
-            if let Ok(plane) = MaskPlane::new(tile.width, tile.height, tile.values) {
-                planes.insert((copy.id.clone(), mask.id.clone()), plane);
-            }
-        }
-    }
-    planes
-}
-
-/// Build a Lensfun lens corrector from decoded RAW metadata (EXIF) for use as
-/// `RenderContext.lensfun`.
-///
-/// Returns `Some(wb)` for a usable As-Shot white balance, `None` if any gain is
-/// NaN/infinite or non-positive. Mirrors the lumina-gui load/background-decode
-/// sanitisation (R2-WB) so CLI and GUI degrade identically instead of aborting
-/// the render on a corrupt CR3 `cam_mul`.
-fn sanitize_camera_white_balance(wb: [f32; 4]) -> Option<[f32; 4]> {
-    if wb.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-        None
-    } else {
-        Some(wb)
-    }
 }
 
 /// Resolve the subject-mask inference engine the CLI wires into the F-048 /
@@ -6683,55 +5783,6 @@ fn resolve_onnx_engine_from_path(
     }
 }
 
-// ---------------------------------------------------------------------------
-// GEN-ONNX-1 Welle 1: generative canvas artifact (local ONNX fixture model).
-// ---------------------------------------------------------------------------
-
-/// `lumina generative` arguments (see `feature/product/generative-expand.md`).
-#[derive(Debug, Clone, Args)]
-struct GenerativeArgs {
-    #[arg(long)]
-    input: PathBuf,
-    #[arg(long)]
-    virtual_copy: Option<String>,
-    /// Report the persisted artifact status and exit (read-only).
-    #[arg(long)]
-    status: bool,
-    /// Produce and persist the composited canvas artifact.
-    #[arg(long)]
-    generate: bool,
-    /// Explicit regeneration: replace an existing record for the same identity.
-    #[arg(long)]
-    force: bool,
-    /// Remove the persisted artifact link from the recipe (the bundle record
-    /// and the original image are left untouched).
-    #[arg(long)]
-    remove: bool,
-    /// Prompt (identity-bearing, roundtrip-stable; may be empty).
-    #[arg(long)]
-    prompt: Option<String>,
-    /// Negative prompt (identity-bearing; additive schema field).
-    #[arg(long)]
-    negative_prompt: Option<String>,
-    /// Deterministic seed (identity-bearing).
-    #[arg(long)]
-    seed: Option<u64>,
-    /// `auto_fill_transparent`: fill transparent pixels after lens correction.
-    #[arg(long)]
-    auto_fill: bool,
-    /// `expand_beyond_image`: enlarge the canvas (requires `--canvas`).
-    #[arg(long)]
-    expand: bool,
-    /// Target canvas `WxH+X+Y` (offsets may be negative) for `--expand`.
-    #[arg(long)]
-    canvas: Option<String>,
-    /// `keep_generative_content` crop decision.
-    #[arg(long)]
-    keep: Option<bool>,
-    #[arg(long)]
-    json: bool,
-}
-
 /// Owned pair of caller-supplied generative canvas artifacts.
 #[derive(Default)]
 struct GenerativeArtifacts {
@@ -6746,342 +5797,6 @@ impl GenerativeArtifacts {
             expand: self.expand.as_ref(),
         }
     }
-}
-
-fn onnx_generative_role(role: CoreGenerativeRole) -> OnnxGenerativeRole {
-    match role {
-        CoreGenerativeRole::Expand => OnnxGenerativeRole::Expand,
-        CoreGenerativeRole::AutoFillTransparent => OnnxGenerativeRole::AutoFillTransparent,
-    }
-}
-
-/// The prompt/model identity of a persisted generative edit.
-///
-/// `model_hash` is the pinned hash of the fixture model the CLI produces with
-/// (`fixture_manifest(role)`), so producer (render-time verification) and
-/// consumer (the ONNX producer) derive the exact same identity. `prompt` is the
-/// persisted prompt; `negative_prompt` is the extras-backed additive field
-/// (`GenerativeEdit::negative_prompt()`, `None` when unset) — `None` is
-/// identity and matches the producer, which derives the same value.
-fn generative_identity(
-    role: CoreGenerativeRole,
-    edit: &GenerativeEdit,
-) -> lumina_core::GenerativeIdentity {
-    lumina_core::GenerativeIdentity {
-        model_hash: lumina_onnx::fixture_manifest(onnx_generative_role(role)).model_hash,
-        prompt: edit.prompt.clone().unwrap_or_default(),
-        negative_prompt: edit.negative_prompt().map(str::to_owned),
-    }
-}
-
-/// Parse the CLI canvas spec `WxH+X+Y` / `WxH-X-Y`.
-fn parse_generative_canvas(spec: &str) -> Result<GenerativeCanvas, CliError> {
-    let invalid = || {
-        CliError::Message(format!(
-            "invalid --canvas `{spec}`: expected WxH+X+Y (offsets may be negative)"
-        ))
-    };
-    let spec = spec.trim();
-    let x_pos = spec.find('x').ok_or_else(invalid)?;
-    let width: u32 = spec[..x_pos].trim().parse().map_err(|_| invalid())?;
-    let rest = &spec[x_pos + 1..];
-    let sign_pos = rest.find(['+', '-']).unwrap_or(rest.len());
-    let height: u32 = rest[..sign_pos].trim().parse().map_err(|_| invalid())?;
-    let offsets = &rest[sign_pos..];
-    let mut parts: Vec<&str> = Vec::new();
-    let mut start = 0usize;
-    for (index, byte) in offsets.bytes().enumerate() {
-        if index > 0 && (byte == b'+' || byte == b'-') {
-            parts.push(&offsets[start..index]);
-            start = index;
-        }
-    }
-    if !offsets.is_empty() {
-        parts.push(&offsets[start..]);
-    }
-    let (source_offset_x, source_offset_y) = match parts.as_slice() {
-        [x, y] => (
-            x.parse::<i32>().map_err(|_| invalid())?,
-            y.parse::<i32>().map_err(|_| invalid())?,
-        ),
-        _ => return Err(invalid()),
-    };
-    let canvas = GenerativeCanvas {
-        output_width: width,
-        output_height: height,
-        source_offset_x,
-        source_offset_y,
-        extras: Default::default(),
-    };
-    canvas
-        .validate()
-        .map_err(|error| CliError::Message(format!("invalid --canvas `{spec}`: {error}")))?;
-    Ok(canvas)
-}
-
-/// Deterministic bundle record id for a generative identity digest.
-fn generative_record_id(identity_digest: &str) -> String {
-    let prefix = identity_digest.get(..16).unwrap_or(identity_digest);
-    format!("generative_canvas:{prefix}")
-}
-
-/// Stage the frame exactly up to the generative stage, returning the frame
-/// entering the auto-fill role (`after_lens`) and the frame entering the expand
-/// role (`after_perspective`). Delegates to the core helper so producer and
-/// consumer agree on the operation identity and no pipeline logic is
-/// duplicated.
-fn stage_generative_input(
-    frame: &ImageFrame,
-    recipe: &EditRecipe,
-    camera_white_balance: Option<[f32; 4]>,
-    source_actions: &[SourceActionArtifact],
-    lensfun: Option<LensfunCorrectorRef<'_>>,
-) -> Result<(ImageFrame, ImageFrame), CliError> {
-    Ok(lumina_core::generative_input_frames(
-        frame,
-        recipe,
-        camera_white_balance,
-        source_actions,
-        lensfun,
-    )?)
-}
-
-/// Produce one role's composited canvas with the deterministic fixture model.
-///
-/// The persisted edit may carry both roles; `produce_canvas` reads a single
-/// role from the flags, so a role-scoped copy is passed — the other role's flag
-/// never silently changes which canvas is produced.
-fn produce_generative_role_canvas(
-    input_frame: &ImageFrame,
-    edit: &GenerativeEdit,
-    role: CoreGenerativeRole,
-) -> Result<GenerativeCanvasOutput, CliError> {
-    let mut scoped = edit.clone();
-    match role {
-        CoreGenerativeRole::Expand => {
-            scoped.expand_beyond_image = Some(true);
-            scoped.auto_fill_transparent = Some(false);
-        }
-        CoreGenerativeRole::AutoFillTransparent => {
-            scoped.expand_beyond_image = Some(false);
-            scoped.auto_fill_transparent = Some(true);
-        }
-    }
-    let model = GenerativeModelSource::Fixture(onnx_generative_role(role));
-    produce_canvas(input_frame, &scoped, &model)
-        .map_err(|error| CliError::Message(format!("generative {role:?} canvas failed: {error}")))
-}
-
-/// Persist one produced canvas into the sidecar `.lumina.zdata` bundle and
-/// return its portable recipe link, its `--json` role object and its human
-/// summary. The record id is the deterministic identity id
-/// (`generative_record_id`) — the same convention the GUI producer uses, so GUI
-/// and CLI address the same record.
-fn persist_generative_role_canvas(
-    zdata_path: &Path,
-    relative_path: &str,
-    force: bool,
-    output: GenerativeCanvasOutput,
-) -> Result<(GenerativeArtifactRef, serde_json::Value, String), CliError> {
-    let identity = output.identity_digest;
-    let role = output.role;
-    let model_name = output.manifest.model_name.clone();
-    let model_hash = output.manifest.model_hash.clone();
-    let record = SidecarGenerativeCanvas {
-        id: generative_record_id(&identity),
-        width: output.width,
-        height: output.height,
-        pixels: output.pixels,
-    };
-    save_generative_canvas(zdata_path, record.clone(), force).map_err(|error| {
-        CliError::Message(format!(
-            "could not write generative canvas bundle `{}`: {error}",
-            zdata_path.display()
-        ))
-    })?;
-    let link =
-        GenerativeArtifactRef::from_generative_canvas(&record, relative_path, identity.clone());
-    let role_json = serde_json::json!({
-        "role": format!("{role:?}"),
-        "width": record.width,
-        "height": record.height,
-        "record": record.id,
-        "identity": identity,
-        "model": model_name,
-        "model_hash": model_hash,
-    });
-    let summary = format!(
-        "role={role:?} {}x{} record={} identity={identity}",
-        record.width, record.height, record.id
-    );
-    Ok((link, role_json, summary))
-}
-
-/// The frame entering the expand role when the auto-fill role produced a
-/// canvas: the auto-filled frame with `Lens → auto-fill → Perspective` applied,
-/// mirroring the render order `Lens → auto-fill → Perspective → expand → Crop`
-/// (GEN-ONNX-1 double-role record). Without an applied auto-fill canvas the
-/// caller uses `after_perspective` directly.
-///
-/// The CLI must **not** call `lumina-core`'s `#[cfg(feature = "lensfun")]`
-/// `ImageFrame::apply_perspective_stage` directly: the CLI's own `lensfun`
-/// feature can be off while `lumina-core`'s is on (e.g. `cargo check
-/// --workspace`, where the GUI's default `lensfun` unifies the core feature),
-/// which would select the wrong arity. The frame is therefore extracted through
-/// the shared, feature-uniform core render pipeline: supplying the auto-fill
-/// artifact makes `composite_auto_fill` replace the lens result with the
-/// artifact frame, and the perspective stage runs on it exactly as the real
-/// render does. A full-frame crop and `expand = false` keep the remaining
-/// stages identity, so the CLI still owns no image math.
-fn generative_expand_input(
-    source: &ImageFrame,
-    recipe: &EditRecipe,
-    camera_white_balance: Option<[f32; 4]>,
-    source_actions: &[SourceActionArtifact],
-    auto_fill: &GenerativeCanvasArtifact,
-    lensfun: Option<LensfunCorrectorRef<'_>>,
-) -> Result<ImageFrame, CliError> {
-    let mut staged = recipe.clone();
-    // Neutralize crop/rotation/mirroring and lens blur; they run after the
-    // expand stage in the real pipeline and must not alter the extracted frame.
-    staged.geometry = Some(Geometry {
-        version: 1,
-        crop: Some(Crop::Free {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        }),
-        rotation_degrees: 0.0,
-        mirror_horizontal: false,
-        mirror_vertical: false,
-    });
-    staged.lens_blur = None;
-    if let Some(edit) = staged.generative_edit.as_mut() {
-        // Only the auto-fill substitution runs; the expand stage is the caller's
-        // next step. `expand = false` requires `canvas == None`
-        // (`validate_generative_edit`), and the canvas is unused by the
-        // perspective stage.
-        edit.expand_beyond_image = Some(false);
-        edit.canvas = None;
-    }
-    let output = render_frame_with_generative(
-        source,
-        &RenderContext {
-            recipe: &staged,
-            camera_white_balance,
-            source_actions,
-            masks: None,
-            lensfun,
-            depth: None,
-        },
-        GenerativeCanvasInput {
-            auto_fill: Some(auto_fill),
-            expand: None,
-        },
-    )?;
-    Ok(output.frame)
-}
-
-/// Resolve one active generative role's canvas.
-///
-/// The persisted record is addressed by the deterministic identity record id
-/// (`generative_record_id(digest)`, the same convention the GUI producer uses),
-/// so the *unlinked* second role of a double-role record is resolvable by
-/// construction: a matching record proves the exact identity (role, seed,
-/// canvas, prompt, model and input are all in the digest, and the zdata load
-/// verifies the BLAKE3 checksum). When no matching record exists, `link` — the
-/// recipe link, pre-scoped by the caller to the role it belongs to — yields the
-/// loud `missing`/`stale`/`corrupt` diagnosis. There is no silent fallback to
-/// an unexpanded render.
-///
-/// `owns_link` marks the role the single recipe link belongs to. Its link must
-/// be present: an explicit `--remove` unlink is a deliberate state and must not
-/// be silently reconstructed from the still-present bundle record.
-fn resolve_generative_role(
-    bundle_root: &Path,
-    zdata_path: &Path,
-    link: Option<&GenerativeArtifactRef>,
-    owns_link: bool,
-    role: CoreGenerativeRole,
-    digest: &str,
-) -> Result<GenerativeCanvasArtifact, CliError> {
-    if owns_link && link.is_none() {
-        return Err(CliError::Message(format!(
-            "generative {role:?} is active but no `generative_canvas` artifact is linked; run \
-             `lumina generative --generate --input <file>` (no silent fallback)"
-        )));
-    }
-    let record_id = generative_record_id(digest);
-    if zdata_path.exists() {
-        if let Ok(container) = load_zdata(zdata_path) {
-            if let Ok(record) = container.generative_canvas(&record_id) {
-                let frame = ImageFrame::new(record.width, record.height, record.pixels)
-                    .map_err(|error| CliError::Message(error.to_string()))?;
-                return Ok(GenerativeCanvasArtifact::new(role, frame));
-            }
-        }
-    }
-    // The role-scoped recipe link is the canonical diagnosis: a
-    // `Stale`/`Missing`/`Corrupt` link stays loud; a link that is current but
-    // whose record is unreadable must never render "as if not generated".
-    if let Some(link) = link {
-        let status = generative_artifact_status(bundle_root, link, digest);
-        if status != GenerativeArtifactStatus::Available {
-            return Err(CliError::Message(format!(
-                "generative canvas `{}` is {status:?} for identity {digest}; refusing to render \
-                 (run `lumina generative --generate` to rebuild it) — no silent fallback",
-                link.id
-            )));
-        }
-        return Err(CliError::Message(format!(
-            "generative {role:?} link `{}` is current but its bundle record `{record_id}` is \
-             unreadable; refusing to render (no silent fallback)",
-            link.id
-        )));
-    }
-    Err(CliError::Message(format!(
-        "generative {role:?} is active but no `generative_canvas` artifact is available for \
-         identity {digest}; run `lumina generative --generate --input <file>` (no silent fallback)"
-    )))
-}
-
-/// Non-fatal per-role status used by `--status`: `(status, resolved frame)`.
-///
-/// Mirrors [`resolve_generative_role`] without aborting, so a double-role
-/// record reports every active role; the frame is returned when the auto-fill
-/// canvas resolved (the expand identity is derived from it).
-fn generative_role_status(
-    bundle_root: &Path,
-    zdata_path: &Path,
-    link: Option<&GenerativeArtifactRef>,
-    owns_link: bool,
-    digest: &str,
-) -> (String, Option<ImageFrame>) {
-    // The link-owning role with an explicitly removed link is `missing` — the
-    // record must not be re-adopted silently (`--remove`).
-    if owns_link && link.is_none() {
-        return ("missing".to_owned(), None);
-    }
-    let record_id = generative_record_id(digest);
-    if zdata_path.exists() {
-        if let Ok(container) = load_zdata(zdata_path) {
-            if let Ok(record) = container.generative_canvas(&record_id) {
-                if let Ok(frame) = ImageFrame::new(record.width, record.height, record.pixels) {
-                    return ("available".to_owned(), Some(frame));
-                }
-            }
-        }
-    }
-    if let Some(link) = link {
-        let status = format!(
-            "{:?}",
-            generative_artifact_status(bundle_root, link, digest)
-        )
-        .to_lowercase();
-        return (status, None);
-    }
-    ("missing".to_owned(), None)
 }
 
 /// Resolve the render-time generative canvas artifacts for `recipe`.
@@ -7174,436 +5889,6 @@ fn resolve_generative_artifacts(
         )?);
     }
     Ok(artifacts)
-}
-
-/// `lumina generative` — produce/report/remove the persisted `generative_canvas`
-/// artifact of one virtual copy (GEN-ONNX-1 Welle 1).
-fn generative(args: GenerativeArgs) -> Result<(), CliError> {
-    let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
-    let (frame, raw_metadata) = decode_input(&args.input, &bytes)?;
-    let wb = raw_metadata
-        .as_ref()
-        .and_then(|metadata| sanitize_camera_white_balance(metadata.camera_white_balance));
-    #[cfg(feature = "lensfun")]
-    let (_lensfun_db, lensfun_corrector) = build_lensfun_corrector(raw_metadata.as_ref())
-        .map(|(db, corrector)| (Some(db), Some(corrector)))
-        .unwrap_or((None, None));
-    // Feature-uniform corrector reference (Cargo feature unification safe).
-    #[cfg(feature = "lensfun")]
-    let generative_lensfun = lensfun_corrector.as_ref().map(LensfunCorrectorRef);
-    #[cfg(not(feature = "lensfun"))]
-    let generative_lensfun: Option<LensfunCorrectorRef<'_>> = None;
-    let sidecar_path = sidecar_path_for(&args.input);
-    let mut document = match load_sidecar(&sidecar_path) {
-        Ok(document) => document,
-        Err(lumina_sidecar::SidecarError::Missing(_)) => SidecarDocument::new(
-            source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?,
-            "raster-mvp-1",
-        ),
-        Err(error) => return Err(error.into()),
-    };
-    let current_identity = source_identity(&args.input, &bytes, &frame, raw_metadata.as_ref())?;
-    if document.source.content_hash != current_identity.content_hash {
-        return Err(CliError::Message(format!(
-            "source changed since sidecar was written: `{}`",
-            args.input.display()
-        )));
-    }
-    let copy_index = args
-        .virtual_copy
-        .as_deref()
-        .map(|id| {
-            document
-                .virtual_copies
-                .iter()
-                .position(|copy| copy.id == id)
-                .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`")))
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let mut recipe = document.virtual_copies[copy_index].recipe.clone();
-    let zdata_path = zdata_path_for(&args.input);
-    let bundle_root = zdata_path.parent().unwrap_or_else(|| Path::new("."));
-
-    if args.remove {
-        if let Some(edit) = recipe.generative_edit.as_mut() {
-            edit.artifact = None;
-        }
-        document.virtual_copies[copy_index].recipe = recipe;
-        save_sidecar(&sidecar_path, &document)?;
-        info!("generative: artifact link removed (bundle record kept)");
-        return Ok(());
-    }
-
-    // Merge the CLI overrides into the persisted generative edit (additive).
-    let mut edit = recipe.generative_edit.clone().unwrap_or(GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: None,
-        expand_beyond_image: None,
-        seed: None,
-        prompt: None,
-        extras: Default::default(),
-    });
-    if edit.version != 1 {
-        return Err(CliError::Message(format!(
-            "unsupported generative_edit version {}; explicit migration required",
-            edit.version
-        )));
-    }
-    if let Some(prompt) = args.prompt.clone() {
-        edit.prompt = Some(prompt);
-    }
-    if let Some(negative_prompt) = args.negative_prompt.clone() {
-        edit.set_negative_prompt(Some(negative_prompt));
-    }
-    if let Some(seed) = args.seed {
-        edit.seed = Some(seed);
-    }
-    if args.auto_fill {
-        edit.auto_fill_transparent = Some(true);
-    }
-    if args.expand {
-        let spec = args
-            .canvas
-            .as_deref()
-            .ok_or_else(|| CliError::Message("--expand requires --canvas WxH+X+Y".into()))?;
-        edit.expand_beyond_image = Some(true);
-        edit.canvas = Some(parse_generative_canvas(spec)?);
-    } else if let Some(spec) = args.canvas.as_deref() {
-        edit.canvas = Some(parse_generative_canvas(spec)?);
-    }
-    if let Some(keep) = args.keep {
-        edit.keep_generative_content = Some(keep);
-    }
-
-    let seed = edit.seed.unwrap_or(0);
-
-    if args.status {
-        let status_source_actions = resolve_source_actions(&recipe, &zdata_path)?;
-        return report_generative_status(
-            &edit,
-            &frame,
-            &recipe,
-            wb,
-            &status_source_actions,
-            bundle_root,
-            &zdata_path,
-            seed,
-            args.json,
-            generative_lensfun,
-        );
-    }
-    if !args.generate {
-        return Err(CliError::Message(
-            "specify one of --status, --generate or --remove".into(),
-        ));
-    }
-    let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
-    let expand_active = edit.effective_expand();
-    if !auto_fill_active && !expand_active {
-        return Err(CliError::Message(
-            "no generative role active: pass --expand or --auto-fill".into(),
-        ));
-    }
-    let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
-    let (after_lens, after_perspective) =
-        stage_generative_input(&frame, &recipe, wb, &source_actions, generative_lensfun)?;
-    let relative_path = zdata_path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "generative.zdata".into());
-
-    // SOLL order `Lens → auto-fill → Perspective → expand`: the auto-fill
-    // canvas is produced first; the expand canvas is then built from the
-    // auto-filled frame with the perspective stage applied, so the composited
-    // auto-fill pixels are authoritative in the expand canvas (GEN-ONNX-1
-    // double-role record).
-    let mut auto_fill_link: Option<GenerativeArtifactRef> = None;
-    let mut expand_link: Option<GenerativeArtifactRef> = None;
-    let mut auto_fill_frame: Option<ImageFrame> = None;
-    let mut json_roles: Vec<serde_json::Value> = Vec::new();
-    let mut summaries: Vec<String> = Vec::new();
-    if auto_fill_active {
-        if !has_transparent_pixels(&after_lens) {
-            // Normative caller convention: no transparent pixels after lens →
-            // identity, no artifact required (never a silent synthetic fill).
-            info!(
-                "generative: auto_fill active but no transparent pixels after lens; \
-                 no auto-fill canvas produced (identity)"
-            );
-        } else {
-            let output = produce_generative_role_canvas(
-                &after_lens,
-                &edit,
-                CoreGenerativeRole::AutoFillTransparent,
-            )?;
-            auto_fill_frame = Some(
-                output
-                    .to_frame()
-                    .map_err(|error| CliError::Message(error.to_string()))?,
-            );
-            let (link, role_json, summary) =
-                persist_generative_role_canvas(&zdata_path, &relative_path, args.force, output)?;
-            auto_fill_link = Some(link);
-            json_roles.push(role_json);
-            summaries.push(summary);
-        }
-    }
-    if expand_active {
-        // Mirror the render order `Lens → auto-fill → Perspective → expand` so
-        // the produced expand canvas embeds the auto-filled pixels (and its
-        // identity matches what the render-time resolver recomputes). The
-        // pending double-role edit must be visible in the staged recipe — the
-        // persisted recipe is only written below.
-        let mut expand_recipe = recipe.clone();
-        expand_recipe.generative_edit = Some(edit.clone());
-        let expand_input = match auto_fill_frame.as_ref() {
-            Some(filled) => {
-                let artifact = GenerativeCanvasArtifact::new(
-                    CoreGenerativeRole::AutoFillTransparent,
-                    filled.clone(),
-                );
-                generative_expand_input(
-                    &frame,
-                    &expand_recipe,
-                    wb,
-                    &source_actions,
-                    &artifact,
-                    generative_lensfun,
-                )?
-            }
-            None => after_perspective.clone(),
-        };
-        let output =
-            produce_generative_role_canvas(&expand_input, &edit, CoreGenerativeRole::Expand)?;
-        let (link, role_json, summary) =
-            persist_generative_role_canvas(&zdata_path, &relative_path, args.force, output)?;
-        expand_link = Some(link);
-        json_roles.push(role_json);
-        summaries.push(summary);
-    }
-    if auto_fill_link.is_none() && expand_link.is_none() {
-        return Err(CliError::Message(
-            "--auto-fill: no transparent pixels after lens correction; nothing to generate \
-             (no artifact written, no silent synthetic fill)"
-                .into(),
-        ));
-    }
-    // The single recipe link is the canvas-defining expand role when both are
-    // active (SOLL: `Lens → GenerativeEdit → Perspective → Crop`); the
-    // auto-fill record stays addressable by its deterministic identity id.
-    edit.artifact = expand_link.or(auto_fill_link);
-    recipe.generative_edit = Some(edit);
-    document.virtual_copies[copy_index].recipe = recipe;
-    save_sidecar(&sidecar_path, &document)?;
-    let summary = format!("generative canvas written: {}", summaries.join("; "));
-    if args.json {
-        if let [only] = json_roles.as_slice() {
-            // Preserve the documented single-role payload shape.
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "generated",
-                    "role": only["role"],
-                    "width": only["width"],
-                    "height": only["height"],
-                    "record": only["record"],
-                    "identity": only["identity"],
-                    "model": only["model"],
-                    "model_hash": only["model_hash"],
-                })
-            );
-        } else {
-            println!(
-                "{}",
-                serde_json::json!({"status": "generated", "roles": json_roles})
-            );
-        }
-    } else {
-        println!("{summary}");
-    }
-    info!("generative: {summary}");
-    Ok(())
-}
-
-/// Source actions are needed for exact stage parity; reused by `--status`.
-///
-/// GEN-ONNX-1 (double-role record): every active role is reported. The expand
-/// identity embeds the auto-filled pixels, so it is only computed once the
-/// auto-fill canvas resolved; without it the expand role is reported `missing`
-/// (loud) instead of guessing a digest from the wrong frame.
-#[allow(clippy::too_many_arguments)]
-fn report_generative_status(
-    edit: &GenerativeEdit,
-    frame: &ImageFrame,
-    recipe: &EditRecipe,
-    camera_white_balance: Option<[f32; 4]>,
-    source_actions: &[SourceActionArtifact],
-    bundle_root: &Path,
-    zdata_path: &Path,
-    seed: u64,
-    json: bool,
-    lensfun: Option<LensfunCorrectorRef<'_>>,
-) -> Result<(), CliError> {
-    let auto_fill_active = edit.auto_fill_transparent.unwrap_or(false);
-    let expand_active = edit.effective_expand();
-    if !auto_fill_active && !expand_active {
-        if json {
-            println!("{}", serde_json::json!({"status": "inactive"}));
-        } else {
-            println!("generative: inactive (no role active)");
-        }
-        return Ok(());
-    }
-    let (after_lens, after_perspective) =
-        stage_generative_input(frame, recipe, camera_white_balance, source_actions, lensfun)?;
-    let link = edit.artifact.as_ref();
-    let link_role = if expand_active {
-        Some(CoreGenerativeRole::Expand)
-    } else {
-        Some(CoreGenerativeRole::AutoFillTransparent)
-    };
-    let role_link = |role: CoreGenerativeRole| link.filter(|_| link_role == Some(role));
-    // (role, identity digest, status, record id)
-    let mut roles: Vec<(&'static str, Option<String>, String, Option<String>)> = Vec::new();
-    let mut auto_fill_frame: Option<ImageFrame> = None;
-    let auto_fill_required = auto_fill_active && has_transparent_pixels(&after_lens);
-    if auto_fill_active {
-        if !auto_fill_required {
-            roles.push(("AutoFillTransparent", None, "not-required".to_owned(), None));
-        } else {
-            let identity = generative_identity(CoreGenerativeRole::AutoFillTransparent, edit);
-            let digest = GenerativeCacheKey::auto_fill(&after_lens, seed, &identity).digest();
-            let owns_link = link_role == Some(CoreGenerativeRole::AutoFillTransparent);
-            let (status, resolved) = generative_role_status(
-                bundle_root,
-                zdata_path,
-                role_link(CoreGenerativeRole::AutoFillTransparent),
-                owns_link,
-                &digest,
-            );
-            auto_fill_frame = resolved;
-            roles.push((
-                "AutoFillTransparent",
-                Some(digest.clone()),
-                status,
-                Some(generative_record_id(&digest)),
-            ));
-        }
-    }
-    if expand_active {
-        if auto_fill_required && auto_fill_frame.is_none() {
-            // The expand identity embeds the auto-filled pixels; without the
-            // auto-fill canvas its status cannot be verified.
-            roles.push(("Expand", None, "missing".to_owned(), None));
-        } else {
-            let canvas = edit.canvas.as_ref().ok_or_else(|| {
-                CliError::Message("expand_beyond_image requires a `canvas`".into())
-            })?;
-            let expand_input = match auto_fill_frame.as_ref() {
-                Some(filled) => {
-                    let artifact = GenerativeCanvasArtifact::new(
-                        CoreGenerativeRole::AutoFillTransparent,
-                        filled.clone(),
-                    );
-                    generative_expand_input(
-                        frame,
-                        recipe,
-                        camera_white_balance,
-                        source_actions,
-                        &artifact,
-                        lensfun,
-                    )?
-                }
-                None => after_perspective.clone(),
-            };
-            let identity = generative_identity(CoreGenerativeRole::Expand, edit);
-            let digest =
-                GenerativeCacheKey::expand(&expand_input, canvas, seed, &identity).digest();
-            let (status, _) = generative_role_status(
-                bundle_root,
-                zdata_path,
-                role_link(CoreGenerativeRole::Expand),
-                link_role == Some(CoreGenerativeRole::Expand),
-                &digest,
-            );
-            roles.push((
-                "Expand",
-                Some(digest.clone()),
-                status,
-                Some(generative_record_id(&digest)),
-            ));
-        }
-    }
-    let ok = |status: &str| status == "available" || status == "not-required";
-    let failed: Vec<String> = roles
-        .iter()
-        .filter(|(_, _, status, _)| !ok(status))
-        .map(|(role, _, status, _)| format!("{role}={status}"))
-        .collect();
-    let combined = if failed.is_empty() {
-        if roles.iter().any(|(_, _, status, _)| status == "available") {
-            "available".to_owned()
-        } else {
-            "not-required".to_owned()
-        }
-    } else {
-        failed.join(", ")
-    };
-    if json {
-        if let [role] = roles.as_slice() {
-            let (role, identity, status, record) = role;
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": status,
-                    "role": role,
-                    "identity": identity,
-                    "record": record,
-                    "model": "inpaint-outpaint-xl",
-                })
-            );
-        } else {
-            let role_json: Vec<serde_json::Value> = roles
-                .iter()
-                .map(|(role, identity, status, record)| {
-                    serde_json::json!({
-                        "role": role,
-                        "status": status,
-                        "identity": identity,
-                        "record": record,
-                    })
-                })
-                .collect();
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": combined,
-                    "roles": role_json,
-                    "model": "inpaint-outpaint-xl",
-                })
-            );
-        }
-    } else if let [role] = roles.as_slice() {
-        println!("generative: status={} role={}", role.2, role.0);
-    } else {
-        let detail = roles
-            .iter()
-            .map(|(role, _, status, _)| format!("{role}:{status}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("generative: status={combined} roles={detail}");
-    }
-    if failed.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Message(format!(
-            "generative canvas is `{combined}` (no silent fallback; run `lumina generative --generate`)"
-        )))
-    }
 }
 
 fn process_selected(

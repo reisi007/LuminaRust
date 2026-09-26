@@ -258,6 +258,136 @@ fn the_diagnostics_sink_persists_across_calls_so_a_batch_reports_once() {
     );
 }
 
+/// LENSFUN-CALLER-37 / F2: the **production call site** must write its database
+/// load into the process-lifetime sink.
+///
+/// The test above proves the *helper* is process-lifetime — but it proves it by
+/// being the helper: it calls `with_diagnostics` itself and never goes through
+/// `build_lensfun_corrector`. The production seam, `lensfun_cli.rs`
+/// `let db = with_diagnostics(LensfunDb::load_system_with)?;`, was therefore
+/// unanchored. Replacing exactly that line with a per-call `report_once()` sink
+/// left every other test in this file green (measured on this tree: 355 passed /
+/// 0 failed), because the seven `build_lensfun_corrector` calls here observe the
+/// *corrector* and never the sink. A refactor re-introducing the very defect
+/// `LENSFUN-CALLER-37` removed — a fresh sink per image, so a batch re-prints
+/// one unlevelled block per file — would have shipped green.
+///
+/// # What it drives, what it observes
+/// `build_lensfun_corrector` is called with a make/model no Lensfun database can
+/// contain, so the production function runs its whole body: it loads the system
+/// database through `with_diagnostics` (the production line) and then misses in
+/// `for_camera`. The sink is afterwards read back through a **separate**
+/// `with_diagnostics` call, and two things must be true there:
+///
+/// 1. a key this test wrote itself is still there — the production call site
+///    does not swap or replace the shared sink, and
+/// 2. a **real load record** is there — the production call site recorded its
+///    load into that same shared instance.
+///
+/// A sink constructed per call is empty at every read, so both are red when the
+/// production line stops using the process-lifetime sink.
+///
+/// # Machine independence: it asserts that *something* was recorded
+/// Which branch the load takes is a property of the host, so the test never
+/// claims a particular outcome. That is the trap
+/// `feature/platform/capability-matrix.md` §"Pflicht des Aufrufers von
+/// `load_system()`" point 2 records for the GUI half: "a failure was recorded"
+/// passes vacuously on a machine with a system database and goes red on a bare
+/// runner. The markers below are therefore chosen to be **unreachable for any
+/// hand-fed sink** in this file:
+///
+/// * `resolved:` — the key prefix `ReportOnce::resolved` writes. No test in this
+///   file produces it, so a sibling test cannot satisfy the assertion instead.
+/// * `OverrideUnusable` — the `LUMINA_LENSFUN_DB`-pinned failure variant, which
+///   only a real resolution can report.
+/// * `/usr/share/lensfun` — in the candidate list of **both**
+///   `linux_default_dirs` and `macos_default_dirs`, so a genuinely unresolved
+///   real lookup names it. The synthetic keys above live under
+///   `/nonexistent/cli-sink-*` and carry none of these.
+///
+/// On a host **with** a database the load takes the `resolved` path and the
+/// first marker matches. On a host **without** one it takes the `failed` path
+/// and the marker pair matches. Neither host can satisfy the assertion without a
+/// production-path load record, and the per-call-sink mutation satisfies neither.
+///
+/// # The honest limit
+/// The sink is a process-wide set of *host-determined* keys, so no test inside
+/// one process can prove that the record it reads was written by *its own* call
+/// rather than by a sibling's `build_lensfun_corrector` (all production calls on
+/// one host produce the same key, so no delta is observable either). What is
+/// pinned is the property that actually broke: a load record written through the
+/// production call site is still readable from a later, independent
+/// `with_diagnostics` call — the two share one instance. Assertion 1 above is
+/// the fully attributed half; it cannot be satisfied by another test at all.
+#[test]
+fn the_production_call_site_records_its_load_into_the_process_lifetime_sink() {
+    use lumina_lensfun::db_path::{MissReason, ProbeMiss, Source, SystemDbError};
+    use lumina_lensfun::system_load::Diagnostics;
+
+    // A make/model no profile database can contain. `for_camera` searches with
+    // `sflags == 0`, i.e. without `LF_SEARCH_LOOSE` (GUI-ROUTING-N6), so this
+    // cannot match a body and the `None` below proves the lookup really ran and
+    // really missed instead of short-circuiting before it.
+    const PROBE_MAKE: &str = "LuminaRust Regression Probe";
+    const PROBE_MODEL: &str = "LuminaRust No Such Camera 9000-XZ";
+    let metadata = make_metadata(Some(PROBE_MAKE), Some(PROBE_MODEL), Some(18.0), Some(5.6));
+
+    // A key only this test writes, so assertion 1 below has an anchor no sibling
+    // can provide. It is reported once here and never asserted to be absent
+    // afterwards, so it cannot collide with anything.
+    const OWN_KEY_MARKER: &str = "/nonexistent/cli-prodseam-own-sink-key";
+    let own_failure = SystemDbError::NotFound {
+        misses: vec![ProbeMiss {
+            dir: std::path::PathBuf::from(OWN_KEY_MARKER),
+            source: Source::PlatformDefault,
+            reason: MissReason::Absent,
+        }],
+    };
+    crate::lensfun_cli::with_diagnostics(|sink| sink.failed(&own_failure));
+
+    // **The production call site.** No sink is passed in and none is observed
+    // here — the sink is the callee's own process-lifetime state, which is the
+    // entire subject of this test.
+    assert!(
+        build_lensfun_corrector(Some(&metadata)).is_none(),
+        "the probe identity {PROBE_MAKE} / {PROBE_MODEL} must not match any \
+         profile: a match would mean the test no longer drives the production \
+         load-then-lookup body"
+    );
+
+    // An **independent** observer: a separate `with_diagnostics` call, which
+    // sees only the keys the process-lifetime sink has accumulated.
+    let observed = crate::lensfun_cli::with_diagnostics(|sink| format!("{sink:?}"));
+
+    assert!(
+        observed.contains(OWN_KEY_MARKER),
+        "the production call site must not swap or replace the process-lifetime \
+         sink: a key recorded before `build_lensfun_corrector` ran is gone \
+         afterwards, so a per-image caller gets a sink nobody else can see. \
+         Sink state: {observed}"
+    );
+
+    const RESOLVED: &str = "resolved:";
+    const OVERRIDE_UNUSABLE: &str = "OverrideUnusable";
+    const REAL_PROBE_DIR: &str = "/usr/share/lensfun";
+    let load_recorded = observed.contains(RESOLVED)
+        || observed.contains(OVERRIDE_UNUSABLE)
+        || (observed.contains("failed:") && observed.contains(REAL_PROBE_DIR));
+
+    assert!(
+        load_recorded,
+        "the production call site must leave its database-load record in the \
+         process-lifetime sink, readable from a later, separate \
+         `with_diagnostics` call: expected one of {RESOLVED:?} (host with a \
+         system database), {OVERRIDE_UNUSABLE:?} (LUMINA_LENSFUN_DB pinned to \
+         an unusable directory) or a real `failed:` key naming \
+         {REAL_PROBE_DIR:?} (host without one). A sink constructed per call is \
+         empty at every read, so this is what turns red if \
+         `build_lensfun_corrector` stops using the shared sink. \
+         Sink state: {observed}"
+    );
+}
+
 /// The lookup itself must still run per image — only the *reporting* is
 /// de-duplicated. A miss is never cached, so a Lensfun database installed while
 /// a long batch is running is picked up by the next image. Pinning the negative
