@@ -35,6 +35,11 @@ const TOOL_NAMES: &[&str] = &[
     "lumina_apply_meta_preset",
     "lumina_batch_sync_metadata",
     "lumina_trigger_export",
+    // MCP-PARITY-A: the four session-based recipe stage editors.
+    "lumina_spot",
+    "lumina_lens_blur",
+    "lumina_geometry",
+    "lumina_upright",
 ];
 
 fn new_server(preview_dir: &Path) -> Server {
@@ -209,33 +214,27 @@ fn initialize_reports_capabilities_and_protocol() {
 }
 
 #[test]
-fn tools_list_returns_all_seventeen_tools_with_valid_schemas() {
+fn tools_list_returns_every_registered_tool_with_a_valid_schema() {
     let dir = tempfile::tempdir().unwrap();
     let mut server = new_server(dir.path());
     let response = call(&mut server, "tools/list", json!({}));
     let tools = response["result"]["tools"].as_array().unwrap();
-    let names: Vec<String> = tools
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_string())
-        .collect();
-    for expected in TOOL_NAMES {
-        assert!(
-            names.contains(&expected.to_string()),
-            "missing tool `{expected}`"
-        );
-        let tool = tools.iter().find(|t| t["name"] == *expected).unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    // The name claims full coverage, so pin the drift in both directions: a
+    // registered tool absent from the listing, or a listed tool absent from
+    // `TOOL_NAMES`, must be a deliberate edit here, not silent staleness.
+    assert_eq!(names.len(), TOOL_NAMES.len(), "tool set drifted: {names:?}");
+    for name in &names {
+        assert!(TOOL_NAMES.contains(name), "`{name}` is not in TOOL_NAMES");
+    }
+    for (name, tool) in names.iter().zip(tools) {
         // Schema validation: every tool declares an object inputSchema with a
         // required-array and a properties map (MCP `tools/list` shape).
-        assert_eq!(tool["inputSchema"]["type"], "object", "`{expected}`");
-        assert!(
-            tool["inputSchema"]["required"].is_array(),
-            "`{expected}` has no required array"
-        );
-        assert!(
-            tool["inputSchema"]["properties"].is_object(),
-            "`{expected}` has no properties map"
-        );
-        assert!(tool["description"].is_string());
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object", "`{name}`");
+        assert!(schema["required"].is_array(), "`{name}`: no required array");
+        assert!(schema["properties"].is_object(), "`{name}`: no properties");
+        assert!(tool["description"].is_string(), "`{name}`: no description");
     }
 }
 

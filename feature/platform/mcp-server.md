@@ -6,8 +6,10 @@
 **F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
-in `lumina-cli`, Default an). Insgesamt 12 Tools. Verträge und dokumentierte
-Grenzen: Abschnitt „Erweiterter MVP-Scope“.
+in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
+Metadaten-Tools aus LRPAR-G15-IPTC-S7 sind es heute **17**. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (14 von 32
+Subcommands): Abschnitt „Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
@@ -604,25 +606,65 @@ keinen Sidecar, daher kann `-32010` dort nicht auftreten (R2-MCP-03).
 
 ## Erweiterter MVP-Scope (2026-08-19 User-Anforderung; F-101-F1 umgesetzt 2026-08-26)
 
-Der MCP-Server bildet **alle CLI-Funktionalitäten** ab, nicht nur die
-sieben ursprünglichen Editing-Tools. Zusätzliche Anforderungen:
+Der MCP-Server deckt den session- und pfadbasierten **Kern** der
+CLI-Funktionalitäten ab, nicht die vollständige Befehlsliste. Der
+ursprüngliche Scope lautete „alle CLI-Funktionalitäten"; diese Zusage war
+**zu weit gefasst** und wird hier auf den geprüften Stand
+zurückgenommen (siehe „Ist-Abdeckung" unten).
 
-### Volle CLI-Abdeckung (12 Tools)
+### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26)
 
-Jeder `lumina`-CLI-Befehl ist als MCP-Tool erreichbar:
+`lumina-cli` hat **32** Subcommands. Abgedeckt sind **22**, offen sind
+**10**. Der Abgleich erfolgte gegen die tatsächlich implementierten
+Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
+2026-09-26: 18 abgedeckt / 14 offen vor MCP-PARITY-A, 22 / 10 danach.
+
+**Abgedeckt (22):**
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
 | `lumina import` | `lumina_import` | F-101-F1 |
 | `lumina develop` / `lumina render` / `lumina export` | `lumina_edit` + `lumina_save` (Render/Export-Choke-Point) | bereits spezifiziert |
 | `lumina process` | `lumina_edit` + `lumina_save` (Rezept vor Render setzen) | bereits spezifiziert |
-| `lumina info` | `lumina_inspect` | bereits spezifiziert |
+| `lumina inspect` | `lumina_inspect` | bereits spezifiziert |
 | `lumina batch` | `lumina_batch` (ein Aufruf = ein Verzeichnis) | F-101-F1 |
 | `lumina reindex` | `lumina_reindex` | F-101-F1 |
 | `lumina dust-removal` | `lumina_dust_removal` | F-101-F1 |
-| `lumina mask` | Maskenstatus via `lumina_inspect` sichtbar; Re-Refresh über Sidecar-Rezept (`update_masks`), Inferenz selbst bewusst Post-MVP | Grenze dokumentiert |
+| `lumina mask` | Maskenstatus via `lumina_inspect` sichtbar; Re-Refresh über Sidecar-Rezept (`lumina_get_recipe`); Inferenz selbst bewusst Post-MVP | Grenze dokumentiert |
 | `lumina validate` | `lumina_import`/`lumina_load` (Identitäts- und Validierungsprüfung beim Laden) | bereits spezifiziert |
+| `lumina meta` (Keywords, Presets, Export, Sync) | `lumina_get_metadata_draft`, `lumina_update_metadata_draft`, `lumina_apply_meta_preset`, `lumina_batch_sync_metadata`, `lumina_trigger_export` | LRPAR-G15-IPTC-S7 |
+| `lumina color` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
+| `lumina red-eye` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
+| `lumina face` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
+| `lumina spot` | `lumina_spot` (Leseweg `op=list`/`op=detect`, Schreibwege je ein Feld) | MCP-PARITY-A |
+| `lumina lens-blur` | `lumina_lens_blur` (Leseweg `op=list`, Schreibwege je ein Feld) | MCP-PARITY-A |
+| `lumina geometry` | `lumina_geometry` (Leseweg `op=list`, Schreibwege je ein Feld/Teilstufe) | MCP-PARITY-A |
+| `lumina upright` | `lumina_upright` (Leseweg `op=list`, Schreibwege `analyze`/`enable`/`disable`/`clear`) | MCP-PARITY-A |
 | `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
+
+**Offen — kein MCP-Weg weder implementiert noch als Grenze dokumentiert (11):**
+`collections`, `smart-collections`, `relocate`, **`previous`**, `merge-hdr`,
+`merge-pano`, `matrix`, `generative`, `regenerate`, `denoise`, `cull`.
+
+**Korrektur 2026-09-26:** `lumina previous` stand in keiner der beiden Listen
+und wurde hier für abgedeckt gehalten, weil das Wort „previous" in einer
+Tool-Beschreibung vorkommt. Das war ein **Stichwort-False-Positive**: es gibt
+kein MCP-Tool dafür, das Kommando wird in `mcp-server.md` **null Mal** erwähnt,
+und es ist ein **rezeptschreibendes** Kommando, nicht nur lesend.
+
+Diese Lücke ist **offen, nicht abgesichert**: die früher hier
+formulierte Zusage „Jeder `lumina`-CLI-Befehl ist als MCP-Tool
+erreichbar" trifft auf die obigen 10 nicht zu und wird nicht mehr
+behauptet. Die Schliessung erfolgt in benannten Slices (Aufgaben
+`MCP-PARITY-A/B/C` in `Agents.todo.md`), **nicht** durch einen einzigen
+Blindumbau: `denoise` und `cull` sind über das F-078-Modellgate
+gesperrt — ein Tool dafür würde immer nur den Modellfehler
+durchreichen und wird deshalb als **modellgegated** geführt statt als
+Stub gebaut.
+
+**Namenskorrektur:** die frühere Fassung dieser Tabelle nannte
+`lumina info`; das CLI-Kommando heisst `lumina inspect`. Es gibt kein
+`lumina info`.
 
 #### Gemeinsame Eigenschaften der Bulk-/Pfad-Tools
 
@@ -724,6 +766,82 @@ Das Original bleibt unverändert.
   `SidecarError` (fehlender Sidecar → „run lumina_import first“),
   `EncodeError`.
 
+### Rezept-Stufen-Editoren (MCP-PARITY-A — umgesetzt)
+
+Vier **session-basierte** Tools für die session-/rezeptnahen Stufen-Editoren.
+Sie sind **keine** zweite Implementierung: `lumina-cli` und `lumina-mcp` rufen
+dieselbe Funktion in `crates/lumina-stages` auf (`crates/lumina-cli/src/stages.rs`
+ist der reine clap-Adapter, `crates/lumina-mcp/src/tools/` der reine
+JSON-Schema-Adapter). Ein MCP-Aufruf und der äquivalente CLI-Aufruf hinterlassen
+deshalb **byte-identische** Sidecars — je Stage-Editor, in lesender und
+schreibender Richtung, belegt in `crates/lumina-cli/tests/stage_parity*.rs`
+(dort steht das echte `lumina-cli`-Binary über `CARGO_BIN_EXE_lumina-cli` zur
+Verfügung). Beide Adapter bauen denselben `*Request` und rendern denselben
+`StageReport`: das CLI-`--json`-Dokument ist wortgleich das Tool-Payload.
+
+| Tool | CLI | Leseweg | Schreibwege |
+| --- | --- | --- | --- |
+| `lumina_spot` | `lumina spot` | `op=list`, `op=detect` | `add`, `update`, `remove`, `set_visualize`, `set_distraction`, `detect_apply`, `clear` |
+| `lumina_lens_blur` | `lumina lens-blur` | `op=list` | `enable`, `disable`, `set_amount`, `set_focal_near`, `set_focal_far`, `set_bokeh`, `set_focus_rect`, `set_depth_artifact`, `clear_depth_artifact`, `clear` |
+| `lumina_geometry` | `lumina geometry` | `op=list` | `set_crop_aspect`, `set_crop_free`, `clear_crop`, `set_rotation`, `set_mirror`, `clear_geometry`, `set_lens_profile`, `set_lens_field`, `clear_lens`, `set_perspective_field`, `clear_perspective` |
+| `lumina_upright` | `lumina upright` | `op=list` | `analyze`, `enable`, `disable`, `clear` |
+
+**Gemeinsame Eigenschaften (Session-Tools):**
+
+- **Input:** `{ image_id (Pflicht), virtual_copy?, op (Pflicht), …op-spezifische
+  Felder }`. Das Schema ist `additionalProperties: false`; ein unbekanntes Feld
+  wird **laut** mit `InvalidParams` (`-32602`) abgewiesen, genau wie ein
+  unbekanntes `op`.
+- **Read und Write sind getrennt.** Der Leseweg (`list`, und `detect` bei
+  `lumina_spot`) schreibt **nie**; jeder Schreibweg benennt genau ein Feld oder
+  genau eine Operation. Ein `op` ohne seinen Wert ist ein lauter Fehler, kein
+  stiller No-op. Es gibt **kein** implizites Setzen ganzer Stufen.
+- **Laut wie die CLI.** Unbekannte Kopie, unbekanntes Feld, unbekannter
+  Spot/Preset/Spiegel/Lens-/Perspektiv-Feldname, Out-of-Range, invertierte
+  Focal-Range, nicht-portabler (absoluter) Depth-Artifact-Pfad,
+  fehlendes Tiefen-Artefakt, `upright --enable` ohne persistierte Analyse und
+  `spot` ohne Sidecar brechen **laut** ab und ändern **keine** Bytes. Es gibt
+  keinen stillen Fallback und kein „leeres Ergebnis als Erfolg".
+- **Output:** der gemeinsame Stufen-Payload (`command`, `copy`, Stufenzustand,
+  `actions`) plus `saved` (bei Lesewegen `false`), `action` (die Aktionen
+  genau dieses Aufrufs) und `revision`.
+- **Session-Semantik wie `lumina_edit`.** Der Sidecar wird pro Aufruf frisch von
+  der Platte gelesen (ein extern geänderter Sidecar wird gesehen, nicht
+  gecacht); der Schreibpfad läuft als Compare-and-Swap gegen die in
+  `lumina_load` gesehene Revision und meldet einen Konflikt als
+  `SidecarConflict` (`-32010`) statt still zu überschreiben. Danach wird die
+  Session wie bei `lumina_edit` auf `document` + `sidecar_revision` rebasiert —
+  mehr Session-Zustand wird nicht erfunden.
+- **Historische Nicht-Reproduzierbarkeit (ehrlich benannt):** `lumina_geometry`
+  und `lumina_upright` hängen pro Aufruf genau einen History-Eintrag an, dessen
+  `id` und `recorded_at` eine **Millisekunde** sind (`geometry-<ms>` /
+  `upright-<ms>`, bestehendes CLI-Verhalten). Zwei *Prozesse* können ihre
+  Sidecars deshalb nicht bitweise vergleichen; der Paritätstest maskiert genau
+  dieses Feld und schlägt bei jeder anderen Abweichung fehl. `spot` und
+  `lens-blur` hängen keinen History-Eintrag an — dort ist der Vergleich ein
+  echter Byte-Vergleich.
+
+**Bewusst nicht abgedeckt (keine Stubs):**
+
+- `spot --regenerate-variant` (generativer Variant-Seed) gehört zur
+  generativen Fläche und kommt mit **MCP-PARITY-B**; ein halb abgedeckter
+  generativer Pfad wäre ein Stub, keine Parität.
+- `geometry --lensfun-status` (Read-only-Lensfun-Auto-Profil-Auflösung) braucht
+  die native `lensfun`-Capability, die `lumina-mcp` nicht linkt. Das Feld
+  meldet `null` — exakt wie `lumina geometry --json` ohne `--lensfun-status`;
+  eine hart kodierte „unavailable“-Zeichenkette wäre ein stiller Fallback.
+- `--straighten` ist im CLI nur ein Alias von `--set-rotation` (gleiches Feld,
+  gleiche Validierung); das MCP-Tool hat dafür nur `op=set_rotation`.
+- `denoise` und `cull` bleiben hinter dem F-078-Modellgate, `generative` und
+  `regenerate` hinter Slice B — unberührt, **nicht** gestubt.
+
+Abnahme: Byte-Identität MCP-gegen-CLI je Stage in beiden Richtungen, ein
+Still-Fehler-Test je Stage (unbekannte Kopie/Feld/ID, Out-of-Range, invertierte
+Focal-Range, fehlendes Depth-Artefakt), ein Registry-Test über
+`list_tool_definitions` **und** `dispatch_tool` **und** `is_known_tool`, Schema-
+Tests (unbekanntes Feld abgewiesen, Pflichtfelder erzwungen) und
+`cargo test -p lumina-mcp --all-targets`.
+
 ### Metadaten-Schnittstelle (LRPAR-G15-IPTC — umgesetzt, S7 BESTANDEN)
 
 Der MCP-Server erhält fünf **pfadbasierte** Metadaten-Tools (Muster der
@@ -793,9 +911,14 @@ Aktueller Projektname: LuminaRust. Brainstorm-Liste:
 - **Typ:** Binary + Library (Library für Tests und potentielle
   Integration in `lumina-cli` als Subcommand).
 - **`Cargo.toml`-Abhängigkeiten:** `lumina-core`, `lumina-sidecar`,
-  `lumina-raw` (optional, für Metadaten-Direktzugriff), `serde`,
-  `serde_json`, `tokio` (für stdin/stdout-Async, falls MCP-Client
-  async erwartet).
+  `lumina-raw` (optional, für Metadaten-Direktzugriff), `lumina-iptc`,
+  `lumina-stages`, `serde`, `serde_json`, `blake3`, `log`.
+- **`lumina-stages`** (MCP-PARITY-A): die EINE Implementierung der vier
+  session-basierten Rezept-Stufen-Editoren. `lumina-cli` **und** `lumina-mcp`
+  hängen davon ab. Das ist keine reine Umorganisation: `lumina-cli` hängt
+  bereits an `lumina-mcp` (Feature `mcp`), Cargo lehnt den Paketzyklus
+  `lumina-cli → lumina-mcp → lumina-cli` ab, also braucht es das dritte Crate —
+  sonst wäre die Parität nur eine Behauptung statt Struktur.
 - **`main.rs`:** Minimaler MCP-Server-Loop. Liest JSON-RPC von stdin,
   dispatcht an Tools, schreibt nach stdout.
 - **Feature-Flag:** `lumina-mcp` ist optional und wird über ein
@@ -859,6 +982,24 @@ andere Features. Es baut ausschließlich auf vorhandenen APIs auf.
 - `lumina_edit` mit `image_id` ohne vorheriges `lumina_load` →
   `NoImageLoaded`.
 - `lumina_edit` mit ungültigen Adjustment-Werten → `InvalidAdjustment`.
+- **Stufen-Editoren (MCP-PARITY-A):** je Stage ein Test, dass ein lauter
+  Fehler **keine** Sidecar-Bytes ändert und dass der CLI dieselbe Eingabe mit
+  Exit-Code 1 und derselben Fehlerzeile ablehnt (unbekannte Kopie, unbekanntes
+  Feld, unbekannte ID, Out-of-Range, invertierte Focal-Range, fehlendes
+  Depth-Artefakt) — `crates/lumina-cli/tests/stage_parity_errors.rs` und
+  `stage_parity_geometry_upright.rs`.
+
+### Paritätstests Stufen-Editoren (MCP-PARITY-A)
+
+- **Byte-Identität:** `crates/lumina-cli/tests/stage_parity.rs` startet das
+  echte `lumina-cli`-Binary gegen die eine Fixture und das MCP-Tool in-process
+  gegen eine zweite, byte-identische Fixture; verglichen werden die
+  Sidecar-Bytes **und** der gemeinsame Stufen-Payload — je Stage, in lesender
+  und schreibender Richtung.
+- **Registry:** `crates/lumina-mcp/tests/stage_tools.rs` prüft, dass jeder
+  registrierte Name in `list_tool_definitions` steht, von `dispatch_tool`
+  angenommen wird und mit `is_known_tool` übereinstimmt, indem es den
+  vollständigen `tools/list`-Ergebnis über `tools/call` schickt.
 - `lumina_save` mit nicht unterstütztem Format → `UnsupportedFormat`.
 - `lumina_preview` ohne geladenes Bild → `NoImageLoaded`.
 

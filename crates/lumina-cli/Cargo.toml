@@ -39,6 +39,12 @@ log = { version = "0.4", features = ["std"] }
 # capability (SOLL: feature-flagged integration); enabled by default so the
 # standard workspace build/test gates cover the subcommand.
 lumina-mcp = { path = "../lumina-mcp", optional = true }
+# MCP-PARITY-A: the ONE implementation of the four session-based recipe stage
+# editors (`spot`, `lens-blur`, `geometry`, `upright`). The MCP server depends on
+# the same crate, so an MCP call and the equivalent CLI call cannot drift — see
+# `crates/lumina-cli/src/stages.rs` (CLI adapter, no stage logic) and
+# `crates/lumina-stages/src/` (the logic).
+lumina-stages = { path = "../lumina-stages" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

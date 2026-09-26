@@ -10,8 +10,10 @@ pub mod batch;
 pub mod copies;
 pub mod dust_removal;
 pub mod edit;
+pub mod geometry;
 pub mod import;
 pub mod inspect;
+pub mod lens_blur;
 pub mod load;
 pub mod meta_common;
 pub mod meta_export;
@@ -23,6 +25,9 @@ pub mod preview;
 pub mod recipe;
 pub mod reindex;
 pub mod save;
+pub mod spot;
+pub mod stage_common;
+pub mod upright;
 
 use crate::error::McpError;
 use crate::Server;
@@ -48,6 +53,13 @@ pub fn list_tool_definitions() -> Vec<Value> {
             dust_removal::DESCRIPTION,
             dust_removal::schema(),
         ),
+        // MCP-PARITY-A: the four session-based recipe stage editors. Each one has
+        // a read op (`list`, plus `detect` for spot) and explicit per-field write
+        // ops; none of them can set a whole stage implicitly.
+        tool_def(spot::NAME, spot::DESCRIPTION, spot::schema()),
+        tool_def(lens_blur::NAME, lens_blur::DESCRIPTION, lens_blur::schema()),
+        tool_def(geometry::NAME, geometry::DESCRIPTION, geometry::schema()),
+        tool_def(upright::NAME, upright::DESCRIPTION, upright::schema()),
         // LRPAR-G15-IPTC-S7: path-based metadata tools (beside the session).
         tool_def(meta_get::NAME, meta_get::DESCRIPTION, meta_get::schema()),
         tool_def(
@@ -92,6 +104,10 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         batch::NAME => batch::run(server, args),
         reindex::NAME => reindex::run(server, args),
         dust_removal::NAME => dust_removal::run(server, args),
+        spot::NAME => spot::run(server, args),
+        lens_blur::NAME => lens_blur::run(server, args),
+        geometry::NAME => geometry::run(server, args),
+        upright::NAME => upright::run(server, args),
         meta_get::NAME => meta_get::run(server, args),
         meta_update::NAME => meta_update::run(server, args),
         meta_preset::NAME => meta_preset::run(server, args),

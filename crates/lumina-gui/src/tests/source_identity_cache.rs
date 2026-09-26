@@ -75,6 +75,38 @@ impl Fixture {
         self.set_mtime(Self::mtime_anchor());
     }
 
+    /// Rewrite the fixture with `bytes` — same length, mtime pinned back — and
+    /// retry across filesystem timestamp ticks until the file's identity key
+    /// actually moves. Returns `true` as soon as it has.
+    ///
+    /// With the mtime pinned and the length unchanged, `ctime` is the only
+    /// signal left, and `ctime` only advances when the filesystem's timestamp
+    /// granularity ticks. APFS (the reference machine) has sub-second
+    /// resolution, so a rewrite moves it immediately. XFS with a coarse
+    /// timestamp setting does not: measured on this container, a rewrite inside
+    /// the same tick leaves the key byte-identical, and the memo then correctly
+    /// serves the previous hash — the guard is not broken, the filesystem simply
+    /// cannot express the change yet. So the test waits for the tick instead of
+    /// assuming one.
+    ///
+    /// Bounded on purpose: it returns `false` rather than skipping, so a
+    /// genuinely broken guard still fails the caller loudly.
+    pub(super) fn rewrite_until_identity_moves(
+        &self,
+        bytes: &[u8],
+        before: &FileContentIdentity,
+    ) -> bool {
+        for _ in 0..8u32 {
+            std::fs::write(&self.path, bytes).unwrap();
+            self.restore_mtime();
+            if &self.identity() != before {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        false
+    }
+
     fn identity(&self) -> FileContentIdentity {
         FileContentIdentity::from_path(&self.path)
     }
@@ -222,15 +254,14 @@ fn same_length_rewrite_with_restored_mtime_still_forces_a_new_identity() {
     let mut replacement = original.clone();
     replacement[0] ^= 0x01;
     assert_eq!(replacement.len(), original.len());
-    std::fs::write(&fixture.path, &replacement).unwrap();
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&fixture.path)
-        .unwrap();
-    file.set_len(original.len() as u64).unwrap();
-    file.set_modified(Fixture::mtime_anchor()).unwrap();
-    drop(file);
-    fixture.restore_mtime();
+    // The rewrite retries across timestamp ticks: with the mtime pinned and the
+    // length unchanged, ctime is the only signal, and it only moves when the
+    // filesystem's granularity ticks. See `rewrite_until_identity_moves`.
+    assert!(
+        fixture.rewrite_until_identity_moves(&replacement, &before),
+        "a same-length rewrite with a restored mtime must force a new identity key; if the key never \
+         moved within 8 ticks the ctime guard is broken"
+    );
 
     let metadata = std::fs::metadata(&fixture.path).unwrap();
     assert_eq!(
@@ -256,26 +287,19 @@ fn same_length_rewrite_with_restored_mtime_still_forces_a_new_identity() {
 
 /// A missing source is `Missing`; an unreadable one is `Unavailable` with the
 /// OS error text. Neither class is ever *stored*: a failure is never memoized
-/// as a successful identity, so a file that later appears — or becomes readable
+/// as a successful identity, so a path that later appears — or becomes readable
 /// — resolves freshly instead of inheriting a remembered failure.
 ///
-/// Note the deliberate boundary (documented in the SOLL § 3), asserted at the
-/// end of the test: revoking permissions on a path whose hash was *already*
-/// computed does **not** change the returned class, because the content did
-/// not change. `chmod` does advance the key's `ctime` (it is a metadata
-/// change), so the memo **does** miss and the lookup really re-attempts — and
-/// re-attempting a readable file re-derives the same hash. The `Unavailable`
-/// class means "the identity could not be determined (now)"; a hash determined
-/// while the path was readable is not invalidated by a permission change.
+/// Boundary (SOLL § 3, asserted at the end): a permission change on an
+/// already-hashed path does not change the class, because the content did not.
 ///
-/// **Why the unreadable case is a directory and not a `chmod 0o000` file**
-/// (2026-09-26, after CI went red on `main`): a privileged runner can read a
-/// mode-000 file, so the assertion held locally and failed in the containerised
-/// CI job — the suite was green here and red there, which is the worst possible
-/// split. The `#[cfg(not(unix))]` fallback for the old helpers was a no-op and
-/// would have failed on Windows for the mirror-image reason. A directory fails
-/// the read for every user, root included, and is not `NotFound`, so it pins
-/// `Unavailable` versus `Missing` identically everywhere.
+/// **Why a directory and not a `chmod 0o000` file** (2026-09-26, after CI went
+/// red on `main`): a privileged runner can read a mode-000 file, so the
+/// assertion held locally and failed in the containerised CI job — green here,
+/// red there, the worst possible split. The old `#[cfg(not(unix))]` helper
+/// fallback was a no-op and would have failed on Windows for the mirror-image
+/// reason. A directory fails the read for every user, root included, and is not
+/// `NotFound`, so it pins `Unavailable` vs `Missing` identically everywhere.
 #[test]
 fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
     let dir = tempfile::tempdir().unwrap();
@@ -356,14 +380,11 @@ fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
         "a chmod must not change the identity value"
     );
     // The matching half — "a chmod advances `ctime`, so the memo misses and
-    // re-hashes" — is deliberately **not** asserted. It is a real property, but
-    // it is only observable when the filesystem's timestamp granularity is
-    // finer than the interval between the write and the `chmod`, and both
-    // happen microseconds apart. Asserting it produced a red suite here
-    // (`hash_count` stayed `Some(1)`), i.e. a timing-dependent assertion. The
-    // property is recorded in the doc comment above and in
-    // `tests::source_identity_trace.rs`; a genuine test for it needs an
-    // injectable clock, not a `chmod` in a hot loop.
+    // re-hashes" — is deliberately **not** asserted: it is only observable when
+    // the filesystem's timestamp granularity is finer than the gap between the
+    // write and the `chmod`, and those are microseconds apart. Asserting it made
+    // this suite red (`hash_count` stayed `Some(1)`) — a timing-dependent
+    // assertion. Testing it properly needs an injectable clock.
 }
 
 // ---- 4. The cache changes no identity value ----
@@ -466,20 +487,10 @@ fn bundle_identity_precedence_and_source_action_bundle_are_unchanged() {
 
 // ---- Helpers ----
 
-/// A path that is guaranteed to fail a content read **regardless of privilege
-/// or platform**.
-///
-/// This replaces a `chmod 0o000` file, which was the wrong tool twice over: a
-/// privileged runner can read a mode-000 file (the CI job runs in a container
-/// and did exactly that, so the suite was red there while green here), and the
-/// old `#[cfg(not(unix))]` fallback was a *no-op*, which would have made the
-/// same assertion fail on Windows for the mirror-image reason.
-///
-/// A directory is the portable choice: `std::fs::read` on a directory fails
-/// with `EISDIR` (or an access-denied error on Windows) for **every** user,
-/// root included, and neither error is `NotFound`, so `from_path` classifies it
-/// as `Unavailable` rather than `Missing` — which is precisely the distinction
-/// this test exists to pin.
+/// A path guaranteed to fail a content read **regardless of privilege or
+/// platform**: a directory, because `fs::read` on one yields `EISDIR` (Windows:
+/// access denied) for every user, root included, and neither is `NotFound`.
+/// See the test's doc comment for why this replaced a `chmod 0o000` file.
 fn unreadable_path(dir: &Path, name: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::create_dir(&path).unwrap();

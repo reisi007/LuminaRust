@@ -1,0 +1,27 @@
+[package]
+name = "lumina-stages"
+version = "0.1.0"
+edition = "2021"
+description = "Shared session-based recipe stage editors (spot, lens-blur, geometry, upright) for the CLI and the MCP server"
+publish = false
+
+# MCP-PARITY-A: this crate exists so the four session-based recipe stage editors
+# have exactly ONE implementation. `lumina-cli` (`spot`, `lens-blur`,
+# `geometry`, `upright`) and `lumina-mcp` (`lumina_spot`, `lumina_lens_blur`,
+# `lumina_geometry`, `lumina_upright`) both call the same `run()` functions
+# below, so an MCP call and the equivalent CLI call cannot drift. It is
+# deliberately NOT reachable from `lumina-cli` alone: a package cycle
+# (`lumina-cli` -> `lumina-mcp` -> `lumina-cli`) is rejected by Cargo, so the
+# shared logic has to live in a third crate.
+[dependencies]
+blake3 = "1"
+log = "0.4"
+lumina-core = { path = "../lumina-core" }
+lumina-raw = { path = "../lumina-raw" }
+lumina-sidecar = { path = "../lumina-sidecar" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -99,11 +99,35 @@ fn a_stamp_that_moved_during_the_read_is_not_memoized() {
 
     // Advance the stamp: a same-length rewrite with the mtime pinned back is
     // the adversarial case, and it advances `ctime`.
+    //
+    // `ctime` only moves when the filesystem's timestamp granularity ticks.
+    // APFS (the reference machine) has sub-second resolution, so a rewrite
+    // immediately advances it; XFS with a coarse timestamp setting does not —
+    // there a rewrite inside the same tick leaves `ctime` byte-identical and
+    // this assertion failed. That is a property of the *filesystem*, not of the
+    // guard, so the rewrite retries across ticks instead of assuming one. The
+    // bound is deliberate: if the stamp never advances, the test FAILS rather
+    // than skipping, so a genuinely broken guard is still caught and a
+    // coarse-granularity filesystem costs a short wait, not coverage.
     let mut changed = bytes.clone();
     changed[0] ^= 0x01;
-    std::fs::write(&fixture.path, &changed).unwrap();
-    fixture.restore_mtime();
-    let moved = source_identity::current_key(&fixture.path).unwrap();
+    let mut moved = None;
+    for _ in 0..8u32 {
+        std::fs::write(&fixture.path, &changed).unwrap();
+        fixture.restore_mtime();
+        let candidate = source_identity::current_key(&fixture.path).unwrap();
+        if candidate != stable {
+            moved = Some(candidate);
+            break;
+        }
+        // Wait for the next timestamp tick before retrying. Bounded: 8 tries
+        // x 250 ms covers a 1 s granularity with room to spare.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let moved = moved.expect(
+        "the rewrite must advance the stamp within 8 tries across timestamp ticks; if it never does \
+         the ctime guard cannot see a same-length rewrite and is broken",
+    );
     assert_ne!(moved, stable, "the rewrite must have advanced the stamp");
     assert!(
         !source_identity::stamp_survived(stable.as_ref(), moved.as_ref()),

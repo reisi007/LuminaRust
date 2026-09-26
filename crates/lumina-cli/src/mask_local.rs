@@ -19,6 +19,13 @@ use lumina_sidecar::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
+// MCP-PARITY-A: virtual-copy resolution and mutable copy access moved to
+// `lumina-stages::copy`, which the four shared stage editors and the MCP tools
+// use. Keeping ONE resolution is what makes an unknown copy abort identically
+// on both transports.
+pub(crate) use lumina_stages::copy::copy_mut as mask_copy_mut;
+pub(crate) use lumina_stages::copy::resolve_copy as resolve_mask_copy;
+
 pub(crate) fn require_mask_name(name: Option<&str>) -> Result<&str, CliError> {
     match name {
         Some(name) if !name.trim().is_empty() => Ok(name),
@@ -26,37 +33,6 @@ pub(crate) fn require_mask_name(name: Option<&str>) -> Result<&str, CliError> {
             "this mask operation requires --name <NAME>".into(),
         )),
     }
-}
-
-pub(crate) fn mask_copy_mut<'a>(
-    document: &'a mut SidecarDocument,
-    copy_id: &str,
-) -> Result<&'a mut VirtualCopy, CliError> {
-    document
-        .virtual_copies
-        .iter_mut()
-        .find(|copy| copy.id == copy_id)
-        .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{copy_id}`")))
-}
-
-pub(crate) fn resolve_mask_copy(
-    document: &SidecarDocument,
-    requested: Option<&str>,
-) -> Result<String, CliError> {
-    if let Some(id) = requested {
-        if document.virtual_copies.iter().any(|copy| copy.id == id) {
-            return Ok(id.into());
-        }
-        return Err(CliError::Message(format!("unknown virtual copy `{id}`")));
-    }
-    if let Some(default) = document.virtual_copies.iter().find(|copy| copy.is_default) {
-        return Ok(default.id.clone());
-    }
-    document
-        .virtual_copies
-        .first()
-        .map(|copy| copy.id.clone())
-        .ok_or_else(|| CliError::Message("sidecar has no virtual copies".into()))
 }
 
 /// Apply the repeatable local P0/P1.1/P1.2a flags as one prevalidated
