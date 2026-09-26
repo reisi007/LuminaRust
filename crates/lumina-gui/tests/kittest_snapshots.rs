@@ -21,7 +21,6 @@
 
 use egui_kittest::kittest::NodeT;
 use egui_kittest::{kittest::Queryable, Harness};
-use lumina_core::cache::{disk::DiskFolderCache, PreviewKind};
 use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_gui::{
     LibraryView, LuminaApp, Module, PinVisibility, ZoomMode, LIBRARY_BADGE_BG, SECTION_COLOR,
@@ -35,6 +34,12 @@ use std::path::{Path, PathBuf};
 // within its committed size baseline (see the support module docs).
 mod kittest_snapshots_support;
 use kittest_snapshots_support::*;
+
+// GOLDEN-FIXT-31: the real-RAW fixture contract (staging the two licensed CR3s
+// from `sample-data/raw/`, plus the "the worker really decoded" settle/guards).
+// Shared with `kittest_library_stack`, which owns the stack-membership golden.
+mod kittest_fixtures_support;
+use kittest_fixtures_support::*;
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
@@ -505,15 +510,20 @@ fn export_module() {
 // `#[ignore]`d and run with the `-- --ignored` flag on a GPU machine.
 // ---------------------------------------------------------------------------
 
-/// Create a temporary folder with `count` dummy RAW files (content does not
-/// decode — the filmstrip/grid cells show placeholders, which is fine for
-/// geometry/layout assertions).
+/// Create a temporary folder with `count` RAW **layout** sentinels.
+///
+/// GOLDEN-FIXT-31 (contract class S1): these files are not image fixtures and
+/// are never committed. They exist only where the assertion is a *geometry* or
+/// *count* that must hold independently of decode success (the filmstrip's
+/// single-row layout with 20 cells), and the caller keeps a real loaded source
+/// so the F-100 auto-load never decodes a sentinel. Any golden that asserts
+/// pixels must use a staged real CR3 instead — see `kittest_fixtures_support`.
 fn temp_raw_dir(count: usize) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
     for i in 0..count {
         std::fs::write(
             dir.path().join(format!("IMG_{:04}.ARW", i)),
-            b"not a real raw file",
+            b"lumina-raw-layout-sentinel",
         )
         .expect("write dummy raw");
     }
@@ -585,7 +595,7 @@ fn filmstrip_is_single_row_horizontal() {
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn filmstrip_counter_reflects_selection() {
     let mut harness = build_harness();
-    let paths = setup_library_views(&mut harness);
+    let (paths, _) = setup_library_views(&mut harness);
     // Exactly the first entry selected: 1 of 3.
     harness
         .state_mut()
@@ -610,12 +620,16 @@ fn filmstrip_counter_reflects_selection() {
 /// folder picker (injected headless — no display server), not the old no-op
 /// re-list of the current directory. A picked folder with a RAW entry proves
 /// the CTA leaves the empty state and adopts the picked path.
+///
+/// GOLDEN-FIXT-31: the picked folder gets a **real** staged CR3. A RAW
+/// sentinel would work for the listing assert, but it would raise the loud
+/// LibRaw failure banner mid-test, so the frame budget below would race a
+/// decode error that has nothing to do with the wiring under test.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_empty_state_cta_picks_folder() {
     let picked = tempfile::tempdir().expect("picked temp dir");
-    std::fs::write(picked.path().join("picked.arw"), b"lumina-raw-fixture")
-        .expect("write picked raw sentinel");
+    let staged = stage_raw(picked.path(), "picked.cr3", "aircraft-landscape.cr3");
     std::fs::create_dir_all(picked.path().join("sub")).expect("create picked subdir");
     let picked_path = picked.path().display().to_string();
 
@@ -640,9 +654,10 @@ fn library_empty_state_cta_picks_folder() {
         })
         .unwrap_or(false);
     assert!(clicked, "empty-state CTA must be present and clickable");
-    // Fixed frames (not `run()`): the picked sentinel starts a background
-    // decode whose repaint requests would exceed `run`'s step budget.
-    harness.run_steps(5);
+    // Settle the picked folder's listing + auto-load decode before asserting
+    // (GOLDEN-FIXT-31): a fixed frame budget cannot cover a real 24-megapixel
+    // RAW decode, and the assertion below is about the settled listing.
+    settle_scan(&mut harness);
     assert_eq!(
         harness.state_mut().directory(),
         picked_path,
@@ -656,6 +671,13 @@ fn library_empty_state_cta_picks_folder() {
         harness.query_all_by_label("No images").next().is_none(),
         "a non-empty picked folder must leave the empty state"
     );
+    // The staged CR3 really is on disk where the listing found it (a listing
+    // assert over a phantom file would be vacuous), and it really decoded.
+    assert!(
+        staged.is_file() && staged.extension().is_some_and(|ext| ext == "cr3"),
+        "the picked folder must contain the staged RAW fixture"
+    );
+    assert_no_raw_decode_failure(&mut harness);
 }
 
 /// UX-SLICE-2 (F2): a cancelled folder dialog is a deliberate no-op — the
@@ -792,6 +814,10 @@ fn library_empty_suppresses_render_hash() {
         .set_directory(LIBRARY_VIEWS_FIXTURE_DIR.to_owned());
     // `set_directory` lists flat; mirror the views tests' recursive listing.
     list_directory_and_settle(&mut harness);
+    // The staged CR3s must decode here too: the F-100 auto-load of the first
+    // entry runs a full LibRaw decode, and a decode failure would raise the
+    // loud error whose suppression this test is about.
+    assert_no_raw_decode_failure(&mut harness);
     harness.state_mut().set_library_filter("no-such-entry");
     harness.run();
     assert!(
@@ -996,28 +1022,24 @@ fn library_metadata() {
     harness.snapshot("library_metadata");
 }
 ///
-/// Committed layout (`top.arw` + `sub/mid.arw` + `sub/nested/deep.arw`);
-/// the files are (re-)written deterministically on every run so a fresh
-/// checkout without the binaries still passes and re-writes are
-/// byte-identical (no git churn). The relative path keeps every rendered
-/// string fixed, and the relative badges (`""`, `"sub"`, `"sub/nested"`)
-/// are machine-independent — unlike a `tempfile::tempdir` path, which
-/// would leak nondeterministic pixels into the golden via the path field
-/// and tree root label.
+/// Committed layout (`top.cr3` + `sub/mid.cr3` + `sub/nested/deep.cr3`), with
+/// the three RAW files staged at run time from `sample-data/raw/` (see
+/// `kittest_fixtures_support`); nothing binary is committed here. The relative
+/// path keeps every rendered string fixed, and the relative badges (`""`,
+/// `"sub"`, `"sub/nested"`) are machine-independent — unlike a
+/// `tempfile::tempdir` path, which would leak nondeterministic pixels into the
+/// golden via the path field and tree root label.
 const LIBRARY_BADGES_FIXTURE_DIR: &str = "tests/fixtures/library_badges";
 
-/// (Re-)write the deterministic badge-fixture files (idempotent).
+/// (Re-)stage the deterministic badge fixture (idempotent).
 ///
-/// RAW sentinel bytes suffice: `scan_entry`/`list_directory` only need a
-/// supported extension (+ optional sidecar) — no decode runs during a
-/// directory scan, and grid cells show placeholders for undecodable bytes.
-/// PNGs do NOT work here: the Library grid is RAW-only, so `.png`
-/// fixtures aggregate into `entries` (status count) but render an empty
-/// grid with no badges. Tradeoff: the golden pins the deterministic LibRaw
-/// "opening input failed" placeholder text for the sentinel bytes (a
-/// LibRaw message change needs a golden refresh); the `sub` / `sub/nested`
-/// badge pixels are the actual regression signal.
-fn ensure_library_badges_fixture() {
+/// GOLDEN-FIXT-31: the three staged files are **real** CR3 fixtures. They used
+/// to be 18-byte RAW sentinels, so the grid painted the deterministic LibRaw
+/// "opening input failed" placeholder and this golden could not see a
+/// single pixel of image-pipeline output. The relative-path badges
+/// (`""` / `sub` / `sub/nested`) remain the regression signal under test, and
+/// they are now painted over real decoded thumbnails.
+fn ensure_library_badges_fixture() -> Vec<StagedEntry> {
     let root = std::path::Path::new(LIBRARY_BADGES_FIXTURE_DIR);
     std::fs::create_dir_all(root.join("sub/nested")).expect("create badge fixture dirs");
     // Remove stale pre-RAW fixtures (H1 first attempt used `.png`).
@@ -1031,8 +1053,8 @@ fn ensure_library_badges_fixture() {
     // The grid's thumbnail probe creates a gitignored `.lumina/` preview cache
     // inside the fixture tree; left behind it would appear as an extra folder
     // row on the *next* run and make this golden order-dependent. Removing it
-    // makes every run start from the committed file set (fresh checkout and
-    // re-run render identically).
+    // makes every run start from the same file set (fresh checkout and re-run
+    // render identically).
     for cache in [
         "tests/fixtures/library_badges/.lumina",
         "tests/fixtures/library_badges/sub/.lumina",
@@ -1040,13 +1062,20 @@ fn ensure_library_badges_fixture() {
     ] {
         let _ = std::fs::remove_dir_all(cache);
     }
-    for path in [
-        "tests/fixtures/library_badges/top.arw",
-        "tests/fixtures/library_badges/sub/mid.arw",
-        "tests/fixtures/library_badges/sub/nested/deep.arw",
-    ] {
-        std::fs::write(path, b"lumina-raw-fixture").expect("write badge fixture");
+    let entries: Vec<StagedEntry> = [
+        ("top.cr3", "aircraft-landscape.cr3"),
+        ("sub/mid.cr3", "aircraft-portrait.cr3"),
+        ("sub/nested/deep.cr3", "aircraft-landscape.cr3"),
+    ]
+    .into_iter()
+    .map(|(staged, source)| (stage_raw(root, staged, source), source))
+    .collect();
+    // Pre-create the per-folder caches so the folder tree is identical on a
+    // cold and a warm run.
+    for folder in [root, &root.join("sub"), &root.join("sub/nested")] {
+        prepare_folder_cache(folder);
     }
+    entries
 }
 
 /// GUI-LIBRARY-SUBFOLDERS-1: the Library grid aggregates subfolders with a
@@ -1055,7 +1084,7 @@ fn ensure_library_badges_fixture() {
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_subfolder_badges() {
-    ensure_library_badges_fixture();
+    let entries = ensure_library_badges_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     harness
@@ -1067,18 +1096,19 @@ fn library_subfolder_badges() {
     // all three files, otherwise the golden below could pass on an empty
     // grid without any badge pixels. (`FileBrowserEntry` fields are
     // private; `thumb_key()` is the public per-entry path accessor.)
-    let entries = harness.state_mut().entries();
-    assert_eq!(entries.len(), 3, "recursive aggregation must see all files");
-    let mut keys: Vec<String> = entries
+    let listed = harness.state_mut().entries();
+    assert_eq!(listed.len(), 3, "recursive aggregation must see all files");
+    let mut keys: Vec<String> = listed
         .iter()
         .map(|entry| entry.thumb_key().to_owned())
         .collect();
     keys.sort();
-    assert!(keys[0].ends_with("mid.arw"), "unexpected key {}", keys[0]);
-    assert!(keys[1].ends_with("deep.arw"), "unexpected key {}", keys[1]);
-    assert!(keys[2].ends_with("top.arw"), "unexpected key {}", keys[2]);
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    assert!(keys[0].ends_with("mid.cr3"), "unexpected key {}", keys[0]);
+    assert!(keys[1].ends_with("deep.cr3"), "unexpected key {}", keys[1]);
+    assert!(keys[2].ends_with("top.cr3"), "unexpected key {}", keys[2]);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &entries);
+    assert_no_raw_decode_failure(&mut harness);
     harness.snapshot("library_subfolder_badges");
 }
 
@@ -1093,70 +1123,41 @@ fn library_subfolder_badges() {
 
 const LIBRARY_RATED_FIXTURE_DIR: &str = "tests/fixtures/library_rated";
 
-/// (Re-)write a deterministic, conflict-free rated fixture: three RAW
-/// sentinels whose sidecars carry the default copy's rating/flag/label, each
-/// with a seeded Standard preview (same `DiskFolderCache` pattern as
-/// `ensure_library_views_fixture`). The seeded cache makes the `.lumina/` node
-/// present before the first frame, so the folder tree and the thumbnail pixels
-/// are stable (a cold cache would create `.lumina/` asynchronously and the
-/// golden would flip between runs). The sidecar content hash matches the
-/// sentinel bytes (`source_status` => `Unchanged`), so the golden pins the
-/// badges, never a conflict state. Idempotent.
-fn ensure_library_rated_fixture() {
-    use lumina_sidecar::{DecodeFingerprint, Flag, GeometryFingerprint, SidecarDocument};
+/// (Re-)stage a deterministic, conflict-free rated fixture: three **real** CR3
+/// fixtures whose sidecars carry the default copy's rating/flag/label.
+///
+/// GOLDEN-FIXT-31: the three staged files used to be 18-byte RAW sentinels with
+/// a *seeded* synthetic gradient in the preview cache, so the cells painted a
+/// colour ramp and the F-100 auto-load of `labeled.arw` raised the deterministic
+/// LibRaw "opening input failed" banner. Now the sidecars describe the real
+/// staged bytes (content hash, LibRaw decoder identity, decoded geometry) and
+/// the cells are painted by the production thumbnail worker from a real decode.
+/// The `.lumina/` node is pre-created (same on-disk shape as before) so the
+/// folder tree is stable, but **no preview is seeded** — a cache hit would hide
+/// a broken decode. The sidecar content hash matches the staged bytes
+/// (`source_status` => `Unchanged`), so the golden pins the badges, never a
+/// conflict state. Idempotent.
+fn ensure_library_rated_fixture() -> Vec<StagedEntry> {
+    use lumina_sidecar::{Flag, SidecarDocument};
     let root = Path::new(LIBRARY_RATED_FIXTURE_DIR);
     std::fs::create_dir_all(root).expect("create rated fixture dir");
-    // Fresh cache directory before re-seeding, so every run starts from the
-    // same committed file set (no stale preview entries).
+    // Fresh cache directory before re-staging, so every run starts from the
+    // same file set (no stale preview entries).
     let _ = std::fs::remove_dir_all(root.join(".lumina"));
-    let bytes = b"lumina-raw-fixture";
-    let content_hash = format!("blake3:{}", blake3::hash(bytes).to_hex());
-    for (name, rating, flag, label, base) in [
-        ("rated.arw", 5u8, Flag::Pick, 1u64, [200, 60, 50]),
-        ("rejected.arw", 2, Flag::Reject, 4, [60, 170, 80]),
-        ("labeled.arw", 0, Flag::Unflagged, 3, [70, 110, 200]),
+    let mut entries: Vec<StagedEntry> = Vec::new();
+    for (name, source, rating, flag, label) in [
+        ("rated.cr3", "aircraft-landscape.cr3", 5u8, Flag::Pick, 1u64),
+        ("rejected.cr3", "aircraft-portrait.cr3", 2, Flag::Reject, 4),
+        (
+            "labeled.cr3",
+            "aircraft-landscape.cr3",
+            0,
+            Flag::Unflagged,
+            3,
+        ),
     ] {
-        std::fs::write(root.join(name), bytes).expect("write rated fixture");
-        // Seed the exact Standard preview `ensure_thumbnail` probes
-        // (`vc-original`), so the Grid cells and the filmstrip paint the
-        // seeded pixels instead of the decode-failure placeholder. A decode
-        // *does* run during the golden: the F-100 start behavior auto-loads
-        // the first RAW (`labeled.arw`), whose sentinel bytes fail
-        // deterministically in LibRaw, so the golden also pins the
-        // deterministic LibRaw "opening input failed" banner in the status
-        // line — exactly like `library_loupe.png` and the
-        // `library_badges` fixture. A LibRaw message change needs a golden
-        // refresh; the badge chip pixels remain the regression signal.
-        let png = library_views_preview_png(base);
-        let cache = DiskFolderCache::for_image(root.join(name)).expect("rated fixture cache");
-        assert!(
-            cache
-                .store_preview(name, "vc-original", PreviewKind::Standard, &png)
-                .expect("seed rated preview"),
-            "Standard previews must be enabled for {name}"
-        );
-        let identity = lumina_sidecar::SourceIdentity {
-            relative_name: name.to_owned(),
-            content_hash: content_hash.clone(),
-            byte_length: bytes.len() as u64,
-            modified_at: None,
-            raw_format: "ARW".to_owned(),
-            orientation: 1,
-            decode_fingerprint: DecodeFingerprint {
-                decoder: "kittest".to_owned(),
-                version: "1".to_owned(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            geometry_fingerprint: GeometryFingerprint {
-                width: 2,
-                height: 2,
-                orientation: 1,
-                pixel_aspect_ratio: 1.0,
-                extras: BTreeMap::new(),
-            },
-            extras: BTreeMap::new(),
-        };
+        entries.push((stage_raw(root, name, source), source));
+        let identity = staged_source_identity(name, source);
         let mut document = SidecarDocument::new(identity, "raster-mvp-1");
         document.virtual_copies[0].rating = rating;
         document.virtual_copies[0].flag = flag;
@@ -1166,6 +1167,8 @@ fn ensure_library_rated_fixture() {
         let sidecar = lumina_sidecar::sidecar_path_for(&root.join(name));
         lumina_sidecar::save_sidecar(&sidecar, &document).expect("seed rated sidecar");
     }
+    prepare_folder_cache(root);
+    entries
 }
 
 /// Non-vacuous pixel guard for the F4 badge golden: count framebuffer pixels
@@ -1200,7 +1203,7 @@ fn assert_badge_chips_painted(harness: &mut Harness<'_, LuminaApp>) {
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_rated_badges() {
-    ensure_library_rated_fixture();
+    let entries = ensure_library_rated_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     harness
@@ -1224,8 +1227,9 @@ fn library_rated_badges() {
         ],
         "rated fixture must carry the three distinct badges (rating/flag/label)"
     );
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &entries);
+    assert_no_raw_decode_failure(&mut harness);
     // Non-vacuous pixel assert on the frame that is snapshotted below: a
     // mis-seeded (clean) fixture paints no chip fill and cannot reach the
     // threshold.
@@ -1342,23 +1346,24 @@ fn write_dynamic_meta_preset(dir: &Path, file: &str, name: &str) {
 /// directory: `open_file` adopts the file's parent as the browser
 /// directory, and the tempdir prefix must never leak into folders/grid/
 /// filmstrip pixels (same rationale as `use_library_fixture`).
+///
+/// The bound is a wall-clock deadline for the same reason as `settle_scan`
+/// (GOLDEN-FIXT-31): a 24-megapixel RAW needs seconds, not 500 fast frames.
 fn open_file_and_restore_fixture(
     harness: &mut Harness<'_, LuminaApp>,
     path: &Path,
     mut ready: impl FnMut(&mut LuminaApp) -> bool,
 ) {
     harness.state_mut().open_file(path.display().to_string());
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    while !ready(harness.state_mut()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "decode of {} never settled in headed harness",
+            path.display()
+        );
         harness.run_steps(1);
-        if ready(harness.state_mut()) {
-            break;
-        }
     }
-    assert!(
-        ready(harness.state_mut()),
-        "decode of {} never settled in headed harness",
-        path.display()
-    );
     set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());
     harness.run();
 }
@@ -1673,158 +1678,54 @@ fn draw_meta_preset_dialog() {
 //
 // Vision baselines covered:
 // * `library_with_image` shows no thumbnail (grid center = empty state):
-//   `library_loupe` proves real image content — each sentinel's Standard
-//   disk-cache preview is seeded with deterministic pixels and the guard
-//   decodes them back (dims + distinct dominant channels), so Loupe paints
-//   thumbnail textures, never the empty/placeholder text.
+//   `library_loupe` proves real image content — the cells are painted by the
+//   production thumbnail worker from a **real** CR3 decode (GOLDEN-FIXT-31), and
+//   `settle_thumbnails` decodes the produced preview back to pin the real-pixel
+//   path, so Loupe never paints the empty/placeholder text.
 // * `subfolder_badges` cell texts squeezed/overlapping (minor): the views
-//   fixture stays flat with short names (`a01.arw` …), so no badge row can
+//   fixture stays flat with short names (`a01.cr3` …), so no badge row can
 //   overlap; the badges themselves stay pinned by `library_subfolder_badges`.
 // ---------------------------------------------------------------------------
 
 /// Committed fixture directory for the Loupe/Compare/Survey snapshots below
 /// (same rationale as `LIBRARY_BADGES_FIXTURE_DIR`: a relative path keeps
 /// every rendered string fixed; a `tempfile::tempdir` would leak its random
-/// prefix into the folder-tree + path-field pixels).
+/// prefix into the folder-tree + path-field pixels). Nothing binary is
+/// committed here: the three CR3s are staged from `sample-data/raw/` per run.
 const LIBRARY_VIEWS_FIXTURE_DIR: &str = "tests/fixtures/library_views";
 
-/// Sentinel files (flat, short names — see the badge note above) with the
-/// base color of their seeded Standard preview. Distinct per file so Survey
-/// shows three visibly different thumbnails.
-const LIBRARY_VIEWS_FILES: &[(&str, [u8; 3])] = &[
-    ("a01.arw", [200, 60, 50]),
-    ("a02.arw", [60, 170, 80]),
-    ("b01.arw", [70, 110, 200]),
+/// Staged RAW files (flat, short names — see the badge note above) and the
+/// committed fixture each is staged from. GOLDEN-FIXT-31 replaced 18-byte
+/// sentinels plus seeded synthetic gradients with these real CR3s, so the
+/// Survey view shows three genuinely decoded thumbnails.
+const LIBRARY_VIEWS_FILES: &[(&str, &str)] = &[
+    ("a01.cr3", "aircraft-portrait.cr3"),
+    ("a02.cr3", "aircraft-landscape.cr3"),
+    ("b01.cr3", "aircraft-portrait.cr3"),
 ];
 
-/// Seeded preview dimensions. Large enough to stay clearly visible in the
-/// Loupe/Compare panes (which paint the thumbnail texture at native size);
-/// the golden pins these pixels.
-const LIBRARY_VIEWS_PREVIEW_SIZE: (u32, u32) = (288, 192);
-
-/// Deterministic preview pixels: vertical gradient around `base` (the ramp
-/// proves non-trivial content; the per-file means stay distinct).
-fn library_views_preview_png(base: [u8; 3]) -> Vec<u8> {
-    let (width, height) = LIBRARY_VIEWS_PREVIEW_SIZE;
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height {
-        // 192..255 ramp over the frame height (deterministic, no wall-clock).
-        let factor = 192 + ((y * 63) / height.max(1));
-        for _ in 0..width {
-            for channel in base {
-                pixels.push(((u32::from(channel) * factor) / 255) as u8);
-            }
-            pixels.push(255);
-        }
-    }
-    ImageFrame::new(width, height, pixels)
-        .expect("fixture frame")
-        .encode(ImageFileFormat::Png)
-        .expect("fixture preview encodes")
-}
-
-/// Serializes the (re-)write + cache seeding below: the three views tests
-/// run in one process on threads and share the same fixture files, while
-/// `DiskFolderCache::store_preview` stages through a pid-named temp file —
-/// concurrent seeds of the same entry would race on that temp path.
+/// Serializes the (re-)staging below: the views tests run in one process on
+/// threads and share the same fixture files, and the thumbnail worker itself
+/// stages cache records through a pid-named temp file — concurrent staging of
+/// the same entry would race on that temp path.
 static LIBRARY_VIEWS_FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// (Re-)write the sentinel RAWs and seed each file's Standard disk-cache
-/// preview (`vc-original`, the key `ensure_thumbnail` probes). RAW sentinel
-/// bytes suffice for the scan (same as `ensure_library_badges_fixture` — no
-/// decode runs during a directory scan); the seeded cache is what lets the
-/// views paint real pixels without a native RAW decode. The cache lives
-/// under the fixture's (gitignored) `.lumina/` dir, so re-seeding is stable
-/// and never git churn. Idempotent: called on every run.
-fn ensure_library_views_fixture() {
+/// (Re-)stage the real RAW files and pre-create the folder cache. Idempotent:
+/// called on every run. Deliberately stores **no** preview: the cells must be
+/// painted by the production thumbnail worker from a real decode, otherwise a
+/// stale cache hit could keep a broken decode green (GOLDEN-FIXT-31).
+fn ensure_library_views_fixture() -> Vec<StagedEntry> {
     let _guard = LIBRARY_VIEWS_FIXTURE_LOCK
         .lock()
         .expect("views fixture lock");
     let root = Path::new(LIBRARY_VIEWS_FIXTURE_DIR);
-    std::fs::create_dir_all(root).expect("create views fixture dir");
-    for &(name, base) in LIBRARY_VIEWS_FILES {
-        std::fs::write(root.join(name), b"lumina-raw-fixture").expect("write views fixture");
-        let png = library_views_preview_png(base);
-        let cache = DiskFolderCache::for_image(root.join(name)).expect("views fixture cache");
-        assert!(
-            cache
-                .store_preview(name, "vc-original", PreviewKind::Standard, &png)
-                .expect("seed views preview"),
-            "Standard previews must be enabled for {name}"
-        );
-    }
-}
-
-/// Dominant (mean-brightest) channel index of an RGBA buffer.
-fn dominant_channel(pixels: &[u8]) -> usize {
-    let mut means = [0u64; 3];
-    let (chunks, _) = pixels.as_chunks::<4>();
-    for pixel in chunks {
-        for (index, mean) in means.iter_mut().enumerate() {
-            *mean += u64::from(pixel[index]);
-        }
-    }
-    means
+    let _ = std::fs::remove_dir_all(root.join(".lumina"));
+    let entries: Vec<StagedEntry> = LIBRARY_VIEWS_FILES
         .iter()
-        .enumerate()
-        .max_by_key(|&(_, mean)| mean)
-        .map(|(index, _)| index)
-        .expect("non-empty pixels")
-}
-
-/// Non-vacuous guard: every seeded preview decodes back to real, distinct
-/// pixels (expected dims, dominant channel matches the file's base color, a
-/// non-trivial vertical ramp). If seeding broke, the views below would paint
-/// the LibRaw-failure placeholder — this assert pins the real-pixel path.
-fn assert_library_views_thumbnails() {
-    for &(name, base) in LIBRARY_VIEWS_FILES {
-        let cache = DiskFolderCache::for_image(Path::new(LIBRARY_VIEWS_FIXTURE_DIR).join(name))
-            .expect("views fixture cache");
-        let bytes = cache
-            .load_preview(name, "vc-original", PreviewKind::Standard)
-            .expect("load views preview")
-            .unwrap_or_else(|| panic!("seeded preview missing for {name}"));
-        let frame = ImageFrame::decode(&bytes).expect("seeded preview decodes");
-        assert_eq!(
-            frame.width, LIBRARY_VIEWS_PREVIEW_SIZE.0,
-            "preview width for {name}"
-        );
-        assert_eq!(
-            frame.height, LIBRARY_VIEWS_PREVIEW_SIZE.1,
-            "preview height for {name}"
-        );
-        let expected = base
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, channel)| channel)
-            .map(|(index, _)| index)
-            .expect("non-empty base");
-        assert_eq!(
-            dominant_channel(&frame.pixels),
-            expected,
-            "seeded preview for {name} must keep its base color"
-        );
-        // The vertical ramp must survive the PNG roundtrip: min/max mean-row
-        // luminance spread proves non-empty, non-flat pixels.
-        let (width, height) = (frame.width as usize, frame.height as usize);
-        let mut brightest: u32 = 0;
-        let mut darkest: u32 = u32::MAX;
-        for y in 0..height {
-            let mut row: u32 = 0;
-            for x in 0..width {
-                let offset = (y * width + x) * 4;
-                row += u32::from(frame.pixels[offset])
-                    + u32::from(frame.pixels[offset + 1])
-                    + u32::from(frame.pixels[offset + 2]);
-            }
-            brightest = brightest.max(row);
-            darkest = darkest.min(row);
-        }
-        assert!(
-            brightest > darkest + 20 * width as u32,
-            "seeded preview for {name} must carry the brightness ramp"
-        );
-    }
+        .map(|&(name, source)| (stage_raw(root, name, source), source))
+        .collect();
+    prepare_folder_cache(root);
+    entries
 }
 
 /// Assert that a label *containing* `needle` is laid out inside the
@@ -1886,9 +1787,8 @@ fn assert_rating_above_filmstrip(harness: &mut Harness<'_, LuminaApp>) {
 /// Returns the three RAW display-string paths in raster order. Asserts the
 /// relative directory (no tempdir-prefix leakage into folder-tree /
 /// path-field pixels) plus the 3-file RAW order the views below share.
-fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> Vec<String> {
-    ensure_library_views_fixture();
-    assert_library_views_thumbnails();
+fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> (Vec<String>, Vec<StagedEntry>) {
+    let staged = ensure_library_views_fixture();
     harness.state_mut().set_module(Module::Library);
     harness
         .state_mut()
@@ -1915,9 +1815,9 @@ fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> Vec<String> {
         .map(|entry| entry.thumb_key().to_owned())
         .collect();
     keys.sort();
-    assert!(keys[0].ends_with("a01.arw"), "unexpected key {}", keys[0]);
-    assert!(keys[1].ends_with("a02.arw"), "unexpected key {}", keys[1]);
-    assert!(keys[2].ends_with("b01.arw"), "unexpected key {}", keys[2]);
+    assert!(keys[0].ends_with("a01.cr3"), "unexpected key {}", keys[0]);
+    assert!(keys[1].ends_with("a02.cr3"), "unexpected key {}", keys[1]);
+    assert!(keys[2].ends_with("b01.cr3"), "unexpected key {}", keys[2]);
     // Display-string paths (`dir/name`, the unit `select_filmstrip_path`
     // compares against): the flat fixture joins deterministically. A wrong
     // assumption fails loudly at the selection asserts below, never silent.
@@ -1926,18 +1826,18 @@ fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> Vec<String> {
         .map(|(name, _)| format!("{LIBRARY_VIEWS_FIXTURE_DIR}/{name}"))
         .collect();
     paths.sort();
-    paths
+    (paths, staged)
 }
 
 /// Loupe (`E`): the active selection shown large with real thumbnail pixels
-/// (seeded cache, see above) plus the rating line. The rating line doubles
+/// (real CR3 decode, see above) plus the rating line. The rating line doubles
 /// as the "Rating-Sektion im Grid-Kontext"/w visible rating UI of the
 /// Library module (the Develop rating section has its own golden).
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_loupe() {
     let mut harness = build_harness();
-    setup_library_views(&mut harness);
+    let (_, staged) = setup_library_views(&mut harness);
     // A real in-memory decode alongside (Preview-Generations-Assert): proves
     // genuine image content flows while the Loupe view paints thumbnails.
     load_sample(&mut harness);
@@ -1947,31 +1847,33 @@ fn library_loupe() {
         "loaded sample must render at least once"
     );
     harness.state_mut().set_library_view(LibraryView::Loupe);
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &staged);
+    assert_no_raw_decode_failure(&mut harness);
     // Non-vacuous guards: the Loupe heading, the active file line, the
     // folder-tree root node (B1: exact match — a contains-query passes
     // vacuously on the path text field) and the rating line above the
     // filmstrip (B2) must actually be pixel-visible — otherwise the golden
     // below could pass on the empty-state text the Vision baseline flagged.
     assert_label_on_screen(&mut harness, "Loupe (E): single image");
-    assert_contains_on_screen(&mut harness, "a01.arw");
+    assert_contains_on_screen(&mut harness, "a01.cr3");
     assert_tree_root_on_screen(&mut harness);
     assert_contains_on_screen(&mut harness, "Rating:");
     assert_rating_above_filmstrip(&mut harness);
     harness.snapshot("library_loupe");
 }
 
-/// Compare (`C`): Before/After of the active image side by side (same seeded
-/// thumbnail texture twice, `before_after` held by `set_library_view`).
+/// Compare (`C`): Before/After of the active image side by side (the same real
+/// CR3 thumbnail texture twice, `before_after` held by `set_library_view`).
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_compare() {
     let mut harness = build_harness();
-    setup_library_views(&mut harness);
+    let (_, staged) = setup_library_views(&mut harness);
     harness.state_mut().set_library_view(LibraryView::Compare);
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &staged);
+    assert_no_raw_decode_failure(&mut harness);
     // Non-vacuous guards: the Compare heading, both pane labels, the
     // live status line (proves the `before_after` Compare branch, not the
     // empty state) and the folder-tree root node (B1: exact match) must
@@ -1984,7 +1886,7 @@ fn library_compare() {
     harness.snapshot("library_compare");
 }
 
-/// Survey (`N`): the multi-selection side by side (all three seeded files
+/// Survey (`N`): the multi-selection side by side (all three staged files
 /// selected, so the real multi-selection branch renders — not the
 /// below-two fallback raster). Folder tree (left) and the expanded keyword
 /// chips (right Metadata panel) are part of this golden: the grid-context
@@ -1993,7 +1895,7 @@ fn library_compare() {
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_survey() {
     let mut harness = build_harness();
-    let paths = setup_library_views(&mut harness);
+    let (paths, staged) = setup_library_views(&mut harness);
     // Select all three (first plain, rest toggle-add): proves the genuine
     // multi-selection branch. A wrong path is a loud no-op in
     // `apply_filmstrip_click`, so the length assert below guards the join
@@ -2016,8 +1918,9 @@ fn library_survey() {
         );
     }
     harness.state_mut().set_library_view(LibraryView::Survey);
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &staged);
+    assert_no_raw_decode_failure(&mut harness);
     // Non-vacuous guards: heading + live count (proves the multi-selection
     // branch, not the fallback) and the folder-tree root node (B1: exact
     // match, not the path-field contains) as grid context.
@@ -2795,10 +2698,17 @@ fn library_metadata_copy_paste() {
     harness.snapshot("library_metadata_copy_paste");
 }
 
-/// Filmstrip with 20 dummy RAWs: the single-row geometry (asserted, see
+/// Filmstrip with 20 layout sentinels: the single-row geometry (asserted, see
 /// `assert_filmstrip_single_row`) plus a pixel golden. The bundled sample is
-/// loaded first so the F-100 auto-load never decodes an invalid dummy (which
+/// loaded first so the F-100 auto-load never decodes an invalid sentinel (which
 /// would raise the error dialog); the strip still lists all 20 RAW cells.
+///
+/// GOLDEN-FIXT-31: the committed golden pins the **per-cell failure text** of
+/// the S1 layout sentinels. That text only appears once the thumbnail worker has
+/// reported the failed decode, so a fixed frame budget is a race — under load
+/// (the R1 fixtures make the whole binary slower) the cells were still blank at
+/// snapshot time. The wait below makes the state deterministic instead of
+/// load-dependent; the rendered image is unchanged.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn filmstrip_twenty_dummies() {
@@ -2809,8 +2719,20 @@ fn filmstrip_twenty_dummies() {
     load_sample(&mut harness);
     set_directory_and_settle(&mut harness, dir.path().display().to_string());
     harness.state_mut().set_module(Module::Develop);
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the sentinel cells' failure state (fixed frames, not `run()`:
+    // thumbnail jobs keep requesting repaints).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    while harness
+        .query_all_by_label_contains("LibRaw opening input failed")
+        .next()
+        .is_none()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the sentinel cells never reported their decode failure"
+        );
+        harness.run_steps(2);
+    }
     // Single-row geometry for all visible cells.
     let chips = assert_filmstrip_single_row(&mut harness);
     assert!(

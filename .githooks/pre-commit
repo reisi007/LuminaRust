@@ -1,19 +1,122 @@
 #!/bin/sh
-# CodeGraph index sync — refresh the knowledge-graph index before committing.
-# Fails open: never blocks git. `codegraph sync -q` is documented "for git hooks".
+# Pre-commit hook. Two independent gates with deliberately different failure
+# modes:
+#
+# 1. CodeGraph index sync - refresh the knowledge-graph index before committing.
+#    Fails open: never blocks git. `codegraph sync -q` is documented "for git
+#    hooks".
+#
+# 2. GOLDEN-REF-30 golden re-pin gate - FAILS CLOSED. `scripts/golden_ref.sh`
+#    only guards invocations that go through its own `check` / `gate`; it cannot
+#    intercept a bare `UPDATE_SNAPSHOTS=1 cargo test …`. This hook is what
+#    anchors a baseline in the history: if any committed golden under
+#    crates/lumina-gui/tests/snapshots/ is staged, the SAME commit must also
+#    stage scripts/golden_ref.lock AND change its `# Grund:` line. Every change
+#    path that reaches a commit is covered (a commit created by a `cherry-pick`,
+#    `revert` or `rebase` replay runs no pre-commit hook - see
+#    feature/quality/golden-references.md §11.1). Cheap: no GPU, no cargo, no
+#    build.
+#
+# Install with:  git config core.hooksPath .githooks
+# `core.hooksPath` is LOCAL git config, so it is NOT set by a fresh clone (not
+# by CI either). Every new clone must run the line above once, otherwise this
+# gate is absent; see feature/quality/golden-references.md §4.1.
+# When absent: the only remaining backstops are the per-key digest in
+# scripts/golden_ref.lock and human review of the golden diff - see
+# feature/quality/golden-references.md §4.1.
+#
+# Regression suite: scripts/golden_ref_test.sh (shell-only, platform
+# independent, committed; it drives a throwaway git repo in a temp dir).
 set -u
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
-# No CodeGraph index in this project -> nothing to sync, skip silently.
-[ -d "$repo_root/.codegraph" ] || exit 0
+# --- gate 1: CodeGraph index sync (fails open) ------------------------------
 
-if command -v codegraph >/dev/null 2>&1; then
-  if codegraph sync -q "$repo_root" >/dev/null 2>&1; then
-    echo "codegraph: index synced"
+codegraph_sync() {
+  # No CodeGraph index in this project -> nothing to sync, skip silently.
+  [ -d "$repo_root/.codegraph" ] || return 0
+  if command -v codegraph >/dev/null 2>&1; then
+    if codegraph sync -q "$repo_root" >/dev/null 2>&1; then
+      echo "codegraph: index synced"
+    else
+      echo "codegraph: warning - sync failed (index may be stale); run 'codegraph sync' manually" >&2
+    fi
   else
-    echo "codegraph: warning - sync failed (index may be stale); run 'codegraph sync' manually" >&2
+    echo "codegraph: not found on PATH - skipping index sync" >&2
   fi
-else
-  echo "codegraph: not found on PATH - skipping index sync" >&2
-fi
+  return 0
+}
+
+# --- gate 2: golden re-pin (fails closed) -----------------------------------
+
+GOLDENS_GLOB='crates/lumina-gui/tests/snapshots/*.png'
+LOCK_PATH='scripts/golden_ref.lock'
+
+# Staged-path query for one pathspec, into $STAGED_OUT. FAILS CLOSED: a git
+# error must never be indistinguishable from "nothing staged", because both
+# mean "this gate lets the commit through". `2>&1` puts git's own message into
+# $STAGED_OUT so the refusal names the real cause instead of a wrong one.
+staged_paths() {
+  STAGED_RC=0
+  STAGED_OUT=$(git diff --cached --name-only -- "$1" 2>&1) || STAGED_RC=$?
+  if [ "$STAGED_RC" -ne 0 ]; then
+    echo "pre-commit: REFUSING - 'git diff --cached --name-only -- $1' failed (rc=$STAGED_RC):" >&2
+    echo "pre-commit: $STAGED_OUT" >&2
+    echo "pre-commit: An unreadable index is not the same as 'nothing staged'; this gate fails closed." >&2
+    return 1
+  fi
+  return 0
+}
+
+golden_repin_gate() {
+  # No --diff-filter on purpose: an A/M/D/R golden all change goldens.count /
+  # goldens.digest and therefore all need a re-pin, and `--diff-filter` with git
+  # 2.54 silently DROPPED the modified entry from `--name-only` output
+  # (`--diff-filter=ACDR` on a modified file prints nothing) - which would have
+  # let a refreshed golden walk straight past this gate. The glob pathspec
+  # alone matches additions, modifications, deletions and renames (git's
+  # pathspec `*` also crosses `/`, so goldens in subdirectories are covered).
+  staged_paths "$GOLDENS_GLOB" || return 1
+  staged_goldens=$STAGED_OUT
+  if [ -z "$staged_goldens" ]; then
+    return 0
+  fi
+  echo "pre-commit: golden change detected:" >&2
+  printf '%s\n' "$staged_goldens" | sed 's/^/pre-commit:   /' >&2
+
+  staged_paths "$LOCK_PATH" || return 1
+  staged_lock=$STAGED_OUT
+  if [ -z "$staged_lock" ]; then
+    echo "pre-commit: REFUSING - $LOCK_PATH is not staged in the same commit." >&2
+    echo "pre-commit: A golden may only change together with a deliberate re-pin." >&2
+    echo "pre-commit: Run: sh scripts/golden_ref.sh check" >&2
+    echo "pre-commit: then, on the pinned platform, record --confirm \"<reason>\"" >&2
+    echo "pre-commit: and stage the result. See feature/quality/golden-references.md" >&2
+    return 1
+  fi
+
+  # Compare HEAD vs the INDEX (not the working tree), so a staged lock that
+  # differs from the working copy is still judged on what would be committed.
+  old_grund=$(git show "HEAD:$LOCK_PATH" 2>/dev/null | grep -m1 '^# Grund: ' || true)
+  new_grund=$(git show ":$LOCK_PATH" 2>/dev/null | grep -m1 '^# Grund: ' || true)
+  if [ -z "$new_grund" ]; then
+    echo "pre-commit: REFUSING - the staged $LOCK_PATH has no '# Grund:' line." >&2
+    echo "pre-commit: Re-pin with: sh scripts/golden_ref.sh record --confirm \"<reason>\"" >&2
+    return 1
+  fi
+  if [ "$old_grund" = "$new_grund" ]; then
+    echo "pre-commit: REFUSING - the '# Grund:' line in $LOCK_PATH is unchanged" >&2
+    echo "pre-commit: ('$new_grund')." >&2
+    echo "pre-commit: A golden refresh needs a NEW written justification, not the" >&2
+    echo "pre-commit: previous one. Re-pin with record --confirm \"<new reason>\"." >&2
+    return 1
+  fi
+  echo "pre-commit: golden change accepted - $LOCK_PATH re-pinned in this commit:" >&2
+  echo "pre-commit:   old: ${old_grund:-<none: lock is new in this commit>}" >&2
+  echo "pre-commit:   new: $new_grund" >&2
+  return 0
+}
+
+codegraph_sync
+golden_repin_gate || exit 1
 exit 0

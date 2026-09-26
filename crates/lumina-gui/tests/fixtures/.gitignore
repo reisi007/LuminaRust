@@ -1,0 +1,14 @@
+# GOLDEN-FIXT-31: fixture staging.
+#
+# The RAW fixtures are NOT committed here. The two licensed Canon EOS R1 CR3s
+# live once in `sample-data/raw/` (provenance/licence: `sample-data/raw/README.md`
+# §4/§8) and every RAW fixture test stages a byte-identical copy of them at setup
+# time (`crates/lumina-gui/tests/kittest_fixtures_support/`). Duplicating ~12 MB
+# per fixture file in the test tree would be the same bytes committed twice.
+#
+# Everything else under this directory is either a committed smoke/layout fixture
+# (`library/.gitkeep`, `generative/*.png`) or a gitignored run artefact.
+library_badges/**/*.cr3
+library_rated/*.cr3
+library_stack/images/*.cr3
+library_views/*.cr3

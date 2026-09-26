@@ -1,7 +1,6 @@
 //! GUI-SRCACC-1: strict persisted source-action resolution.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::Path;
 
 use lumina_core::{ImageFrame, MaskPlane, SourceActionArtifact};
@@ -41,25 +40,24 @@ pub(crate) enum FileContentIdentity {
 }
 
 impl FileContentIdentity {
+    /// Exact whole-file content identity of `path`.
+    ///
+    /// THUMB-HASH-PERF-35: the expensive BLAKE3 pass is memoized on
+    /// `(path, mtime, ctime, len)` in [`crate::source_identity`] — an unchanged
+    /// file is hashed once instead of once per visible cell per frame. Only the
+    /// *recomputation* is skipped: the returned value is bit-identical to the
+    /// pre-cache hash, a genuinely changed file always misses the memo (the key
+    /// carries the kernel-maintained `ctime`, so even a same-length rewrite
+    /// whose mtime was restored invalidates), and a missing / unreadable /
+    /// permission-denied path keeps its own class and is never stored. Normative
+    /// contract and the platform caveat: `feature/platform/cli-gui-wasm.md`
+    /// § *Quell-Identitäts-Cache im UI-Thread*.
     pub(crate) fn from_path(path: &Path) -> Self {
-        let mut file = match std::fs::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::Missing,
-            Err(error) => return Self::Unavailable(error.to_string()),
-        };
-        let mut hasher = blake3::Hasher::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            match file.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    hasher.update(&buffer[..read]);
-                }
-                Err(error) => return Self::Unavailable(error.to_string()),
-            }
+        match crate::source_identity::content_hash(path) {
+            Ok(content_hash) => Self::Hashed(content_hash),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::Missing,
+            Err(error) => Self::Unavailable(error.to_string()),
         }
-        let digest = hasher.finalize();
-        Self::Hashed(format!("blake3:{}", digest.to_hex()))
     }
 
     pub(crate) fn from_bytes(bytes: &[u8]) -> Self {

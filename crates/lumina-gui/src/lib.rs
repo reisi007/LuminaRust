@@ -50,6 +50,18 @@ mod merge_gui;
 // through the readback-free VRAM path instead of the documented CPU exception.
 #[cfg(all(feature = "gpu", feature = "lensfun"))]
 mod lensfun_gpu;
+// LENSFUN-CALLER-37: the G-06 auto-corrector cache and the GUI's own Lensfun
+// diagnostics sink, extracted from the crate root so the F2 reporting path has
+// a cohesive home and the ratchet-baselined `lib.rs` does not grow.
+#[cfg(feature = "lensfun")]
+mod lensfun_auto;
+#[cfg(feature = "lensfun")]
+mod lensfun_diag;
+// LENSFUN-CALLER-37: the cache's own value type moved to `lensfun_auto` with the
+// logic that fills it; re-exported so the existing users (`gpu_routing`,
+// `lensfun_gpu`, the `LuminaApp` field) are untouched.
+#[cfg(feature = "lensfun")]
+pub(crate) use lensfun_auto::CachedLensCorrector;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // UX-LOOK-HISTORY-18: the presets group tree (relative-folder grouping, own
@@ -96,6 +108,13 @@ mod gpu_routing;
 // shared by active preview/export and the navigator/neighbor/thumbnail paths.
 mod source_actions;
 use source_actions::ResolvedSourceActions;
+// THUMB-HASH-PERF-35: what a source file *is* — the one persisted
+// `SourceIdentity` constructor (shared by `present` and the selection-sidecar
+// path, replacing two field-for-field copies) plus the process-wide
+// whole-file content memo keyed on `(path, mtime, ctime, len)` that stops the
+// UI thread from re-hashing every visible RAW in every frame.
+mod source_identity;
+pub(crate) use source_identity::selection_source_identity;
 // GUI-REFACTOR-W1-20 S1.2a: source content hash + mask-plane loading.
 mod render_source;
 // GUI-REFACTOR-W1-20 S1.2b: the committed full-quality render entry points and
@@ -2401,47 +2420,6 @@ fn decode_selection_frame(path: &Path) -> Result<(Vec<u8>, ImageFrame, u8), Stri
     }
 }
 
-/// Source identity for a freshly created selection sidecar, mirroring
-/// [`LuminaApp::source_identity`] without requiring loaded-app state.
-fn selection_source_identity(
-    name: &str,
-    bytes: &[u8],
-    frame: &ImageFrame,
-    orientation: u8,
-    source_is_raw: bool,
-) -> SourceIdentity {
-    SourceIdentity {
-        relative_name: name.to_string(),
-        content_hash: format!("blake3:{}", blake3::hash(bytes).to_hex()),
-        byte_length: bytes.len() as u64,
-        modified_at: None,
-        raw_format: Path::new(name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("raster")
-            .to_ascii_uppercase(),
-        orientation,
-        decode_fingerprint: DecodeFingerprint {
-            decoder: decoder_identity(source_is_raw).into(),
-            version: if source_is_raw {
-                lumina_raw::libraw_decode_version()
-            } else {
-                env!("CARGO_PKG_VERSION").into()
-            },
-            parameters: BTreeMap::new(),
-            extras: BTreeMap::new(),
-        },
-        geometry_fingerprint: GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
-            orientation,
-            pixel_aspect_ratio: 1.0,
-            extras: BTreeMap::new(),
-        },
-        extras: BTreeMap::new(),
-    }
-}
-
 impl FileBrowserEntry {
     fn status_label(&self) -> &'static str {
         if self.conflict {
@@ -2525,44 +2503,6 @@ fn lens_identity_from_metadata(metadata: &lumina_raw::RawMetadata) -> Option<Len
     } else {
         Some(identity)
     }
-}
-
-/// Cached Lensfun auto-corrector pair (G-06, `lensfun` feature only).
-/// The database handle is kept alive alongside the corrector (the modifier
-/// references DB-owned lens data); field order matters — `corrector`
-/// (modifier destroy) drops before `_db`.
-#[cfg(feature = "lensfun")]
-struct CachedLensCorrector {
-    corrector: lumina_lensfun::Corrector,
-    _db: lumina_lensfun::LensfunDb,
-    /// Identity + frame dimensions this corrector was built for.
-    key: (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        u32,
-        u32,
-        u32,
-        u32,
-    ),
-    /// GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: whether this corrector
-    /// changes pixels (`!Corrector::is_identity()`, probing
-    /// distortion/vignetting/TCA). Computed once at build time so neither the
-    /// present gate nor the per-frame map bind pays the FFI probe; mirrors the
-    /// CLI's `lensfun_corrector_active`. An inactive (identity) corrector is a
-    /// no-op on the CPU oracle and binds no map, so the manual model stays in
-    /// effect on both paths. GPU-only: the non-GPU build has no bind path that
-    /// could consume it.
-    #[cfg(feature = "gpu")]
-    active: bool,
-    /// GPU-LENSFUN-PARITY-1: CPU-precomputed warp/gain map for this corrector at
-    /// the dimensions it was last built for (`LensfunMap::from_corrector`).
-    /// Built lazily by [`lensfun_gpu::bind`] on the GPU present path and reused
-    /// across frames/tool moves (the per-pixel FFI build is expensive); `None`
-    /// until first use. Fine to keep on the CPU: the map is a pure derived
-    /// artifact, the recipe/sidecar stay authoritative.
-    #[cfg(feature = "gpu")]
-    gpu_map: Option<lumina_core::LensfunMap>,
 }
 
 /// Whether a background decode is allowed to adopt its target directory.
@@ -8931,93 +8871,6 @@ impl LuminaApp {
         }
     }
 
-    /// Lensfun auto-corrector cache refresh for a render at `width`×`height`
-    /// (G-06, `lensfun` feature only): rebuilds the cached corrector when
-    /// the identity/dimensions key changed. Split from
-    /// [`Self::lensfun_render_ref`] so renders can refresh under `&mut`
-    /// first and then build the `RenderContext` under shared borrows.
-    #[cfg(feature = "lensfun")]
-    fn ensure_lensfun_cache(&mut self, width: u32, height: u32) {
-        let Some(identity) = self.loaded_lens_identity.clone() else {
-            return;
-        };
-        let (Some(make), Some(model), Some(focal), Some(aperture)) = (
-            identity.camera_make.clone(),
-            identity.camera_model.clone(),
-            identity.focal_length.filter(|v| v.is_finite()),
-            identity.aperture.filter(|v| v.is_finite()),
-        ) else {
-            return;
-        };
-        let key = (
-            Some(make.clone()),
-            Some(model.clone()),
-            identity.lens.clone(),
-            width,
-            height,
-            focal.to_bits(),
-            aperture.to_bits(),
-        );
-        let fresh = match &self.lensfun_cache {
-            Some(cached) => cached.key != key,
-            None => true,
-        };
-        if !fresh {
-            return;
-        }
-        // Rebuild: a new source (or new dimensions) needs a new modifier.
-        // A rebuild that finds no profile caches NOTHING, so every render
-        // retries the lookup instead of pinning a stale miss across a DB
-        // install — the lookup itself is strict (never a guessed
-        // correction, same contract as the CLI `build_lensfun_corrector`).
-        let Some(db) = lumina_lensfun::LensfunDb::load_system() else {
-            return;
-        };
-        let Some(corrector) = db.for_camera(
-            &make,
-            &model,
-            identity.lens.as_deref(),
-            width,
-            height,
-            focal,
-            aperture,
-            10.0,
-        ) else {
-            return;
-        };
-        info!(
-            "lensfun auto: profile matched for {make} {model} (distortion={} vignetting={} tca={})",
-            corrector.has_distortion(),
-            corrector.has_vignetting(),
-            corrector.has_tca()
-        );
-        // GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: snapshot the
-        // pixel-relevance once. A non-identity corrector is bound on the GPU as
-        // a precomputed `LensfunMap` (`lensfun_gpu::bind`); only an identity
-        // one is a no-op that leaves the manual model in effect on both paths.
-        #[cfg(feature = "gpu")]
-        let active = !corrector.is_identity();
-        self.lensfun_cache = Some(CachedLensCorrector {
-            corrector,
-            _db: db,
-            key,
-            #[cfg(feature = "gpu")]
-            active,
-            #[cfg(feature = "gpu")]
-            gpu_map: None,
-        });
-    }
-
-    /// Shared borrow of the cached Lensfun auto-corrector for a render
-    /// (G-06, `lensfun` feature only). Call [`Self::ensure_lensfun_cache`]
-    /// first so the cache matches the rendered frame.
-    #[cfg(feature = "lensfun")]
-    fn lensfun_render_ref(&self) -> Option<lumina_core::LensfunCorrectorRef<'_>> {
-        self.lensfun_cache
-            .as_ref()
-            .map(|cached| lumina_core::LensfunCorrectorRef(&cached.corrector))
-    }
-
     /// User-visible lens-blur depth status (G-05): `off`, `heuristic active`
     /// or `missing depth artifact`. The GUI never resolves external depth
     /// files (no depth format in v1), so a referenced artifact reports
@@ -11188,9 +11041,10 @@ impl LuminaApp {
         ui.label(&self.status);
     }
 
-    /// A small sample RGBA PNG for headless snapshot / integration tests
-    /// (F-103-N9). Pure helper with no app side effects; the bytes decode via
-    /// [`Self::load_bytes`].
+    /// A **4x3-pixel** synthetic sample RGBA PNG for headless smoke / layout
+    /// tests (F-103-N9); fixture class S2 in `feature/quality/golden-fixtures.md`
+    /// — a Chrome-/Layout-Invariante source, never a render invariant. Pure
+    /// helper with no app side effects; the bytes decode via [`Self::load_bytes`].
     pub fn sample_image_png() -> Vec<u8> {
         ImageFrame::new(
             4,
@@ -12354,6 +12208,11 @@ mod tests {
     mod iptc;
     mod layout;
     mod lens_blur;
+    // LENSFUN-CALLER-37: the diagnostics sink's three contract clauses. Gated on
+    // the same feature as the module under test — without the gate the lean
+    // `--no-default-features` build loses both `lensfun_diag` and `lumina_lensfun`.
+    #[cfg(feature = "lensfun")]
+    mod lensfun_diagnostics;
     mod library_scan;
     mod library_sort;
     mod library_sync;
@@ -12401,6 +12260,9 @@ mod tests {
     mod sliders_domain;
     mod sliders_filmstrip;
     mod source_actions;
+    // THUMB-HASH-PERF-35: the whole-file source-identity memo (hash once per
+    // file state, not once per frame) and its changed-file/missing-file guards.
+    mod source_identity_cache;
     mod spot_heal;
     // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select/update/
     // remove, detail-only-when-selected, no-Clone-fallback).

@@ -105,6 +105,31 @@ Sidecars vollständig wiederherstellbar sein.
 - [fixtures-licensing.md](quality/fixtures-licensing.md):
   Fixture-Inventar, Modell- und Abhängigkeitslizenzen, Distributionsaudit und
   Versionierungs-Policy (F-073, F-078)
+- [golden-references.md](quality/golden-references.md):
+  Golden-Referenzplattform (macOS/Metal) — OS, wgpu-Backend/Adapter,
+  Font-Auflösung, UI-Skalierung, LibRaw-Version, Fixture-Set und exakte
+  Regenerations-CLI. `scripts/golden_ref.sh` **vergleicht** den gepinnten
+  Fingerabdruck zur Laufzeit und verweigert **seine eigenen** `check`-/`gate`-Läufe,
+  wenn `UPDATE_SNAPSHOTS` auf einer nicht gepinnten Maschine gesetzt ist — es
+  greift nicht in Aufrufe ein, die das Skript umgehen. Lasttragend ist das
+  Pre-Commit-Gate `.githooks/pre-commit`: ein gestagtes Golden verlangt im
+  selben Commit eine `# Grund:`-Änderung an `scripts/golden_ref.lock`. Beide
+  sind durch die committete, plattformunabhängige Shell-Suite
+  `scripts/golden_ref_test.sh` abgedeckt (Schlüssel-Sweep, Lock-Kanonik,
+  `record`-Verweigerungen, `UPDATE_SNAPSHOTS`-Wahrheitswert, 14-Fälle-
+  Pre-Commit-Matrix; §4.2), die in der `docs`-CI-Stufe läuft. Der Gate-Schutz
+  greift nur nach `git config core.hooksPath .githooks` — **pro Clone einmal**
+  auszuführen, da lokale Git-Konfiguration kein `clone` überlebt. Die
+  Goldens sind ein **lokales** macOS-Gate und werden in CI **nie** verifiziert
+  (kein GPU-Runner) (GOLDEN-REF-30, F-103-N9)
+- [golden-fixtures.md](quality/golden-fixtures.md):
+  Fixture-Vertrag und Golden-Inventar — Klassen R1 (echtes RAW) /
+  S1 (Layout-Sentinel) / S2 (Smoke-Raster) sowie die Klassifikation aller
+  62 committeten Goldens als *Render-Invariante* (echter Bildinhalt) oder
+  *Chrome-/Layout-Invariante* (nur UI-Rahmen). Eine Chrome-Invariante darf
+  keine Bildpipeline-Regression belegen; die RAW-Fixtures sind die beiden
+  lizenzierten CR3 aus `sample-data/raw/`, die 18-Byte-`.arw`-Sentinel sind
+  entfernt (GOLDEN-FIXT-31)
 - [preview-cache.md](quality/preview-cache.md): Hybrid-Preview-Cache für
   sofortiges Scrollen — GPU-Textur (VRAM) fürs aktive Bild, WebP-Cache
   (Screen/1:1, Disk/RAM, Alpha) für Nachbarn, asymmetrisches +4/−2-Prefetch
@@ -214,6 +239,32 @@ Sidecars vollständig wiederherstellbar sein.
   linearer ProPhoto-RGB-Arbeitsraum ist als Ziel reserviert (siehe
   `architecture/pipeline.md`).
 - GUI-Technologie ist egui/eframe.
+- **Golden-Referenzplattform (GOLDEN-REF-30, User-Entscheid 2026-09-25):**
+  Die `egui_kittest`-Goldens sind nur auf **macOS/Metal** reproduzierbar
+  (Referenz: macOS 27.0, Apple M5 Pro, Metal 4, wgpu 30.0.1, egui 0.36.2,
+  gebundener egui-Font-Stack, `pixels_per_point` 1.0, 1024×720, LibRaw
+  0.22.2). Der Fingerabdruck liegt in `scripts/golden_ref.lock`;
+  `scripts/golden_ref.sh` vergleicht ihn zur Laufzeit und verweigert **seine
+  eigenen** `check`-/`gate`-Läufe, wenn `UPDATE_SNAPSHOTS` gesetzt ist und die
+  Maschine nicht dem Pin entspricht. **Geltung ehrlich benannt:** ein direkter
+  `UPDATE_SNAPSHOTS=1 cargo test …` umgeht das Skript vollständig; lasttragend
+  ist deshalb das Pre-Commit-Gate `.githooks/pre-commit`, das ein gestagtes
+  Golden nur zusammen mit einer geänderten `# Grund:`-Zeile in
+  `scripts/golden_ref.lock` durchlässt, plus das Review des
+  `<name>.diff.png`. Das Gate greift nur, wenn `core.hooksPath` auf `.githooks`
+  zeigt — das ist **lokale** Git-Konfiguration und wird von keinem `clone`
+  gesetzt, also **pro Checkout einmal** `git config core.hooksPath .githooks`
+  auszuführen (auch in CI, wo es ohne Wirkung auf die Produktgates bleibt).
+  Commits, die keinen Pre-Commit-Hook ausführen (`cherry-pick`, `revert`,
+  `rebase`, `commit-tree`), umgehen es; der `goldens.digest` macht ein so
+  committetes Golden spätestens beim nächsten `check` rot. Skript und Gate sind
+  durch die committete Shell-Suite `scripts/golden_ref_test.sh` abgedeckt
+  (Schlüssel-Sweep, Lock-Kanonik, `record`-Verweigerungen,
+  `UPDATE_SNAPSHOTS`-Wahrheitswert, Pre-Commit-Matrix), die in der `docs`-CI-
+  Stufe läuft. Ein Mismatch bedeutet **„bewusst neu aufnehmen"**, nicht
+  „CI ist kaputt": die Goldens sind ein **lokales** macOS-Gate und werden in CI
+  **nie** verifiziert (Runner ohne GPU). Details:
+  [`quality/golden-references.md`](quality/golden-references.md).
 - **Pre-MVP-Schema-Entscheidung (2026-08-17):** Bis zum MVP ist das
   Sidecar-/Rezept-Schema bewusst nicht abwärtskompatibel — Altdateien müssen
   nicht lesbar bleiben. Die Migrations-Maschinerie bleibt dauerhaft im Code

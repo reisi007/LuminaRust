@@ -12,38 +12,11 @@
 
 use super::*;
 
-/// Process-wide capture of the `info!` migration line: installs one logger for
-/// the library test binary and records every `INFO`-and-below message so the
-/// one-time migration is proven to be loud (DoD §4), not only functional.
-static MIGRATION_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-static LOGGER_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-
-struct CaptureLogger;
-
-impl log::Log for CaptureLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            MIGRATION_LOGS
-                .lock()
-                .expect("migration log mutex")
-                .push(format!("{}: {}", record.level(), record.args()));
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-fn init_log_capture() {
-    LOGGER_INIT.get_or_init(|| {
-        let _ = log::set_boxed_logger(Box::new(CaptureLogger));
-        log::set_max_level(log::LevelFilter::Info);
-    });
-}
-
+/// The `info!` migration line is captured through the **shared** process-wide
+/// capture logger (`crate::tests::support`), because `log` accepts exactly one
+/// logger per process: a private installer here used to win or lose a race
+/// against every other capturing test, and a lost race silently emptied this
+/// assertion (LENSFUN-CALLER-37).
 /// Legacy (pre-2026-09-20) location directly next to the images.
 fn legacy_file(dir: &Path) -> PathBuf {
     dir.join("lumina-sort.json")
@@ -100,7 +73,7 @@ fn legacy_sort_file_next_to_images_is_migrated_once() {
 /// new location (DoD §4: user-visible action logs at least `info!`).
 #[test]
 fn legacy_migration_is_logged_at_info() {
-    init_log_capture();
+    clear_captured_logs();
     let dir = tempfile::tempdir().unwrap();
     stub_raw(dir.path(), "a.cr3");
     std::fs::write(
@@ -110,7 +83,7 @@ fn legacy_migration_is_logged_at_info() {
     .unwrap();
     let mut app = new_app();
     scan(&mut app, dir.path());
-    let logs = MIGRATION_LOGS.lock().expect("migration log mutex");
+    let logs = captured_logs();
     assert!(
         logs.iter().any(|line| line.contains("migrated legacy")),
         "the migration must log loudly, captured: {logs:?}"

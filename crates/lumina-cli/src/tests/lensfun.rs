@@ -138,3 +138,46 @@ fn render_with_corrector_changes_pixels() {
         "a Lensfun corrector must change the rendered pixels"
     );
 }
+
+/// LENSFUN-CALLER-37 / F2: the diagnostics sink must be **process-lifetime**.
+///
+/// `build_lensfun_corrector` runs once per image. If each call constructed a
+/// fresh `ReportOnce`, a batch over a machine without a resolvable Lensfun
+/// database would print one unlevelled block per image again — the exact defect
+/// this wiring removes. What makes the de-duplication work is that the *same*
+/// sink instance is handed to every call, so its `seen` set accumulates.
+///
+/// The de-duplication logic itself is `lumina-lensfun`'s (`ReportOnce`) and is
+/// tested there. What is specific to the CLI — and what this pins — is the
+/// persistence across calls.
+#[test]
+fn the_diagnostics_sink_persists_across_calls_so_a_batch_reports_once() {
+    let first = crate::lensfun_cli::with_diagnostics(|sink| sink as *const _);
+    let second = crate::lensfun_cli::with_diagnostics(|sink| sink as *const _);
+    assert_eq!(
+        first, second,
+        "every call must receive the same process-lifetime sink, otherwise a \
+         per-image lookup re-prints the failure and the batch spams one block \
+         per file"
+    );
+}
+
+/// The lookup itself must still run per image — only the *reporting* is
+/// de-duplicated. A miss is never cached, so a Lensfun database installed while
+/// a long batch is running is picked up by the next image. Pinning the negative
+/// here guards against someone "optimising" the sink into a cache of results.
+#[test]
+fn the_sink_deduplicates_reports_but_does_not_cache_the_lookup() {
+    // Two calls, two *invocations* of the loader: a caching implementation
+    // would collapse these into one lookup and stop noticing later DB changes.
+    let calls = std::cell::Cell::new(0u32);
+    for _ in 0..2 {
+        crate::lensfun_cli::with_diagnostics(|_sink| calls.set(calls.get() + 1));
+    }
+    assert_eq!(
+        calls.get(),
+        2,
+        "the closure must run once per call; wrapping the loader in the \
+         process-lifetime sink must not turn into a per-process result cache"
+    );
+}

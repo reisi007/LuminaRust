@@ -101,11 +101,19 @@ fn read_sidecar_recipe_snapshot_detailed(
     // for. This check is shared by neighbor and thumbnail stand-ins; accepting a
     // recipe here would let a same-path replacement inherit stale pixels even
     // when its dimensions (and therefore the cheap decode shape) are unchanged.
+    //
+    // THUMB-HASH-PERF-35: without `source_bytes` this used to
+    // `std::fs::read` the whole source on the UI thread per visible cell per
+    // frame. `source_fingerprint_of` returns the identical
+    // `SourceFingerprint` from the `(path, mtime, ctime, len)`-memoized
+    // whole-file identity, so the fail-closed comparison is unchanged in value
+    // and in failure class — a path that cannot be stat'ed or read still
+    // returns the same loud "could not read source" error.
     let live_source = if let Some(bytes) = source_bytes {
         source_fingerprint(bytes)
     } else {
-        match std::fs::read(source) {
-            Ok(bytes) => source_fingerprint(&bytes),
+        match crate::source_identity::source_fingerprint_of(source) {
+            Ok(fingerprint) => fingerprint,
             Err(error) => {
                 return Err(SidecarSnapshotError {
                     message: format!(

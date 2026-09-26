@@ -224,6 +224,17 @@ Agent derselben Änderung gelten.
 
 ## Verbindlicher Arbeitsablauf
 
+0. **Vor jedem Pull/Fetch/Merge/Rebase die lokale Arbeit committen
+   (User-Regel 2026-09-26).** Niemals in einen schmutzigen Arbeitsbaum
+   hinein aktualisieren. Der Commit dient der Sicherung — er wird auch
+   dann ausgeführt, wenn die Arbeit noch nicht verifiziert ist (der
+   Verifikationsstand steht dann im Commit-Text und in `Agents.todo.md`),
+   denn ein Merge mit ungesicherten Änderungen im Arbeitsbaum kann sie
+   stillschweigend zerstören. Reihenfolge: `git status` prüfen →
+   `scripts/check_file_sizes.sh` + die betroffenen Gates → committen →
+   holen → mergen. Nach dem Merge: die gelieferten Tests laufen lassen,
+   das Ratchet erneut prüfen und den Merge-Stand im Abschlussbericht
+   nennen.
 1. `Agents.md`, `Agents.todo.md`, `feature/README.md`, das betroffene
    Feature-Dokument und relevante ADRs lesen.
 2. Die betroffene Funktion anhand einer stabilen Feature-ID identifizieren.
@@ -275,6 +286,146 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen
 Modell-Download oder externen Netzwerkzugriff abhängen.
+
+### Integration headless gelieferter Features (User-Regel 2026-09-26)
+
+**Arbeitsteilung:** Ein anderer Agent entwickelt Features **headless** — also
+Schema, `lumina-core`, `lumina-cli`, `lumina-sidecar` — **ohne** GUI und
+**ohne** kittest. Der Build-Agent **integriert** sie danach in
+`lumina-gui` und in die kittest-Abdeckung. Das ist ein **regelmäßig
+wiederkehrender** Vorgang, kein Einzelfall.
+
+**Grenze der GUI-Testbarkeit (User-Klarstellung 2026-09-26):** Der GUI-Pfad ist
+**ausschließlich headless** prüfbar — `egui Context` + `LuminaApp` im tempdir,
+ergänzt um `egui_kittest` mit wgpu-Adapter. Es gibt **keinen** echten
+Fenster-/Interaktions-Test, und es wird keiner versprochen: **keine
+Abnahmekriterien formulieren, die ein real gerendertes Fenster, echte
+Maus-/Zeigerereignisse, DPI- oder Multi-Monitor-Verhalten oder einen sichtbaren
+GUI-Lauf durch einen Menschen voraussetzen.** Ist ein Feature nur so prüfbar, ist
+das eine **laut benannte Lücke** mit Hardware-Gate — kein Anlass, die Abnahme zu
+beschönigen oder den Test als „manuell geprüft" zu verbuchen. Die kittest-Goldens
+laufen headless über den wgpu-Adapter und sind ein **lokales** macOS-Gate; in CI
+werden sie **nie** verifiziert (kein GPU-Runner). Der **einzige** Weg zu einem real
+gestarteten Prozess ist der manuelle Akzeptanz-Run nach R5-LOG-1
+(`RUST_LOG=trace`, genau eine App-Instanz, Log-Redirect) — das ist eine
+User-Aktion und wird **nicht** durch einen headless Test ersetzt.
+
+Pro geliefertem Headless-Feature prüft und ergänzt der Build-Agent:
+
+1. **GUI-Verdrahtung.** Liegt für jede neue Fähigkeit ein `draw_*`-Pfad vor,
+   der vom tatsächlichen UI-Panel aufgerufen wird? Ein Modul mit Tests, das
+   nirgends gezeichnet wird, ist **nicht integriert**. Beispiel: `mask_local_curves`
+   lag mit 318 Zeilen plus 416 Testzeilen vor, ohne `draw_`-Aufruf in
+   `develop_masking.rs`.
+2. **Interaktive Bedienung.** Regler, Kurvengraphen, Picker und Buttons müssen
+   **anklickbar** sein und ihren Wert tatsächlich in das Rezept schreiben — nicht
+   nur paintbar. Für jede sichtbare Funktion ein klickbarer headless Test.
+3. **kittest-Goldens.** Jede neue sichtbare Editor-Fläche braucht einen Golden
+   im passenden Ziel (`kittest_snapshots` oder ein neues, feature-spezifisches
+   `tests/kittest_*.rs`). Die Goldens sind in CI `#[ignore]`d und werden **nie**
+   dort verifiziert; sie sind ein **lokales** macOS-Gate (siehe
+   `feature/quality/golden-references.md`).
+4. **Fixture-Klasse.** Neue Goldens brauchen eine echte Quelle. `R1` = echtes
+   RAW/echte Bilddaten, `S1` = Layout-Sentinel, `S2` = Smoke-Raster
+   (`feature/quality/golden-fixtures.md`). Ein Golden, das einen Decode-Fehler
+   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis.
+5. **Aktions-Audit.** Jede neue `GuiAction`-Variante oder Enum-Variante erzwingt
+   den `ALL_GUI_ACTIONS`-Audit (aktuell 110 Aktionen).
+6. **SOLL-Zuordnung.** Das headless gelieferte SOLL-Dokument ist zu lesen und um
+   den GUI-/kittest-Stand zu ergänzen; fehlt der GUI-Teil im SOLL, ist er **vor**
+   dem Code zu schreiben.
+7. **Ratchet.** Neue GUI-Module bleiben ≤ 500 Zeilen; wächst `lumina-gui/src/lib.rs`,
+   ist echte Extraktion Pflicht und die Baseline danach zu senken.
+
+**Abnahme einer Integration:** `cargo test -p lumina-gui --all-targets` grün,
+jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
+`ALL_GUI_ACTIONS`-Audit ist grün, `sh scripts/check_file_sizes.sh` grün ohne neue
+Baseline-Einträge, fmt/Clippy clean, und das Feature-Dokument nennt den GUI- und
+kittest-Stand ausdrücklich.
+
+### Modellwechsel nach dreifacher Verifikations-Niederlage (User-Regel 2026-09-26)
+
+**Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
+Verifikation durch (`NICHT BESTANDEN` dreimal für dieselbe Findings-Gruppe),
+wechselt der Build-Agent das Modell für die Verifikation und alle
+weiteren Fix-Runden dieser Aufgabe.**
+
+- **Modell:** `opencode-go/deepseek-v4.1-flash` (User: „deepseek v 4.1").
+  Ein Modellwechsel bricht die Fehlerserie, indem eine andere Modellfamilie
+  dieselbe Evidenz neu bewertet — drei Runden desselben Modells hatten
+  denselben Denkfehler dreimal wiederholt.
+- **Gilt für:** die Verifikation **und** die anschließenden
+  Implementierungs-/Remediierungsrunden. Ein frisches `continue` oder eine
+  neue Session ändert daran nichts: das Modell ist der Wechsel, nicht die
+  Sitzung.
+- **Nicht ersetzt durch:** „mehr Kontext", „frischer Agent", „einmal
+  genauer hinsehen". Erschwerte Fehlschläge sind ein Signal zum
+  Perspektivwechsel, nicht zur Wiederholung.
+- **Zählung:** aufeinanderfolgende Runden **derselben** Aufgabe. Ein
+  zwischenzeitlich bestandener Task setzt die Zählung zurück; ein
+  dazwischen liegender, sachlich unabhängiger Task ebenfalls nicht.
+- **Dokumentation:** der Modellwechsel und der auslösende Befund stehen im
+  Commit-Text und im Task-Eintrag, damit die Historie nachvollziehbar
+  bleibt, **warum** ein anderes Modell eingesetzt wurde.
+
+Begründung aus der Praxis: `LENSFUN-DB-33` fiel viermal durch. Alle vier
+Runden behaupteten eine exakte upstream-Parität, die jeweils messbar
+falsch war — der Fehler war nicht Sorgfalt, sondern die Art, wie geprüft
+wurde (aus der C++-Quelle schließen statt das exportierte Symbol messen).
+Ein anderes Modell ist die naheliegendste Gegenmaßnahme, weil die
+Fehlerkette eine Denk- und nicht eine Sorgfaltfrage war.
+
+### Testabdeckungs-Politik (User-Regel 2026-09-26)
+
+- **Grundregel: Alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
+  Migration, Persistenz, Pipeline oder Agentenregeln wird mit Tests geliefert,
+  die die **neue** Aussage tatsächlich abdecken. Ein Test, der die Aussage nicht
+  belegt, zählt nicht (DoD §7.5). Diese Regel wird **nicht** aus Bequemlichkeit
+  oder Laufzeitgründen relativiert; ein Verweis auf „zu langsam" oder „reicht
+  auch so" ist ein Befund, keine Abnahme.
+- **Gegenregel: Tests sind kein Selbstzweck.** Abdeckung ohne Informationswert
+  ist ein Defekt. Ein Test, der eine Konstante auf sich selbst prüft, eine
+  bereits durch einen anderen Test abgedeckte Eigenschaft ein zweites Mal
+  durchläuft, eine Implementierungsentscheidung statt des Verhaltens pinnt
+  oder der bei Wegfall der Logik nichts verlieren würde, wird als
+  **unnötiger Test** geführt. Erschwerte Tests verlieren außerdem ihre
+  eigentliche Funktion als Netz: 745 GUI-Tests in einem einzigen 3:11-CI-Shard
+  sind ein Wartbarkeitsproblem, kein Qualitätsnachweis.
+- **Rhythmus: höchstens einmal pro Woche ein Build-Agent für den
+  Test-Redundanz-Audit** (`TEST-AUDIT-36`, fortlaufend). Der Build-Agent prüft
+  die Suite auf unnötige Tests und **berichtet**; er entfernt nichts eigenmächtig
+  und ohne Rücksprache. Für jede Löschung gilt der normale Weg: SOLL zuerst,
+  Delegation an einen Implementierungs-Agent, danach unabhängige
+  Verifikation. Beim Audit wird ausdrücklich geprüft, ob der Test eine
+  **Fehlalarm-resistente** Aussage trägt — der Tausch „Tests weg" gegen
+  „Regression unentdeckt" ist ausgeschlossen.
+- **Der Audit darf keine Löschung als Abkürzung für fehlende Abdeckung
+  missbrauchen.** Wird beim Audit eine Lücke sichtbar (Feature, Klausel oder
+  Fehlerpfad ohne Anker), ist das eine **neue offene Aufgabe** — kein Anlass,
+  einen benachbarten Test zu streichen.
+- **Nachweispflicht:** Jeder umgesetzte Audit-Befund nennt Test-Name, Datei und
+  die konkrete Begründung (welche doppelte Aussage entfällt). Eine Löschung
+  ohne Begründung gilt als Regel-Umgehung.
+- **Eine extrahierte Testnaht ist noch kein Test der Produktion (User-Klarstellung
+  2026-09-26).** Wird eine Funktion extrahiert, um sie testbar zu machen, muss
+  der **Produktionspfad sie aufrufen**. Sonst existiert eine byte-gleiche
+  Zweitimplementierung, die nur der Test benutzt, während der echte Pfad
+  ungetestet bleibt. **Pflichtnachweis:** eine Mutation am Produktionspfad muss
+  den Test rot machen. Konkret belegt in `LENSFUN-DB-33` Runde 4: `report_with`
+  war eine Kopie von `resolve_system_with`, die nur `tests/production_seam.rs`
+  aufrief; das Löschen von `pin_displaced` **im echten Pfad** ließ alle 84 Tests
+  grün. Ein Test, der die falsche Funktion prüft, ist schlimmer als keiner —
+  er erzeugt genau die grüne Deckung, die er zu belegen vorgibt.
+- **Eine Behauptung über „gemessen" ist ein Prüfauftrag, keine Aussage.** Werte,
+  die als gemessen bezeichnet werden, müssen aus einer Messung stammen. Ein
+  Build-Agent, der eine Zahl, Matrixgröße oder Abweichungsmenge angibt, hat sie
+  gegen die Quelle zu prüfen — nachgewiesen durch Nachrechnen oder eine
+  unabhängige Gegenmessung, nicht durch Behauptung.
+- **Git-Hygiene (User-Regel 2026-09-26):** Vor jedem Pull/Fetch/Merge/Rebase
+  wird die lokale Arbeit committet — auch wenn sie noch nicht verifiziert ist;
+  der Verifikationsstand steht dann im Commit-Text. Ein Merge in einen
+  schmutzigen Arbeitsbaum ist verboten, weil er ungesicherte Änderungen
+  stillschweigend zerstören kann.
 
 - **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff
   (kein Metal-Compute), daher kann die CI den GPU-Pfad nur kompilieren
