@@ -1247,17 +1247,31 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — die drei anderen *mask-local* Ziele bleiben grün. **Zusätzlich** werden drei **vorbestehende** Lib-Tests rot (`brush_lifecycle::invert_uses_the_automatic_slider_save_path_and_reloads`, `brush_management::copy_selection_and_reload_ignore_cross_copy_layers`, `mask_local_previous::previous_transfers_full_local_state_but_sync_keeps_target_layers`); das ist **mehr** Abdeckung, kein Defekt — das fette „nur" wäre irreführend gewesen. |
   | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
   | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
-- **`SIDECAR-SAVE-STRAND-39` ist hier reproduziert worden — und die Ursache ist
-  gemessen, nicht vermutet.** Mit einem `log::Log`-Tap auf Trace-Level
-  sichtbar: ein mask-local Edit hochstuft seinen Draft-Tick zu einem
-  **Vollrender** (`render_tick.rs`: „absolute-frame or local-mask stage
-  active"), und der entprellte Save läuft nur im Zweig
-  `!pointer_down && pending_full_render` von `schedule_render`. Die
-  150-ms-Uhr wird von **jedem** Edit neu gestartet, und `pending_slider_commit`
-  ist last-write-wins: ein zweites Gest innerhalb des Fensters schiebt den
-  Commit des ersten hinaus. **Kein Wert geht dabei verloren** — der Save trägt
-  den kompletten Layer-Zustand —, aber „die Datei enthält meinen Edit *jetzt*"
-  gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
+- **`SIDECAR-SAVE-STRAND-39`: die gemeldete Ursache ist widerlegt, eine andere
+  ist gemessen.** Der ursprüngliche Bericht führte den Save-Verlust auf einen
+  Draft-Tick-**Hochstuf** zu einem Vollrender zurück (mask-local Edit →
+  `render_tick.rs` „absolute-frame or local-mask stage active"). Der Hochstuf
+  ist real und wurde bestätigt — er ist aber **nicht** die Ursache.
+
+  **Ausgeschlossen:** `full_render_debounce_remaining` (`render_tick.rs:29-35`)
+  gibt `None`, also *sofortigen* Commit, wenn `last_edit_time <= 0.0` oder das
+  150-ms-Fenster abgelaufen ist. Ein **veralteter** Zeitstempel macht den
+  Commit also *eifriger*, nicht strandend; der Debounce kann nur verzoegern,
+  nie abbrechen. Und `pending_full_render` ist am Release-Frame immer gesetzt,
+  weil `slider.rs:203-206` es bei jedem `dragged()`-Frame unbedingt neu bewaffnet.
+  Ein „Edit in einem Frame verliert den entprellten Save" gibt es nicht.
+
+  **Tatsächlich gemessen:** `render_schedule.rs:53` haengt den einzigen
+  Commit-Pfad an `pending_full_render`. Jeder Vollrender, der nicht durch
+  `commit_pending_slider_save` laeuft — der Fusszeilen-Button `Render / Apply`
+  und ~20 weitere `render()`-Aufrufstellen — loescht das Flag in seinem Frame
+  und macht den bewaffneten Token fuer den Rest der Session unerreichbar.
+  Reproduziert als `a_render_apply_click_inside_the_debounce_window_does_not_
+  strand_the_save` (rot ohne den Fix: `memory 0 vs disk 0.6000000238418579`).
+
+  **Von dem Verlust unberuehrt** bleibt die F-4-Regel: der Save traegt den
+  kompletten Layer-Zustand, also geht **kein** Wert verloren, und „die Datei
+  enthaelt meinen Edit *jetzt*" gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
   **jedes Wertgest** ein `settle_persisted` **und** eine Datei-Assertion, bevor
   das nächste Gest kommt (F-4). Die eine benannte Ausnahme — zwei `Add
   color`-Klicks ohne Settle — steht in `tests/mask_local_color_controls.rs` und
