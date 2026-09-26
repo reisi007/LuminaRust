@@ -1,11 +1,19 @@
 //! Shared support for the adapter-dependent `lumina-gpu` integration tests.
 //!
-//! The integration tests that actually drive a wgpu adapter are declared with
-//! [`gated_test!`]. Without the opt-in `gpu-adapter-tests` feature the macro
-//! gives every generated test an `#[ignore]`, so the default
-//! `cargo test -p lumina-gpu` — exactly what CI runs on a GPU-less runner —
-//! reports them as **ignored** instead of running them and counting their early
-//! `return` as `passed`.
+//! The integration tests that actually drive a wgpu adapter are declared with a
+//! plain `#[test]` plus the literal gate
+//!
+//! ```text
+//! #[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+//! ```
+//!
+//! Without the opt-in `gpu-adapter-tests` feature that attribute makes the test
+//! `#[ignore]`d, so the default `cargo test -p lumina-gpu` — exactly what CI
+//! runs on a GPU-less runner — reports them as **ignored** instead of running
+//! them and counting their early `return` as `passed`. The gate is written out
+//! literally rather than hidden behind a `macro_rules!` wrapper so that
+//! `cargo fmt` stays able to format the test bodies: rustfmt does not descend
+//! into a brace-macro invocation carrying a `///` doc-comment token.
 //!
 //! Enabling the opt-in `gpu-adapter-tests` feature is an explicit claim that a
 //! real adapter is available. [`require_adapter`] enforces that claim: it
@@ -21,30 +29,6 @@
 //! ```
 
 use lumina_gpu::GpuContext;
-
-/// Declare an adapter-dependent integration test.
-///
-/// The gate is expressed **once, here**, instead of a `#[test]` plus a
-/// per-test `#[cfg_attr(..., ignore = "...")]` pair on every test. The
-/// generated function keeps its outer attributes (doc comments, `#[cfg]`) and
-/// is listed by `cargo test -- --list` like any other test:
-///
-/// ```ignore
-/// gated_test!(
-///     /// …the test's doc comment…
-///     some_parity_test, {
-///     // …the test body, unchanged…
-/// });
-/// ```
-macro_rules! gated_test {
-    ($(#[$attr:meta])* $name:ident, $body:block) => {
-        $(#[$attr])*
-        #[test]
-        #[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
-        fn $name() $body
-    };
-}
-pub(crate) use gated_test;
 
 /// Fail loudly if `ctx` has no real GPU adapter bound, and report that it does.
 ///

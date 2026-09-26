@@ -232,7 +232,9 @@ fn assert_bounded_match(label: &str, cpu: &[u8], gpu: &[u8], dims: (u32, u32)) {
     );
 }
 
-support::gated_test!(manual_ca_skipped_under_tca_map_and_applied_without, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+fn manual_ca_skipped_under_tca_map_and_applied_without() {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -338,4 +340,4 @@ support::gated_test!(manual_ca_skipped_under_tca_map_and_applied_without, {
         &gpu_ca.pixels,
         (gpu_ca.width, gpu_ca.height),
     );
-});
+}

@@ -74,9 +74,10 @@ fn cropped_recipe() -> EditRecipe {
     }
 }
 
-support::gated_test!(
-    /// F1: a map dimension mismatch is a loud planner error on both entry points.
-    f1_mismatched_map_dimensions_are_refused_loudly, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// F1: a map dimension mismatch is a loud planner error on both entry points.
+fn f1_mismatched_map_dimensions_are_refused_loudly() {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -118,7 +119,7 @@ support::gated_test!(
         eprintln!("F1 readback planner assertion skipped (no GPU adapter)");
     }
     ctx.set_lensfun_map(None).expect("clear map");
-});
+}
 
 /// F3: a bound map turns a would-be CPU fallback into a loud refusal.
 #[test]
@@ -203,10 +204,11 @@ fn f4_malformed_map_is_rejected_on_bind() {
 }
 
 #[cfg(feature = "lensfun")]
-support::gated_test!(
-    /// F2: a vignetting-only corrector (no distortion, no explicit crop) renders on
-    /// the GPU with CPU-oracle parity.
-    f2_vignetting_only_corrector_matches_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// F2: a vignetting-only corrector (no distortion, no explicit crop) renders on
+/// the GPU with CPU-oracle parity.
+fn f2_vignetting_only_corrector_matches_cpu_oracle() {
     use lumina_core::{render_frame, LensfunCorrectorRef, RenderContext};
     use lumina_lensfun::{Corrector, LensfunDb};
 
@@ -311,4 +313,4 @@ support::gated_test!(
         );
     }
     ctx.set_lensfun_map(None).expect("clear map");
-});
+}

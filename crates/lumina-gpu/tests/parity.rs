@@ -25,9 +25,7 @@
 mod support;
 
 use lumina_core::{
-    render_frame, render_frame_with_generative, CoreError, DepthPlane, GenerativeCanvasArtifact,
-    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFrame, MaskPlane,
-    RenderContext, SourceActionArtifact,
+    render_frame, CoreError, DepthPlane, ImageFrame, MaskPlane, RenderContext, SourceActionArtifact,
 };
 use lumina_gpu::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
@@ -44,6 +42,7 @@ use lumina_sidecar::{
 };
 use std::collections::BTreeMap;
 
+mod parity_generative;
 mod parity_support;
 use parity_support::*;
 
@@ -1081,7 +1080,9 @@ fn equivalence_for(name: &str) -> Equivalence {
     }
 }
 
-support::gated_test!(tone_only_is_byte_identical, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+fn tone_only_is_byte_identical() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1125,7 +1126,7 @@ support::gated_test!(tone_only_is_byte_identical, {
             "tone-only render must stay byte-identical ({name})"
         );
     }
-});
+}
 
 #[test]
 fn implemented_stages_are_not_flagged() {
@@ -1138,7 +1139,9 @@ fn implemented_stages_are_not_flagged() {
     }
 }
 
-support::gated_test!(implemented_stages_match_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+fn implemented_stages_match_cpu_oracle() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1219,20 +1222,21 @@ support::gated_test!(implemented_stages_match_cpu_oracle, {
         failures.is_empty(),
         "post-tone GPU stages exceeded their per-stage declared equivalence: {failures:?}"
     );
-});
+}
 
-support::gated_test!(
-    /// GPU-MAXRECT-WELLE (CROP-MAXRECT-1): a lens/perspective correction without an
-    /// explicit crop activates the CPU oracle's content-based default crop. The
-    /// recipe-only GPU plan cannot predict the (resampled-alpha-dependent)
-    /// rectangle, so the gate flags the recipe (`geometry (default content crop)`)
-    /// and `render_with_gpu` routes it to the CPU — the output dimensions and pixels
-    /// must be identical to the oracle. `lens_wedge` and the two `perspective_*`
-    /// recipes prove the default crop really fired (the oracle frame is smaller than
-    /// the uncropped geometry dimensions); the non-wedge lens recipes document the
-    /// conservative route (identity crop, still CPU-routed rather than risk a
-    /// mispredicted rectangle).
-    default_content_crop_routes_to_cpu_with_parity, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-MAXRECT-WELLE (CROP-MAXRECT-1): a lens/perspective correction without an
+/// explicit crop activates the CPU oracle's content-based default crop. The
+/// recipe-only GPU plan cannot predict the (resampled-alpha-dependent)
+/// rectangle, so the gate flags the recipe (`geometry (default content crop)`)
+/// and `render_with_gpu` routes it to the CPU — the output dimensions and pixels
+/// must be identical to the oracle. `lens_wedge` and the two `perspective_*`
+/// recipes prove the default crop really fired (the oracle frame is smaller than
+/// the uncropped geometry dimensions); the non-wedge lens recipes document the
+/// conservative route (identity crop, still CPU-routed rather than risk a
+/// mispredicted rectangle).
+fn default_content_crop_routes_to_cpu_with_parity() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1310,7 +1314,7 @@ support::gated_test!(
             );
         }
     }
-});
+}
 
 /// LRPAR-G14-DENOISE-IMPL-20: an active `denoise_ai` stage must never be
 /// silently dropped by the GPU path. The routing gate flags it, so
@@ -1362,11 +1366,12 @@ fn denoise_ai_routes_to_cpu_and_aborts_loudly() {
     }
 }
 
-support::gated_test!(
-    /// GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass must be pixel-effective
-    /// and match the CPU oracle on a frame whose redness actually triggers the
-    /// correction (the gradient/noise frames barely exercise it).
-    implemented_red_eye_matches_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-RENDER-PARITY-1 stage 3 (G-14): the red-eye pass must be pixel-effective
+/// and match the CPU oracle on a frame whose redness actually triggers the
+/// correction (the gradient/noise frames barely exercise it).
+fn implemented_red_eye_matches_cpu_oracle() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1469,17 +1474,18 @@ support::gated_test!(
         }
     }
     assert!(failures.is_empty(), "red-eye parity: {failures:?}");
-});
+}
 
-support::gated_test!(
-    /// CAMERA-WB-WELLE (R2-MCP-01): a valid decoder As-Shot WB context is now an
-    /// explicit GPU input the caller binds via `GpuContext::set_camera_white_balance`;
-    /// the gains are validated with the oracle's own error but never re-applied
-    /// (matching `lumina-core`), so the GPU render stays byte-identical to the CPU
-    /// oracle for a tone-only recipe. Invalid gains are rejected at the bind and
-    /// still flagged by the routing gate so unbound callers reach the oracle's
-    /// loud rejection.
-    as_shot_wb_context_is_carried_and_validated, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// CAMERA-WB-WELLE (R2-MCP-01): a valid decoder As-Shot WB context is now an
+/// explicit GPU input the caller binds via `GpuContext::set_camera_white_balance`;
+/// the gains are validated with the oracle's own error but never re-applied
+/// (matching `lumina-core`), so the GPU render stays byte-identical to the CPU
+/// oracle for a tone-only recipe. Invalid gains are rejected at the bind and
+/// still flagged by the routing gate so unbound callers reach the oracle's
+/// loud rejection.
+fn as_shot_wb_context_is_carried_and_validated() {
     let recipe = EditRecipe {
         adjustments: BTreeMap::from([("exposure".into(), 0.3)]),
         ..Default::default()
@@ -1543,16 +1549,17 @@ support::gated_test!(
         diff, 0,
         "a carried (validated, not re-applied) As-Shot context must match the CPU reference"
     );
-});
+}
 
-support::gated_test!(
-    /// CAMERA-WB-WELLE oracle parity: decoder As-Shot gains (identity and
-    /// non-identity) crossed with every recipe white-balance combination. The GPU
-    /// entry carries the gains, so each render must match the CPU oracle within the
-    /// standard tone bound, and binding the gains must not change the GPU pixels at
-    /// all (they are validation state — `lumina-core` never re-applies them, and
-    /// neither may the shader).
-    as_shot_wb_gains_match_cpu_oracle_across_recipe_wb, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// CAMERA-WB-WELLE oracle parity: decoder As-Shot gains (identity and
+/// non-identity) crossed with every recipe white-balance combination. The GPU
+/// entry carries the gains, so each render must match the CPU oracle within the
+/// standard tone bound, and binding the gains must not change the GPU pixels at
+/// all (they are validation state — `lumina-core` never re-applies them, and
+/// neither may the shader).
+fn as_shot_wb_gains_match_cpu_oracle_across_recipe_wb() {
     let recipes: Vec<(&str, EditRecipe)> = vec![
         ("default", EditRecipe::default()),
         (
@@ -1675,15 +1682,16 @@ support::gated_test!(
         }
     }
     assert!(failures.is_empty(), "As-Shot WB parity: {failures:?}");
-});
+}
 
-support::gated_test!(
-    /// GPU-RENDER-PARITY-1 stage-2 follow-up: a schema-invalid sharpening radius
-    /// (> 10.0) must be **rejected**, not silently clamped to the 91-tap kernel.
-    /// The gate deliberately does *not* classify it as a stage gap: the GPU entry
-    /// rejects it directly (`validate_gpu_recipe`), mirroring the CPU oracle's
-    /// `InvalidAdjustment`.
-    sharpening_radius_out_of_schema_is_rejected_not_clamped, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-RENDER-PARITY-1 stage-2 follow-up: a schema-invalid sharpening radius
+/// (> 10.0) must be **rejected**, not silently clamped to the 91-tap kernel.
+/// The gate deliberately does *not* classify it as a stage gap: the GPU entry
+/// rejects it directly (`validate_gpu_recipe`), mirroring the CPU oracle's
+/// `InvalidAdjustment`.
+fn sharpening_radius_out_of_schema_is_rejected_not_clamped() {
     let recipe = EditRecipe {
         sharpening: Some(Sharpening {
             version: 1,
@@ -1744,13 +1752,14 @@ support::gated_test!(
         format!("{err}").contains("sharpening.radius"),
         "unexpected error: {err}"
     );
-});
+}
 
-support::gated_test!(
-    /// Schema-foreign adjustment keys have no GPU meaning and no neutral value:
-    /// the GPU entry must surface the CPU oracle's `UnsupportedAdjustment` (a clean
-    /// rejection), not silently drop the key.
-    schema_foreign_adjustment_key_is_rejected, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// Schema-foreign adjustment keys have no GPU meaning and no neutral value:
+/// the GPU entry must surface the CPU oracle's `UnsupportedAdjustment` (a clean
+/// rejection), not silently drop the key.
+fn schema_foreign_adjustment_key_is_rejected() {
     let recipe = EditRecipe {
         adjustments: BTreeMap::from([("definitely_not_a_key".into(), 0.5)]),
         ..Default::default()
@@ -1782,14 +1791,15 @@ support::gated_test!(
             || format!("{err}").contains("unsupported"),
         "unexpected error: {err}"
     );
-});
+}
 
-support::gated_test!(
-    /// The interactive VRAM path (`render_to_vram`, which the GUI uses for the
-    /// readback-free present) must apply the same post-tone chain as
-    /// `render_with_gpu`. Read the VRAM output back through the diagnostic seam and
-    /// gate it on the same tolerance.
-    vram_path_applies_post_stages, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// The interactive VRAM path (`render_to_vram`, which the GUI uses for the
+/// readback-free present) must apply the same post-tone chain as
+/// `render_with_gpu`. Read the VRAM output back through the diagnostic seam and
+/// gate it on the same tolerance.
+fn vram_path_applies_post_stages() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1920,12 +1930,13 @@ support::gated_test!(
             ),
         }
     }
-});
+}
 
-support::gated_test!(
-    /// GPU-RENDER-PARITY-1 stage 3: the readback-free VRAM path must also run the
-    /// red-eye pass (it shares `render_post_stages` with the streaming path).
-    vram_path_applies_red_eye, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-RENDER-PARITY-1 stage 3: the readback-free VRAM path must also run the
+/// red-eye pass (it shares `render_post_stages` with the streaming path).
+fn vram_path_applies_red_eye() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -1961,322 +1972,7 @@ support::gated_test!(
     let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
     eprintln!("vram[red_eye]: maxAbsDiff={diff}");
     assert_eq!(diff, 0, "VRAM red-eye pass must match the CPU oracle");
-});
-
-support::gated_test!(
-    /// A recipe that still uses an unimplemented stage stays CPU-routed and yields
-    /// GEN-ONNX-1 Welle 2a: `generative_edit` is no longer a CPU-routing reason, but
-    /// an **artifact-blind** render (recipe-only GPU entry / CPU `render_frame`) must
-    /// still refuse loudly instead of rendering unexpanded.
-    artifact_blind_generative_render_is_loud_not_routed, {
-    let ctx = match GpuContext::new() {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            eprintln!("GPU context init failed ({err}) - skipped routing check");
-            return;
-        }
-    };
-    let frame = gradient_frame(48, 48);
-    let recipe = generative_expand_recipe();
-    // Welle 2a: no blanket CPU route anymore — the stage is GPU-eligible.
-    assert!(
-        unsupported_gpu_stages(&recipe).is_empty(),
-        "generative_edit must not be a routing reason: {:?}",
-        unsupported_gpu_stages(&recipe)
-    );
-    if !support::require_adapter(&ctx) {
-        eprintln!("{SKIP_MESSAGE} - validator-only assertion");
-        return;
-    }
-    // Without an artifact both the CPU oracle and the artifact-blind GPU entry
-    // reject loudly (no silent unexpanded render, no third state).
-    let context = RenderContext {
-        recipe: &recipe,
-        camera_white_balance: None,
-        source_actions: &[],
-        masks: None,
-        lensfun: None,
-        depth: None,
-    };
-    assert!(
-        render_frame(&frame, &context).is_err(),
-        "the CPU oracle must refuse an expand without a composited canvas"
-    );
-    assert!(
-        ctx.render_with_gpu(&frame, &recipe).is_err(),
-        "the artifact-blind GPU entry must refuse an expand without a canvas"
-    );
-    // With the artifact the artifact-aware GPU entry renders successfully.
-    let canvas = lumina_core::generative::apply_generative_expand(&frame, &recipe)
-        .expect("deterministic producer");
-    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::Expand, canvas);
-    let result = ctx.render_with_gpu_and_generative(
-        &frame,
-        &recipe,
-        &GenerativeCanvasInput {
-            auto_fill: None,
-            expand: Some(&artifact),
-        },
-    );
-    assert!(
-        result.is_ok(),
-        "the artifact-aware GPU entry must render an expand with a canvas: {:?}",
-        result.err()
-    );
-});
-
-support::gated_test!(
-    /// GEN-ONNX-1 Welle 2a GPU parity of the mid-geometry expand compositing: the
-    /// chain is `Substitute(expand) → Crop` (an exact integer crop after the
-    /// substitution). The compositing itself is a texture swap, so parity is
-    /// byte-identical (`maxAbsDiff == 0`), matching the other exact stages.
-    generative_canvas_compositing_is_gpu_parity, {
-    let ctx = match GpuContext::new() {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            eprintln!("GPU context init failed ({err}) - skipped compositing parity");
-            return;
-        }
-    };
-    if !support::require_adapter(&ctx) {
-        eprintln!("{SKIP_MESSAGE}");
-        return;
-    }
-    let frame = gradient_frame(48, 48);
-    let mut recipe = generative_expand_recipe();
-    // Force a render pass *after* the substitution so the mid-chain insertion is
-    // exercised (an exact 0.5 crop; the crop pass is a pure integer copy).
-    recipe.geometry = Some(Geometry {
-        version: 1,
-        crop: Some(Crop::Free {
-            x: 0.0,
-            y: 0.0,
-            width: 0.5,
-            height: 0.5,
-        }),
-        rotation_degrees: 0.0,
-        mirror_horizontal: false,
-        mirror_vertical: false,
-    });
-    // Deterministic producer: the exact canvas the render will adopt.
-    let canvas_frame = lumina_core::generative::apply_generative_expand(&frame, &recipe)
-        .expect("deterministic producer");
-    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::Expand, canvas_frame);
-
-    let input = GenerativeCanvasInput {
-        auto_fill: None,
-        expand: Some(&artifact),
-    };
-    let cpu = render_frame_with_generative(
-        &frame,
-        &RenderContext {
-            recipe: &recipe,
-            camera_white_balance: None,
-            source_actions: &[],
-            masks: None,
-            lensfun: None,
-            depth: None,
-        },
-        input,
-    )
-    .expect("CPU oracle compositing render")
-    .frame;
-
-    let gpu = ctx
-        .render_with_gpu_and_generative(&frame, &recipe, &input)
-        .expect("GPU generative render");
-
-    assert_eq!(
-        (cpu.width, cpu.height),
-        (gpu.width, gpu.height),
-        "composited dimensions must match on both backends"
-    );
-    assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
-        0,
-        "the expand compositing + downstream crop must be GPU-parity"
-    );
-});
-
-support::gated_test!(
-    /// GEN-ONNX-1 Welle 2a GPU parity of the auto-fill compositing: the plan is a
-    /// single `Substitute(auto-fill)` (no other geometry), which exercises the
-    /// "only substitutions → copy into the final texture" path. Byte-identical.
-    generative_auto_fill_compositing_is_gpu_parity, {
-    let ctx = match GpuContext::new() {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            eprintln!("GPU context init failed ({err}) - skipped auto-fill parity");
-            return;
-        }
-    };
-    if !support::require_adapter(&ctx) {
-        eprintln!("{SKIP_MESSAGE}");
-        return;
-    }
-    // 32x32 frame with a transparent border wedge.
-    let mut pixels = vec![0u8; 32 * 32 * 4];
-    for y in 0..32u32 {
-        for x in 0..32u32 {
-            let idx = ((y * 32 + x) * 4) as usize;
-            if x < 4 || y < 4 || x >= 28 || y >= 28 {
-                pixels[idx + 3] = 0;
-            } else {
-                let v = if (x + y) % 2 == 0 { 20 } else { 230 };
-                pixels[idx] = v;
-                pixels[idx + 1] = v;
-                pixels[idx + 2] = v;
-                pixels[idx + 3] = 255;
-            }
-        }
-    }
-    let frame = ImageFrame::new(32, 32, pixels).unwrap();
-    let recipe = EditRecipe {
-        generative_edit: Some(GenerativeEdit {
-            version: 1,
-            canvas: None,
-            artifact: None,
-            keep_generative_content: None,
-            auto_fill_transparent: Some(true),
-            expand_beyond_image: None,
-            seed: Some(11),
-            prompt: None,
-            extras: BTreeMap::new(),
-        }),
-        ..Default::default()
-    };
-    // Deterministic producer over the post-lens frame (no lens here).
-    let mut canvas = frame.clone();
-    lumina_core::generative::fill_transparent_heuristic(&mut canvas, 11);
-    let artifact = GenerativeCanvasArtifact::new(CoreGenerativeRole::AutoFillTransparent, canvas);
-    let input = GenerativeCanvasInput {
-        auto_fill: Some(&artifact),
-        expand: None,
-    };
-
-    let cpu = render_frame_with_generative(
-        &frame,
-        &RenderContext {
-            recipe: &recipe,
-            camera_white_balance: None,
-            source_actions: &[],
-            masks: None,
-            lensfun: None,
-            depth: None,
-        },
-        input,
-    )
-    .expect("CPU oracle auto-fill render")
-    .frame;
-    let gpu = ctx
-        .render_with_gpu_and_generative(&frame, &recipe, &input)
-        .expect("GPU auto-fill render");
-    assert_eq!((cpu.width, cpu.height), (32, 32));
-    assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
-        0,
-        "the auto-fill compositing must be GPU-parity"
-    );
-});
-
-support::gated_test!(
-    /// GEN-ONNX-1 Welle 2a BLOCKER fix: a real render pass **before** a trailing
-    /// `Substitute` must not discard the artifact. Recipe: a manual lens pass (real
-    /// geometry) plus an explicit full-frame crop, then expand (trailing substitute,
-    /// no crop step). The CPU oracle discards the lens output (`composite_expand`
-    /// replaces the frame); the GPU must return the artifact, not the lens output.
-    /// Before the fix this silently returned the lens texture (`Ok`, 4022/4096
-    /// bytes divergent).
-    generative_trailing_substitute_after_render_pass_is_gpu_parity, {
-    let ctx = match GpuContext::new() {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            eprintln!("GPU context init failed ({err}) - skipped trailing-substitute parity");
-            return;
-        }
-    };
-    if !support::require_adapter(&ctx) {
-        eprintln!("{SKIP_MESSAGE}");
-        return;
-    }
-    let frame = gradient_frame(48, 48);
-    let mut recipe = generative_expand_recipe();
-    // A real geometry render pass before the trailing substitute…
-    recipe.lens_correction = Some(LensCorrection {
-        version: 1,
-        profile: None,
-        distortion_k1: Some(0.2),
-        distortion_k2: None,
-        distortion_k3: None,
-        vignette_c0: None,
-        vignette_c1: None,
-        vignette_c2: None,
-        ca_red: None,
-        ca_blue: None,
-    });
-    // …and an explicit (authoritative) full-frame crop so no default
-    // content-crop reason applies; the crop is the identity and adds no step.
-    recipe.geometry = Some(Geometry {
-        version: 1,
-        crop: Some(Crop::Free {
-            x: 0.0,
-            y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        }),
-        rotation_degrees: 0.0,
-        mirror_horizontal: false,
-        mirror_vertical: false,
-    });
-    // A flat artifact makes any divergence (lens output vs artifact) obvious.
-    let artifact = GenerativeCanvasArtifact::new(
-        CoreGenerativeRole::Expand,
-        solid_frame(128, 96, [10, 20, 30, 255]),
-    );
-    let input = GenerativeCanvasInput {
-        auto_fill: None,
-        expand: Some(&artifact),
-    };
-
-    let cpu = render_frame_with_generative(
-        &frame,
-        &RenderContext {
-            recipe: &recipe,
-            camera_white_balance: None,
-            source_actions: &[],
-            masks: None,
-            lensfun: None,
-            depth: None,
-        },
-        input,
-    )
-    .expect("CPU oracle trailing-substitute render")
-    .frame;
-    let gpu = ctx
-        .render_with_gpu_and_generative(&frame, &recipe, &input)
-        .expect("GPU trailing-substitute render");
-
-    assert_eq!(
-        (cpu.width, cpu.height),
-        (128, 96),
-        "the CPU oracle result is the expand canvas"
-    );
-    assert_eq!(
-        (gpu.width, gpu.height),
-        (128, 96),
-        "the GPU must return the trailing artifact, not the lens pass output"
-    );
-    assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
-        0,
-        "a render pass before a trailing substitute must not be served as the result"
-    );
-    assert_eq!(
-        &gpu.pixels[..4],
-        &[10, 20, 30, 255],
-        "the GPU result is the substituted artifact"
-    );
-});
+}
 
 /// A Red-Eye recipe with a real, pixel-effective region on a red frame.
 fn red_eye_recipe() -> EditRecipe {
@@ -2460,12 +2156,13 @@ fn cpu_only_recipe_stages_are_gated() {
     );
 }
 
-support::gated_test!(
-    /// GPU-RENDER-PARITY-1 follow-up: a typed `spot_removals` entry without the
-    /// extras heal geometry is unrenderable on both backends. The GPU entry must
-    /// reject it loudly (not silently drop the spot, and not route to the CPU to
-    /// hide the divergence), and it must not appear as a GPU stage gap.
-    typed_spot_without_extras_is_a_hard_error_on_both_backends, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-RENDER-PARITY-1 follow-up: a typed `spot_removals` entry without the
+/// extras heal geometry is unrenderable on both backends. The GPU entry must
+/// reject it loudly (not silently drop the spot, and not route to the CPU to
+/// hide the divergence), and it must not appear as a GPU stage gap.
+fn typed_spot_without_extras_is_a_hard_error_on_both_backends() {
     let recipe = typed_spot_recipe();
     let frame = gradient_frame(16, 16);
     // Not a routing reason: the GPU validates and errors itself.
@@ -2508,7 +2205,7 @@ support::gated_test!(
         format!("{err}").contains("spot_heal"),
         "unexpected error: {err}"
     );
-});
+}
 
 /// An invalid red-eye correction (out-of-range desaturation) that the CPU
 /// oracle rejects loudly: the GPU gate must keep it CPU-routed.
@@ -2539,17 +2236,18 @@ fn red_frame(width: u32, height: u32) -> ImageFrame {
     .expect("red frame")
 }
 
-support::gated_test!(
-    /// Blocker-1 resolution: `render_with_gpu`'s fallback is the **full**
-    /// `lumina_core::render_frame` chain. The (role-inactive) generative recipe is
-    /// CPU-routed as a fallback example and its pixels must be byte-identical to
-    /// `render_frame`; an *active* generative edit has no artifact on the CPU
-    /// fallback and must be rejected loudly by both backends (GEN-ONNX-1 Welle 2a —
-    /// no blanket route, no silent unexpanded render). The legacy spot
-    /// geometry is GPU-rendered and must match the oracle byte-for-byte through
-    /// the GPU spot pass. For a recipe the reference rejects (isolated typed spot),
-    /// the GPU entry must reject it too — never silently drop it.
-    cpu_only_recipe_stages_render_through_full_cpu_reference, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// Blocker-1 resolution: `render_with_gpu`'s fallback is the **full**
+/// `lumina_core::render_frame` chain. The (role-inactive) generative recipe is
+/// CPU-routed as a fallback example and its pixels must be byte-identical to
+/// `render_frame`; an *active* generative edit has no artifact on the CPU
+/// fallback and must be rejected loudly by both backends (GEN-ONNX-1 Welle 2a —
+/// no blanket route, no silent unexpanded render). The legacy spot
+/// geometry is GPU-rendered and must match the oracle byte-for-byte through
+/// the GPU spot pass. For a recipe the reference rejects (isolated typed spot),
+/// the GPU entry must reject it too — never silently drop it.
+fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -2667,14 +2365,15 @@ support::gated_test!(
         ctx.render_with_gpu(&frame, &invalid_red_eye).is_err(),
         "fallback must propagate the invalid red-eye rejection"
     );
-});
+}
 
-support::gated_test!(
-    /// `render_to_vram` cannot CPU-route without a readback, so it must refuse a
-    /// recipe it cannot render (no divergent pixels in the VRAM output). GEN-ONNX-1
-    /// Welle 2a: an active generative edit is no longer a routing *reason*, but the
-    /// artifact-blind VRAM path still refuses it loudly (no artifact injection).
-    vram_path_refuses_unsupported_recipes, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// `render_to_vram` cannot CPU-route without a readback, so it must refuse a
+/// recipe it cannot render (no divergent pixels in the VRAM output). GEN-ONNX-1
+/// Welle 2a: an active generative edit is no longer a routing *reason*, but the
+/// artifact-blind VRAM path still refuses it loudly (no artifact injection).
+fn vram_path_refuses_unsupported_recipes() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -2698,19 +2397,20 @@ support::gated_test!(
         "the artifact-blind VRAM path must refuse an active generative recipe instead of \
          writing divergent (unexpanded) pixels"
     );
-});
+}
 
-support::gated_test!(
-    /// GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: the readback-free
-    /// VRAM present texture is source-sized, so a geometry chain that **changes the
-    /// output dimensions** (crop/rotation/perspective) must be refused loudly — the
-    /// caller then uses the exact CPU present path. The same applies to a
-    /// lens/perspective correction without an explicit crop, whose content-based
-    /// default crop is derived from the resampled alpha and cannot be planned
-    /// readback-free (gate reason `geometry (default content crop)`).
-    /// Dimension-preserving, default-crop-inactive geometry (mirroring) is rendered
-    /// into the resident output and must match the CPU oracle.
-    vram_geometry_dimension_change_is_refused_loudly, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// GPU-RENDER-PARITY-1 geometry wave / GPU-MAXRECT-WELLE: the readback-free
+/// VRAM present texture is source-sized, so a geometry chain that **changes the
+/// output dimensions** (crop/rotation/perspective) must be refused loudly — the
+/// caller then uses the exact CPU present path. The same applies to a
+/// lens/perspective correction without an explicit crop, whose content-based
+/// default crop is derived from the resampled alpha and cannot be planned
+/// readback-free (gate reason `geometry (default content crop)`).
+/// Dimension-preserving, default-crop-inactive geometry (mirroring) is rendered
+/// into the resident output and must match the CPU oracle.
+fn vram_geometry_dimension_change_is_refused_loudly() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -2844,7 +2544,7 @@ support::gated_test!(
         diff <= 1,
         "VRAM post + mirror chain must match the CPU oracle within one code, got {diff}"
     );
-});
+}
 
 /// An *empty* legacy `extras["spot_removals"]` array is an explicit no-op in
 /// core (`reject_unsupported_spot_modes_extras` iterates it, `spots_from_recipe`
@@ -2880,11 +2580,12 @@ fn depth_plane(width: u32, height: u32) -> DepthPlane {
     DepthPlane::new(width, height, values).expect("depth plane")
 }
 
-support::gated_test!(
-    /// G-05 with a caller-supplied external depth plane: the GPU pass must match
-    /// the CPU oracle, and every missing/mismatched plane must fail loudly on both
-    /// backends (never a silent heuristic fallback).
-    lens_blur_external_depth_matches_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// G-05 with a caller-supplied external depth plane: the GPU pass must match
+/// the CPU oracle, and every missing/mismatched plane must fail loudly on both
+/// backends (never a silent heuristic fallback).
+fn lens_blur_external_depth_matches_cpu_oracle() {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -2989,14 +2690,15 @@ support::gated_test!(
         "a NaN depth value must be rejected"
     );
     ctx.set_depth_plane(None).expect("clear depth plane");
-});
+}
 
-support::gated_test!(
-    /// The readback-free VRAM path renders G-05 lens blur into the resident output
-    /// (dimension-preserving, source-sized) and matches the CPU oracle — including
-    /// after a dimension-preserving geometry chain and with a bound external depth
-    /// plane.
-    vram_path_applies_lens_blur, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// The readback-free VRAM path renders G-05 lens blur into the resident output
+/// (dimension-preserving, source-sized) and matches the CPU oracle — including
+/// after a dimension-preserving geometry chain and with a bound external depth
+/// plane.
+fn vram_path_applies_lens_blur() {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -3112,7 +2814,7 @@ support::gated_test!(
         diff <= 1,
         "VRAM external-depth lens blur: maxAbsDiff={diff}"
     );
-});
+}
 
 // ---------------------------------------------------------------------------
 // "Nicht-GPU-taugliche Rezepte" inventory (GPU-RENDER-PARITY-1 follow-up)
@@ -3511,11 +3213,12 @@ fn source_action_artifacts(width: u32, height: u32, count: usize) -> Vec<SourceA
         .collect()
 }
 
-support::gated_test!(
-    /// Item 7: more artifacts than the per-pass slot count must composite on the
-    /// GPU in batches and match the CPU oracle byte-for-byte (the previous gate
-    /// CPU-routed these).
-    source_action_batch_matches_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// Item 7: more artifacts than the per-pass slot count must composite on the
+/// GPU in batches and match the CPU oracle byte-for-byte (the previous gate
+/// CPU-routed these).
+fn source_action_batch_matches_oracle() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -3564,12 +3267,13 @@ support::gated_test!(
         diff, 0,
         "batched source-action compositing must match the CPU oracle"
     );
-});
+}
 
-support::gated_test!(
-    /// Item 5: legacy spot-heal geometry rendered by the GPU spot pass must match
-    /// `apply_spot_heals` byte-for-byte, including feathered and overlapping spots.
-    legacy_spot_heal_matches_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+/// Item 5: legacy spot-heal geometry rendered by the GPU spot pass must match
+/// `apply_spot_heals` byte-for-byte, including feathered and overlapping spots.
+fn legacy_spot_heal_matches_cpu_oracle() {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -3670,7 +3374,7 @@ support::gated_test!(
         failures.is_empty(),
         "spot-heal GPU pass diverged from the CPU oracle: {failures:?}"
     );
-});
+}
 
 // ---------------------------------------------------------------------------
 // GPU-LENSFUN-PARITY-1: the strict Lensfun corrector renders on the GPU through
@@ -3754,7 +3458,9 @@ fn lensfun_recipe() -> EditRecipe {
 }
 
 #[cfg(feature = "lensfun")]
-support::gated_test!(lensfun_corrector_map_matches_cpu_oracle, {
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+fn lensfun_corrector_map_matches_cpu_oracle() {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -3820,4 +3526,4 @@ support::gated_test!(lensfun_corrector_map_matches_cpu_oracle, {
         }
         ctx.set_lensfun_map(None).expect("clear map");
     }
-});
+}
