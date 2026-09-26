@@ -50,6 +50,13 @@ mod merge_gui;
 // through the readback-free VRAM path instead of the documented CPU exception.
 #[cfg(all(feature = "gpu", feature = "lensfun"))]
 mod lensfun_gpu;
+// LENSFUN-CALLER-37: the G-06 auto-corrector cache and the GUI's own Lensfun
+// diagnostics sink, extracted from the crate root so the F2 reporting path has
+// a cohesive home and the ratchet-baselined `lib.rs` does not grow.
+#[cfg(feature = "lensfun")]
+mod lensfun_auto;
+#[cfg(feature = "lensfun")]
+mod lensfun_diag;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // UX-LOOK-HISTORY-18: the presets group tree (relative-folder grouping, own
@@ -8897,93 +8904,6 @@ impl LuminaApp {
         }
     }
 
-    /// Lensfun auto-corrector cache refresh for a render at `width`×`height`
-    /// (G-06, `lensfun` feature only): rebuilds the cached corrector when
-    /// the identity/dimensions key changed. Split from
-    /// [`Self::lensfun_render_ref`] so renders can refresh under `&mut`
-    /// first and then build the `RenderContext` under shared borrows.
-    #[cfg(feature = "lensfun")]
-    fn ensure_lensfun_cache(&mut self, width: u32, height: u32) {
-        let Some(identity) = self.loaded_lens_identity.clone() else {
-            return;
-        };
-        let (Some(make), Some(model), Some(focal), Some(aperture)) = (
-            identity.camera_make.clone(),
-            identity.camera_model.clone(),
-            identity.focal_length.filter(|v| v.is_finite()),
-            identity.aperture.filter(|v| v.is_finite()),
-        ) else {
-            return;
-        };
-        let key = (
-            Some(make.clone()),
-            Some(model.clone()),
-            identity.lens.clone(),
-            width,
-            height,
-            focal.to_bits(),
-            aperture.to_bits(),
-        );
-        let fresh = match &self.lensfun_cache {
-            Some(cached) => cached.key != key,
-            None => true,
-        };
-        if !fresh {
-            return;
-        }
-        // Rebuild: a new source (or new dimensions) needs a new modifier.
-        // A rebuild that finds no profile caches NOTHING, so every render
-        // retries the lookup instead of pinning a stale miss across a DB
-        // install — the lookup itself is strict (never a guessed
-        // correction, same contract as the CLI `build_lensfun_corrector`).
-        let Some(db) = lumina_lensfun::LensfunDb::load_system() else {
-            return;
-        };
-        let Some(corrector) = db.for_camera(
-            &make,
-            &model,
-            identity.lens.as_deref(),
-            width,
-            height,
-            focal,
-            aperture,
-            10.0,
-        ) else {
-            return;
-        };
-        info!(
-            "lensfun auto: profile matched for {make} {model} (distortion={} vignetting={} tca={})",
-            corrector.has_distortion(),
-            corrector.has_vignetting(),
-            corrector.has_tca()
-        );
-        // GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: snapshot the
-        // pixel-relevance once. A non-identity corrector is bound on the GPU as
-        // a precomputed `LensfunMap` (`lensfun_gpu::bind`); only an identity
-        // one is a no-op that leaves the manual model in effect on both paths.
-        #[cfg(feature = "gpu")]
-        let active = !corrector.is_identity();
-        self.lensfun_cache = Some(CachedLensCorrector {
-            corrector,
-            _db: db,
-            key,
-            #[cfg(feature = "gpu")]
-            active,
-            #[cfg(feature = "gpu")]
-            gpu_map: None,
-        });
-    }
-
-    /// Shared borrow of the cached Lensfun auto-corrector for a render
-    /// (G-06, `lensfun` feature only). Call [`Self::ensure_lensfun_cache`]
-    /// first so the cache matches the rendered frame.
-    #[cfg(feature = "lensfun")]
-    fn lensfun_render_ref(&self) -> Option<lumina_core::LensfunCorrectorRef<'_>> {
-        self.lensfun_cache
-            .as_ref()
-            .map(|cached| lumina_core::LensfunCorrectorRef(&cached.corrector))
-    }
-
     /// User-visible lens-blur depth status (G-05): `off`, `heuristic active`
     /// or `missing depth artifact`. The GUI never resolves external depth
     /// files (no depth format in v1), so a referenced artifact reports
@@ -12321,6 +12241,8 @@ mod tests {
     mod iptc;
     mod layout;
     mod lens_blur;
+    // LENSFUN-CALLER-37: the diagnostics sink's three contract clauses.
+    mod lensfun_diagnostics;
     mod library_scan;
     mod library_sort;
     mod library_sync;

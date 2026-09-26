@@ -6,6 +6,93 @@
 
 use super::*;
 
+// ---------------------------------------------------------------------------
+// Shared log capture (LENSFUN-CALLER-37).
+//
+// `log` accepts **one** logger per process, and `set_logger` fails silently
+// for the loser. Two test modules each installing their own capture therefore
+// race: whichever runs first swallows every record the other one waits for.
+// `tests/library_sort/migration.rs` had its own installer, and the Lensfun
+// diagnostics tests needed a second one — so there is exactly **one** installer
+// here, and both read from it.
+//
+// Records are bucketed **per thread**: the suite runs multi-threaded, so a
+// global vector would mix unrelated tests' records into each other's
+// assertions, and one test draining the buffer would starve another. Each
+// bucket is capped so a chatty test cannot grow it without bound.
+// ---------------------------------------------------------------------------
+
+/// Per-thread captured records, formatted as `"<LEVEL>: <message>"`.
+type CapturedLogs = std::sync::Mutex<std::collections::HashMap<std::thread::ThreadId, Vec<String>>>;
+
+/// How many records one thread's bucket keeps before the oldest are dropped.
+const CAPTURED_LOG_CAP: usize = 256;
+
+static CAPTURED_LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+
+struct CaptureLogger;
+
+impl log::Log for CaptureLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        // Everything: a filter here would decide another test's fate, and the
+        // per-thread buckets keep the volume bounded anyway.
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        if let Ok(mut logs) = CAPTURED_LOGS
+            .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+            .lock()
+        {
+            let bucket = logs.entry(std::thread::current().id()).or_default();
+            bucket.push(format!("{}: {}", record.level(), record.args()));
+            if bucket.len() > CAPTURED_LOG_CAP {
+                let excess = bucket.len() - CAPTURED_LOG_CAP;
+                bucket.drain(..excess);
+            }
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Install the process-wide capture logger (idempotent, thread-safe).
+///
+/// `Trace` is the max level on purpose: a test that asserts "this is a `debug`
+/// line" needs `debug!` records to reach the logger at all.
+pub(super) fn init_log_capture() {
+    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = log::set_boxed_logger(Box::new(CaptureLogger));
+        log::set_max_level(log::LevelFilter::Trace);
+    });
+}
+
+/// The calling thread's captured records, oldest first.
+pub(super) fn captured_logs() -> Vec<String> {
+    init_log_capture();
+    CAPTURED_LOGS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .map(|logs| {
+            logs.get(&std::thread::current().id())
+                .cloned()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// Discard the calling thread's captured records.
+pub(super) fn clear_captured_logs() {
+    init_log_capture();
+    if let Ok(mut logs) = CAPTURED_LOGS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+    {
+        logs.remove(&std::thread::current().id());
+    }
+}
+
 // GUI-REFACTOR-W3-20 helpers moved out of the ratcheted crate root:
 // `new_app`, `open_and_decode` and the 2×1 PNG fixture are shared by the
 // thematic test modules through `crate::tests`'s `use support::*;`.

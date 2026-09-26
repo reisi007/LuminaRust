@@ -342,7 +342,29 @@ Verankert in
 und `tests::production_seam::production_does_not_report_an_absent_update_directory`
 (Stille bei `Absent`).
 
-#### Pflicht des Aufrufers von `load_system()` (F2 — offen)
+#### Pflicht des Aufrufers von `load_system()` (F2 — **geschlossen 2026-09-26**)
+
+**Stand: beide Produktaufrufer sind verdrahtet (LENSFUN-CALLER-37).**
+`lumina-gui` (`src/lensfun_auto.rs`) nutzt `load_system_with` mit dem
+GUI-eigenen `LogDiagnostics` (`src/lensfun_diag.rs`): eigener Log-Level je
+Ereignis (`resolved` = `debug`, `file_rejected`/`layer_skipped`/
+`pin_displaced` = `warn`, `failed` = `error`) und eine prozessweite
+Deduplizierung über Ereignis-Identitäten, damit eine nicht auflösbare
+Datenbank **eine** Warnung erzeugt und nicht eine pro Render. `lumina-cli`
+(`src/lensfun_cli.rs`) nutzt `load_system_with` mit einem
+prozessweiten `ReportOnce`-Sink über `with_diagnostics(|sink| …)`.
+**Der Lookup wird in beiden Pfaden nicht gecacht** — ein Miss lässt den Cache
+leer, damit eine später installierte Datenbank noch aufgefaellt wird; nur das
+*Melden* ist dedupliziert.
+
+**Verbleibende, bewusst nicht behobene Grenze:** `lumina-cli` meldet über
+`StderrDiagnostics`, also **unlevellierte** Textlabels nach `stderr`. Das ist für
+ein Terminalprogramm korrekt und sichtbar; es ist nur keine Log-Aussage. Der
+`log`-Pfad ist auf die GUI beschränkt, weil nur dort ein Logger existiert und ein
+per Dock/Finder gestarteter Prozess **kein** `stderr` hat — das war der Grund
+für die F2-Reparatur.
+
+<details><summary>Historie: der frühere, inzwischen überholte Stand</summary>
 
 `load_system()` (Legacy, von `lumina-gui` und `lumina-cli` genutzt) ist **nicht
 mehr still**, auch nicht im Erfolgsfall: Erfolg, jede Abweichung und jeder
@@ -367,6 +389,8 @@ Bis dahin gilt: `None` aus `load_system_with` bedeutet **„Linsenkorrektur nich
 verfügbar"**, nicht „kein Profil passt" — und genau dieser Unterschied wird
 gemeldet. Ein `None` ohne zusätzliche Auswertung der Senke bleibt in CLI/GUI
 eine stille Degradierung, die mit dieser Änderung **nicht** behoben ist.
+
+</details>
 
 ### Kein stiller Ersatz, harte Fehler
 
