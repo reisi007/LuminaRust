@@ -3,11 +3,23 @@
 //! source still forces a new identity.
 //!
 //! The pre-fix UI thread read and BLAKE3-hashed every visible RAW in every
-//! frame (0.105 s per 12 MB CR3, 0.79 s per frame at three visible cells
-//! against 0.69 s of decode → ~1 fps for a folder of real RAWs). The memo in
-//! [`crate::source_identity`] keys the expensive identity on
-//! `(path, mtime, len)`; the normative contract lives in
+//! frame. Per **lookup** (one file, one hash) that measured ~115 ms for a
+//! 12.3 MB CR3; the reported frame figure of 0.79 s at **3** visible cells is
+//! consistent with two full reads per cell (the `from_path` hash plus the
+//! sidecar `std::fs::read`), i.e. 3 × 2 × ~0.115 s plus overhead, against
+//! 0.69 s of decode — about 1 fps for a folder of real RAWs. The two figures
+//! have different denominators and must not be set against each other; the
+//! reproducible evidence is the counters below, not the wall clock.
+//!
+//! The memo in [`crate::source_identity`] keys the expensive identity on
+//! **`(path, mtime, ctime, len)`** — the kernel-maintained `ctime` is load
+//! bearing, not decoration; see the `FileStatKey` doc and the SOLL in
 //! `feature/platform/cli-gui-wasm.md` § *Quell-Identitäts-Cache im UI-Thread*.
+//! Do not "simplify" this key back to `(path, mtime, len)`: that reintroduces
+//! the stale-identity defect this change exists to prevent, and both
+//! `same_length_rewrite_with_restored_mtime_still_forces_a_new_identity` and
+//! the committed `thumbnail_source_replacement_invalidates_cached_and_pending_state`
+//! fail if you do.
 //!
 //! Every assertion here is a **count** or a **value**, never a sleep: the memo
 //! records how many whole-file hashes it spent on a key, and the counter is
@@ -20,11 +32,17 @@ use crate::thumb_cache::THUMB_VIRTUAL_COPY;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// A temp file with a fixed mtime, so `(path, mtime, len)` keys are
+// THUMB-HASH-PERF-35: the trace line and the TOCTOU write guard, split out to
+// keep both files under the 500-line rule (this file owns the shared `Fixture`).
+#[cfg(test)]
+#[path = "source_identity_trace.rs"]
+mod trace;
+
+/// A temp file with a fixed mtime, so the `(path, mtime, ctime, len)` keys are
 /// reproducible and a deliberate mtime bump is unambiguous.
-struct Fixture {
-    _dir: tempfile::TempDir,
-    path: PathBuf,
+pub(super) struct Fixture {
+    pub(super) _dir: tempfile::TempDir,
+    pub(super) path: PathBuf,
 }
 
 impl Fixture {
@@ -53,7 +71,7 @@ impl Fixture {
     }
 
     /// Pin the mtime back to the anchor (used by the ctime guard).
-    fn restore_mtime(&self) {
+    pub(super) fn restore_mtime(&self) {
         self.set_mtime(Self::mtime_anchor());
     }
 
@@ -70,11 +88,11 @@ impl Fixture {
 /// Deterministic filler large enough to span several 64-KB hash chunks, so the
 /// streaming/one-shot equivalence below is a real test and not a
 /// single-chunk coincidence.
-fn payload(len: usize, seed: u8) -> Vec<u8> {
+pub(super) fn payload(len: usize, seed: u8) -> Vec<u8> {
     (0..len).map(|index| (index as u8) ^ seed).collect()
 }
 
-fn identity_of_bytes(bytes: &[u8]) -> String {
+pub(super) fn identity_of_bytes(bytes: &[u8]) -> String {
     format!("blake3:{}", blake3::hash(bytes).to_hex())
 }
 
@@ -156,9 +174,9 @@ fn changed_file_forces_a_new_identity() {
         "the new length is a new key, so its own first hash is spent"
     );
 
-    // (b) Same length, different content, different mtime — the residual case
-    // the SOLL names. An edit that preserves the byte count still invalidates,
-    // because the write bumps the mtime.
+    // (b) Same length, different content, different mtime. Here the mtime alone
+    // already decides it (the write bumps it), so `ctime` is not exercised; the
+    // case where the mtime is *restored* is covered separately below.
     let same_size = payload(longer.len(), 0x22);
     assert_eq!(
         same_size.len(),
@@ -179,10 +197,10 @@ fn changed_file_forces_a_new_identity() {
     );
 }
 
-/// The residual case the task brief's `(path, mtime, len)` key gets **wrong**,
-/// and the reason the key carries `ctime`. A rewrite that preserves the byte
-/// length *and* restores the mtime still changes the kernel-maintained inode
-/// change time, so the memo must miss.
+/// The residual case the originally proposed `(path, mtime, len)` key gets
+/// **wrong**, and the reason the key carries `ctime`. A rewrite that preserves
+/// the byte length *and* restores the mtime still changes the
+/// kernel-maintained inode change time, so the memo must miss.
 ///
 /// This mirrors the committed guard
 /// `thumbnail_source_replacement_invalidates_cached_and_pending_state`
@@ -241,12 +259,15 @@ fn same_length_rewrite_with_restored_mtime_still_forces_a_new_identity() {
 /// as a successful identity, so a file that later appears — or becomes readable
 /// — resolves freshly instead of inheriting a remembered failure.
 ///
-/// Note the deliberate boundary (documented in the SOLL § 3): a path whose
-/// content hash was *already* computed keeps serving that hash even if its
-/// permissions are revoked afterwards, because `chmod` changes neither mtime nor
-/// length and the content genuinely did not change. The `Unavailable` class is
-/// about a file whose identity was never determined; a determined identity is a
-/// fact about bytes that are still on disk.
+/// Note the deliberate boundary (documented in the SOLL § 3): revoking
+/// permissions on a path whose hash was *already* computed does **not** change
+/// the returned class. `chmod` does advance the key's `ctime` (it is a metadata
+/// change), so the memo **does** miss and the lookup really re-attempts — but
+/// that re-attempt fails, and a failure is not memoized, so what the caller
+/// sees is the freshly-determined `Unavailable`, not a remembered `Hashed`. The
+/// `Unavailable` class means "the identity could not be determined (now)"; a
+/// hash that was determined while the file was readable is simply not
+/// re-derived from an unreadable file, because the content did not change.
 #[test]
 fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
     let dir = tempfile::tempdir().unwrap();
@@ -255,23 +276,29 @@ fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
         FileContentIdentity::from_path(&absent),
         FileContentIdentity::Missing
     );
-    assert_eq!(
-        source_identity::hash_count(&absent),
-        None,
-        "a missing file must not be memoized as an identity"
-    );
+    // NOTE: `hash_count` is not asserted here. For a nonexistent path it
+    // returns `None` because `metadata` fails, so such an assertion could never
+    // fail and would prove nothing. The falsifiable half of this claim is
+    // asserted below via the *existing* locked file (whose `stat` succeeds) and
+    // by the exactly-one-hash check once the absent path appears.
     assert_eq!(
         FileContentIdentity::from_path(&absent),
         FileContentIdentity::Missing,
         "and the miss must be retried, not remembered"
     );
 
-    // It appears: the remembered `Missing` must not survive.
+    // It appears: the remembered `Missing` must not survive, and it must cost
+    // exactly one real hash — not zero (a memoized failure) and not two.
     let bytes = payload(64, 0x33);
     std::fs::write(&absent, &bytes).unwrap();
     assert_eq!(
         FileContentIdentity::from_path(&absent),
         FileContentIdentity::Hashed(identity_of_bytes(&bytes))
+    );
+    assert_eq!(
+        source_identity::hash_count(&absent),
+        Some(1),
+        "a newly appeared file must be hashed exactly once, not served for free"
     );
 
     // Never-readable file: `stat` succeeds, `open` is denied. The failure class
@@ -396,6 +423,8 @@ fn bundle_identity_precedence_and_source_action_bundle_are_unchanged() {
         "a changed source must force a new bundle identity"
     );
 }
+
+// ---- 6. Observability + the memo write guard: `source_identity_trace.rs` ----
 
 // ---- Helpers ----
 

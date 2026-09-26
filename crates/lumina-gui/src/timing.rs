@@ -134,6 +134,18 @@ pub(crate) fn preview_index_line(folder: &Path, entries: usize, ms: f64) -> Stri
     )
 }
 
+/// THUMB-HASH-PERF-35: one whole-file source identity that was really computed
+/// (a memo miss). `hash_ms` is the wall clock of the read+BLAKE3 pass, so a
+/// manual `RUST_LOG=trace` acceptance run (Agents.md R5-LOG-1) can *count* the
+/// hashes a browse session spent and see that they stop after the first frame.
+pub(crate) fn source_identity_hashed_line(path: &Path, bytes: u64, ms: f64) -> String {
+    format!(
+        "GUI source identity hashed (cache miss) path={} bytes={bytes} hash_ms={}",
+        path.display(),
+        format_ms(ms)
+    )
+}
+
 /// R4-SWITCH-2: the depth-limited RAW count of one folder-tree node. This walk
 /// runs synchronously on the UI thread the first time a node is shown and was
 /// the uninstrumented block behind the first Library paint; the line makes it

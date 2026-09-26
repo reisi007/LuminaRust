@@ -1210,9 +1210,14 @@ Kette: `ensure_thumbnail_priority` (`library_grid.rs`, `filmstrip_frame.rs`,
 64-KB-Blöcken ganz liest — **vor** jedem Early-Out. Zweiter Voll-Lesepfad mit
 derselben Wirkung: der Fail-closed-Quellabgleich in
 `read_sidecar_recipe_snapshot_detailed` (`std::fs::read(source)` plus Hash).
-Gemessen: 0,105 s Hash pro 12-MB-CR3, **0,79 s pro UI-Frame** bei 3 sichtbaren
-Zellen bei 0,69 s Decode. Die 18-Byte-`.arw`-Sentinel-Fixtures hatten das
-vollständig verdeckt. **Nutzerfolge:** ein Ordner echter RAWs ergibt ~1 fps.
+Gemessen: **~115 ms Hash pro Lookup** (eine 12,3-MB-CR3, eine Datei, einmal;
+5 Läufe: 115,0–117,1 ms) bei **0,79 s pro UI-Frame mit 3 sichtbaren Zellen** und
+0,69 s Decode. Die beiden Zahlen sind **nicht** dieselbe Größenordnung und
+dürfen nicht gegeneinander gestellt werden: der Lookup ist *eine* Datei
+*einmal*, der Frame ist *drei* Zellen *zweimal* (jeder der beiden Voll-Lesepfade)
+— 3 × 2 × ~0,115 s ≈ 0,69 s plus Syscall-/JSON-Anteil ergibt die berichteten
+0,79 s. Die 18-Byte-`.arw`-Sentinel-Fixtures hatten das vollständig verdeckt.
+**Nutzerfolge:** ein Ordner echter RAWs ergibt ~1 fps.
 
 **Ziel.** Die teure Volldatei-Identität wird **einmal pro Dateizustand**
 berechnet, nicht einmal pro Frame. Der Identitäts-*Wert* bleibt derselbe; nur
@@ -1270,6 +1275,22 @@ Ein gewöhnlicher Schreibvorgang ändert Länge, mtime **oder** ctime:
 - atomarer Ersatz (`rename`/Kopieren über die Datei) → neues `mtime` und neues
   `ctime`, und im Regelfall andere Länge → Cache-Miss.
 
+**2a. `ctime` deckt vier Angriffsklassen ab, die Länge *und* mtime unangetastet
+lassen** (alle vier auf der Zielplattform verifiziert; in jedem Fall
+`len_same=true`, `mtime_same=true`, `ctime_same=false`):
+
+| # | Angriff | Warum `(path, mtime, len)` ihn **nicht** sieht | `ctime` |
+| --- | --- | --- | --- |
+| 1 | In-Place-Rewrite, Bytezahl und mtime restauriert | Länge gleich, mtime per `set_modified` zurückgesetzt | neu |
+| 2 | **Symlink-Swap** (`pfad → a` wird `pfad → b`) | `stat` folgt dem Link; Pfad, Länge und mtime stimmen für `a` und `b` überein, der Inhalt ist aber `b` | neu |
+| 3 | **Hardlink-Write-Through** (dieselbe Inode über den zweiten Namen mutiert) | `stat` liefert dieselbe Inode; `st_ino` ist hier **identisch** — Inode als Schlüsselteil hätte *auch nicht* geholfen | neu |
+| 4 | **Pfad-Wiederverwendung** (löschen + neu anlegen, gleiche Länge, mtime restauriert) | Pfad, Länge und mtime stimmen überein | neu |
+
+Fall 2 ist praktisch relevant, weil LuminaRust-Pfade aus einem Dateibrowser
+oder Drag-&-Drop stammen und ein Nutzer sie durch einen Symlink-Zielwechsel
+ersetzen kann, ohne die Bilddatei selbst anzufassen. Fall 3 ist der Grund, warum
+`st_ino` **nicht** zusätzlich in den Schlüssel aufgenommen wurde (siehe 4.).
+
 **3. Korrektheitsinvariante (nicht verhandelbar).** Ein aus dem Memo
 gelieferter Wert darf **nie** für eine Datei ausgegeben werden, die sich
 tatsächlich geändert hat. Daraus folgt verbindlich:
@@ -1293,15 +1314,23 @@ tatsächlich geändert hat. Daraus folgt verbindlich:
   gesetzt und vom Benutzer nicht zurücksetzbar. Das Restfenster ist damit
   praktisch geschlossen; es bliebe nur ein Angreifer mit Raw-Device-Zugriff.
 - **Nicht-Unix:** Ohne `ctime` degradiert der Schlüssel auf
-  `(path, mtime, len)`. Dort gilt das ursprünglich benannte Restrisiko: eine
+  `(path, mtime, len)`. Dort gilt das oben benannte Restrisiko: eine
   Inhaltsänderung mit identischer Länge und identischer mtime (mtime
   absichtlich auf den alten Wert zurückgesetzt, z. B. `cp -p`/`rsync --times`/
   `tar -x`) würde als unverändert gewertet. Das ist **kein** stiller Fallback,
-  sondern eine dokumentierte Plattformgrenze mit benanntem Restrisiko; die
-  zweite, unabhängige Schicht — der Sidecar-Quellabgleich
-  (`source_fingerprint_matches`) — fängt eine solche Änderung beim Öffnen/
-  Neuberechnen einer Zelle mit Sidecar weiterhin mit dem sichtbaren
-  „source identity conflict" ab.
+  sondern eine dokumentierte Plattformgrenze mit benanntem Restrisiko.
+  **Ausdrücklich ohne zusätzliche Absicherung:** Auf Nicht-Unix gibt es für den
+  Per-Frame-Pfad **keine** unabhängige zweite Schicht. Der UI-Thread ruft
+  `read_sidecar_recipe_snapshot_detailed(source, vc, None)` auf, und dessen
+  `live_source` stammt aus `source_fingerprint_of` — **demselben Memo**. Ein
+  veralteter Memo-Eintrag ergibt also einen Abgleich „veraltet gegen
+  gespeichert", der **matcht**, und es entsteht *kein* sichtbarer
+  „source identity conflict". Nur `preview_jobs.rs` und `thumb_worker.rs`
+  übergeben echte dekodierte Bytes (`read_sidecar_recipe_snapshot_for_bytes`)
+  und sind memo-unabhängig — sie laufen aber erst, wenn der UI-Thread die
+  Identitätsänderung **schon** erkannt hat, können sie also nicht die
+  Erkennung ersetzen. Auf Nicht-Unix ist diese Grenze damit ungeschützt; das
+  ist benannt und nicht kaschiert.
 - **Inode:** wurde bewusst **nicht** in den Schlüssel aufgenommen. `st_ino`
   ändert sich nur bei Ersetzung per `rename`, nicht bei einem In-Place-Write
   über denselben Pfad — es hätte den entscheidenden Fall (gleiche Länge,
@@ -1319,30 +1348,89 @@ deckt nur einen `BTreeMap`-Lookup bzw. -Einfügebereich ab. Ein Lock-Poison
 wird über `into_inner()` überlebt (der Memo enthält reine Ableitungen, keine
 Ressourcen) — er führt zu einem Cache-Miss, nie zu einer falschen Identität.
 Zwei Threads, die dieselbe Datei gleichzeitig anfordern, dürfen sie beide
-hashen; das ist doppelte Arbeit, keine Race-Condition. Die Zähler sind
-`AtomicU64`.
+hashen; das ist doppelte Arbeit, keine Race-Condition.
+
+**Die Zähler sind ausdrücklich keine `AtomicU64`:** sie sind ein `u64`-Feld
+*pro Memo-Eintrag* (`MemoEntry::hashes`) und damit durch **denselben** `Mutex`
+geschützt wie der Hash selbst. Ein separater atomarer Zähler wäre redundant
+und würde eine zweite, aus dem Guard heraus erreichbare Schreibstelle erzeugen.
+
+**5a. TOCTOU zwischen `stat` und dem Hash (verbindlich).** Der Schlüssel wird
+*vor* dem ~107-ms-Lesevorgang genommen. Wird die Datei während dieses Fensters
+verändert, ist der gelesene Digest **zerrissen** und gehört zu keinem Schlüssel.
+Verbindlich ist daher: **der Schreibpfad ist die einzige Eintrittsstelle in den
+Memo (`store`) und `stat`t dort erneut.** Stimmt der Stempel nach dem Lesen nicht
+mehr mit dem vor dem Lesen genommenen überein, wird **nichts** eingetragen; der
+nächste Aufruf hasht erneut. Kosten: **ein** zusätzlicher `stat` auf dem kalten
+Pfad (nur bei einem Miss), auf einem warmen Treffer **keiner**. Der Wettbewerbs-
+fall selbst (das ~107-ms-Fenster) ist nicht auf Vorrat reproduzierbar; die
+Entscheidung schon, und die ist getestet.
+
+**5b. Verdrängung (Eviction), offen benannt.** Der Memo ist auf 4096 Einträge
+begrenzt; beim Überlauf wird er **komplett** geleert. Das ist eine bewusste,
+laut benannte Abwägung und keine stille Optimierung:
+
+- Ein Überlauf ist ein **Herden-Rehash**: die nächsten bis zu 4096 Lookups
+  hashten erneut. Bei realistischen Bibliotheken (≤ 4096 sichtbare/quell-
+  identifizierte Pfade) tritt er praktisch nicht ein; er existiert nur als
+  Schutz gegen unbegrenztes Wachstum in sehr langen Sessions mit vielen
+  Dateizuständen.
+- Das Leeren setzt **auch die pro Schlüssel gezählten Hashes auf 0**
+  zurück. Observierbarkeit und Verdrängung sind damit gekoppelt: ein Test, der
+  die Zähler über eine Verdrängung hinaus liest, sieht wieder 0 → 1. Für die
+  Abnahme-Tests ist das unkritisch (jeder Test nutzt einen frischen
+  `tempdir`-Pfad und überschreitet die Grenze nicht), aber es ist eine
+  **echte Kopplung** und keine reine Zählervariablen-Eigenschaft.
 
 **6. Beobachtbarkeit und Abnahme.**
 
 - `content_hash(path)` / `source_fingerprint_of(path)` liefern **denselben
   Wert** wie der Vorher-Code (`blake3:<hex>` bzw. `SourceFingerprint` mit
   `byte_length`); ein Cache verändert niemals einen Identitätswert.
-- Ein Zähler der **tatsächlich gestarteten Vollhashes** macht „kein Re-Hash
-  bei unveränderter Datei" **beweisbar** (keine Zeitmessung als Beleg).
-- Jeder Miss emittiert **eine** `trace!`-Zeile
-  (`GUI source identity hashed (cache miss) path=… bytes=… hash_ms=…`), damit
-  ein manueller `RUST_LOG=trace`-Run nachzählen kann. Im Normalbetrieb ist
-  das still.
-- Der Memo ist **begrenzt** (Klartext-Bound); beim Überlauf wird er geleert.
-  Das ist eine reine Optimierung: die Folge ist ein Miss, nie ein falscher
-  Treffer.
+- Ein Zähler der **tatsächlich durchgeführten Vollhashes** macht „kein Re-Hash
+  bei unveränderter Datei" **beweisbar** (keine Zeitmessung als Beleg). Er ist
+  **pro Schlüssel** (`hashes` je Memo-Eintrag, siehe 5.) und damit gegen die
+  Parallelität der Testsuite immun: ein Test auf einem `tempdir`-Pfad liest
+  seine eigene Zahl, unbeeinflusst von Tests, die andere Dateien hashen.
+- Jeder Miss emittiert **genau eine** `trace!`-Zeile
+  (`GUI source identity hashed (cache miss) path=… bytes=… hash_ms=…`) über
+  `timing::emit`; ein **Treffer** emittiert **nichts**. Damit kann ein manueller
+  `RUST_LOG=trace`-Akzeptanzlauf (R5-LOG-1) die Hashes einer Browse-Session
+  **zählen** und sehen, dass sie nach dem ersten Frame aufhören. Kosten: auf
+  einem Miss ein `Instant::now()` (unvermeidbar, um `hash_ms` zu messen) und
+  auf einem Treffer **gar nichts** — `emit` wertet den Format-String nur aus,
+  wenn `trace` aktiv ist; im Normalbetrieb (`RUST_LOG=info`) entsteht weder
+  Allokation noch Formatierung.
+- Der Memo ist **begrenzt** (Klartext-Bound 4096); beim Überlauf wird er
+  vollständig geleert — Herden-Rehash und Zurücksetzen der pro Schlüssel
+  gezählten Hashes sind in 5b benannt. Das ist eine reine Optimierung: die
+  Folge ist ein Miss, nie ein falscher Treffer.
+- **Messgrößen — nicht miteinander verrechnen.** Drei Größen, drei
+  Bezugsgrößen, alle auf den beiden lizenzierten CR3 aus `sample-data/raw/`
+  (23.947.092 Byte sichtbar, 5 Läufe):
+  - **pro Lookup** (1 Datei, 1 Hash, 12.339.882 Byte): **~115 ms** vor dem Fix
+    (115,0 / 115,4 / 116,0 / 116,5 / 117,1 ms). Nach dem Fix **~0,004 ms** warm.
+  - **pro Frame mit 2 sichtbaren Zellen** (die zwei Fixture-CR3, 20 Frames):
+    vorher **~224 ms/Frame** im Mittel (223,6–228,4 ms); nach dem Fix
+    **0,004–0,005 ms/Frame** für alle Frames nach dem Kalt-Frame, dessen
+    einmalige Kosten **~224 ms** sind.
+  - **pro Frame mit 3 sichtbaren Zellen** (der motivating Befund, vor dem Fix,
+    nicht nachgemessen): **0,79 s**, davon ~0,69 s Hashing (3 Zellen ×
+    2 Voll-Lesepfade × ~0,115 s).
+  Diese Zahlen sind **nicht** direkt gegeneinanderstellbar: 2 Zellen gegen 3,
+  kalter gegen warmen Frame, Lookup gegen Frame. Der reproduzierbare Nachweis
+  der *Wirkung* sind nicht die Zeiten, sondern die Zähler und die `trace!`-
+  Zeilen: **11 Lookups auf eine unveränderte Datei kosteten vorher 11 Hashes,
+  nach dem Fix 1 Hash und genau 1 Trace-Zeile.**
 - Nachweis-Testanker: unveränderte Datei → genau **ein** Hash über N
   Aufrufe; geänderte Datei (Länge, mtime, **und** nur mtime bei gleicher
   Länge) → **andere** Identität; fehlende und unlesbare Datei → `Missing` bzw.
   `Unavailable(..)` mit **jeweils erneutem** Versuch (nie gecacht);
   `persisted_action_identity`-Präzedenz und Source-Action-Bundle-Verhalten
   unverändert; BLAKE3 über 64-KB-Blöcke ist **zeichengleich** mit dem
-  Einmal-Hash (pinnt die Chunking-Annahme).
+  Einmal-Hash (pinnt die Chunking-Annahme); ein kalter Miss emittiert **eine**
+  `trace!`-Zeile im spezifizierten Format, ein warmer **keine**; ein während
+  des Lesens verrutschter Stempel wird **nicht** gememoized (5a).
 - **Abgrenzung:** Produktcode in `lumina-gui`. Keine Änderung an
   Sidecar-Schema, Persistenz, Migration, Renderpipeline oder Rezept; keine
   Änderung an Fixture-/Golden-Struktur.

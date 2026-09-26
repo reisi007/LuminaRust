@@ -13,18 +13,26 @@
 //!    [`source_fingerprint_of`]), the `THUMB-HASH-PERF-35` fix. The thumbnail
 //!    scheduler asks for a source's *exact* content identity once per visible
 //!    cell **per frame**, and the answer used to be "read and BLAKE3-hash the
-//!    whole 12 MB RAW" every single time (0.105 s per file, 0.79 s per frame at
-//!    three visible cells, against 0.69 s of decode). The memo keys the
-//!    expensive full-file identity on the cheap stat triple
-//!    `(path, mtime, len)`, so an unchanged file is hashed once instead of once
-//!    per frame. It changes **no identity value** — only how often the same
-//!    value is recomputed.
+//!    whole 12 MB RAW" every single time — ~115 ms per *lookup* for a 12.3 MB
+//!    CR3, and 0.79 s per *frame* at three visible cells (two full reads per
+//!    cell) against 0.69 s of decode. The memo keys the expensive full-file
+//!    identity on the cheap stat quadruple
+//!    **`(path, mtime, ctime, len)`**, so an unchanged file is hashed once
+//!    instead of once per frame. It changes **no identity value** — only how
+//!    often the same value is recomputed.
+//!
+//!    **`ctime` is load bearing, not decoration.** Do not "simplify" this key
+//!    back to `(path, mtime, len)`: the committed regression
+//!    `thumbnail_source_replacement_invalidates_cached_and_pending_state`
+//!    restores both the byte length *and* the mtime and still requires a new
+//!    content identity, so the shorter key would serve stale pixels. See the
+//!    [`FileStatKey`] doc for the full argument.
 //!
 //! The normative contract (cache key, why it is sound, what happens on a miss,
 //! and the "a genuinely changed source must still yield a new identity"
 //! invariant) is `feature/platform/cli-gui-wasm.md` § *Quell-Identitäts-Cache im
-//! UI-Thread*. The residual risk — a same-length change with an explicitly
-//! preserved mtime — is named there, not hidden here.
+//! UI-Thread*. The residual risk — a platform that exposes no `ctime` — is
+//! named there, not hidden here.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -120,25 +128,38 @@ const HASH_CHUNK: usize = 64 * 1024;
 /// A drop costs one re-hash, never a wrong hit.
 const MAX_MEMO_ENTRIES: usize = 4096;
 
-/// Cheap, mutation-sensitive cache key.
+/// Cheap, mutation-sensitive cache key: `(path, mtime, ctime, len)`.
 ///
-/// The task brief proposed `(path, mtime, len)`. That key is **not sound
-/// here**, and the existing suite says so explicitly: the committed
-/// regression `thumbnail_source_replacement_invalidates_cached_and_pending_state`
-/// writes new content, restores the original byte length *and* the original
-/// mtime, and asserts the content identity still changes ("content identity
-/// must change even with identical mtime/length"). `(path, mtime, len)` would
-/// serve a stale identity there, so the key additionally carries the inode
-/// **change time** (`ctime`).
+/// The originally proposed key `(path, mtime, len)` is **not sound here**, and
+/// the existing suite says so explicitly: the committed regression
+/// `thumbnail_source_replacement_invalidates_cached_and_pending_state` writes
+/// new content, restores the original byte length *and* the original mtime, and
+/// asserts the content identity still changes ("content identity must change
+/// even with identical mtime/length"). `(path, mtime, len)` would serve a stale
+/// identity there, so the key additionally carries the inode **change time**
+/// (`ctime`).
 ///
 /// `ctime` is the kernel-maintained "last metadata-or-content change"
 /// timestamp. A user *can* set mtime back with `utimensat`/`touch -r`, but
-/// cannot set `ctime` back — every write and every `set_modified` bumps it.
-/// So `ctime` closes exactly the hole `mtime` leaves, at the cost of one
-/// already-paid `stat`. On non-Unix targets there is no `ctime`; the key then
-/// degrades to the stat triple and the documented residual risk stands.
+/// cannot set `ctime` back — every write and every `set_modified` bumps it. It
+/// also catches three further changes that leave length *and* mtime untouched.
+/// All four were verified on this platform, each yielding `len_same=true`,
+/// `mtime_same=true`, `ctime_same=false`:
+///
+/// * an in-place rewrite with the byte count preserved and mtime restored;
+/// * a **symlink swap** (`path → a` becomes `path → b`, both targets with the
+///   same length and mtime — `stat` follows the link, so path, length and mtime
+///   all agree while the content is now `b`);
+/// * a **hardlink write-through** (the same inode mutated through its other
+///   name — `st_ino` is *identical* here, so inode would not have helped);
+/// * **path reuse** (delete + recreate at the same path with the same length
+///   and a restored mtime).
+///
+/// It costs **no** extra syscall, because it comes out of the `stat` already
+/// performed. On non-Unix targets there is no `ctime`; the key then degrades to
+/// the stat triple and the residual risk in the SOLL applies in full.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct FileStatKey {
+pub(crate) struct FileStatKey {
     path: PathBuf,
     len: u64,
     mtime: SystemTime,
@@ -225,15 +246,36 @@ pub(crate) fn source_fingerprint_of(path: &Path) -> std::io::Result<SourceFinger
 #[cfg(test)]
 pub(crate) fn hash_count(path: &Path) -> Option<u64> {
     let key = current_key(path).ok().flatten()?;
-    locked().get(&key).map(|entry| entry.hashes)
+    hash_count_for(&key)
 }
 
-/// The memo key for `path` as of now. `Ok(None)` = stat succeeded but the
-/// filesystem reports no mtime, so the path is deliberately not memoizable.
+/// Test-only: the hash count stored under one **specific** key.
+///
+/// Needed because [`Self::hash_count`] only ever looks at the file's *current*
+/// key: an entry wrongly filed under a stale key would be invisible to it, and
+/// the TOCTOU guard test would pass whether the guard exists or not.
 #[cfg(test)]
-fn current_key(path: &Path) -> std::io::Result<Option<FileStatKey>> {
+pub(crate) fn hash_count_for(key: &FileStatKey) -> Option<u64> {
+    locked().get(key).map(|entry| entry.hashes)
+}
+
+/// The memo key for `path` as of right now.
+///
+/// `Ok(None)` = the stat succeeded but the filesystem reports no usable
+/// modification stamp, so the path is deliberately not memoizable. Used by the
+/// post-read re-stat ([`stamp_survived_read`]), the test-only [`hash_count`]
+/// and the TOCTOU guard test.
+pub(crate) fn current_key(path: &Path) -> std::io::Result<Option<FileStatKey>> {
     let metadata = std::fs::metadata(path)?;
     Ok(stat_key(path, &metadata))
+}
+
+/// Whether the pre-read and post-read stamps agree, i.e. whether the digest just
+/// computed is trustworthy as a memo entry. Pure, and exposed for the guard
+/// test: the ~100 ms race window itself is not reproducible on demand, the
+/// decision is.
+pub(crate) fn stamp_survived(before: Option<&FileStatKey>, after: Option<&FileStatKey>) -> bool {
+    before.is_some() && before == after
 }
 
 /// Look the file up, hashing it on a miss.
@@ -255,11 +297,24 @@ fn resolve(path: &Path) -> std::io::Result<(u64, String)> {
             return Ok((len, entry.content_hash.clone()));
         }
     }
+    // R3-LOG-1 / THUMB-HASH-PERF-35: the one wall-clock read of the heavy pass.
+    // The SOLL makes this line the manual counting seam for a `RUST_LOG=trace`
+    // acceptance run; `emit` only evaluates the closure when the level is on,
+    // so the format string costs nothing in normal operation.
+    let stopwatch = crate::timing::Stopwatch::now();
     let content_hash = hash_whole_file(path)?;
+    crate::timing::emit(|| {
+        crate::timing::source_identity_hashed_line(path, len, stopwatch.elapsed_ms())
+    });
     if let Some(key) = key.as_ref() {
-        store(key, &content_hash);
+        store(path, key, &content_hash);
     }
     Ok((len, content_hash))
+}
+
+/// Whether `path` still carries exactly `key` right now.
+fn stamp_survived_read(path: &Path, key: &FileStatKey) -> bool {
+    stamp_survived(Some(key), current_key(path).ok().flatten().as_ref())
 }
 
 /// A poisoned lock must not turn a pure memo into a panic cascade: the map
@@ -270,7 +325,23 @@ fn locked() -> MutexGuard<'static, BTreeMap<FileStatKey, MemoEntry>> {
 }
 
 /// Record one successful full hash, spending a hash on the key.
-fn store(key: &FileStatKey, content_hash: &str) {
+///
+/// **The single write path into the memo, and the TOCTOU guard lives here.**
+/// The key was taken before a read that costs ~100 ms; a file mutated inside
+/// that window produces a torn digest that belongs to no key at all. Storing
+/// it under the pre-read stamp would be a `(key, value)` inconsistency, so
+/// this re-stats (one syscall, cold path only) and **refuses** a stamp that no
+/// longer describes the file — the next lookup simply re-hashes. `crate`-visible
+/// so the guard can be tested directly: the race window itself is not
+/// reproducible on demand, but "a stale stamp is refused" is.
+pub(crate) fn store(path: &Path, key: &FileStatKey, content_hash: &str) {
+    if !stamp_survived_read(path, key) {
+        log::debug!(
+            "GUI source identity: file changed while it was being hashed, nothing memoized path={}",
+            path.display()
+        );
+        return;
+    }
     let mut memo = locked();
     if memo.len() >= MAX_MEMO_ENTRIES {
         log::debug!(
