@@ -96,6 +96,13 @@ mod gpu_routing;
 // shared by active preview/export and the navigator/neighbor/thumbnail paths.
 mod source_actions;
 use source_actions::ResolvedSourceActions;
+// THUMB-HASH-PERF-35: what a source file *is* — the one persisted
+// `SourceIdentity` constructor (shared by `present` and the selection-sidecar
+// path, replacing two field-for-field copies) plus the process-wide
+// whole-file content memo keyed on `(path, mtime, ctime, len)` that stops the
+// UI thread from re-hashing every visible RAW in every frame.
+mod source_identity;
+pub(crate) use source_identity::selection_source_identity;
 // GUI-REFACTOR-W1-20 S1.2a: source content hash + mask-plane loading.
 mod render_source;
 // GUI-REFACTOR-W1-20 S1.2b: the committed full-quality render entry points and
@@ -2398,47 +2405,6 @@ fn decode_selection_frame(path: &Path) -> Result<(Vec<u8>, ImageFrame, u8), Stri
     } else {
         let frame = ImageFrame::decode(&bytes).map_err(|error| error.to_string())?;
         Ok((bytes, frame, 1))
-    }
-}
-
-/// Source identity for a freshly created selection sidecar, mirroring
-/// [`LuminaApp::source_identity`] without requiring loaded-app state.
-fn selection_source_identity(
-    name: &str,
-    bytes: &[u8],
-    frame: &ImageFrame,
-    orientation: u8,
-    source_is_raw: bool,
-) -> SourceIdentity {
-    SourceIdentity {
-        relative_name: name.to_string(),
-        content_hash: format!("blake3:{}", blake3::hash(bytes).to_hex()),
-        byte_length: bytes.len() as u64,
-        modified_at: None,
-        raw_format: Path::new(name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("raster")
-            .to_ascii_uppercase(),
-        orientation,
-        decode_fingerprint: DecodeFingerprint {
-            decoder: decoder_identity(source_is_raw).into(),
-            version: if source_is_raw {
-                lumina_raw::libraw_decode_version()
-            } else {
-                env!("CARGO_PKG_VERSION").into()
-            },
-            parameters: BTreeMap::new(),
-            extras: BTreeMap::new(),
-        },
-        geometry_fingerprint: GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
-            orientation,
-            pixel_aspect_ratio: 1.0,
-            extras: BTreeMap::new(),
-        },
-        extras: BTreeMap::new(),
     }
 }
 
@@ -12402,6 +12368,9 @@ mod tests {
     mod sliders_domain;
     mod sliders_filmstrip;
     mod source_actions;
+    // THUMB-HASH-PERF-35: the whole-file source-identity memo (hash once per
+    // file state, not once per frame) and its changed-file/missing-file guards.
+    mod source_identity_cache;
     mod spot_heal;
     // R5-DUST-23-FOLLOWUP: spot selection + per-spot editing (select/update/
     // remove, detail-only-when-selected, no-Clone-fallback).

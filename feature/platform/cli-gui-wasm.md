@@ -1199,6 +1199,154 @@ Empfehlung; ein Zwei-Zeilen-Fallback mit `seq=<n>` bleibt Freigabefrage U4.
   kein Immer-an). Feature-Name bei S1.5-Umsetzung festlegen.
 - U6/U7 bleiben offen (Default-Vorschläge des Entwurfs gelten bis zur Freigabe).
 
+### Quell-Identitäts-Cache im UI-Thread (`THUMB-HASH-PERF-35`, Release 1.0)
+
+**Befund (gemessen 2026-09-25 bei `GOLDEN-FIXT-31`).** Der UI-Thread hat
+**jede sichtbare Quelldatei in jedem Frame vollständig gelesen und BLAKE3-gehasht.**
+Kette: `ensure_thumbnail_priority` (`library_grid.rs`, `filmstrip_frame.rs`,
+`library_views.rs`) → `ensure_thumbnail` → `FilmstripManager::refresh_source` →
+`source_identity` → `persisted_action_identity` (`sidecar_snapshot.rs`) →
+`FileContentIdentity::from_path` (`source_actions.rs`), das die Datei in
+64-KB-Blöcken ganz liest — **vor** jedem Early-Out. Zweiter Voll-Lesepfad mit
+derselben Wirkung: der Fail-closed-Quellabgleich in
+`read_sidecar_recipe_snapshot_detailed` (`std::fs::read(source)` plus Hash).
+Gemessen: 0,105 s Hash pro 12-MB-CR3, **0,79 s pro UI-Frame** bei 3 sichtbaren
+Zellen bei 0,69 s Decode. Die 18-Byte-`.arw`-Sentinel-Fixtures hatten das
+vollständig verdeckt. **Nutzerfolge:** ein Ordner echter RAWs ergibt ~1 fps.
+
+**Ziel.** Die teure Volldatei-Identität wird **einmal pro Dateizustand**
+berechnet, nicht einmal pro Frame. Der Identitäts-*Wert* bleibt derselbe; nur
+die Neuberechnung entfällt. Es gibt weiterhin keinen stillen Fallback: eine
+fehlende, unlesbare oder tatsächlich geänderte Datei verhält sich exakt wie
+vor dem Cache.
+
+**1. Cache-Schlüssel (verbindlich).** Der Prozess-Memo ist geschlüsselt auf
+
+```text
+(path, mtime, ctime, len)
+```
+
+- `path` — der übergebene Pfad **als Zeichenkette** (kein `canonicalize`:
+  zwei Schreibweisen derselben Datei sind zwei Cache-Einträge und damit
+  höchstens ein Fehlschlag, niemals ein falscher Treffer; ein
+  `canonicalize`-Syscall pro Zelle und Frame wäre selbst Teil des Problems).
+- `mtime` — `metadata.modified()`. **Fehlt die mtime** (Dateisystem liefert
+  sie nicht), ist der Eintrag **nicht cachebar** und die Datei wird bei jedem
+  Aufruf neu gehasht. Ein `None` wird nie als „unverändert" ausgelegt.
+- `len` — `metadata.len()`.
+- `ctime` — die **kernelgepflegte** Inode-Änderungszeit
+  (`MetadataExt::ctime()`/`ctime_nsec()`, Unix). **Warum zusätzlich zu
+  `mtime`:** der ursprünglich vorgeschlagene Schlüssel `(path, mtime, len)` ist
+  **nicht korrekt** und die bestehende Suite sagt das ausdrücklich. Der
+  committete Regressionstest `thumbnail_source_replacement_invalidates_cached_and_pending_state`
+  schreibt neuen Inhalt, stellt die ursprüngliche **Länge und die ursprüngliche
+  mtime wieder her** und verlangt, dass die Inhaltsidentität trotzdem wechselt
+  („content identity must change even with identical mtime/length"). Mit
+  `(path, mtime, len)` würde dort eine veraltete Identität ausgeliefert.
+  `ctime` schließt genau dieses Loch: ein Nutzer **kann** `mtime` mit
+  `utimensat`/`touch -r`/`set_modified` zurücksetzen, die `ctime` aber nicht —
+  jeder Schreibvorgang und jedes `set_modified` bumps sie kernelseitig. Sie
+  kostet **keinen** zusätzlichen Syscall, weil sie aus demselben `stat`
+  stammt. Auf Nicht-Unix-Zielen gibt es keine `ctime`; dort degradiert der
+  Schlüssel auf `(path, mtime, len)` und das unten benannte Restrisiko gilt in
+  vollem Umfang (siehe „Plattformgrenze" unten).
+
+Der Wert hängt **zusätzlich** an keinem Prozesszustand: es gibt keine
+sessionübergreifende Persistenz, der Memo ist rein prozesslokal und
+flüchtig.
+
+**2. Warum der Schlüssel als Ersatz für den Volldatei-Hash klang ist.**
+BLAKE3 über einen unveränderten Dateiinhalt ist per Definition konstant; die
+Identität eines Originals ändert sich also **nur**, wenn sich die Bytes ändern.
+Ein gewöhnlicher Schreibvorgang ändert Länge, mtime **oder** ctime:
+
+- andere Länge → anderer Schlüssel → Cache-Miss → erneuter Hash → **neue**
+  Identität (der häufigste und vollständig abgedeckte Fall);
+- gleiche Länge, anderer Inhalt → mtime und ctime werden aktualisiert →
+  anderer Schlüssel → Cache-Miss → neue Identität;
+- gleiche Länge, mtime bewusst zurückgesetzt (`cp -p`, `rsync --times`,
+  `tar -x`, Attributes-erhaltendes Kopieren) → mtime identisch, **ctime
+  dennoch neu** → Cache-Miss → neue Identität;
+- atomarer Ersatz (`rename`/Kopieren über die Datei) → neues `mtime` und neues
+  `ctime`, und im Regelfall andere Länge → Cache-Miss.
+
+**3. Korrektheitsinvariante (nicht verhandelbar).** Ein aus dem Memo
+gelieferter Wert darf **nie** für eine Datei ausgegeben werden, die sich
+tatsächlich geändert hat. Daraus folgt verbindlich:
+
+- **Miss = Neuberechnung.** Jeder Schlüssel, der nicht im Memo liegt, wird
+  vollständig neu gelesen und gehasht. Es gibt keine Teil-/Stichproben- oder
+  Header-Identität.
+- **Miss = Speichern.** Nur ein *erfolgreicher* Vollhash wird eingetragen.
+  `Missing`, `Unavailable(..)` und jeder Lesefehler werden **nie** als
+  Identität gespeichert — eine spätere reparierte Datei muss wieder als
+  geänderte Datei auffallen und nicht als „unverändert" durchgewunken werden.
+- **Ebenfalls neu berechnen** bei: fehlender mtime, fehlgeschlagenem `stat`,
+  fehlgeschlagenem `open`/`read`.
+- **Kein Schreibzugriff auf das Original.** Der Cache verändert nie eine Datei.
+
+**4. Restrisiko und Plattformgrenze (offen benannt, nicht verdeckt).**
+
+- **Unix (Zielplattform):** Der Schlüssel enthält `ctime`. Eine
+  Inhaltsänderung, die Länge **und** mtime **und** ctime unverändert lässt,
+  existiert für normale Werkzeuge nicht — die `ctime` wird vom Kernel
+  gesetzt und vom Benutzer nicht zurücksetzbar. Das Restfenster ist damit
+  praktisch geschlossen; es bliebe nur ein Angreifer mit Raw-Device-Zugriff.
+- **Nicht-Unix:** Ohne `ctime` degradiert der Schlüssel auf
+  `(path, mtime, len)`. Dort gilt das ursprünglich benannte Restrisiko: eine
+  Inhaltsänderung mit identischer Länge und identischer mtime (mtime
+  absichtlich auf den alten Wert zurückgesetzt, z. B. `cp -p`/`rsync --times`/
+  `tar -x`) würde als unverändert gewertet. Das ist **kein** stiller Fallback,
+  sondern eine dokumentierte Plattformgrenze mit benanntem Restrisiko; die
+  zweite, unabhängige Schicht — der Sidecar-Quellabgleich
+  (`source_fingerprint_matches`) — fängt eine solche Änderung beim Öffnen/
+  Neuberechnen einer Zelle mit Sidecar weiterhin mit dem sichtbaren
+  „source identity conflict" ab.
+- **Inode:** wurde bewusst **nicht** in den Schlüssel aufgenommen. `st_ino`
+  ändert sich nur bei Ersetzung per `rename`, nicht bei einem In-Place-Write
+  über denselben Pfad — es hätte den entscheidenden Fall (gleiche Länge,
+  gleicher Pfad, neuer Inhalt) also **nicht** abgedeckt und nur den
+  `ctime`-Nutzen dupliziert. `ctime` ist die strengere und passende Wahl.
+- **Nachpflegebedarf:** Sollte LuminaRust je Windows als Zielplattform
+  aufnehmen, ist ein äquivalenter kernelgepflegter Stempel (Windows
+  `last_change_time` über `FILE_BASIC_INFO`) nachzuziehen. Für die aktuellen
+  Zielplattformen (macOS/Linux) ist das erledigt.
+
+**5. Nebenläufigkeit.** Der Memo ist ein `Mutex<BTreeMap<..>>` mit
+`OnceLock`-freier `const`-Initialisierung. **Kein Lock wird über Datei-I/O
+gehalten:** `stat` und der Vollhash laufen außerhalb des Guards, der Guard
+deckt nur einen `BTreeMap`-Lookup bzw. -Einfügebereich ab. Ein Lock-Poison
+wird über `into_inner()` überlebt (der Memo enthält reine Ableitungen, keine
+Ressourcen) — er führt zu einem Cache-Miss, nie zu einer falschen Identität.
+Zwei Threads, die dieselbe Datei gleichzeitig anfordern, dürfen sie beide
+hashen; das ist doppelte Arbeit, keine Race-Condition. Die Zähler sind
+`AtomicU64`.
+
+**6. Beobachtbarkeit und Abnahme.**
+
+- `content_hash(path)` / `source_fingerprint_of(path)` liefern **denselben
+  Wert** wie der Vorher-Code (`blake3:<hex>` bzw. `SourceFingerprint` mit
+  `byte_length`); ein Cache verändert niemals einen Identitätswert.
+- Ein Zähler der **tatsächlich gestarteten Vollhashes** macht „kein Re-Hash
+  bei unveränderter Datei" **beweisbar** (keine Zeitmessung als Beleg).
+- Jeder Miss emittiert **eine** `trace!`-Zeile
+  (`GUI source identity hashed (cache miss) path=… bytes=… hash_ms=…`), damit
+  ein manueller `RUST_LOG=trace`-Run nachzählen kann. Im Normalbetrieb ist
+  das still.
+- Der Memo ist **begrenzt** (Klartext-Bound); beim Überlauf wird er geleert.
+  Das ist eine reine Optimierung: die Folge ist ein Miss, nie ein falscher
+  Treffer.
+- Nachweis-Testanker: unveränderte Datei → genau **ein** Hash über N
+  Aufrufe; geänderte Datei (Länge, mtime, **und** nur mtime bei gleicher
+  Länge) → **andere** Identität; fehlende und unlesbare Datei → `Missing` bzw.
+  `Unavailable(..)` mit **jeweils erneutem** Versuch (nie gecacht);
+  `persisted_action_identity`-Präzedenz und Source-Action-Bundle-Verhalten
+  unverändert; BLAKE3 über 64-KB-Blöcke ist **zeichengleich** mit dem
+  Einmal-Hash (pinnt die Chunking-Annahme).
+- **Abgrenzung:** Produktcode in `lumina-gui`. Keine Änderung an
+  Sidecar-Schema, Persistenz, Migration, Renderpipeline oder Rezept; keine
+  Änderung an Fixture-/Golden-Struktur.
+
 ### Regler und Standardinteraktionen
 
 - Jeder Bearbeitungsregler ist ein horizontaler Slider mit der Beschriftung

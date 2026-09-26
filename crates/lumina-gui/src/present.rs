@@ -273,48 +273,21 @@ impl LuminaApp {
         Ok(())
     }
 
+    /// THUMB-HASH-PERF-35: the loaded source's persisted identity, built by the
+    /// one shared constructor so it cannot drift from the selection-sidecar
+    /// path (which is the stateless twin of this method).
     pub(crate) fn source_identity(&self, frame: &ImageFrame) -> SourceIdentity {
-        SourceIdentity {
-            relative_name: if self.source_name.is_empty() {
+        crate::source_identity::build_source_identity(
+            if self.source_name.is_empty() {
                 "dropped-image".into()
             } else {
                 self.source_name.clone()
             },
-            content_hash: self
-                .source_bytes
-                .as_ref()
-                .map(|bytes| format!("blake3:{}", blake3::hash(bytes).to_hex()))
-                .unwrap_or_else(|| "blake3:unknown".into()),
-            byte_length: self
-                .source_bytes
-                .as_ref()
-                .map_or(0, |bytes| bytes.len() as u64),
-            modified_at: None,
-            raw_format: Path::new(&self.source_name)
-                .extension()
-                .and_then(|v| v.to_str())
-                .unwrap_or("raster")
-                .to_ascii_uppercase(),
-            orientation: self.raw_orientation,
-            decode_fingerprint: DecodeFingerprint {
-                decoder: decoder_identity(self.source_is_raw).into(),
-                version: if self.source_is_raw {
-                    lumina_raw::libraw_decode_version()
-                } else {
-                    env!("CARGO_PKG_VERSION").into()
-                },
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            geometry_fingerprint: GeometryFingerprint {
-                width: frame.width,
-                height: frame.height,
-                orientation: self.raw_orientation,
-                pixel_aspect_ratio: 1.0,
-                extras: BTreeMap::new(),
-            },
-            extras: BTreeMap::new(),
-        }
+            self.source_bytes.as_deref(),
+            frame,
+            self.raw_orientation,
+            self.source_is_raw,
+        )
     }
 }
 
