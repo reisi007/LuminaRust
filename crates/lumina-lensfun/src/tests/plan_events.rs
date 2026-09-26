@@ -164,9 +164,9 @@ fn every_skip_reason_is_recorded_and_the_actionable_ones_reach_the_sink() {
 }
 
 /// **F2: the legacy `StderrDiagnostics` must not be silent on success.** Its
-/// `resolved` was a no-op, so `LensfunDb::load_system()` — the entry point
-/// `lumina-gui` and `lumina-cli` still use — reported *nothing at all* when the
-/// database loaded fine. The sink cannot route to a logger (no dependencies), so
+/// `resolved` was a no-op, so `LensfunDb::load_system()` reported *nothing at
+/// all* when the database loaded fine. The sink cannot route to a logger (no
+/// dependencies), so
 /// the assertion is on the event contract the wrapper emits, not on captured
 /// stderr: `resolved` must reach the sink with the layers and the resolved
 /// directory.

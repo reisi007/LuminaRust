@@ -347,7 +347,7 @@ kein macOS) und ist plattformunabhängig: sie behauptet **nie**, dass die
 ausführende Maschine die Referenzplattform ist, sondern pinnt zuerst einen
 synthetischen Lock aus der laufenden Umgebung und prüft gegen diesen.
 
-Abgedeckt (177 Prüfungen, Exit 0 = alles grün):
+Abgedeckt (180 Prüfungen, Exit 0 = alles grün):
 
 | Bereich | Inhalt |
 | --- | --- |
@@ -366,7 +366,7 @@ dokumentierte Test-Override `GOLDEN_REF_LOCK`), das Pre-Commit-Gate läuft in
 einem Wegwerf-Repo, und ein `trap` räumt den Sandbox bei Erfolg, Fehler und
 Abbruch auf. Laufzeit auf einem echten Checkout: grob **eineinhalb bis zwei
 Minuten** (jeder `check`/`record`-Aufruf erfasst den Fingerabdruck neu und
-läuft `dd|od|awk` über 62 Goldens).
+läuft `dd|od|awk` über 66 Goldens).
 
 ---
 
@@ -480,7 +480,7 @@ Ordnerbaum leaken).
 
 ## 7. Golden-Inventar
 
-62 committete Golden-PNGs in `crates/lumina-gui/tests/snapshots/`:
+66 committete Golden-PNGs in `crates/lumina-gui/tests/snapshots/`:
 
 | Test-Target | Goldens |
 | --- | --- |
@@ -491,6 +491,7 @@ Ordnerbaum leaken).
 | `crates/lumina-gui/tests/kittest_library_stack.rs` | 1 |
 | `crates/lumina-gui/src/tests/brush_management.rs` (Lib-Target, `mask_management_controls_have_a_representative_kittest_golden`) | 1 |
 | `crates/lumina-gui/tests/kittest_parity.rs` (`parity_paths_{scene}_{cpu,gpu}`, nur mit `--features gpu`) | 8 |
+| `crates/lumina-gui/tests/kittest_mask_local.rs` | 4 |
 
 Alle sind `#[ignore]`. Es gibt dabei **zwei** dokumentierte Gründe, nicht einen:
 `"headless GPU required; …"` in den Integrationstest-Targets
@@ -570,7 +571,9 @@ Diese Datei ist **die** Begründungsgrundlage für jeden `record`-Lauf.
 ### 8.4 Re-Pin nach beabsichtigter Neuregistrierung
 
 ```sh
-sh scripts/golden_ref.sh record --confirm "GOLDEN-BASELINE-32: 62 Goldens auf macOS 27.0 / Apple M5 Pro / Metal 4 / LibRaw 0.22.2 neu erzeugt, 12 Abweichungen einzeln begruendet"
+# Der Grund nennt die Anzahl **nicht**, damit das Beispiel nicht beim nächsten
+# Golden-Zuwachs veraltet; der Lock nennt `goldens.count` ohnehin selbst.
+sh scripts/golden_ref.sh record --confirm "GOLDEN-BASELINE-32: <Plattform> / <Toolchain> / <Fixture-Set> neu erzeugt, <N> Abweichungen einzeln begruendet"
 ```
 
 ---
@@ -683,11 +686,22 @@ Daraus folgt:
 > | `git revert <Golden+Re-Pin-Commit>` | `rc=0`, **keine** Hook-Ausgabe |
 > | `git rebase <Replay>` | `rc=0`, beim Replay keine Hook-Ausgabe |
 > | `git commit-tree <tree> -p HEAD -m …` | `rc=0`, keine Hook-Ausgabe (reine Plumbing) |
+> | `git am <Golden-Patch>` | `rc=0`, **keine** Hook-Ausgabe (läuft `pre-applypatch`/`post-applypatch`, nicht `pre-commit`) |
+> | `git merge <Branch>` (Fast-Forward **und** Merge-Commit) | `rc=0`, **keine** Hook-Ausgabe — git führt `pre-merge-commit` aus, und `.githooks/` hat **keinen** `pre-merge-commit`. Gemessen: das HEAD-Golden wird dabei still neu geschrieben, `# Grund:` bleibt unverändert. |
 > | `git merge --squash <Branch>` | **kein** Bypass: der abschließende `git commit` läuft durch den Hook und wird abgewiesen (`rc=1`) |
 >
-> Ein Revert, ein Cherry-Pick oder ein Rebase sind die normalsten
-> Fehlerbehebungen der Welt. Niemand denkt dabei an einen Golden-Pin, und genau
-> deshalb ist das eine **unbeabsichtigte** Lücke und keine Formalie.
+> Ein Revert, ein Cherry-Pick, ein Rebase, ein `git am` oder ein **`git merge`**
+> sind die normalsten Fehlerbehebungen bzw. Arbeitsschritte der Welt — und ein
+> Merge ist noch normaler als ein Cherry-Pick. Niemand denkt dabei an einen
+> Golden-Pin, und genau deshalb ist das eine **unbeabsichtigte** Lücke und keine
+> Formalie.
+>
+> **Zwei dieser Lücken sind ohne Zusatzaufwand schließbar**, wenn das gewollt
+> wird: `.githooks/pre-merge-commit` würde `git merge` fangen, und eine
+> `post-applypatch`-Prüfung würde `git am` fangen. Beides ist **bewusst nicht
+> umgesetzt** — der Wächter soll kein zweiter Mechanismus mit eigener
+> Fehlermode-Logik werden, und der dauerhafte Restschutz ist `goldens.digest`.
+> Der Preis dieser Entscheidung ist oben benannt, nicht weggeredet.
 >
 > **Was in Klasse 2 als Restschutz bleibt:** `goldens.digest` und
 > `goldens.count` (Fingerabdruck, §3) machen jedes **spätere** `check` rot, weil
