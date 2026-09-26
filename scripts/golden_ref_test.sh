@@ -1800,17 +1800,100 @@ else
     "the committed probe $GFC_PROBE_REL could not be measured ($GFC_MISSING_TOOLS)"
 fi
 
+# --- the known-red list -----------------------------------------------------
+#
+# The exact names of the class-R goldens that are KNOWN to fail the pixel check
+# today, and the task that owns fixing them. This is not an exemption; it is
+# the difference between a finding and a permanently red gate. Without it the
+# suite is red on every run, a red `main` gets ignored as noise, and the six
+# broken goldens stop being news. The only ways to get a green suite WITHOUT
+# fixing the pixels are all forbidden by this repository: lower
+# GFC_MIN_COLOURS/GFC_MAX_RED, re-classify the rows as R-F, or delete the rows
+# from the inventory table and the render-evidence ledger. All three make the
+# finding invisible rather than fix it.
+#
+# What replaces those six unconditional failures is one bounded invariant:
+#
+#   every class-R golden either carries real render evidence, or its EXACT
+#   name is on this list, and while it is on this list it still fails.
+#
+# The four ways that invariant goes red, each with its own assertion below:
+#   * UNKNOWN failure - a class-R golden fails B2 and is NOT on this list. A
+#     seventh broken golden can never be absorbed here.
+#   * STALE entry - a name on this list now PASSES B2. The entry has to go,
+#     and that is precisely the signal that GOLDEN-BASELINE-32 has landed.
+#     This is what stops the list from becoming a permanent exemption: an entry
+#     that outlives its defect is itself the failure.
+#   * UNMEASURABLE entry - a name on this list cannot be measured at all (the
+#     tool is gone, the file is gone). Not a stale entry: a different defect
+#     with a different fix, and therefore a different assertion.
+#   * MALFORMED entry - a name on this list is not a class-R row of the
+#     inventory, or occurs twice, or is empty. A typo would otherwise be an
+#     exemption that can never fire while still looking declared. These two
+#     check the DECLARATION rather than the pixels.
+#
+# The finding these six carry: the committed goldens still show the LibRaw
+# error banner (finding H1 of GOLDEN-FIXT-31, measured in
+# feature/quality/golden-fixtures.md §5.5 and §5.6). Re-recording them is
+# GOLDEN-BASELINE-32's one-shot task, and nothing in this file may pre-empt it:
+# no threshold is lowered, no golden is rewritten, no inventory or ledger row
+# is removed. Every listed golden keeps printing its measured numbers, here and
+# in the recap at the end of this section - a named exception that hides its
+# subject would defeat the purpose.
+#
+# The list lives HERE and nowhere else. golden-fixtures.md §5.5 names the same
+# six in prose as the specification's account of the known limitation; that is
+# not a second copy a gate reads, so there is nothing that can drift. This
+# variable is the single place the check consults.
+GFC_KNOWN_RED="library_compare.png
+library_loupe.png
+library_rated_badges.png
+library_subfolder_badges.png
+library_survey.png
+library_stack_membership.png"
+GFC_KNOWN_RED_FILE="$SANDBOX/gfc_known_red.txt"
+printf '%s\n' "$GFC_KNOWN_RED" >"$GFC_KNOWN_RED_FILE"
+# Non-empty entries, and the two shapes a malformed list can take. Both are
+# counted before the loop so the assertions below can name a number.
+GFC_LIST_N=$(grep -c . "$GFC_KNOWN_RED_FILE" || true)
+GFC_LIST_BLANK=$(grep -c '^[[:space:]]*$' "$GFC_KNOWN_RED_FILE" || true)
+GFC_LIST_DUP=$(LC_ALL=C sort "$GFC_KNOWN_RED_FILE" | LC_ALL=C uniq -d | tr '\n' ' ')
+GFC_R_N=$(printf '%s\n' "$GFC_R_NAMES" | grep -c . || true)
+
+printf '\n== B2: class-R pixel evidence; %s of %s class-R rows are NAMED known-red, owned by GOLDEN-BASELINE-32\n' \
+  "$GFC_LIST_N" "$GFC_R_N"
+
+# Per-row verdicts, collected for the set-level assertions that follow the loop.
+# One pass over the rows cannot express "every unlisted row passes AND every
+# listed row still fails", which is why the judgement is split: the loop keeps
+# the per-row detail (with the measured numbers), the aggregates below own the
+# invariant.
+GFC_B2_UNKNOWN=
+GFC_B2_STALE=
+GFC_B2_LISTED_MEASURED=0
+GFC_B2_LISTED_RED=0
+GFC_B2_REPORT=
+
+gfc_is_known_red() {
+  # gfc_is_known_red <exact golden name>. Whole-LINE exact match, so no name
+  # can be exempted by a prefix, a substring, a glob or a case difference - the
+  # failure mode a `case $name in *library_*` test would have.
+  grep -Fxq -- "$1" "$GFC_KNOWN_RED_FILE"
+}
+
 # Word splitting on purpose: golden file names contain no whitespace, and a
 # `while read` pipeline would run the loop in a subshell where the pass/fail
 # counters of ok/no are lost - the assertions would print and count nothing.
 for gfc_r_name in $GFC_R_NAMES; do
   gfc_r_path="$ROOT/$GFC_SNAP_REL/$gfc_r_name"
   if [ ! -f "$gfc_r_path" ]; then
+    gfc_is_known_red "$gfc_r_name" || GFC_B2_UNKNOWN="$GFC_B2_UNKNOWN$gfc_r_name "
     no "B2: $gfc_r_name carries real render evidence" \
       "the table classifies it as R but there is no file at $gfc_r_path"
     continue
   fi
   if ! gfc_measure "$gfc_r_path"; then
+    gfc_is_known_red "$gfc_r_name" || GFC_B2_UNKNOWN="$GFC_B2_UNKNOWN$gfc_r_name "
     no "B2: $gfc_r_name carries real render evidence" \
       "no usable measurement ($GFC_MISSING_TOOLS). Either the tool is absent -
 see the precondition above - or it returned something that is not a colour
@@ -1822,18 +1905,153 @@ count and a fraction in [0,1]."
   if gfc_dec_gt "$GFC_RED" "$GFC_MAX_RED"; then
     gfc_r_bad="$gfc_r_bad P2"
   fi
+  # Measured once, then counted as MEASURED - not as red. A listed row that
+  # passes B2 has been measured just as much as one that fails, and conflating
+  # the two would let the aggregate below report a stale entry as an unmeasurable
+  # one, which is a different defect with a different fix.
+  gfc_r_known=no
+  if gfc_is_known_red "$gfc_r_name"; then
+    gfc_r_known=yes
+    GFC_B2_LISTED_MEASURED=$((GFC_B2_LISTED_MEASURED + 1))
+  fi
   if [ -z "$gfc_r_bad" ]; then
-    ok "B2: $gfc_r_name carries real render evidence (colours=$GFC_COLOURS >= $GFC_MIN_COLOURS, red=$GFC_RED <= $GFC_MAX_RED)"
+    if [ "$gfc_r_known" = yes ]; then
+      GFC_B2_STALE="$GFC_B2_STALE$gfc_r_name "
+      no "B2: $gfc_r_name carries real render evidence" \
+        "STALE ENTRY in the B2 known-red list. This golden is on the list of
+class-R rows that are known to lack render evidence, and it PASSES the pixel
+check right now:
+  measured distinct_colours=$GFC_COLOURS   (>= $GFC_MIN_COLOURS)
+  measured red_fraction=$GFC_RED           (<= $GFC_MAX_RED)
+The list exists to NAME a defect that is still there. This one is not, so the
+entry has to be removed - that removal is what the landing of
+GOLDEN-BASELINE-32 looks like from here. Keeping it would turn the list into a
+permanent exemption, which is the one outcome it must not become."
+    else
+      ok "B2: $gfc_r_name carries real render evidence (colours=$GFC_COLOURS >= $GFC_MIN_COLOURS, red=$GFC_RED <= $GFC_MAX_RED)"
+    fi
   else
-    no "B2: $gfc_r_name carries real render evidence" \
-      "failed predicate(s): $gfc_r_bad
+    if [ "$gfc_r_known" = yes ]; then
+      GFC_B2_LISTED_RED=$((GFC_B2_LISTED_RED + 1))
+      GFC_B2_REPORT="$GFC_B2_REPORT  $gfc_r_name: distinct_colours=$GFC_COLOURS (P1 needs >= $GFC_MIN_COLOURS), red_fraction=$GFC_RED (P2 needs <= $GFC_MAX_RED), failed $gfc_r_bad$NL"
+      ok "B2: $gfc_r_name is a NAMED known-red class-R row owned by GOLDEN-BASELINE-32 - the render-evidence finding is OPEN, not fixed (failed $gfc_r_bad, colours=$GFC_COLOURS, red=$GFC_RED)"
+    else
+      GFC_B2_UNKNOWN="$GFC_B2_UNKNOWN$gfc_r_name "
+      no "B2: $gfc_r_name carries real render evidence" \
+        "failed predicate(s): $gfc_r_bad
   measured distinct_colours=$GFC_COLOURS   P1 requires >= $GFC_MIN_COLOURS
   measured red_fraction=$GFC_RED           P2 requires <= $GFC_MAX_RED
 A class-R golden may not take a decode failure or an error placeholder as its
 expected state (golden-fixtures.md §2 rules 5 and 7). Re-recording it is
-GOLDEN-BASELINE-32's task; this threshold must not be lowered to hide it."
+GOLDEN-BASELINE-32's task; this threshold must not be lowered to hide it.
+AND it is not one of the rows that task owns, so this is an UNKNOWN failure: a
+class-R golden that lost its render evidence since the last re-record. The
+known-red list is not a place to absorb it - see the B2-allowlist assertion
+below."
+    fi
   fi
 done
+
+# --- the B2-allowlist invariant, as five set-level assertions ---------------
+#
+# A1-A4, B1 and B3 are all statements about SETS, and so is this one. Judged
+# row by row, a list can hide a failure; judged as a set, the states below are
+# the only ones the gate distinguishes, and every one of them but the first is
+# red.
+
+# (1) UNKNOWN failure. The list is closed: nothing joins it by failing.
+GFC_LISTED_N=$GFC_LIST_N
+GFC_UNLISTED_N=$((GFC_R_N - GFC_LISTED_N))
+if [ -z "$GFC_B2_UNKNOWN" ]; then
+  ok "B2-allowlist: every class-R golden OUTSIDE the known-red list carries render evidence (unknown failures 0 of $GFC_UNLISTED_N unlisted rows)"
+else
+  no "B2-allowlist: every class-R golden OUTSIDE the known-red list carries render evidence" \
+    "UNKNOWN failure - these class-R rows are not on the known-red list and do
+not carry render evidence:
+$GFC_B2_UNKNOWN  The per-row assertion above names the failed predicate and the
+measured numbers for each of them.
+This is a new regression, not the tracked finding H1, and the list must not
+become the place where it disappears. Either the golden is re-recorded, or -
+if it genuinely shows the known LibRaw banner - its exact name is added to
+GFC_KNOWN_RED above, next to the task that owns it."
+fi
+
+# (2) STALE entry. The list is self-limiting: it can only shrink, and only by
+# this assertion going red. An entry that no longer describes a defect is the
+# signal that GOLDEN-BASELINE-32 has landed.
+if [ -z "$GFC_B2_STALE" ]; then
+  ok "B2-allowlist: no entry of the known-red list has gone stale ($GFC_B2_LISTED_RED of $GFC_LIST_N entries still red, none passing)"
+else
+  no "B2-allowlist: no entry of the known-red list has gone stale" \
+    "STALE entry - listed as known-red but measurably PASSING the pixel check,
+so the entry has to be deleted from GFC_KNOWN_RED:
+$GFC_B2_STALE  An entry that outlives its defect is a permanent exemption, and
+removing it is the intended reaction to GOLDEN-BASELINE-32 re-recording the
+golden. The measured numbers are in the per-row assertion above."
+fi
+
+# (2b) Measurable. Kept apart from (2) on purpose: a listed row that cannot be
+# measured is a missing tool or a broken repository, a DIFFERENT defect with a
+# DIFFERENT fix, and folding it into the stale message would report it as
+# something it is not.
+if [ "$GFC_B2_LISTED_MEASURED" -eq "$GFC_LIST_N" ]; then
+  ok "B2-allowlist: every entry of the known-red list could be measured ($GFC_B2_LISTED_MEASURED of $GFC_LIST_N)"
+else
+  no "B2-allowlist: every entry of the known-red list could be measured" \
+    "$((GFC_LIST_N - GFC_B2_LISTED_MEASURED)) of $GFC_LIST_N entries of the known-red list could not be
+measured at all, so their entry cannot be confirmed as still describing a
+defect. The per-row assertions above report why - usually the image tool is
+missing (see the tool precondition), or the file is gone. This is NOT a stale
+entry: fixing it means restoring the measurement, not deleting the name."
+fi
+
+# (3) MALFORMED entry. Every declared name has to be a class-R row of the
+# inventory, and no name may appear twice. A typo would otherwise be an
+# exemption that can never fire while still reading as a declaration.
+GFC_LIST_NOT_R=
+for gfc_ln in $GFC_KNOWN_RED; do
+  gfc_ln_class=$(printf '%s\n' "$GFC_ROWS" | awk -v n="$gfc_ln" '$1 == n { print $2 }')
+  if [ "$gfc_ln_class" != "R" ]; then
+    GFC_LIST_NOT_R="$GFC_LIST_NOT_R  $gfc_ln -> class [$gfc_ln_class] (no such row if empty)$NL"
+  fi
+done
+if [ -z "$GFC_LIST_NOT_R" ]; then
+  ok "B2-allowlist: every known-red entry names a class-R row of the inventory (all $GFC_LIST_N entries)"
+else
+  no "B2-allowlist: every known-red entry names a class-R row of the inventory" \
+    "an entry that is not a class-R row of the inventory can never be checked by
+the loop above, so it would be an exemption that never fires while still
+looking like a declaration:
+$GFC_LIST_NOT_R  Fix the spelling, or delete the entry if the golden is gone."
+fi
+
+# The third shape a list can take: a duplicated or empty entry.
+if [ -z "$GFC_LIST_DUP" ] && [ "$GFC_LIST_BLANK" -eq 0 ]; then
+  ok "B2-allowlist: the known-red list has no duplicated and no empty entry ($GFC_LIST_N entries)"
+else
+  no "B2-allowlist: the known-red list has no duplicated and no empty entry" \
+    "duplicated entries: ${GFC_LIST_DUP:-none}
+empty entries: $GFC_LIST_BLANK of $((GFC_LIST_N + GFC_LIST_BLANK)) lines
+A duplicate counts the same golden twice, which makes the set-level counts
+above lie about how many rows are actually covered; an empty entry is an
+exemption of nothing at all."
+fi
+
+# --- the six known-red findings, spelled out with their numbers -------------
+#
+# The gate is green because the finding is named, bounded and owned - not
+# because it is gone. This block is the reason: it prints every listed golden
+# that is still red, with the measurement, every run, in the open. If this
+# section ever comes out empty while entries are still on the list, the
+# assertions above have already said so.
+printf '\n== B2 known-red findings, tracked by GOLDEN-BASELINE-32 (still open, not fixed)\n'
+if [ -n "$GFC_B2_REPORT" ]; then
+  printf '%s' "$GFC_B2_REPORT"
+  printf '  -> %s of %s class-R rows lack render evidence and are named above; the re-record belongs to GOLDEN-BASELINE-32.\n' \
+    "$GFC_B2_LISTED_RED" "$GFC_LIST_N"
+else
+  printf '  (none: no listed golden is red right now - if entries are still on the list, the stale-entry assertion above is red)\n'
+fi
 
 # B3: the H3 criterion itself. A render-evidence citation has to name a row the
 # inventory classifies R. A class-C row here is exactly "a Chrome invariant
@@ -1893,6 +2111,82 @@ if env PATH="$GFC_LEAN_PATH" sh -c \
 else
   no "git, sed and awk stay reachable under that PATH, so the inventory checks are platform independent" \
     "PATH=$GFC_LEAN_PATH has no git/sed/awk, so A1-A4 could not run on a plain runner"
+fi
+
+# The two checks above ask the SHELL whether a tool is reachable. This one runs
+# the production function itself, `gfc_measure`, and asserts the "no tool" branch
+# is what actually answers - the difference between a probe that reports absence
+# and a measurement that cannot silently invent a number.
+if ( PATH="$GFC_LEAN_PATH"; gfc_measure "$GFC_PROBE" >/dev/null 2>&1 ); then
+  no "gfc_measure itself reports 'no measurement' under a PATH without any image tool" \
+    "gfc_measure returned success with no image tool on PATH=$GFC_LEAN_PATH, so
+the branch B2 relies on for its refusal does not exist and a missing tool could
+be read as a measurement of 0"
+else
+  ok "gfc_measure itself reports 'no measurement' under a PATH without any image tool"
+fi
+
+# Which major version CI actually gets. The `docs` job installs the runner's own
+# `imagemagick`, whose apt set is expected to be ImageMagick 6 (`convert` +
+# `identify`, no `magick`), while this machine has 7 (`magick`). gfc_fx_tool
+# resolves both, so the suite runs on either - but only the IM6-shaped PATH is
+# exercised by a real measurement, and that is the one CI will use. The shim
+# below provides `convert`/`identify` and no `magick`, forwarding to the real
+# binaries by ABSOLUTE path (the lean PATH has no image tool to forward to), so
+# the IM6 branch is measured against the same committed probe literals instead of
+# being assumed to work. What this proves is the RESOLUTION and the invocation
+# shape; the arithmetic still comes from the installed binaries, which is why the
+# CI step prints their version into the log rather than this file guessing it.
+GFC_IM6_DIR="$SANDBOX/gfc_im6_path"
+mkdir -p "$GFC_IM6_DIR"
+gfc_tool_path() {
+  # gfc_tool_path <command> -> the ABSOLUTE path it resolves to, or nothing.
+  # Absolute is not a style preference here. A shim that exec'd the bare name
+  # would exec ITSELF, because the shim directory is first on PATH - measured:
+  # that version forked until the run was killed, because nothing about it
+  # errors. A builtin or a function name, and any resolution that is not
+  # absolute, are rejected for the same reason.
+  gfc_tp=$(command -v "$1" 2>/dev/null) || return 1
+  case "$gfc_tp" in
+    /*) [ -x "$gfc_tp" ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$gfc_tp"
+}
+GFC_IM6_FX=$(gfc_tool_path "$(gfc_fx_tool)")
+GFC_IM6_INFO=$(gfc_tool_path "$(gfc_info_tool)")
+if [ -n "$GFC_IM6_FX" ] && [ -n "$GFC_IM6_INFO" ]; then
+  printf '#!/bin/sh\nexec %s "$@"\n' "$GFC_IM6_FX" >"$GFC_IM6_DIR/convert"
+  printf '#!/bin/sh\nexec %s "$@"\n' "$GFC_IM6_INFO" >"$GFC_IM6_DIR/identify"
+  chmod +x "$GFC_IM6_DIR/convert" "$GFC_IM6_DIR/identify"
+  # A subshell, because gfc_measure reports through globals and PATH must not
+  # leak back into the rest of the suite.
+  GFC_IM6_MEASURED=$(
+    GFC_COLOURS=
+    GFC_RED=
+    PATH="$GFC_IM6_DIR:$GFC_LEAN_PATH"
+    export PATH
+    if gfc_measure "$GFC_PROBE" >/dev/null 2>&1; then
+      printf '%s %s' "$GFC_COLOURS" "$GFC_RED"
+    else
+      printf 'unmeasurable'
+    fi
+  )
+  if [ "$GFC_IM6_MEASURED" = "$GFC_PROBE_COLOURS $GFC_PROBE_RED" ]; then
+    ok "the IM6-shaped tool path (convert+identify, no magick) resolves and measures the committed probe correctly ($GFC_PROBE_COLOURS / $GFC_PROBE_RED)"
+  else
+    no "the IM6-shaped tool path (convert+identify, no magick) resolves and measures the committed probe correctly ($GFC_PROBE_COLOURS / $GFC_PROBE_RED)" \
+      "with only $GFC_IM6_DIR/convert and $GFC_IM6_DIR/identify on PATH, gfc_measure
+returned: '$GFC_IM6_MEASURED'. This is the shape the docs CI job is expected to
+get from the runner's own apt imagemagick package, and it would have been the
+branch no measurement ever covered."
+  fi
+else
+  no "the IM6-shaped tool path (convert+identify, no magick) resolves and measures the committed probe correctly ($GFC_PROBE_COLOURS / $GFC_PROBE_RED)" \
+    "no image tool on this machine to build the shim from, or it does not resolve
+to an absolute path (fx='$GFC_IM6_FX', identify='$GFC_IM6_INFO'), so the
+resolution branch CI will use cannot be exercised here. The tool precondition
+above is red for the same reason."
 fi
 
 # --- sandbox discipline ----------------------------------------------------

@@ -29,6 +29,7 @@ Verifikationsregeln).
   - [4.2 Regressions-Suite des Wächters: `scripts/golden_ref_test.sh`](#42-regressions-suite-des-wächters-scriptsgolden_ref_testsh)
     - [4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war](#421-der-eine-bruch-in-der-selbstkonsistenz--und-warum-er-nötig-war)
     - [4.2.2 Der zweite Bruch: die Golden-Inventar-Ebene war nicht verankert](#422-der-zweite-bruch-die-golden-inventar-ebene-war-nicht-verankert)
+    - [4.2.3 Die sechs bekannten roten `R`-Zeilen: benannt, besessen, selbstkontrollierend](#423-die-sechs-bekannten-roten-r-zeilen-benannt-besessen-selbstkontrollierend)
 - [5. `UPDATE_SNAPSHOTS`-Sperre (Geltung: `check` und `gate`)](#5-update_snapshots-sperre-geltung-check-und-gate)
 - [6. Fixture-Set der Goldens](#6-fixture-set-der-goldens)
 - [7. Golden-Inventar](#7-golden-inventar)
@@ -366,12 +367,33 @@ nachbauen, die sie prüfen soll. Der Vertrag hat darum eine eigene,
 sh scripts/golden_ref_test.sh
 ```
 
-Sie läuft in der `docs`-CI-Stufe auf einem nackten `ubuntu-latest` (kein GPU,
+Sie läuft in der `docs`-CI-Stufe auf einem `ubuntu-latest` (kein GPU,
 kein macOS) und ist plattformunabhängig: sie behauptet **nie**, dass die
 ausführende Maschine die Referenzplattform ist, sondern pinnt zuerst einen
 synthetischen Lock aus der laufenden Umgebung und prüft gegen diesen.
 
-Abgedeckt (201 Prüfungen, Exit 0 = alles grün):
+**Korrektur 2026-09-26 (gemessen, CI-Lauf 36260409553 auf `cfad92`):** der Satz
+„läuft auf einem **nackten** `ubuntu-latest`" war falsch. Die Stufe installierte
+ImageMagick nirgends, und die Pixel-Schicht der Suite (B2, §4.2.3) braucht es;
+der Job war deshalb rot mit **230 passed / 17 failed** — die 3
+Werkzeug-Vorbedingungen plus alle **14** `R`-Zeilen, keine davon an ihrem
+eigenen Gegenstand. Die Stufe installiert ImageMagick jetzt aus dem Paketsatz des
+Runners (`sudo apt-get install -y imagemagick`) und **druckt die gelieferte
+Version ins Log**; bewusst **ohne** Versions-Pin, weil ein Pin nur bricht, wenn
+sich der Paketsatz des Runners bewegt, und die Major-Version nicht die
+Korrektheit trägt: die Suite löst `magick` (IM7) **oder** `convert` (IM6), beide
+mit `identify`, und prüft das gelöste Werkzeug gegen die committete Probe
+`scripts/fixtures/png_pixel_probe.png` mit den Literalwerten 4 Farben /
+0,375 Rotanteil (`golden-fixtures.md` §5.7). Fehlt das Werkzeug, ist der Gate
+**rot** und **nicht** still übersprungen — erst das Werkzeug, dann die Schranke
+messen. Zusätzlich abgesichert: der IM6-Zweig der Auflösung wird von einer
+Messung durchlaufen, nicht nur behauptet (§4.2.3).
+
+Abgedeckt (**254** Prüfungen, Exit 0 = alles grün; gezählt am Exit-0-Lauf vom
+2026-09-26, `sh scripts/golden_ref_test.sh` → `254 passed, 0 failed`. Vorher
+stand hier „201" — durch den zwischenzeitlichen Ausbau der
+Golden-Inventar-Ebene (§4.2.2) überholt, deshalb durch Nachzählen ersetzt und
+nicht fortgeschrieben):
 
 | Bereich | Inhalt |
 | --- | --- |
@@ -385,6 +407,7 @@ Abgedeckt (201 Prüfungen, Exit 0 = alles grün):
 | `UPDATE_SNAPSHOTS` | 8 falsche Werte (`''`, `0`, `false`, `no`, `off` + Großschreibung) bleiben still, 6 wahre (`1`, `true`, `yes`, `on`, `force`, `garbage`) lösen die Verweigerung aus — jeweils über `gate` und mit der Zusicherung, dass das gated Kommando **nicht** gelaufen ist; auf passendem Pin läuft es |
 | Pre-Commit-Matrix | 16 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook (14 `mc_commit`-Zeilen + "nichts gestaged" + kaputter Index als Positivkontrolle): geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie auf **beiden** Seiten (Goldenseite und Lockseite, §4.1), Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
 | Sandbox-Disziplin | `scripts/golden_ref.lock` ist am Ende byte-identisch, der echte Git-Index unverändert, keine `golden_ref.lock.tmp.*` übrig — und **jeweils mit Vorbedingung**: der Before-/After-Wert muss ein `sha256` bzw. ein Tree-OID sein, sonst ist der Vergleich nicht aussagekräftig und die Prüfung wird rot statt grün (§4.2.2) |
+| Pixel- und Klassenschicht (A1–A4, B1–B3) | die Prüfungen aus `golden-fixtures.md` §4.5 gegen die **committeten** Dateien, nicht gegen eine Kopie: Inventar ↔ Verzeichnis ↔ `git ls-files` in **beiden** Richtungen, die drei im Text genannten Zahlen gegen die Tabelle, kein `R-F`, P1/P2 für jede `R`-Zeile, jedes Ledger-Zitat eine `R`-Zeile — und die **bekannt-roten** `R`-Zeilen als benannte, besessene Ausnahme mit selbstkontrollierender Liste (§4.2.3) |
 
 ### 4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war
 
@@ -498,6 +521,75 @@ git oder ein fehlender Lock macht die Suite damit **rot** statt still grün;
 nachgemessen über einen `git`-Shim, der ausschließlich `write-tree` scheitern
 lässt (2 rot, beide Vorbedingungen), während der unveränderte Wächter daneben
 weiterhin „ok" meldet.
+
+---
+
+### 4.2.3 Die sechs bekannten roten `R`-Zeilen: benannt, besessen, selbstkontrollierend
+
+**Die Ausgangslage, gemessen.** Sechs committete `R`-Zeilen tragen als
+erwarteten Zustand das LibRaw-Fehlerbanner (Befund H1 aus `GOLDEN-FIXT-31`,
+Herleitung in `golden-fixtures.md` §5.5/§5.6: 570–1516 Farbwerte gegen
+88 426–104 756 im gesunden Stand). B2 prüft P1 und P2 gegen die **committierte
+Datei** — also war die Suite auf jedem Stand rot, und damit auch die
+`docs`-CI-Stufe. Das ist ein kaputter Zustand, kein Beweis: `main` rot heißt,
+dass ein Gate nicht mehr gelesen wird, und ein dauerhaft rotes Gate ist eines,
+das man ignoriert.
+
+**Was ausgeschlossen ist.** Die Suite ist rot, die Schranken sind aus den Daten
+gesetzt (P1 = 10 000, P2 = 0,02) und werden nicht gesenkt; die sechs Zeilen
+behalten Klasse `R` (kein Umdeklarieren als `R-F`, Regel 5/8 in
+`golden-fixtures.md` §2); die sechs Zeilen bleiben in Inventartabelle und
+Render-Evidenz-Ledger stehen. Jeder dieser Wege macht den Befund unsichtbar,
+statt ihn zu beheben.
+
+**Die Regelung.** Eine Liste der **exakten Namen**, die heute bekanntermaßen an
+B2 scheitern, steht in genau einer Stelle: `GFC_KNOWN_RED` in
+`scripts/golden_ref_test.sh`, unmittelbar neben der Prüfung, und mit dem
+besessenen Task (`GOLDEN-BASELINE-32`) im Kommentar darüber.
+`golden-fixtures.md` §5.5 nennt dieselben sechs im Prosatext als bekannte
+Grenze — das ist die Spezifikation, keine zweite Liste, aus der ein Gate liest;
+es kann also nichts auseinanderlaufen.
+
+Die Liste ist **keine Ausnahme**, sondern die Formulierung einer
+Erfüllungsbedingung:
+
+> Jede `R`-Zeile trägt echte Render-Evidenz — **oder** ihr exakter Name steht
+> auf dieser Liste, und solange er dort steht, scheitert er auch.
+
+Diese Bedingung ist in genau drei Zuständen falsch, und jeder davon hat seine
+eigene rote Prüfung:
+
+| Zustand | Was passiert | Prüfung |
+| --- | --- | --- |
+| **Unbekannter Fehlschlag** | Eine `R`-Zeile außerhalb der Liste fällt durch B2. Ein siebter kaputter Golden kann **nie** absorbiert werden. | `B2-allowlist: every class-R golden OUTSIDE the known-red list …` (zusätzlich zur Detailzeile pro Zeile) |
+| **Veralteter Eintrag** | Ein Listenname **besteht** B2. Der Eintrag muss gelöscht werden — genau das ist das Signal, dass `GOLDEN-BASELINE-32` gelandet ist. Ohne diese Prüfung würde die Liste zur dauerhaften Ausnahme. | `B2-allowlist: no entry of the known-red list has gone stale` |
+| **Unbrauchbarer Eintrag** | Ein Listenname ist nicht messbar (Werkzeug fehlt, Datei weg). Kein *stale*, sondern ein anderer Defekt mit anderer Behebung — deshalb eine eigene Prüfung statt eine Sammelbedingung. | `B2-allowlist: every entry of the known-red list could be measured` |
+| Fehlerhafte Deklaration | Ein Name ist keine `R`-Zeile des Inventars, oder er steht doppelt. Ein Tippfehler wäre sonst eine Ausnahme, die nie feuern kann und trotzdem wie eine Deklaration aussieht. | `… every known-red entry names a class-R row of the inventory`, `… has no duplicated and no empty entry` |
+
+**Die sechs Befunde bleiben sichtbar.** Jede gelistete, weiterhin rote Zeile
+druckt ihre gemessenen Zahlen in der Zeile selbst (`colours=… red=…`, mit den
+erfüllten Prädikaten), und ein eigener Abschnitt am Ende der Pixel-Schicht listet
+alle sechs mit Zahl und Zeitpunkt des Laufs. Eine benannte Ausnahme, die ihr
+eigenes subject versteckt, wäre wertlos.
+
+**Beleg statt Behauptung.** Alle vier Zustände sind durch Mutation am echten
+Gate rot geprüft (2026-09-26, `sh scripts/golden_ref_test.sh`):
+
+| Mutation | Ergebnis |
+| --- | --- |
+| ImageMagick fehlt (PATH ohne jedes Bildwerkzeug) | **rot**, Exit 1: die 3 Werkzeug-Vorbedingungen, alle 14 `R`-Zeilen, `unknown failures` **und** `could be measured` |
+| 7. `R`-Zeile `parity_paths_neutral_cpu.png` gesundes Golden mit Pixels kaputt | **rot**, Exit 1: `unknown failure … parity_paths_neutral_cpu.png` |
+| `library_survey.png` aus der Liste entfernt, obwohl es weiterhin scheitert | **rot**, Exit 1: `unknown failure … library_survey.png` |
+| `parity_paths_tinted_cpu.png` (gesund, besteht B2) zur Liste hinzugefügt | **rot**, Exit 1: `stale entry …` |
+
+**Nebenbefund, im Lauf gefunden und behoben.** Der IM6-Zweig der Werkzeug-Auflösung
+(lokal hat der Rechner `magick`, der Runner voraussichtlich `convert`) wäre vorher
+von **keiner** Messung berührt worden. Er wird jetzt mit einem Shim gemessen, der
+nur `convert`/`identify` anbietet, mit gemessenen Literalwerten (4 / 0,375). Die
+Messung fand beim ersten Versuch einen Fehler, den keine Zeile des Codes gezeigt
+hat: der Shim enthielt `exec identify`, und weil sein Verzeichnis vorn auf `PATH`
+liegt, hat er **sich selbst** aufgerufen, bis der Lauf abgeschossen war. Behoben
+über die Forderung nach einem **absoluten** Pfad im Shim.
 
 ---
 
