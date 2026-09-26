@@ -287,6 +287,62 @@ AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen
 Modell-Download oder externen Netzwerkzugriff abhängen.
 
+### Integration headless gelieferter Features (User-Regel 2026-09-26)
+
+**Arbeitsteilung:** Ein anderer Agent entwickelt Features **headless** — also
+Schema, `lumina-core`, `lumina-cli`, `lumina-sidecar` — **ohne** GUI und
+**ohne** kittest. Der Build-Agent **integriert** sie danach in
+`lumina-gui` und in die kittest-Abdeckung. Das ist ein **regelmäßig
+wiederkehrender** Vorgang, kein Einzelfall.
+
+**Grenze der GUI-Testbarkeit (User-Klarstellung 2026-09-26):** Der GUI-Pfad ist
+**ausschließlich headless** prüfbar — `egui Context` + `LuminaApp` im tempdir,
+ergänzt um `egui_kittest` mit wgpu-Adapter. Es gibt **keinen** echten
+Fenster-/Interaktions-Test, und es wird keiner versprochen: **keine
+Abnahmekriterien formulieren, die ein real gerendertes Fenster, echte
+Maus-/Zeigerereignisse, DPI- oder Multi-Monitor-Verhalten oder einen sichtbaren
+GUI-Lauf durch einen Menschen voraussetzen.** Ist ein Feature nur so prüfbar, ist
+das eine **laut benannte Lücke** mit Hardware-Gate — kein Anlass, die Abnahme zu
+beschönigen oder den Test als „manuell geprüft" zu verbuchen. Die kittest-Goldens
+laufen headless über den wgpu-Adapter und sind ein **lokales** macOS-Gate; in CI
+werden sie **nie** verifiziert (kein GPU-Runner). Der **einzige** Weg zu einem real
+gestarteten Prozess ist der manuelle Akzeptanz-Run nach R5-LOG-1
+(`RUST_LOG=trace`, genau eine App-Instanz, Log-Redirect) — das ist eine
+User-Aktion und wird **nicht** durch einen headless Test ersetzt.
+
+Pro geliefertem Headless-Feature prüft und ergänzt der Build-Agent:
+
+1. **GUI-Verdrahtung.** Liegt für jede neue Fähigkeit ein `draw_*`-Pfad vor,
+   der vom tatsächlichen UI-Panel aufgerufen wird? Ein Modul mit Tests, das
+   nirgends gezeichnet wird, ist **nicht integriert**. Beispiel: `mask_local_curves`
+   lag mit 318 Zeilen plus 416 Testzeilen vor, ohne `draw_`-Aufruf in
+   `develop_masking.rs`.
+2. **Interaktive Bedienung.** Regler, Kurvengraphen, Picker und Buttons müssen
+   **anklickbar** sein und ihren Wert tatsächlich in das Rezept schreiben — nicht
+   nur paintbar. Für jede sichtbare Funktion ein klickbarer headless Test.
+3. **kittest-Goldens.** Jede neue sichtbare Editor-Fläche braucht einen Golden
+   im passenden Ziel (`kittest_snapshots` oder ein neues, feature-spezifisches
+   `tests/kittest_*.rs`). Die Goldens sind in CI `#[ignore]`d und werden **nie**
+   dort verifiziert; sie sind ein **lokales** macOS-Gate (siehe
+   `feature/quality/golden-references.md`).
+4. **Fixture-Klasse.** Neue Goldens brauchen eine echte Quelle. `R1` = echtes
+   RAW/echte Bilddaten, `S1` = Layout-Sentinel, `S2` = Smoke-Raster
+   (`feature/quality/golden-fixtures.md`). Ein Golden, das einen Decode-Fehler
+   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis.
+5. **Aktions-Audit.** Jede neue `GuiAction`-Variante oder Enum-Variante erzwingt
+   den `ALL_GUI_ACTIONS`-Audit (aktuell 110 Aktionen).
+6. **SOLL-Zuordnung.** Das headless gelieferte SOLL-Dokument ist zu lesen und um
+   den GUI-/kittest-Stand zu ergänzen; fehlt der GUI-Teil im SOLL, ist er **vor**
+   dem Code zu schreiben.
+7. **Ratchet.** Neue GUI-Module bleiben ≤ 500 Zeilen; wächst `lumina-gui/src/lib.rs`,
+   ist echte Extraktion Pflicht und die Baseline danach zu senken.
+
+**Abnahme einer Integration:** `cargo test -p lumina-gui --all-targets` grün,
+jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
+`ALL_GUI_ACTIONS`-Audit ist grün, `sh scripts/check_file_sizes.sh` grün ohne neue
+Baseline-Einträge, fmt/Clippy clean, und das Feature-Dokument nennt den GUI- und
+kittest-Stand ausdrücklich.
+
 ### Testabdeckungs-Politik (User-Regel 2026-09-26)
 
 - **Grundregel: Alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
