@@ -1379,6 +1379,522 @@ chk_has "fails closed" "hook/git-diff-failure explains that it fails closed"
 chk_has "simulated index failure" "hook/git-diff-failure names the real git error"
 mc_reset
 
+# --- the golden fixture contract: the table the digest cannot see ------------
+
+section "golden fixture contract (GOLDEN-FIXT-31: the table the digest cannot see)"
+
+# WHAT this section is for. `feature/quality/golden-fixtures.md` §4 states the
+# gap from its own side: the R/S1/S2 classification table has one row per
+# committed golden, and "`golden_ref.sh check` vergleicht Digests, nicht diese
+# Tabelle - eine fehlende Zeile fällt dort nicht auf". The acceptance criterion
+# of GOLDEN-FIXT-31 that had no implementation anywhere (verification finding
+# H3, measured as zero hits for `golden-fixtures` in every `.rs`, `scripts/*`
+# and `.github/*` file) is the other half of the same sentence: "ein Test
+# schlägt an, wenn eine Chrome-Invariante als Beleg für eine
+# Bildpipeline-Regression herangezogen wird".
+#
+# The digest layer above cannot see either half, and not by accident: a
+# `record` fills the lock from the same code `check` reads, so a golden nobody
+# ever classified still hashes happily; and the classification table is prose
+# that no code read. So everything below is derived HERE, from the committed
+# files and from the document, with plain `git`, `find`, `awk` and `sed` - never
+# through the guard's own `list_goldens` / `list_fixtures`. Comparing the guard
+# with a list that came out of the same functions would only prove that the
+# guard agrees with itself, which is the failure mode this section exists to
+# remove.
+#
+# Two properties, deliberately kept apart:
+#   A  completeness - the inventory table and the golden directory describe the
+#      SAME set of files in BOTH directions, and the numbers the document claims
+#      in prose are the numbers its table contains.
+#   B  class discipline - a class-R row is backed by real rendered pixels, the
+#      forbidden class token R-F does not occur, and every render-evidence
+#      citation names a class-R row.
+#
+# B2 IS RED on the untouched tree, on purpose. Six committed class-R goldens
+# still carry the LibRaw error banner and flat colour blocks as their expected
+# state (golden-fixtures.md §5.6, verification finding H1). That is the finding
+# this section exists to make visible; re-recording those goldens is
+# GOLDEN-BASELINE-32's task. Lowering a threshold until the six pass would hide
+# exactly the thing the check is for, so the thresholds are the ones the
+# document derives from the measured populations and are left alone.
+GFC_DOC="$ROOT/feature/quality/golden-fixtures.md"
+GFC_SNAP_REL='crates/lumina-gui/tests/snapshots'
+GFC_PROBE_REL='scripts/fixtures/png_pixel_probe.png'
+GFC_PROBE="$ROOT/$GFC_PROBE_REL"
+
+# The two class-R pixel thresholds, from golden-fixtures.md §2 rule 7. P1 is a
+# floor on distinct colours, P2 a ceiling on the share of strongly-red pixels
+# (r > 0.5, g < 0.25, b < 0.25). §5.6 of that document carries the measurement
+# both numbers come from: the two populations sit at 570..1516 (error state) and
+# 88426..104756 (healthy), and 10000 is the rounded geometric mean of the two
+# extremes (11578) - a maximum-margin placement, not a number chosen to make
+# today's set pass. It does not.
+GFC_MIN_COLOURS=10000
+GFC_MAX_RED=0.02
+
+# Literal expectations for the committed measurement probe, counted by hand from
+# the pixel list in `scripts/fixtures/README.md` and never derived from the tool
+# under test (DoD §10, no self-referential expectation).
+GFC_PROBE_COLOURS=4
+GFC_PROBE_RED=0.375
+
+gfc_is_uint() {
+  # A non-empty run of digits and nothing else.
+  case "${1:-}" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  return 0
+}
+
+gfc_is_fraction() {
+  # A decimal in [0,1] as ImageMagick's %[fx:mean] prints it. Rejects the empty
+  # string, a colour name, an error message, two dots and anything above 1, so
+  # a broken tool cannot feed a plausible-looking number into P2.
+  case "${1:-}" in
+    '' | *[!0-9.]*) return 1 ;;
+  esac
+  case "${1#*.}" in
+    *.*) return 1 ;;
+  esac
+  case "${1%%.*}" in
+    0) case "$1" in 0 | 0.*) return 0 ;; esac ;;
+    1) case "$1" in 1 | 1.0 | 1.00*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+gfc_dec_gt() {
+  # True when decimal $1 is greater than $2. POSIX sh has no floating point.
+  awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
+}
+
+gfc_fx_tool() {
+  # The command that can evaluate -fx, or nothing. ImageMagick 7 ships `magick`,
+  # ImageMagick 6 `convert`; both ship `identify`.
+  if command -v magick >/dev/null 2>&1; then
+    echo magick
+  elif command -v convert >/dev/null 2>&1; then
+    echo convert
+  fi
+}
+
+gfc_info_tool() {
+  if command -v identify >/dev/null 2>&1; then
+    echo identify
+  fi
+}
+
+gfc_measure() {
+  # Sets GFC_COLOURS and GFC_RED, or returns 1 and leaves them unusable. The
+  # caller MUST read a non-zero return as "no measurement", never as a zero -
+  # that distinction is the whole point of the precondition below.
+  gfc_m_fx=$(gfc_fx_tool)
+  gfc_m_info=$(gfc_info_tool)
+  GFC_MISSING_TOOLS=
+  if [ -z "$gfc_m_fx" ] || [ -z "$gfc_m_info" ]; then
+    GFC_MISSING_TOOLS="fx='$gfc_m_fx' identify='$gfc_m_info'"
+    return 1
+  fi
+  GFC_COLOURS=$("$gfc_m_info" -format '%k' "$1" 2>/dev/null) || return 1
+  GFC_RED=$("$gfc_m_fx" "$1" -alpha off \
+    -fx 'u.r>0.5 && u.g<0.25 && u.b<0.25 ? 1 : 0' \
+    -format '%[fx:mean]' info: 2>/dev/null) || return 1
+  gfc_is_uint "$GFC_COLOURS" || return 1
+  gfc_is_fraction "$GFC_RED" || return 1
+  return 0
+}
+
+gfc_inventory_rows() {
+  # "<golden> <class>" for every row of the two inventory tables. Only rows
+  # whose FIRST cell is a number qualify, which excludes the header row, the
+  # `| --- |` separator and the unrelated tables elsewhere in the document. The
+  # class cell is taken verbatim apart from `*` and whitespace, so the forbidden
+  # token R-F stays distinguishable from R - collapsing them here would make B1
+  # unreachable by construction.
+  awk -F'|' '
+    $0 ~ /^[[:space:]]*\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
+      n = $3; c = $4
+      gsub(/`/, "", n); gsub(/[[:space:]]/, "", n)
+      gsub(/\*/, "", c); gsub(/[[:space:]]/, "", c)
+      if (n != "") print n " " c
+    }
+  ' "$GFC_DOC"
+}
+
+gfc_ledger_rows() {
+  # The goldens named in the render-evidence ledger (§4.4), read as the rows
+  # between the `### 4.4` and `### 4.5` headings whose first cell is a
+  # backticked name. The ledger deliberately carries NO class column; the class
+  # is looked up in the inventory, so the two lists cannot drift apart.
+  sed -n '/^### 4\.4 /,/^### 4\.5 /p' "$GFC_DOC" |
+    awk -F'|' '$0 ~ /^[[:space:]]*\|[[:space:]]*`/ {
+      n = $2
+      gsub(/`/, "", n); gsub(/[[:space:]]/, "", n)
+      if (n != "") print n
+    }'
+}
+
+gfc_doc_int() {
+  # The first number of the first line matching the ERE in $1, or nothing. Used
+  # for the three numbers the document states in prose, so a claim in the text
+  # is compared against the table instead of being taken on trust.
+  #
+  # awk, not a `sed 's/.*\(...\)/\1/p'` backreference, and that is a measured
+  # choice: on this machine (BSD sed) the backreference form returns
+  # "66 (gezählt mit" for the very line it is supposed to read, while the awk
+  # form returns "66". A gate that misreads its own document on one of the two
+  # platforms it runs on is worse than no gate, so the portable tool wins.
+  # The patterns are EREs, and they are written with bracket expressions
+  # ([*][*]) rather than `\*\*`: escaping an ordinary character is undefined in
+  # POSIX ERE, and BSD awk rejects `\*\*` outright with "illegal primary". Both
+  # spellings work with gawk, so this is exactly the kind of difference a gate
+  # that only ever runs on the author's machine never meets.
+  awk -v re="$1" '
+    match($0, re) {
+      seg = substr($0, RSTART, RLENGTH)
+      if (match(seg, /[0-9]+/)) { print substr(seg, RSTART, RLENGTH); exit }
+    }
+  ' "$GFC_DOC"
+}
+
+gfc_chk_num() {
+  # gfc_chk_num <label> <claim-from-the-document> <measured>
+  gfc_n_lbl=$1
+  gfc_n_claim=$2
+  gfc_n_meas=$3
+  if [ -z "$gfc_n_claim" ]; then
+    no "$gfc_n_lbl" "the number could not be found in $GFC_DOC at all.
+A count that cannot be read is not a count, so this stays red rather than
+comparing an empty string with '$gfc_n_meas'."
+    return 1
+  fi
+  if [ "$gfc_n_claim" = "$gfc_n_meas" ]; then
+    ok "$gfc_n_lbl ($gfc_n_meas)"
+    return 0
+  fi
+  no "$gfc_n_lbl" "the document claims $gfc_n_claim, the table contains $gfc_n_meas"
+  return 1
+}
+
+gfc_chk_both_ways() {
+  # gfc_chk_both_ways <label> <set-a> <set-b> <what-a> <what-b>
+  # Equality as a SET, reported per name in both directions. The existing
+  # chk_inventory helper does the same job for the guard's inventory, but its
+  # message says "the guard enumerated"; these two sides are a directory listing
+  # and a markdown table, so they get wording that names the right things
+  # rather than a misleading one.
+  gfc_b_lbl=$1
+  gfc_b_a=$2
+  gfc_b_b=$3
+  gfc_b_an=$4
+  gfc_b_bn=$5
+  if [ "$gfc_b_a" = "$gfc_b_b" ]; then
+    ok "$gfc_b_lbl ($(printf '%s\n' "$gfc_b_a" | grep -c . || true) names)"
+    return 0
+  fi
+  gfc_b_af="$SANDBOX/gfc_side_a.txt"
+  gfc_b_bf="$SANDBOX/gfc_side_b.txt"
+  printf '%s\n' "$gfc_b_a" | LC_ALL=C sort >"$gfc_b_af"
+  printf '%s\n' "$gfc_b_b" | LC_ALL=C sort >"$gfc_b_bf"
+  gfc_b_onlya=$(LC_ALL=C comm -23 "$gfc_b_af" "$gfc_b_bf")
+  gfc_b_onlyb=$(LC_ALL=C comm -13 "$gfc_b_af" "$gfc_b_bf")
+  no "$gfc_b_lbl" "in $gfc_b_an but not in $gfc_b_bn: $(printf '%s\n' "$gfc_b_onlya" | grep -c . || true)
+$(printf '%s\n' "$gfc_b_onlya" | head -n 5)
+in $gfc_b_bn but not in $gfc_b_an: $(printf '%s\n' "$gfc_b_onlyb" | grep -c . || true)
+$(printf '%s\n' "$gfc_b_onlyb" | head -n 5)"
+  return 1
+}
+
+gfc_lean_path() {
+  # This machine's PATH minus every directory that provides an image tool -
+  # i.e. what a plain runner without ImageMagick looks like. Derived rather
+  # than hard-coded, so the test does not assume a particular install prefix.
+  gfc_lp_out=
+  # SC2031: shellcheck infers "PATH was modified in a subshell" from the
+  # gi_probe/fd_probe subshells far above (which export a git shim PATH), not
+  # from this line - this only READS $PATH, and it must see the real one so the
+  # derived lean PATH differs from it. Proven necessary: with this disable
+  # removed, `shellcheck --shell=sh` reports SC2031 at exactly this line.
+  # shellcheck disable=SC2031
+  gfc_lp_rest=$PATH
+  while [ -n "$gfc_lp_rest" ]; do
+    case "$gfc_lp_rest" in
+      *:*)
+        gfc_lp_dir=${gfc_lp_rest%%:*}
+        gfc_lp_rest=${gfc_lp_rest#*:}
+        ;;
+      *)
+        gfc_lp_dir=$gfc_lp_rest
+        gfc_lp_rest=
+        ;;
+    esac
+    [ -n "$gfc_lp_dir" ] || continue
+    if [ -x "$gfc_lp_dir/magick" ] || [ -x "$gfc_lp_dir/convert" ] ||
+      [ -x "$gfc_lp_dir/identify" ]; then
+      continue
+    fi
+    if [ -z "$gfc_lp_out" ]; then
+      gfc_lp_out=$gfc_lp_dir
+    else
+      gfc_lp_out="$gfc_lp_out:$gfc_lp_dir"
+    fi
+  done
+  printf '%s' "$gfc_lp_out"
+}
+
+# --- preconditions ---------------------------------------------------------
+
+chk_true "$([ -f "$GFC_DOC" ] && echo 0 || echo 1)" \
+  "precondition: the fixture contract document exists" \
+  "every check below reads $GFC_DOC. Without it they would compare empty lists
+with empty lists and report success without having read a single golden."
+
+GFC_ROWS=$(gfc_inventory_rows)
+GFC_ROW_N=$(printf '%s\n' "$GFC_ROWS" | grep -c . || true)
+chk_true "$([ "$GFC_ROW_N" -gt 0 ] && echo 0 || echo 1)" \
+  "precondition: the inventory table parsed to at least one row ($GFC_ROW_N rows)" \
+  "no line of $GFC_DOC matched the shape '| <number> | \`<golden>\` | <class> |'.
+If the table's shape changed, A1/A2/A3/B1/B2 would all compare empty lists and
+pass without covering a single golden."
+
+GFC_TABLE_NAMES=$(printf '%s\n' "$GFC_ROWS" | awk '{print $1}' | LC_ALL=C sort)
+GFC_DISK=$(find "$ROOT/$GFC_SNAP_REL" -maxdepth 1 -type f -name '*.png' |
+  awk '!/\.new\.png$/ && !/\.diff\.png$/ && !/\.old\.png$/' |
+  sed 's|.*/||' | LC_ALL=C sort)
+GFC_DISK_N=$(printf '%s\n' "$GFC_DISK" | grep -c . || true)
+chk_true "$([ "$GFC_DISK_N" -gt 0 ] && echo 0 || echo 1)" \
+  "precondition: the snapshot directory holds at least one golden ($GFC_DISK_N files)" \
+  "find $ROOT/$GFC_SNAP_REL -name '*.png' returned nothing, so A1/A2 would
+compare an empty side against the table and 'pass' without covering a golden."
+
+# --- A: completeness -------------------------------------------------------
+
+# A1 and A2 in one comparison, because they are the two directions of the same
+# statement: a golden with no row, and a row with no golden. `golden_ref.sh
+# check` compares digests and sees neither.
+gfc_chk_both_ways \
+  "A1+A2: the inventory table and the snapshot directory name the same goldens, both ways" \
+  "$GFC_DISK" "$GFC_TABLE_NAMES" "the snapshot directory" "the inventory table"
+
+# A3: the three numbers the document states in prose must be the numbers its
+# table contains. This is what stops a future edit from bumping "66" in one
+# sentence and leaving the table at 65.
+GFC_CLAIM_TOTAL=$(gfc_doc_int '[*][*][0-9]+[*][*] committete Golden-Dateien')
+GFC_CLAIM_R=$(gfc_doc_int 'Bilanz: [0-9]+ Render-Invarianten')
+GFC_CLAIM_C=$(gfc_doc_int '[0-9]+ Chrome-/Layout-Invarianten')
+GFC_TAB_R=$(printf '%s\n' "$GFC_ROWS" | awk '$2 == "R"' | grep -c . || true)
+GFC_TAB_C=$(printf '%s\n' "$GFC_ROWS" | awk '$2 == "C"' | grep -c . || true)
+gfc_chk_num "A3: the document's golden total matches its table" \
+  "$GFC_CLAIM_TOTAL" "$GFC_ROW_N"
+gfc_chk_num "A3: the document's class-R total matches its table" \
+  "$GFC_CLAIM_R" "$GFC_TAB_R"
+gfc_chk_num "A3: the document's class-C total matches its table" \
+  "$GFC_CLAIM_C" "$GFC_TAB_C"
+
+# A4: the directory and the committed set agree, so "committed" is a fact rather
+# than a claim - and so an untracked golden dropped into the directory is caught
+# by A1 even though `git ls-files` cannot see it yet.
+GFC_COMMITTED=$(git -C "$ROOT" ls-files --cached -- "$GFC_SNAP_REL/*.png" |
+  awk '!/\.new\.png$/ && !/\.diff\.png$/ && !/\.old\.png$/' |
+  sed 's|.*/||' | LC_ALL=C sort)
+gfc_chk_both_ways \
+  "A4: the snapshot directory matches the committed golden set" \
+  "$GFC_DISK" "$GFC_COMMITTED" "the snapshot directory" "git ls-files"
+
+# The class vocabulary, checked before B1 and B2 depend on it: a misspelt token
+# would silently remove the row from the pixel check below, and a check that
+# silently stops covering a golden is worse than no check.
+GFC_ODD_CLASS=$(printf '%s\n' "$GFC_ROWS" |
+  awk '$2 != "R" && $2 != "C" && $2 != "R-F" { print $1 " -> " $2 }')
+if [ -z "$GFC_ODD_CLASS" ]; then
+  ok "every inventory row carries a class token out of {R, C, R-F}"
+else
+  no "every inventory row carries a class token out of {R, C, R-F}" \
+    "a token outside the vocabulary would drop that row out of the B2 pixel
+check without any red assertion - that is the silent-coverage failure mode:
+$GFC_ODD_CLASS"
+fi
+
+# --- B: class discipline ---------------------------------------------------
+
+# B1: the forbidden token. R-F exists so the table can NAME the state that
+# GOLDEN-BASELINE-32 has to fix; it may not be used as a classification.
+GFC_RF=$(printf '%s\n' "$GFC_ROWS" | awk '$2 == "R-F" { print $1 }')
+if [ -z "$GFC_RF" ]; then
+  ok "B1: no inventory row is classified R-F (a render invariant whose expected state is a decode failure)"
+else
+  no "B1: no inventory row is classified R-F (a render invariant whose expected state is a decode failure)" \
+    "these rows declare a decode failure as the expected state of a render
+invariant, which golden-fixtures.md §2 rule 5 forbids for class R:
+$(printf '%s' "$GFC_RF" | tr '\n' ' ')"
+  # Two-sided: R-F must not become a way to smuggle a healthy golden past B2, so
+  # each R-F row also has to actually show the failure in its pixels.
+  for gfc_rf_name in $GFC_RF; do
+    gfc_rf_path="$ROOT/$GFC_SNAP_REL/$gfc_rf_name"
+    if [ ! -f "$gfc_rf_path" ]; then
+      no "B1: the R-F row $gfc_rf_name is corroborated by its pixels" \
+        "there is no file at $gfc_rf_path, so the claim is unverifiable"
+      continue
+    fi
+    if gfc_measure "$gfc_rf_path"; then
+      gfc_rf_seen=
+      [ "$GFC_COLOURS" -lt "$GFC_MIN_COLOURS" ] && gfc_rf_seen="P1"
+      if gfc_dec_gt "$GFC_RED" "$GFC_MAX_RED"; then
+        gfc_rf_seen="$gfc_rf_seen P2"
+      fi
+      if [ -z "$gfc_rf_seen" ]; then
+        no "B1: the R-F row $gfc_rf_name is corroborated by its pixels" \
+          "measured distinct_colours=$GFC_COLOURS (>= $GFC_MIN_COLOURS) and
+red_fraction=$GFC_RED (<= $GFC_MAX_RED): the pixels show a HEALTHY render, so
+'R-F' is being used to exempt a golden from the pixel check rather than to
+record a real finding."
+      else
+        ok "B1: the R-F row $gfc_rf_name is corroborated by its pixels (failed: $gfc_rf_seen)"
+      fi
+    else
+      no "B1: the R-F row $gfc_rf_name is corroborated by its pixels" \
+        "no usable measurement ($GFC_MISSING_TOOLS); the claim stays unverified"
+    fi
+  done
+fi
+
+# B2: the pixel proof for every class-R row. This is the check that turns
+# "the six library goldens still show the LibRaw banner" from a thing somebody
+# noticed into a red assertion with numbers attached.
+GFC_R_NAMES=$(printf '%s\n' "$GFC_ROWS" | awk '$2 == "R" { print $1 }')
+chk_true "$([ -n "$GFC_R_NAMES" ] && echo 0 || echo 1)" \
+  "precondition: the table lists at least one class-R golden" \
+  "with no class-R row the pixel check would pass over an empty loop."
+
+GFC_FX=$(gfc_fx_tool)
+GFC_INFO=$(gfc_info_tool)
+chk_true "$([ -n "$GFC_FX" ] && [ -n "$GFC_INFO" ] && echo 0 || echo 1)" \
+  "precondition: an image measuring tool is on PATH (fx='$GFC_FX', identify='$GFC_INFO')" \
+  "B2 measures committed PNGs with ImageMagick, and that is an external
+dependency, so it is asserted instead of assumed (DoD §10: no environment
+assumption in a test). The correct behaviour without the tool is RED, never a
+silent skip - a skipped check is a check that cannot fail.
+Install it (macOS: brew install imagemagick, Debian/Ubuntu: apt-get install
+imagemagick) or run the suite where it exists."
+
+# The tool is validated against a committed probe whose pixels are countable by
+# hand. Without this, a tool that answers every question plausibly but wrongly
+# would turn B2 into a random number generator.
+if gfc_measure "$GFC_PROBE"; then
+  chk_true "$([ "$GFC_COLOURS" = "$GFC_PROBE_COLOURS" ] && echo 0 || echo 1)" \
+    "precondition: the tool counts the committed probe's distinct colours correctly ($GFC_PROBE_COLOURS)" \
+    "$GFC_PROBE was measured as distinct_colours=$GFC_COLOURS, but the literal
+pixel list in scripts/fixtures/README.md has exactly $GFC_PROBE_COLOURS colours
+(red, green, blue, black). A wrong count here means the P1 threshold is being
+compared against a number from an unverified derivation."
+  chk_true "$(awk -v a="$GFC_RED" -v b="$GFC_PROBE_RED" 'BEGIN { print (a + 0 == b + 0) ? 0 : 1 }')" \
+    "precondition: the tool computes the committed probe's red fraction correctly ($GFC_PROBE_RED)" \
+    "$GFC_PROBE was measured as red_fraction=$GFC_RED, but the literal pixel
+list gives 3 of 8 pixels = $GFC_PROBE_RED. A tool that answered 0.0 (nothing is
+red) or 1.0 (everything is red) would equally invalidate the P2 threshold."
+else
+  no "precondition: the tool counts the committed probe's distinct colours correctly ($GFC_PROBE_COLOURS)" \
+    "the committed probe $GFC_PROBE_REL could not be measured ($GFC_MISSING_TOOLS)"
+  no "precondition: the tool computes the committed probe's red fraction correctly ($GFC_PROBE_RED)" \
+    "the committed probe $GFC_PROBE_REL could not be measured ($GFC_MISSING_TOOLS)"
+fi
+
+# Word splitting on purpose: golden file names contain no whitespace, and a
+# `while read` pipeline would run the loop in a subshell where the pass/fail
+# counters of ok/no are lost - the assertions would print and count nothing.
+for gfc_r_name in $GFC_R_NAMES; do
+  gfc_r_path="$ROOT/$GFC_SNAP_REL/$gfc_r_name"
+  if [ ! -f "$gfc_r_path" ]; then
+    no "B2: $gfc_r_name carries real render evidence" \
+      "the table classifies it as R but there is no file at $gfc_r_path"
+    continue
+  fi
+  if ! gfc_measure "$gfc_r_path"; then
+    no "B2: $gfc_r_name carries real render evidence" \
+      "no usable measurement ($GFC_MISSING_TOOLS). Either the tool is absent -
+see the precondition above - or it returned something that is not a colour
+count and a fraction in [0,1]."
+    continue
+  fi
+  gfc_r_bad=
+  [ "$GFC_COLOURS" -lt "$GFC_MIN_COLOURS" ] && gfc_r_bad="P1"
+  if gfc_dec_gt "$GFC_RED" "$GFC_MAX_RED"; then
+    gfc_r_bad="$gfc_r_bad P2"
+  fi
+  if [ -z "$gfc_r_bad" ]; then
+    ok "B2: $gfc_r_name carries real render evidence (colours=$GFC_COLOURS >= $GFC_MIN_COLOURS, red=$GFC_RED <= $GFC_MAX_RED)"
+  else
+    no "B2: $gfc_r_name carries real render evidence" \
+      "failed predicate(s): $gfc_r_bad
+  measured distinct_colours=$GFC_COLOURS   P1 requires >= $GFC_MIN_COLOURS
+  measured red_fraction=$GFC_RED           P2 requires <= $GFC_MAX_RED
+A class-R golden may not take a decode failure or an error placeholder as its
+expected state (golden-fixtures.md §2 rules 5 and 7). Re-recording it is
+GOLDEN-BASELINE-32's task; this threshold must not be lowered to hide it."
+  fi
+done
+
+# B3: the H3 criterion itself. A render-evidence citation has to name a row the
+# inventory classifies R. A class-C row here is exactly "a Chrome invariant
+# cited as evidence for an image-pipeline regression".
+GFC_LEDGER=$(gfc_ledger_rows)
+GFC_LEDGER_N=$(printf '%s\n' "$GFC_LEDGER" | grep -c . || true)
+chk_true "$([ "$GFC_LEDGER_N" -gt 0 ] && echo 0 || echo 1)" \
+  "precondition: the render-evidence ledger parsed to at least one citation ($GFC_LEDGER_N)" \
+  "the ledger is the rows between '### 4.4' and '### 4.5' whose first cell is a
+backticked name. Without a citation the H3 criterion would have nothing to
+fire on, and an empty loop would report success."
+# Word splitting on purpose: golden file names contain no whitespace, and a
+# `while read` pipeline would run the loop in a subshell where the pass/fail
+# counters of ok/no are lost - the assertions would print and count nothing.
+for gfc_cite in $GFC_LEDGER; do
+  gfc_cite_class=$(printf '%s\n' "$GFC_ROWS" | awk -v n="$gfc_cite" '$1 == n { print $2 }')
+  if [ -z "$gfc_cite_class" ]; then
+    no "B3: the render-evidence citation $gfc_cite names a class-R golden" \
+      "it is not a row of the inventory table at all - a citation with no
+classification cannot be checked for anything"
+  elif [ "$gfc_cite_class" = "R" ]; then
+    ok "B3: the render-evidence citation $gfc_cite names a class-R golden"
+  else
+    no "B3: the render-evidence citation $gfc_cite names a class-R golden" \
+      "the inventory table classifies it as '$gfc_cite_class', and a
+Chrome-/Layout-Invariante may never be cited as evidence for an
+image-pipeline regression (golden-fixtures.md §3, §2 rule 9). This is
+acceptance criterion H3 of GOLDEN-FIXT-31 firing."
+  fi
+done
+
+# --- platform independence of this section ----------------------------------
+
+# The inventory checks need git, sed and awk and nothing else; the pixel check
+# needs an image tool. Proving the second is detected as missing - rather than
+# skipped - is what keeps the first claim honest on a runner that has no
+# ImageMagick, which is the environment the CI job runs in.
+GFC_LEAN_PATH=$(gfc_lean_path)
+chk_true "$([ -n "$GFC_LEAN_PATH" ] && echo 0 || echo 1)" \
+  "precondition: a PATH without any image tool could be constructed" \
+  "every directory on PATH provides magick/convert/identify, so the 'tool
+absent' branch below cannot be exercised on this machine and the B2 tool
+precondition is only half proved."
+
+if env PATH="$GFC_LEAN_PATH" sh -c \
+  'command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1' 2>/dev/null; then
+  no "the image-tool probe answers negative under a PATH without any image tool" \
+    "magick or convert is still reachable under PATH=$GFC_LEAN_PATH, so the
+'no tool' branch of gfc_measure was not exercised"
+else
+  ok "the image-tool probe answers negative under a PATH without any image tool"
+fi
+
+if env PATH="$GFC_LEAN_PATH" sh -c \
+  'command -v git >/dev/null 2>&1 && command -v sed >/dev/null 2>&1 && command -v awk >/dev/null 2>&1' 2>/dev/null; then
+  ok "git, sed and awk stay reachable under that PATH, so the inventory checks are platform independent"
+else
+  no "git, sed and awk stay reachable under that PATH, so the inventory checks are platform independent" \
+    "PATH=$GFC_LEAN_PATH has no git/sed/awk, so A1-A4 could not run on a plain runner"
+fi
+
 # --- sandbox discipline ----------------------------------------------------
 
 section "sandbox discipline (the real lock and index must be untouched)"
