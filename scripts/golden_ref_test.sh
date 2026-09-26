@@ -1607,40 +1607,78 @@ $(printf '%s\n' "$gfc_b_onlyb" | head -n 5)"
 }
 
 gfc_lean_path() {
-  # This machine's PATH minus every directory that provides an image tool -
-  # i.e. what a plain runner without ImageMagick looks like. Derived rather
-  # than hard-coded, so the test does not assume a particular install prefix.
-  gfc_lp_out=
-  # SC2031: shellcheck infers "PATH was modified in a subshell" from the
-  # gi_probe/fd_probe subshells far above (which export a git shim PATH), not
-  # from this line - this only READS $PATH, and it must see the real one so the
-  # derived lean PATH differs from it. Proven necessary: with this disable
-  # removed, `shellcheck --shell=sh` reports SC2031 at exactly this line.
-  # shellcheck disable=SC2031
-  gfc_lp_rest=$PATH
-  while [ -n "$gfc_lp_rest" ]; do
-    case "$gfc_lp_rest" in
-      *:*)
-        gfc_lp_dir=${gfc_lp_rest%%:*}
-        gfc_lp_rest=${gfc_lp_rest#*:}
-        ;;
-      *)
-        gfc_lp_dir=$gfc_lp_rest
-        gfc_lp_rest=
-        ;;
+  # A synthetic PATH that deliberately has NO image tool, while still carrying
+  # the tools the inventory checks need - i.e. what a plain runner without
+  # ImageMagick looks like.
+  #
+  # Why a synthetic bin and not "this machine's PATH minus every directory that
+  # provides an image tool": on Ubuntu the runner installs ImageMagick 6, whose
+  # `convert` and `identify` live in /usr/bin - the SAME directory as git, sed
+  # and awk. Dropping that directory to remove ImageMagick removes every
+  # coreutils binary too, so the assertion below fails for the wrong reason
+  # (measured: CI job "Documentation checks", run 36265383058, on main@f2ed6da).
+  # "Directory without image tools" is simply not the same statement as "PATH
+  # without image tools" when the two sets share a directory. Strip-by-directory
+  # therefore cannot express what is required and is not used.
+  #
+  # Building the bin from `command -v` makes the split by TOOL rather than by
+  # directory. It is keyed to no install prefix and to no platform, and it is
+  # deliberately NOT a filter: every required tool is resolved first and a
+  # missing one is reported by name. An accidentally incomplete bin would make
+  # the "git/sed/awk reachable" assertion fail (loud), and an accidentally
+  # complete one would make the "tool absent" assertion pass vacuously - so the
+  # unresolved-tool case must be loud, not an omission.
+  #
+  # Output contract: `ok <path>` with the bin directory, or `missing <names>`
+  # with the unresolved tools. It never prints an empty path on error, so the
+  # precondition below cannot turn the result into a vacuous empty PATH.
+  #
+  # If a required tool is absent on this machine:
+  #   * sh/git/sed/awk absent -> "missing <name>"; the lean PATH cannot be built,
+  #     the precondition below is red, and the "git/sed/awk reachable" assertion
+  #     is red too. It never reads as "the tool is absent from the lean PATH".
+  #   * an image tool (magick/convert/identify) absent -> it is NOT copied into
+  #     the bin (there is nothing to copy), and the "tool absent" assertion is
+  #     still red for exactly that tool - by construction, not by luck. The other
+  #     image tools are still probed, so the assertion cannot pass while any of
+  #     the three is resolvable.
+  #
+  # Never touches $PATH itself and never runs in a subshell: it only reads $PATH
+  # via `command -v`, so the SC2031 disable the previous version needed for
+  # reading $PATH no longer applies and is gone.
+  gfc_lp_bin=$GFC_LEAN_BIN
+  gfc_lp_ok=1
+  gfc_lp_missing=
+  # The tools `env PATH=<lean> sh -c` needs to start at all (`env` and the `sh`
+  # it execs) plus the ones the assertions and the inventory checks probe for.
+  for gfc_lp_t in env sh git sed awk; do
+    gfc_lp_p=$(command -v "$gfc_lp_t" 2>/dev/null) || gfc_lp_p=
+    case "$gfc_lp_p" in
+      /*) [ -x "$gfc_lp_p" ] || gfc_lp_p= ;;
+      *) gfc_lp_p= ;;
     esac
-    [ -n "$gfc_lp_dir" ] || continue
-    if [ -x "$gfc_lp_dir/magick" ] || [ -x "$gfc_lp_dir/convert" ] ||
-      [ -x "$gfc_lp_dir/identify" ]; then
+    if [ -z "$gfc_lp_p" ]; then
+      gfc_lp_ok=0
+      gfc_lp_missing="$gfc_lp_missing $gfc_lp_t"
       continue
     fi
-    if [ -z "$gfc_lp_out" ]; then
-      gfc_lp_out=$gfc_lp_dir
-    else
-      gfc_lp_out="$gfc_lp_out:$gfc_lp_dir"
-    fi
+    ln -sf "$gfc_lp_p" "$gfc_lp_bin/$gfc_lp_t"
   done
-  printf '%s' "$gfc_lp_out"
+  # The image tools are deliberately NOT copied in: the whole point of the bin
+  # is that it resolves env/sh/git/sed/awk and NO image tool. An earlier draft
+  # symlinked magick/convert/identify here "when resolvable", which put exactly
+  # the tools the assertion checks for back on the lean PATH and made the two
+  # assertions below fail (measured locally, 2 red). The vacuity concern - "the
+  # bin lacks ImageMagick because the machine lacks it, not because we stripped
+  # it" - is already covered by the precondition above the section, which is red
+  # when no image tool exists at all. That one assertion cannot be satisfied
+  # vacuously here.
+  if [ "$gfc_lp_ok" -eq 0 ]; then
+    printf 'missing%s' "$gfc_lp_missing"
+    return 1
+  fi
+  printf '%s' "$gfc_lp_bin"
+  return 0
 }
 
 # --- preconditions ---------------------------------------------------------
@@ -2085,22 +2123,27 @@ done
 
 # --- platform independence of this section ----------------------------------
 
-# The inventory checks need git, sed and awk and nothing else; the pixel check
-# needs an image tool. Proving the second is detected as missing - rather than
-# skipped - is what keeps the first claim honest on a runner that has no
-# ImageMagick, which is the environment the CI job runs in.
-GFC_LEAN_PATH=$(gfc_lean_path)
+# The inventory checks need env, sh, git, sed and awk and nothing else; the
+# pixel check needs an image tool. Proving the second is detected as missing -
+# rather than skipped - is what keeps the first claim honest on a runner that
+# has no ImageMagick, which is the environment the CI job runs in.
+GFC_LEAN_BIN="$SANDBOX/gfc_lean_path"
+mkdir -p "$GFC_LEAN_BIN"
+GFC_LEAN_PATH=$(gfc_lean_path) || GFC_LEAN_PATH=
 chk_true "$([ -n "$GFC_LEAN_PATH" ] && echo 0 || echo 1)" \
   "precondition: a PATH without any image tool could be constructed" \
-  "every directory on PATH provides magick/convert/identify, so the 'tool
-absent' branch below cannot be exercised on this machine and the B2 tool
-precondition is only half proved."
+  "gfc_lean_path could not build its bin: it returned '$(gfc_lean_path)'.
+Every tool the lean PATH needs (env, sh, git, sed, awk) must resolve to an
+absolute executable path; the missing ones are named after 'missing'. This is
+red rather than an empty PATH on purpose - an empty PATH would make the
+'git/sed/awk reachable' assertion below fail for the wrong reason, hiding the
+actual problem."
 
 if env PATH="$GFC_LEAN_PATH" sh -c \
-  'command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1' 2>/dev/null; then
+  'command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 || command -v identify >/dev/null 2>&1' 2>/dev/null; then
   no "the image-tool probe answers negative under a PATH without any image tool" \
-    "magick or convert is still reachable under PATH=$GFC_LEAN_PATH, so the
-'no tool' branch of gfc_measure was not exercised"
+    "magick, convert or identify is still reachable under PATH=$GFC_LEAN_PATH, so
+the 'no tool' branch of gfc_measure was not exercised"
 else
   ok "the image-tool probe answers negative under a PATH without any image tool"
 fi
