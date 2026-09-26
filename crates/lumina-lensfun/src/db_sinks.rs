@@ -202,8 +202,11 @@ impl Diagnostics for ReportOnce {
     }
 
     fn failed(&mut self, err: &SystemDbError) {
-        // Key on the error *kind*, not its full text, so a stable, resolvable
-        // system database does not permanently suppress a later real failure.
+        // Key on the error's **full text** (its kind plus every probed
+        // location), not on its kind alone, so a resolvable database does not
+        // permanently suppress a *later, different* real failure. Cost: two
+        // failures differing only in a probed path are reported twice — the
+        // deliberate trade, since the alternative hides a genuine change.
         if self.first_time(format!("failed:{err}")) {
             StderrDiagnostics.failed(err);
         }

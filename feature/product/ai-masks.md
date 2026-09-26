@@ -1299,7 +1299,7 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 11 | **Saturation** (Vibrance-Paar) | ja — `mask_local_color_controls` (negativ gezogen) | dito | — |
 | 12 | Point Color **Remove** | ja — `mask_local_color_controls` (2 Einträge, der **zweite** Button) | `remove_mask_local_point_color(id)` | — |
 | 13 | Point Color `Add color` | ja — `mask_local_editors`, `mask_local_reload` | `add_mask_local_point_color` | — |
-| 14 | Reset Point-Color-Block | **nein** (Button nicht geklickt) | `remove_mask_local_point_color("")` | nur Mechanik: ein eigener `id.is_empty()`-Zweig, den kein Klick erreicht. **Nicht** dieselbe Wirkung wie der geklickte Gesamtblock-Reset, und das ist auch nicht behauptigt: in `mask_local_editors.rs` leert der `all local color reset`-Klick (`:277`) die Point-Color-Liste bereits **zuvor** (`:197-203`), seine `point_color.is_none()`-Assertion (`:302`) wäre also für diesen Block vakuos. (Korrektur 2026-09-26: die frühere Begründung stützte sich genau auf diese vakuose Beobachtung.) |
+| 14 | Reset Point-Color-Block | **nein** (Button nicht geklickt) | `remove_mask_local_point_color("")` | nur Mechanik: derselbe Effekt wie der geklickte Gesamtblock-Reset auf diesen Block — `remove_mask_local_point_color("")` verzweigt auf `recipe.reset_local_point_color()` (`mask_local_color.rs:206-212`), und `reset_local_color()` ruft dieselbe Funktion (`color_grading.rs:291`). Dass dieser Pfad **persistiert** funktioniert, ist belegt: `mask_local_editors.rs:215-232` fuellt die Liste und weist `Some(1)` auf der Platte nach, `:277-278` klickt den Gesamtblock-Reset, `:302` weist `persisted.point_color.is_none()` nach. (Korrektur 2026-09-26: eine Zwischenfassung dieses Satzes behauptete, die Liste sei **zuvor** geleert und `:302` sei vakuos. Beides falsch — `:197-203` ist die globale-HSL-Assertion, und `:302` ist der einzige persistierte Zeuge. Die Zwischenfassung wurde durch Messung widerlegt und ist hiermit zurueckgenommen.) |
 | 15 | Grading-Bereichswahl (3) | ja — `mask_local_editors` (midtones), `mask_local_color_controls` (midtones, highlights) | `selectable_label` | — |
 | 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
 | 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
@@ -1338,11 +1338,17 @@ Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
 unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
 Für die **Color**-Schleife deckt das der Mutationstest in 6.1 auf (`local_color_slider`
 schreibt nicht mehr → rot). Für die **Presence**- und **Detail**-Schleifen
-(Zeilen 6/8, 23/24, 28/29/30, 32) gibt es **keinen** Schleifen-Mutationstest;
-eine Vertauschung der Feldindizes in ihnen wäre also nicht nachweisbar. Die
+(Zeilen 23/24, 28/29/30, 32) gibt es **keinen** Schleifen-Mutationstest; eine
+Vertauschung der Feldindizes in ihnen wäre also nicht nachweisbar. Die
 `nein`-Einstufung selbst bleibt richtig — sie sagt nichts über Klicks —, aber
 der diese Absatz stützende Satz gilt **nur** für Zeile 18 und ihre Geschwister.
-(Korrektur 2026-09-26 nach Verifikationsbefund N3.)
+(Zeilen 18/16/17 sind die *Color*-Schleife und **sind** durch den Mutationstest
+gedeckt. Zeilen 6/8 sind die HSL-Bänder und stehen unter derselben Mutation: der
+Saturation-Klick in `mask_local_editors.rs` macht eine Vertauschung der
+`HSL_FIELDS`-Indizes sichtbar, weil `mask_local_color.rs` dieselbe Form hat —
+Label aus Index, Feld aus Array. Korrektur 2026-09-26 nach
+Verifikationsbefund N3; Zeilengruppierung berichtigt nach F-10, wo eine
+Zwischenfassung die Zeilen 6/8 faelschlich Presence/Detail zurechnete.)
 
 #### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
 

@@ -115,12 +115,18 @@ ihre Aussage stützt. Das ist nötig, weil eine Render-Invariante auf einem
 
 ## 4. Inventar (Version 1)
 
-62 committete Golden-Dateien. Die in `Agents.todo.md` genannte Zahl „56" ist die
-Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon erzeugen 46 ein
-Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden. Die restlichen 16
-Goldens gehören zu den anderen kittest-Binaries und zum Lib-Test.
+**66** committete Golden-Dateien (gezählt mit
+`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
+`golden_ref.sh check` als `goldens.count`). Die in `Agents.todo.md` genannte Zahl
+„56" ist die Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon
+erzeugen 46 ein Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden.
+Die restlichen **20** Goldens gehören zu den anderen kittest-Binaries und zum
+Lib-Test (46 + 20 = 66).
 
-**Bilanz: 14 Render-Invarianten, 48 Chrome-/Layout-Invarianten.**
+**Bilanz: 14 Render-Invarianten (Klasse R), 52 Chrome-/Layout-Invarianten
+(Klasse C)** — 66 Zeilen, ausgezählt aus der Tabelle dieses Abschnitts.
+(Zahlenkorrektur 2026-09-26: die Fassung vor der Zeilen-Ergänzung nannte 62 /
+16 / 48 und war nach der Ergänzung um genau die vier neuen Goldens zu niedrig.)
 
 ### 4.1 `kittest_snapshots` (46 Goldens, Binary `tests/kittest_snapshots.rs`)
 
@@ -173,7 +179,7 @@ Goldens gehören zu den anderen kittest-Binaries und zum Lib-Test.
 | 45 | `navigator_viewport.png` | C | S2 | Navigator-Viewport-Rechteck |
 | 46 | `toast_info.png` | C | S2 | Toast-Overlay |
 
-### 4.2 Weitere kittest-Binaries (15 Goldens)
+### 4.2 Weitere kittest-Binaries (20 Goldens)
 
 | # | Golden | Klasse | Fixture | Nachweis-Scope | Owner |
 | --- | --- | --- | --- | --- | --- |

@@ -218,8 +218,9 @@ impl LensfunDb {
     /// **Closed 2026-09-26 (`LENSFUN-CALLER-37`):** both product callers were
     /// migrated — `lumina-gui` with its own `LogDiagnostics` on the app's `log`
     /// facade, `lumina-cli` with a process-lifetime `ReportOnce`. This function
-    /// now has **no** product caller and survives only as a convenience for
-    /// tests and external users. Recorded in
+    /// now has **no** caller at all inside the workspace — neither product code
+    /// nor a single test — and survives only as a public convenience for
+    /// external users. Recorded in
     /// `feature/platform/capability-matrix.md`.
     pub fn load_system() -> Option<LensfunDb> {
         Self::load_system_with(&mut StderrDiagnostics)

@@ -240,10 +240,10 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 ///
 /// # Non-vacuity: the four memos this test actually kills
 ///
-/// The counter is bumped *inside* the same closure as the load, so the test
-/// turns red for every memo that can skip the load. Each of the following was
-/// applied to the production call site, run, and observed to fail here; each
-/// was then reverted:
+/// The counter is bumped *inside* the same closure as the load, which kills
+/// every memo that skips the load **and** the counting with it. Each of the
+/// following was applied to the production call site, run, and observed to fail
+/// here; each was then reverted:
 ///
 /// | memo | first red assertion |
 /// |---|---|

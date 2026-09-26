@@ -47,12 +47,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// So the lookups are counted **where they happen**: inside the same closure
 /// as the load, immediately after `load_system_with` returns (see
-/// [`LuminaApp::ensure_lensfun_cache`]). Every path that skips the load also
-/// skips the add — a memo in front of the call, and equally a memo *inside* the
-/// closure, which is where an "have we already asked?" check would naturally be
-/// written (the sink's own `seen` set). A counter read *before* the load, or an
-/// add *after* the closure returned, would instead count a load that never
-/// happened and hide exactly that regression.
+/// [`LuminaApp::ensure_lensfun_cache`]). A memo in front of the call skips both
+/// the load and the add, and so does a memo *inside* the closure — which is
+/// where an "have we already asked?" check would naturally be written (the
+/// sink's own `seen` set). A counter read *before* the load, or an add *after*
+/// the closure returned, would instead count a load that never happened and hide
+/// exactly that regression.
+///
+/// The matching invariant — "every path that skips the load also skips the
+/// add" — is true of this code and of **nothing else**: it is enforced by
+/// placement alone, not by a test. A memo that skips the FFI call but *still*
+/// increments the counter (a plausible "avoid the expensive load" optimisation
+/// written by someone who wants the counter to keep moving) leaves the whole
+/// suite green, because the counter lives in the same crate as the memo. Closing
+/// that would mean counting inside `lumina-lensfun`, below the memo; it is named
+/// here rather than papered over.
 ///
 /// What the counter does **not** cover: the corrector lookup behind the load. It
 /// counts *database loads*, not profile searches — see the module doc's

@@ -504,8 +504,10 @@ Lib-Target (`brush_management.rs`). Der Dateiname je Golden ist der
 
 > **Merke zur Zahlenangabe:** „56 Goldens" bezeichnet die **Tests** in
 > `kittest_snapshots.rs`, nicht die Vergleichsanzahl. Vergleichsanzahl in
-> diesem Target: 46. Über alle Targets: 62. Die in der Task-Notiz genannten
-> „12 von 56" sind damit weder 56 noch 62 und müssen neu gezählt werden.
+> diesem Target: 46. Über alle Targets: **66** (gezählt mit
+> `git ls-files "crates/lumina-gui/tests/snapshots/*.png"`, identisch mit dem
+> `goldens.count` aus `golden_ref.sh check`). Die in der Task-Notiz genannten
+> „12 von 56" sind damit weder 56 noch 66 und müssen neu gezählt werden.
 > Ein früherer Zwischenstand dieses Dokuments stützte sich auf 11 Paare
 > `<name>.diff.png` / `<name>.new.png`, die zu einem GPU-Lauf im Arbeitsbaum
 > lagen. Das ist **kein** belastbarer Beleg: diese Artefakte sind gitignoriert,
