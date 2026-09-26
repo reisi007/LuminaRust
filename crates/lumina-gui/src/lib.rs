@@ -12347,15 +12347,7 @@ mod tests {
     }
 
     /// Raw listing fixture: `scan_entry`/`list_directory` only need a
-    /// supported extension (+ optional sidecar) — no decode runs during a
-    /// directory scan, so a few sentinel bytes suffice.
-    ///
-    /// The marker is deliberately **not** the former `lumina-raw-fixture`
-    /// literal, which `golden-fixtures.md` rule S1 abolished repo-wide (it was
-    /// the sentinel that got committed into goldens and caused the whole
-    /// `GOLDEN-FIXT-31` fixture remediation). The `-listing-sentinel` suffix
-    /// follows the `lumina-raw-layout-sentinel` convention already used by the
-    /// filmstrip test.
+    /// supported extension — no decode runs during a directory scan.
     fn save_raw(path: &Path) {
         std::fs::write(path, b"lumina-raw-listing-sentinel").unwrap();
     }
