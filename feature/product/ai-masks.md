@@ -1225,6 +1225,31 @@ Was der Code tatsächlich tut:
   und erfüllt `GUI-SLIDER-SAVE-1` (CAS, entprellter Save, reine View-Edits
   schreiben nichts).
 
+- **`GUI-SLIDER-SAVE-1`, Zusatzklausel (2026-09-26, `SIDECAR-SAVE-STRAND-39`):
+  ein normaler Render entlastet keinen offenen Save.** `schedule_render` haengt
+  den einzigen Commit-Pfad an `pending_full_render`. Jeder Vollrender, der
+  nicht durch `commit_pending_slider_save` laeuft — der Fusszeilen-Button
+  `Render / Apply` und ~20 weitere `render()`-Aufrufstellen — loescht dieses Flag
+  in seinem Frame. Ohne die Zusatzklausel waere der bewaffnete Token danach fuer
+  den Rest der Session unerreichbar: der Edit lebt nur im Speicher, die Sidecar
+  traegt den alten Wert, und **nichts** sagt es. Kein Fehler, kein Badge, kein
+  Log — stiller Verlust einer Nutzereingabe.
+
+  Der Scheduler **bewaffnet das Flag deshalb neu**, aber nur solange eine
+  Drag-Uhr laeuft (`last_edit_time > 0.0`) **und** ein Commit-Token armiert ist.
+  Die Drag-Uhr macht das Rewind **one-shot**: sie steht auf `0.0` bei einem
+  Edit ohne Drag (der committet sofort, es gibt kein Fenster zu stornieren) und
+  nach **jedem** Commit-Versuch. Ein erfolgreicher Save wird nie wiederholt; ein
+  fehlgeschlagener behaelt das bisherige Verhalten (laut, und von der naechsten
+  User-Aktion erneut angestossen) statt einen modalen Fehler pro Frame neu zu
+  oeffnen. Reine View-Edits (Zoom/Pan) armieren keinen Token und schreiben
+  damit weiterhin nichts.
+
+  **Anker:** `tests/slider_sidecar_save.rs::a_render_apply_click_inside_the_debounce_window_does_not_strand_the_save`
+  (rot ohne den Fix) und
+  `src/tests/render_dirty.rs::the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs`
+  (pinnt beide Richtungen, auch die Antiretry-).
+
 **Warum der Ausschluss gewollt ist.** `GuiAction`/`ALL_GUI_ACTIONS` ist die
 **globale Kommandofläche** (Tastatur-Shortcut + Button je Aktion, F-100). Ein
 mask-local Regler ist kein Kommando, sondern ein Panel-lokales Widget an genau
@@ -1285,17 +1310,31 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — die drei anderen *mask-local* Ziele bleiben grün. **Zusätzlich** werden drei **vorbestehende** Lib-Tests rot (`brush_lifecycle::invert_uses_the_automatic_slider_save_path_and_reloads`, `brush_management::copy_selection_and_reload_ignore_cross_copy_layers`, `mask_local_previous::previous_transfers_full_local_state_but_sync_keeps_target_layers`); das ist **mehr** Abdeckung, kein Defekt — das fette „nur" wäre irreführend gewesen. |
   | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
   | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
-- **`SIDECAR-SAVE-STRAND-39` ist hier reproduziert worden — und die Ursache ist
-  gemessen, nicht vermutet.** Mit einem `log::Log`-Tap auf Trace-Level
-  sichtbar: ein mask-local Edit hochstuft seinen Draft-Tick zu einem
-  **Vollrender** (`render_tick.rs`: „absolute-frame or local-mask stage
-  active"), und der entprellte Save läuft nur im Zweig
-  `!pointer_down && pending_full_render` von `schedule_render`. Die
-  150-ms-Uhr wird von **jedem** Edit neu gestartet, und `pending_slider_commit`
-  ist last-write-wins: ein zweites Gest innerhalb des Fensters schiebt den
-  Commit des ersten hinaus. **Kein Wert geht dabei verloren** — der Save trägt
-  den kompletten Layer-Zustand —, aber „die Datei enthält meinen Edit *jetzt*"
-  gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
+- **`SIDECAR-SAVE-STRAND-39`: die gemeldete Ursache ist widerlegt, eine andere
+  ist gemessen.** Der ursprüngliche Bericht führte den Save-Verlust auf einen
+  Draft-Tick-**Hochstuf** zu einem Vollrender zurück (mask-local Edit →
+  `render_tick.rs` „absolute-frame or local-mask stage active"). Der Hochstuf
+  ist real und wurde bestätigt — er ist aber **nicht** die Ursache.
+
+  **Ausgeschlossen:** `full_render_debounce_remaining` (`render_tick.rs:29-35`)
+  gibt `None`, also *sofortigen* Commit, wenn `last_edit_time <= 0.0` oder das
+  150-ms-Fenster abgelaufen ist. Ein **veralteter** Zeitstempel macht den
+  Commit also *eifriger*, nicht strandend; der Debounce kann nur verzoegern,
+  nie abbrechen. Und `pending_full_render` ist am Release-Frame immer gesetzt,
+  weil `slider.rs:203-206` es bei jedem `dragged()`-Frame unbedingt neu bewaffnet.
+  Ein „Edit in einem Frame verliert den entprellten Save" gibt es nicht.
+
+  **Tatsächlich gemessen:** `render_schedule.rs:53` haengt den einzigen
+  Commit-Pfad an `pending_full_render`. Jeder Vollrender, der nicht durch
+  `commit_pending_slider_save` laeuft — der Fusszeilen-Button `Render / Apply`
+  und ~20 weitere `render()`-Aufrufstellen — loescht das Flag in seinem Frame
+  und macht den bewaffneten Token fuer den Rest der Session unerreichbar.
+  Reproduziert als `a_render_apply_click_inside_the_debounce_window_does_not_
+  strand_the_save` (rot ohne den Fix: `memory 0 vs disk 0.6000000238418579`).
+
+  **Von dem Verlust unberuehrt** bleibt die F-4-Regel: der Save traegt den
+  kompletten Layer-Zustand, also geht **kein** Wert verloren, und „die Datei
+  enthaelt meinen Edit *jetzt*" gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
   **jedes Wertgest** ein `settle_persisted` **und** eine Datei-Assertion, bevor
   das nächste Gest kommt (F-4). Die eine benannte Ausnahme — zwei `Add
   color`-Klicks ohne Settle — steht in `tests/mask_local_color_controls.rs` und
@@ -1368,25 +1407,49 @@ Klick-Abdeckung. (Korrektur 2026-09-26 nach dem Verifikationsbefund: Zeile 24
 fuhr zuvor „ja — `mask_local_reload`", obwohl dieser Test **weder**
 Presence **noch** Clarity anfasst — `grep -c` auf `mask_local_reload.rs` ergibt
 0. Clarity wird von keinem GUI-Test angeklickt. Damit sind es 22/13, nicht
-23/12.) Für die **dreizehn** gilt der ehrliche Nachweis: sie teilen sich
-entweder **exakt** den Helper/Setter mit einem geklickten Geschwister oder
-stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
-das nicht gelten lässt, braucht 13 weitere Drag-/Click-Tests über dieselben
-Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
-unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
-Für die **Color**-Schleife deckt das der Mutationstest in 6.1 auf (`local_color_slider`
-schreibt nicht mehr → rot). Für die **Presence**- und **Detail**-Schleifen
-(Zeilen 23/24, 28/29/30, 32) gibt es **keinen** Schleifen-Mutationstest; eine
-Vertauschung der Feldindizes in ihnen wäre also nicht nachweisbar. Die
-`nein`-Einstufung selbst bleibt richtig — sie sagt nichts über Klicks —, aber
-der diese Absatz stützende Satz gilt **nur** für Zeile 18 und ihre Geschwister.
-(Zeilen 18/16/17 sind die *Color*-Schleife und **sind** durch den Mutationstest
-gedeckt. Zeilen 6/8 sind die HSL-Bänder und stehen unter derselben Mutation: der
-Saturation-Klick in `mask_local_editors.rs` macht eine Vertauschung der
-`HSL_FIELDS`-Indizes sichtbar, weil `mask_local_color.rs` dieselbe Form hat —
-Label aus Index, Feld aus Array. Korrektur 2026-09-26 nach
-Verifikationsbefund N3; Zeilengruppierung berichtigt nach F-10, wo eine
-Zwischenfassung die Zeilen 6/8 faelschlich Presence/Detail zurechnete.)
+23/12.)
+
+Für **elf** der dreizehn gilt der ehrliche Nachweis: sie teilen sich **exakt**
+den Helper/Setter mit einem geklickten Geschwister, und eine Mutation des
+gemeinsamen Aufrufs oder eine Vertauschung der Feldindizes macht die Abweichung
+sichtbar (Tabelle unten). Für diese elf wäre ein zusätzlicher Drag-/Click-Test
+der von der Testabdeckungs-Politik verlangte **unnötige** Test.
+
+**Für zwei gilt er nicht: die HSL-Bänder Hue und Luminance (Zeilen 6 und 8).**
+Bei ihnen macht eine Mutation die Abweichung **nicht** sichtbar (0↔2 bleibt
+grün), und kein Test klickt ihre Schiene. Sie brauchen also **echten**
+Click-Test — das ist die eine echte Lücke, die diese Tabelle offenlegt, und sie
+ist hier benannt statt weggeredet. (Korrektur 2026-09-26 nach
+Verifikationsbefund N1: der vorige Absatz behauptete für **alle** dreizehn, ein
+Mutationsversuch mache die Abweichung sichtbar, oder er seien sonst
+unnötige Tests. Für elf stimmt das, für Zeilen 6 und 8 ist es falsch.)
+
+Geschwister. Wie gut das den Index→Feld-Zusammenhang festnagelt, ist **pro
+Schleife gemessen** und nicht gleich:
+
+| Schleife | angeklicktes Geschwister (Index) | Mutation: Feldindizes vertauscht | Ergebnis |
+|---|---|---|---|
+| Color (Z. 16/17/18, 20) | Hue (0), Saturation (1) | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
+| HSL (Z. 6/7/8) | Saturation (**1**) | `HSL_FIELDS` 0↔1 | **rot** (`mask_local_color_controls.rs:225`) |
+| HSL (Z. 6/8) | — | `HSL_FIELDS` **0↔2** | **grün, 926/926** |
+| Presence (Z. 23/24) | Dehaze (2) | `PRESENCE_FIELDS` 0↔2 | **rot** (`mask_local_editors.rs:87`) |
+| Sharpening (Z. 28/29/30) | Amount (0) | 0↔3 | **rot** (`mask_local_editors.rs:325`) |
+| Noise Reduction (Z. 32) | Luminance (0) | 0↔1 | **rot** (`mask_local_editors.rs:360`) |
+
+**Die eine gemessene Lücke der Tabelle: die HSL-Bänder Hue und Luminance
+(Zeilen 6 und 8).** Der Saturation-Klick pinnt nur Index 1, eine Vertauschung
+0↔2 zwischen Hue und Luminance bleibt unsichtbar, und **kein** GUI-Test klickt
+die HSL-`Hue`- oder HSL-`Luminance`-Schiene (`grep` über `crates/lumina-gui/tests/`
+findet keinen solchen Klick). Für **alle** anderen `nein`-Zeilen ist der
+Index→Feld-Zusammenhang durch das angeklickte Geschwister messbar gedeckt.
+
+(Korrektur 2026-09-26 nach Verifikationsbefund N1. Zwei frühere Fassungen
+dieses Absatzes waren **beide** falsch und in entgegengesetzte Richtungen: die
+eine behauptete, Presence- und Detail-Schleifen seien gar nicht nachweisbar —
+sie sind es (alle drei Mutationen rot); die andere behauptete, der
+Saturation-Klick decke jede Vertauschung der `HSL_FIELDS`-Indizes — er deckt
+nur 0↔1, nicht 0↔2. Der Satz ist jetzt aus den Mutationen abgeleitet statt
+aus einer Annahme über die Form des Codes.)
 
 #### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
 

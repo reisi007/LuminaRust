@@ -20,6 +20,15 @@ use super::*;
 use log::trace;
 
 impl LuminaApp {
+    /// GUI-SLIDER-SAVE-1: whether a debounced commit is armed — the same pair
+    /// [`Self::commit_pending_slider_save`] and [`Self::flush_pending_edit`]
+    /// treat as "there is something to save": a slider/presence value token, or
+    /// a mask/history transaction. Pure view state (zoom/pan) arms neither, so
+    /// a view edit never reaches the commit and never writes a sidecar.
+    fn debounced_commit_armed(&self) -> bool {
+        self.pending_slider_commit.is_some() || self.pending_history_step.is_some()
+    }
+
     /// Run this frame's render scheduling (draft tick / debounced full render).
     pub(crate) fn schedule_render(&mut self, ctx: &egui::Context) {
         // PERF-GUI-3/4: draft render while a pointer drag is in progress
@@ -35,6 +44,30 @@ impl LuminaApp {
         // R2-MODSWITCH-1 F7: first scheduler run after a module change.
         let module_switched = self.last_scheduled_module != Some(self.active_module);
         self.last_scheduled_module = Some(self.active_module);
+        // SIDECAR-SAVE-STRAND-39: a full render does **not** discharge an owed
+        // save. A render that does not go through `commit_pending_slider_save` —
+        // the Develop footer's `Render / Apply` (`render_action` →
+        // `LuminaApp::render`) and the other explicit `render()` callers —
+        // clears `pending_full_render` in its own frame, and that flag is the
+        // gate of the only commit path below. An armed token would then be
+        // unreachable for the rest of the session: the edited value stayed in
+        // memory, the sidecar kept the old one, and nothing said so. Re-arm the
+        // flag so the unchanged debounce path below still saves the edit.
+        //
+        // A running drag clock (`last_edit_time > 0.0`) is what makes this
+        // exactly one-shot rather than a retry loop: the clock is `0.0` for an
+        // edit *without* a drag (that one commits immediately, so there is no
+        // window to cancel) and after every commit attempt, successful or not.
+        // So a successful save is never repeated, and a failed one keeps
+        // today's behaviour — loud, and retried by the next user action.
+        if !pointer_down
+            && !self.pending_full_render
+            && self.last_edit_time > 0.0
+            && self.debounced_commit_armed()
+        {
+            trace!("GUI render: debounced save re-armed after a non-committing render");
+            self.pending_full_render = true;
+        }
         if pointer_down
             && self.pending_full_render
             && self.original.is_some()
