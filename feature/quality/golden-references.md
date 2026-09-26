@@ -381,7 +381,7 @@ Abgedeckt (188 Prüfungen, Exit 0 = alles grün):
 | `record`-Verweigerungen | 9 Fälle → Exit 2 **und** keine Lock-Datei entstanden: kein `--confirm`, `--confirm` ohne Wert, leerer Grund, 19 Zeichen, LF, CR, CRLF, `--` im Grund, unerwartetes Argument |
 | `record`-Annahmen | 20 Zeichen, Grund mit Leerzeichen, erneutes Aufzeichnen mit anderem Grund, `old -> new`-Diff **vor** dem Pin |
 | `UPDATE_SNAPSHOTS` | 8 falsche Werte (`''`, `0`, `false`, `no`, `off` + Großschreibung) bleiben still, 6 wahre (`1`, `true`, `yes`, `on`, `force`, `garbage`) lösen die Verweigerung aus — jeweils über `gate` und mit der Zusicherung, dass das gated Kommando **nicht** gelaufen ist; auf passendem Pin läuft es |
-| Pre-Commit-Matrix | 15 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook: geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie auf **beiden** Seiten (Goldenseite und Lockseite, §4.1), Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
+| Pre-Commit-Matrix | 16 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook (14 `mc_commit`-Zeilen + "nichts gestaged" + kaputter Index als Positivkontrolle): geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie auf **beiden** Seiten (Goldenseite und Lockseite, §4.1), Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
 | Sandbox-Disziplin | `scripts/golden_ref.lock` ist am Ende byte-identisch, der echte Git-Index unverändert, keine `golden_ref.lock.tmp.*` übrig |
 
 ### 4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war
@@ -397,7 +397,7 @@ Zeilen existierten:
 | Mutation (nur die Ableitung, Produktionstest unverändert) | vorher | jetzt |
 | --- | --- | --- |
 | `png_size`: die beiden hohen Breitenbytes vertauscht | **180/180 grün** | 184/188, 4 rot |
-| `ui.scale_factor`-Fall auf immer `1.0` festgenagelt | **180/180 grün** | 185/188, 2 rot (nur die `non-unit`-Zeilen; die `1.0`-Zeile bleibt grün — genau deshalb sind es zwei) |
+| `ui.scale_factor`-Fall auf immer `1.0` festgenagelt | **180/180 grün** | 186/188, 2 rot (nur die `non-unit`-Zeilen; die `1.0`-Zeile bleibt grün — genau deshalb sind es zwei) |
 
 Geschlossen wird das nicht durch eine Kopie der Ableitung im Test (eine Kopie
 prüft sich selbst), sondern indem die Suite die **echte** `emit_fingerprint`
@@ -496,23 +496,32 @@ Setup-Zeit gestagte, lizenzierte Canon-EOS-R1-CR3-Kopien aus `sample-data/raw/`
 (same bytes, keine Doppelablage im Testbaum, gitignoriert — deshalb nicht im
 Digest, siehe §3.1).
 
-> **Der aktuell committete Pin ist ein Übergangszustand.** Er wurde gegen einen
-> Arbeitsbaum aufgezeichnet, in dem die parallele `GOLDEN-FIXT-31`-Arbeit die
-> 12 `*.arw`-Sentinels bereits von der Platte entfernt, aber noch nicht
-> committet hatte. Diese 12 Pfade stehen deshalb im Digest als `absent` (nicht
-> als SHA-256, nicht als Fehler), und `fixtures/.gitignore` ist als untracked
-> Eintrag enthalten. Sobald `GOLDEN-FIXT-31` landet, ändert sich der Digest
-> **einmal legitim** und `check` schlägt genau deshalb fehl. Der **endgültige**
-> `record` gehört deshalb ans **Ende** von `GOLDEN-FIXT-31`, nicht in diese
-> Aufgabe.
+> **Stand des Fixtures-Digests 2026-09-26 (gemessen, nicht behauptet):** Die
+> 12 `*.arw`-Sentinels **sind** committet — `git ls-files
+> crates/lumina-gui/tests/fixtures/*.arw` liefert 0 Treffer, `git ls-files` über das
+> fixtures-Verzeichnis zeigt 4 echte Formate (`.gitignore`, `library/.gitkeep`,
+> zwei generative PNGs), und `fixtures.count=4` im Pin entspricht dem.
+> Die Übergangsphase, in der die 12 Pfade als `absent` im Digest standen, wurde
+> in `2e9827f` durch einen `record` **legal verabschiedet** — der Lock-Grund nennt
+> `fixtures.count 16->4 aus GOLDEN-FIXT-31 (11 synthetische .arw entfernt)`.
+>
+> **Achtung, drei Zahlen für denselben Vorgang überleben im Repo:** 12 (dieser
+> Abschnitt, korrekt), 11 (der Commit-Grund oben — die automatisch gemessene
+> Anzahl, nicht die manuell gezählte), 9 (`Agents.todo.md`, Block F-3 der
+> `GOLDEN-REF-30`-Task). Die Diskrepanz war nie aufgelöst; sie ist hier benannt.
+> `GOLDEN-BASELINE-32` führt die endgültige Neumessung.
+>
+> Was damals als „einmal legitim, dann schlägt `check` fehl" formuliert wurde, ist
+> damit **erledigt**; die Aussage war als *Plan* korrekt, als Beschreibung des
+> Zustands am 2026-09-26 ist sie falsch und wird hier zurückgenommen.
 
 ### 6.2 Zur Laufzeit deterministisch erzeugte Fixtures
 
 | Fixture | Erzeugung | Zweck |
 | --- | --- | --- |
 | `library_badges/**` | bei jedem Lauf neu aufgebaut, Preview-Cache vorher entfernt | Unterordner-Badges |
-| `library_rated/*` + Sidecars | neu aufgebaut, Cache vorher entfernt, Standard-Previews in den `DiskFolderCache` gesät | Rating/Flag/Color-Label-Badges |
-| `library_views/*` + `.lumina/`-Cache | neu aufgebaut, `vc-original`-Standardpreviews (288 × 192, deterministischer Vertikalverlauf) gesät | Loupe/Compare/Survey mit echten Thumbnail-Pixeln |
+| `library_rated/*` + Sidecars | neu aufgebaut, Cache vorher entfernt, **keine** Standard-Previews (s. Korrektur 2026-09-26) | Rating/Flag/Color-Label-Badges |
+| `library_views/*` + `.lumina/`-Cache | neu aufgebaut, `vc-original`-Standardpreviews **nicht** gesät (s. Korrektur 2026-09-26) | Loupe/Compare/Survey mit echten Thumbnail-Pixeln |
 | lizenzierte CR3-Kopien aus `sample-data/raw/` (GOLDEN-FIXT-31) | zur Setup-Zeit in die Fixture-Unterordner kopiert, gitignoriert, pro Lauf identisch | echte RAW-Dekodierung statt Platzhalter |
 | `photo.png` / `sample.png` in einem `tempfile::tempdir` | `LuminaApp::sample_image_png()` (4 × 3 px RGBA, in `lib.rs` als Konstante) | Develop/Export/Overlay-Previews |
 | `photo.jpg` + IPTC-JPEG bzw. Sidecar mit 10 Historienzeilen | echte JPEG-Bytes über den Projekt-Encoder, feste RFC-3339-Zeitstempel | Metadata-Subpanels |
