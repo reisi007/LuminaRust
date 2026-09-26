@@ -37,11 +37,38 @@ Decodierung trägt.
 | **S1 — Layout-Sentinel** | Nicht-Bild-Bytes mit gültiger RAW-Endung, erzeugt **zur Laufzeit in einem `tempfile::TempDir`**. Ausschließlich dort zulässig, wo die Assertion eine *Geometrie* oder *Anzahl* ist, die unabhängig vom Decode-Erfolg gelten muss (z. B. Filmstreifen-Geometrie mit 20 Zellen). | Klar markierter Platzhaltertext (kein `lumina-raw-fixture`) | **Nein** |
 | **S2 — Smoke-/Layout-Raster** | Kleine synthetische PNGs: `LuminaApp::sample_image_png()` (4×3), `tests/fixtures/generative/*.png`, eingebettete 2×1-JPEG-Metadatenfixtures. | beliebig, deterministisch | Rasterja: ja (Screenshots der Smoke-Goldens) |
 
+### Quellwahl je Golden (User-Entscheid 2026-09-26, verbindlich)
+
+- **Wo Bildinhalt zählt, ein echtes CR3** — und nichts anderes. Ein
+  herunterskaliertes CR3-Derivat ist **kein RAW**: die volle demosaizierte
+  Auflösung *ist* das, was die Datei zur RAW macht. Ein verkleinertes Derivat
+  ist ein gerendertes Bild und kann keine RAW-Aussage tragen. **Ein
+  abgespecktes CR3 ist als RAW-Fixture ausgeschlossen** — es wäre ein
+  vorgetäuschter Beweis, und zwar genau in den Goldens, die allein
+  Bildqualität belegen sollen. Damit ist die previously offene Alternative
+  „herunterskaliertes Derivat als committete Fixture" **verworfen**.
+- **Für alles andere ein synthetisches PNG.** Layout, Bedienung, Badges,
+  Auswahl, Reihenfolge, Scroll, Empty-State, Fehlerbanner, Sichtbarkeit —
+  all das ist Chrome, und Chrome braucht keinen RAW-Decode.
+- **Die 18-Byte-`.arw`-Sentinel sind damit vollständig abgeschafft.** Sie waren
+  weder RAW noch PNG: kein Decode, kein Raster, nur ein Platzhaltertext unter
+  einer RAW-Endung. Sie wurden als Nächstes zu `S1` umgewidmet und sind nun
+  durch synthetische PNGs ersetzt.
+- **Folge für die Laufzeit:** die Decode-Kosten der echten CR3 konzentrieren
+  sich auf die R1-Goldens, die sie wirklich brauchen. Die Suite lief am
+  2026-09-26 mit 301 s (43 passed / 13 failed) — das ist **kein** Hash-Problem.
+  `THUMB-HASH-PERF-35` hat das Hashen pro Frame beseitigt (211,6 ms → 0,004 ms
+  warm), die Laufzeit blieb unverändert, weil sie am LibRaw-Decode eines
+  24-MP-CR3 im Debug-Build hängt (~0,69 s je Decode). Wer die Suite verkürzen
+  will, stuft Goldens von R1 auf S2 herab, **wenn die Aussage das zulässt** —
+  niemals durch Verkleinerung der Quelle.
+
 ### Normative Regeln
 
-1. **R1 ist die einzige RAW-Quelle.** Eine Fixture, die Bildinhalt
-   beansprucht, enthält CR3-Bytes. Es gibt kein zweites RAW-Format und keine
-   Kopie der 12-MB-Dateien im Testbaum.
+1. **R1 ist die einzige RAW-Quelle, und sie ist unverkleinert.** Eine Fixture,
+   die Bildinhalt beansprucht, enthält die Original-Bytes der beiden
+   lizenzierten CR3. Es gibt kein zweites RAW-Format, keine Kopie der
+   12-MB-Dateien im Testbaum und **kein herunterskaliertes Derivat**.
 2. **Kein Vorkalibrieren des Preview-Caches.** Eine Fixture, die einen
    `Standard`-Preview in den `.lumina`-Cache schreibt, würde einen Cache-Hit
    erzeugen und einen defekten Decode grün halten. Die Library-/Filmstreifen-
