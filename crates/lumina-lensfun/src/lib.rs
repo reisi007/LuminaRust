@@ -57,14 +57,55 @@
 //! [`Corrector::has_distortion`]; the vignetting correction of such a
 //! corrector remains fully usable.
 //!
+//! # Where the profile database comes from (LENSFUN-DB-33)
+//!
+//! lensfun 0.3.4 offers no runtime override, so [`LensfunDb::resolve_system`]
+//! resolves the location itself and loads the XML files explicitly. The **user**
+//! database is merged on top the way `lfDatabase::Load()` does, a missing one is a
+//! named [`SystemDbError`] rather than a silent no-op, and every event goes
+//! through a caller-supplied [`Diagnostics`] sink — this crate has no logger.
+//! Which directory supplies the system database follows upstream's
+//! `lfDatabase::Load()` competition over three `version_1` directories, where
+//! "newer" is the **content of `timestamp.txt`**, never a file mtime
+//! ([`db_timestamp`]). The winning layer is [`db_path::Resolved::primary`] — not
+//! necessarily [`db_path::Resolved::dir`], and the gap is always reported. See
+//! [`db_path`], [`db_layers`], [`db_error`], [`system_load`].
+//!
 #![cfg_attr(not(feature = "native"), allow(dead_code))]
 
 #[cfg(feature = "native")]
-pub use ffi::LensfunDb;
+pub use system_load::LensfunDb;
 
 /// Per-image lens corrector. Re-exported under the `native` feature.
 #[cfg(feature = "native")]
 pub use ffi::Corrector;
+
+/// Named, loud failures of the database lookup (LENSFUN-DB-33). Deliberately
+/// no `Option`-shaped escape hatch; see [`db_error`].
+#[cfg(feature = "native")]
+pub use db_error::{MissReason, ProbeMiss, SystemDbError};
+
+/// Caller-supplied sink for database-load events (LENSFUN-DB-33): this crate
+/// has no logger, so the caller routes these and decides the level. See
+/// [`system_load::ReportOnce`] for the "report once" helper.
+#[cfg(feature = "native")]
+pub use system_load::{report_once, Diagnostics};
+
+/// Row-batch FFI wrappers of [`Corrector`] (R2-LENS-01); see the module docs.
+#[cfg(feature = "native")]
+mod corrector_rows;
+
+// The LENSFUN-DB-33 modules; each file carries its own module docs.
+#[cfg(feature = "native")]
+pub mod db_error;
+#[cfg(feature = "native")]
+pub mod db_layers;
+#[cfg(feature = "native")]
+pub mod db_path;
+#[cfg(feature = "native")]
+pub mod db_timestamp;
+#[cfg(feature = "native")]
+pub mod system_load;
 
 #[cfg(feature = "native")]
 mod ffi {
@@ -76,6 +117,7 @@ mod ffi {
     //! parent module. The signatures follow `/opt/homebrew/include/lensfun/lensfun.h`.
     #![allow(non_camel_case_types, non_snake_case, dead_code)]
 
+    use super::system_load::LensfunDb;
     use std::os::raw::{c_char, c_float, c_int, c_void};
     use std::sync::Mutex;
 
@@ -93,9 +135,9 @@ mod ffi {
     /// construction, search and destruction. Per-corrector modifier calls
     /// (`geometry`/`color_gain`) and `lf_modifier_destroy` touch no global
     /// state and stay lock-free.
-    static LENSFUN_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
+    pub(crate) static LENSFUN_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
 
-    fn lensfun_global_lock() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn lensfun_global_lock() -> std::sync::MutexGuard<'static, ()> {
         LENSFUN_GLOBAL_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -155,6 +197,12 @@ mod ffi {
         pub fn lf_db_new() -> *mut lfDatabase;
         pub fn lf_db_destroy(db: *mut lfDatabase);
         /// Returns an `lfError` (0 == LF_NO_ERROR).
+        ///
+        /// **Deliberately unused** (LENSFUN-DB-33): its search path is
+        /// compiled into the shared library, so it is neither influenceable by
+        /// `LUMINA_LENSFUN_DB` nor testable. The wrapper loads the resolved
+        /// files via [`lf_db_load_file`] instead. Kept declared so the binding
+        /// set stays a faithful mirror of the C API.
         pub fn lf_db_load(db: *mut lfDatabase) -> c_int;
         /// Loads one XML database file into `db`, in addition to whatever is
         /// already loaded. Returns an `lfError` (0 == LF_NO_ERROR).
@@ -284,107 +332,6 @@ mod ffi {
     /// channel, as in the manual CA model.
     pub type SubpixelTriple = ((f64, f64), (f64, f64), (f64, f64));
 
-    /// Handle to the system Lensfun database, loaded once.
-    pub struct LensfunDb {
-        db: *mut lfDatabase,
-    }
-
-    impl LensfunDb {
-        /// Load the system Lensfun database (via the standard search paths).
-        /// Returns `None` if the library or database cannot be initialised.
-        ///
-        /// Thread safety: lensfun 0.3.4's database path is not thread-safe
-        /// (global lazy regex compilation, see `LENSFUN_GLOBAL_LOCK`); the
-        /// wrapper serializes it, so concurrent calls from several threads
-        /// are safe.
-        pub fn load_system() -> Option<LensfunDb> {
-            let _guard = lensfun_global_lock();
-            unsafe {
-                let db = lf_db_new();
-                if db.is_null() {
-                    return None;
-                }
-                // `lf_db_load` searches the system database directories
-                // (e.g. /opt/homebrew/share/lensfun/version_1).
-                let err = lf_db_load(db);
-                if err != 0 {
-                    lf_db_destroy(db);
-                    return None;
-                }
-                Some(LensfunDb { db })
-            }
-        }
-
-        /// Load a Lensfun database from one XML file (instead of the system
-        /// search paths). Returns `None` if the database cannot be initialised
-        /// or the file does not exist or fails to parse.
-        ///
-        /// Thread safety: serialized behind [`LENSFUN_GLOBAL_LOCK`], like
-        /// [`Self::load_system`].
-        pub fn load_file(path: &std::path::Path) -> Option<LensfunDb> {
-            // Runs before any C allocation, so `?` cannot leak the handle.
-            let as_str = path.to_str()?;
-            let c_path = match std::ffi::CString::new(as_str) {
-                Ok(c) => c,
-                Err(_) => return None,
-            };
-            let _guard = lensfun_global_lock();
-            unsafe {
-                let db = lf_db_new();
-                if db.is_null() {
-                    return None;
-                }
-                let err = lf_db_load_file(db, c_path.as_ptr());
-                if err != 0 {
-                    lf_db_destroy(db);
-                    return None;
-                }
-                Some(LensfunDb { db })
-            }
-        }
-
-        /// Build a lens corrector for the given camera/lens, or `None` if no
-        /// matching, non-identity profile is found.
-        ///
-        /// `lens_name` is an optional human-readable lens description; when
-        /// `None` only the camera is used to pick a lens. `width`/`height` are
-        /// the image dimensions the correction is computed for (must be > 0).
-        #[allow(clippy::too_many_arguments)]
-        pub fn for_camera(
-            &self,
-            make: &str,
-            model: &str,
-            lens_name: Option<&str>,
-            width: u32,
-            height: u32,
-            focal_length: f32,
-            aperture: f32,
-            distance: f32,
-        ) -> Option<Corrector> {
-            Corrector::for_camera(
-                self,
-                make,
-                model,
-                lens_name,
-                width,
-                height,
-                focal_length,
-                aperture,
-                distance,
-            )
-        }
-    }
-
-    impl Drop for LensfunDb {
-        fn drop(&mut self) {
-            // The database destructor deletes its `lfLens` objects, which
-            // decrements lensfun's global regex refcount (and may `regfree` the
-            // shared regexes) — must not race with a concurrent load/search.
-            let _guard = lensfun_global_lock();
-            unsafe { lf_db_destroy(self.db) }
-        }
-    }
-
     /// A pre-configured Lensfun lens corrector for one image (camera/lens/focal/
     /// aperture/distance/size). Provides per-pixel geometry (distortion) and
     /// colour (vignetting) mappings.
@@ -418,27 +365,27 @@ mod ffi {
     /// `Corrector` is alive cannot dangle. This invariant is pinned by the
     /// `corrector_remains_usable_after_database_is_dropped` test.
     pub struct Corrector {
-        modifier: *mut lfModifier,
-        width: u32,
-        height: u32,
+        pub(crate) modifier: *mut lfModifier,
+        pub(crate) width: u32,
+        pub(crate) height: u32,
         /// True iff lensfun set up a geometry callback
         /// (`LF_MODIFY_DISTORTION`), i.e. the profile carries distortion
         /// calibration for the requested parameters. Only then may the
         /// corrector be used geometrically ([`Corrector::geometry`]);
         /// vignetting-only profiles keep [`Corrector::geometry`] at the
         /// identity mapping (review REVIEW-LENSFUN-VIGN-1).
-        has_distortion: bool,
+        pub(crate) has_distortion: bool,
         /// True iff lensfun set up a colour callback (`LF_MODIFY_VIGNETTING`),
         /// i.e. the profile carries vignetting calibration for the requested
         /// parameters.
-        has_vignetting: bool,
+        pub(crate) has_vignetting: bool,
         /// True iff lensfun set up a transverse-chromatic-aberration
         /// correction (`LF_MODIFY_TCA`), i.e. the profile carries TCA
         /// calibration for the requested focal length. Only then may the
         /// corrector be used for per-channel sampling
         /// ([`Corrector::subpixel`]); without TCA calibration the manual
         /// `ca_red`/`ca_blue` model stays in effect (G-06 Lensfun-Vollausbau).
-        has_tca: bool,
+        pub(crate) has_tca: bool,
     }
 
     impl Corrector {
@@ -674,227 +621,6 @@ mod ffi {
             }
         }
 
-        // -------------------------------------------------------------------
-        // Row-batch wrappers (R2-LENS-01).
-        //
-        // The per-pixel `geometry` / `color_gain` methods each cross the FFI
-        // boundary once per destination pixel (two transitions per pixel → ~48
-        // million FFI crossings for a 24 MP frame). Lensfun's colour batch API
-        // (`lf_modifier_apply_color_modification`) computes a whole *block* of
-        // pixels (`width × height`) in one call. Feeding it one row at a time
-        // (`height = 1`) reduces the vignetting FFI crossings to ~1 per row
-        // (~8k for 24 MP); see `apply_vignetting_row`.
-        //
-        // # Why `geometry_row` is NOT a single native batch call
-        //
-        // lensfun 0.3.4's x86 SSE geometry callbacks
-        // (`libs/lensfun/mod-coord-sse.cpp`: `ModifyCoord_Dist_PTLens_SSE`,
-        // `ModifyCoord_UnDist_PTLens_SSE`, `ModifyCoord_Dist_Poly3_SSE`) are
-        // mathematically wrong for multi-pixel blocks: they shuffle four
-        // pixels' interleaved `(x, y)` lanes apart to compute one correction
-        // factor per pixel, but then multiply the per-pixel factor vector
-        // directly with the still-interleaved coordinate vector
-        // (`_mm_store_ps(&iocoord[8*i], _mm_mul_ps(poly3, c0))`), so pixel 0's
-        // factor scales pixel 0's x but pixel 1's factor scales pixel 0's y,
-        // and so on. On a horizontal row every input y is identical, hence the
-        // signature pairwise-duplicated output y
-        // (observed on x86_64: `geometry_row(0, 0, width=5)` yields
-        // y = [a, b, a, b, _], off by up to ~1 px, while width=1 calls match
-        // `geometry` bit-exactly). The scalar tail (`remain = count % 4`) and
-        // every width=1 call stay correct, and non-x86 builds (e.g. ARM, where
-        // `VECTORIZATION_SSE` is undefined) never take the SSE path — which is
-        // why the bug is x86_64-only.
-        //
-        // `geometry_row` therefore issues one native width=1 call per column
-        // (each provably on the scalar path: `count/4 == 0`), i.e. it is
-        // bit-identical to `out.len()` calls to [`Self::geometry`] on every
-        // platform. The geometry FFI rate stays at one transition per pixel;
-        // only the vignetting pass keeps the one-call-per-row batching. If a
-        // future lensfun fixes the SSE lane shuffle, the single-call batch
-        // can be re-enabled (the `geometry_row_*` tests pin the contract).
-        //
-        // # Documented numeric divergence of `apply_vignetting_row`
-        // (not byte-identical)
-        //
-        // The batch colour path advances the vignette polynomial's `r²`
-        // incrementally (`r2 += 2·ns·x + ns²`) instead of recomputing `x² + y²`
-        // per pixel (`mod-color.cpp::ModifyColor_Vignetting_PA`). The first
-        // column is bit-identical to [`Self::color_gain`]; later columns drift
-        // by float rounding that grows with the row width but stays far below
-        // one output unit. (Note: with our `LF_CR_RGB` 3-component role the
-        // colour SSE fast path is never taken — it requires 4 components per
-        // pixel plus 16-byte alignment and falls back to the scalar code — so
-        // the colour batch is exact up to the documented `r²` accumulation.)
-        //
-        // Switching the pipeline to the row wrappers changes the exact output
-        // bytes, which is why it requires a Golden rebaseline (F-043), not a
-        // silent output change (see the `apply_lens` comment in `lumina-core`
-        // and R2-LENS-01 in `docs/reviews/2026-08-26-full-review.md`).
-        // -------------------------------------------------------------------
-
-        /// Map a whole destination row to the source pixels it samples
-        /// (R2-LENS-01).
-        ///
-        /// `out[i]` receives the destination→source mapping of the destination
-        /// pixel `(x_start + i, y)` (for `i` in `0..out.len()`), so one call
-        /// replaces `out.len()` calls to [`Self::geometry`]. `out` must have
-        /// exactly as many entries as the row has pixels (its length is the row
-        /// width).
-        ///
-        /// For a vignetting-only profile (`has_distortion() == false`) the row
-        /// is filled with the exact identity mapping (as with
-        /// [`Self::geometry`], review REVIEW-LENSFUN-VIGN-1).
-        ///
-        /// Bit-identity vs. [`Self::geometry`] contract: EVERY column is
-        /// bit-identical to the corresponding per-pixel call on every
-        /// platform. This is implemented as one native width=1 call per
-        /// column, never as a single multi-pixel native batch call, because
-        /// lensfun 0.3.4's x86 SSE geometry callbacks apply each pixel's
-        /// correction factor to its neighbour's lane (see the module-level
-        /// "Why `geometry_row` is NOT a single native batch call" block).
-        pub fn geometry_row(&self, x_start: f64, y: f64, out: &mut [(f64, f64)]) {
-            let width = out.len();
-            debug_assert!(width > 0, "geometry_row requires at least one pixel");
-            // Prefill with the identity mapping: for a vignetting-only profile
-            // the early return below keeps these passthrough values — exactly
-            // like [`Self::geometry`].
-            for (i, slot) in out.iter_mut().enumerate() {
-                *slot = (x_start + i as f64, y);
-            }
-            if !self.has_distortion {
-                return;
-            }
-            // One native width=1 call per column: each call takes lensfun's
-            // scalar path (`count/4 == 0`, plus the width=1 result matches
-            // `geometry` bit-exactly), so the SSE lane-shuffle bug of the
-            // multi-pixel batch path can never trigger, on any platform.
-            unsafe {
-                for (i, slot) in out.iter_mut().enumerate() {
-                    let x = x_start + i as f64;
-                    let mut res = [x as c_float, y as c_float];
-                    let ok = lf_modifier_apply_geometry_distortion(
-                        self.modifier,
-                        x as c_float,
-                        y as c_float,
-                        1,
-                        1,
-                        res.as_mut_ptr(),
-                    );
-                    if ok != 0 {
-                        *slot = (res[0] as f64, res[1] as f64);
-                    }
-                    // `ok == 0`: no distortion callback — keep the prefilled
-                    // identity mapping (never a silent fallback onto (0, 0)).
-                }
-            }
-        }
-
-        /// Map a whole destination row to the per-channel source pixels it
-        /// samples (G-06 Lensfun-Vollausbau, TCA row batch).
-        ///
-        /// `out[i]` receives the `(red, green, blue)` destination→source
-        /// mappings of the destination pixel `(x_start + i, y)`, so one call
-        /// replaces `out.len()` calls to [`Self::subpixel`]. Without TCA
-        /// calibration (`has_tca() == false`) the row is filled with the
-        /// exact identity triple (as with [`Self::subpixel`]).
-        ///
-        /// Bit-identity vs. [`Self::subpixel`] contract: EVERY column is
-        /// bit-identical to the corresponding per-pixel call on every
-        /// platform — implemented as one native width=1/height=1 call per
-        /// column (scalar path), never as a single multi-pixel native batch
-        /// call (same SSE lane-shuffle concern as `geometry_row`).
-        pub fn subpixel_row(&self, x_start: f64, y: f64, out: &mut [SubpixelTriple]) {
-            // Prefill with the identity triple (no-TCA passthrough).
-            for (i, slot) in out.iter_mut().enumerate() {
-                let p = (x_start + i as f64, y);
-                *slot = (p, p, p);
-            }
-            if !self.has_tca {
-                return;
-            }
-            unsafe {
-                for (i, slot) in out.iter_mut().enumerate() {
-                    let x = x_start + i as f64;
-                    let mut res = [
-                        x as c_float,
-                        y as c_float,
-                        x as c_float,
-                        y as c_float,
-                        x as c_float,
-                        y as c_float,
-                    ];
-                    let ok = lf_modifier_apply_subpixel_geometry_distortion(
-                        self.modifier,
-                        x as c_float,
-                        y as c_float,
-                        1,
-                        1,
-                        res.as_mut_ptr(),
-                    );
-                    if ok != 0 {
-                        *slot = (
-                            (res[0] as f64, res[1] as f64),
-                            (res[2] as f64, res[3] as f64),
-                            (res[4] as f64, res[5] as f64),
-                        );
-                    }
-                    // `ok == 0`: keep the prefilled identity triple (never a
-                    // silent fallback onto (0, 0)).
-                }
-            }
-        }
-
-        /// Apply the vignetting correction to a whole row of packed RGB pixels
-        /// **in place**, in a single lensfun batch call (R2-LENS-01).
-        ///
-        /// `rgb` holds `width * 3` consecutive `f32`s (three channels per
-        /// pixel, RGB order — lensfun walks the buffer one RGB triple per
-        /// pixel via `LF_CR_RGB`); `x_start`/`y` are the destination
-        /// coordinates of the row's first pixel, used for the radial position.
-        /// One call replaces `width` calls to [`Self::color_gain`].
-        ///
-        /// The buffer is modified in place, exactly like lensfun's own
-        /// `lf_modifier_apply_color_modification`. Callers wanting to keep the
-        /// geometry pass separate must pass a buffer that holds only the RGB
-        /// of the row (not, e.g., an RGBA frame — `LF_CR_RGB` consumes three
-        /// components per pixel and would walk an RGBA buffer ragged).
-        ///
-        /// On a distortion-only profile (no colour callback) lensfun reports
-        /// `false` and leaves the buffer untouched, matching [`Self::color_gain`].
-        ///
-        /// See the module-level "Documented numeric divergence of
-        /// `apply_vignetting_row`" block above for the bit-identity vs.
-        /// [`Self::color_gain`] contract.
-        pub fn apply_vignetting_row(&self, rgb: &mut [f32], x_start: f64, y: f64) {
-            debug_assert!(
-                rgb.len().is_multiple_of(3),
-                "apply_vignetting_row requires whole RGB triples, got {} floats",
-                rgb.len()
-            );
-            let width = rgb.len() / 3;
-            if width == 0 || !self.has_vignetting {
-                return;
-            }
-            unsafe {
-                // `row_stride = 0` → lensfun treats the block as packed;
-                // with `height = 1` the row stride is unused anyway (matches
-                // `color_gain`). The 16-byte alignment hint in the lensfun
-                // header is a performance note, not a correctness contract;
-                // `Vec<f32>`/`[f32]` buffers are fine (same as the per-pixel
-                // stack array today).
-                lf_modifier_apply_color_modification(
-                    self.modifier,
-                    rgb.as_mut_ptr() as *mut c_void,
-                    x_start as c_float,
-                    y as c_float,
-                    width as c_int,
-                    1,
-                    LF_CR_RGB,
-                    0,
-                );
-            }
-        }
-
         /// Probe whether the correction is approximately the identity mapping
         /// at the image centre and four corners. A near-identity correction is
         /// treated as a no-op and the caller falls back to the manual model.
@@ -979,9 +705,19 @@ mod ffi {
 
 #[cfg(all(test, feature = "native"))]
 mod tests {
-    use super::ffi::{lf_camera_crop_factor, Corrector, LensfunDb};
+    use super::ffi::{lf_camera_crop_factor, Corrector};
+    use super::LensfunDb;
 
+    // LENSFUN-DB-33: hermetic load-plan / resolution-order / diagnostics /
+    // plan-event tests, plus the real-filesystem and real-database suites.
+    mod db_layers;
+    mod db_path;
+    mod diagnostics;
+    mod fs_probe;
+    mod plan_events;
+    mod probe_fixture; // shared in-memory Probe for the LENSFUN-DB-33 tests
     mod strict_match; // GUI-ROUTING-N6: strict matching; see src/tests/strict_match.rs
+    mod system_db;
 
     // These tests exercise the real system database. They only compile/run with
     // `--features native`, so the default `cargo test -p lumina-lensfun` (no
@@ -994,21 +730,27 @@ mod tests {
     const MODEL: &str = "Nikon D40";
     const LENS: &str = "Nikon AF-S DX Zoom-Nikkor 18-55mm f/3.5-5.6G VR";
 
-    #[test]
-    fn system_database_loads() {
-        assert!(LensfunDb::load_system().is_some());
+    /// The installed system database, or a **loud, named** failure.
+    ///
+    /// LENSFUN-DB-33: these tests assert on *real* database content, so there
+    /// is deliberately no silent skip. A machine without a resolvable database
+    /// fails with the full `SystemDbError` diagnostic (every probed location,
+    /// its source and the remediation) instead of a green test that never
+    /// exercised anything.
+    fn system_db() -> LensfunDb {
+        system_db::system_db()
     }
 
     #[test]
     fn real_profile_yields_corrector() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         let c = Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0);
         assert!(c.is_some(), "expected a matching Lensfun profile");
     }
 
     #[test]
     fn real_profile_distortion_deviates_at_corner() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         let c = Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0)
             .expect("profile found");
         // Corner destination pixel (0, 0) must map to a different source pixel.
@@ -1021,7 +763,7 @@ mod tests {
 
     #[test]
     fn real_profile_corrects_vignetting_by_brightening_corners() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         let c = Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0)
             .expect("profile found");
         let centre = c.color_gain(100.0, 100.0, 100.0, 500.0, 375.0);
@@ -1234,7 +976,7 @@ mod tests {
 
     #[test]
     fn real_profile_reports_distortion_and_vignetting_flags() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         let c = Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0)
             .expect("profile found");
         // The DX 18-55mm VR carries distortion AND vignetting calibration at
@@ -1492,7 +1234,7 @@ mod tests {
 
     #[test]
     fn unknown_camera_yields_none() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         assert!(Corrector::for_camera(
             &db,
             "NoSuchMake__XYZ",
@@ -1509,7 +1251,7 @@ mod tests {
 
     #[test]
     fn zero_dimensions_yield_none() {
-        let db = LensfunDb::load_system().expect("system lensfun db");
+        let db = system_db();
         assert!(Corrector::for_camera(&db, MAKE, MODEL, None, 0, 750, 18.0, 5.6, 10.0).is_none());
         assert!(Corrector::for_camera(&db, MAKE, MODEL, None, 1000, 0, 18.0, 5.6, 10.0).is_none());
     }
@@ -1526,11 +1268,11 @@ mod tests {
         // The safe wrapper serializes load/search/drop, so exercising the
         // exact same concurrency must succeed. Without the wrapper lock this
         // test crashes the whole test process on glibc.
-        let _db = LensfunDb::load_system().expect("system lensfun db");
+        let _db = system_db();
         let threads: Vec<_> = (0..6)
             .map(|_| {
                 std::thread::spawn(|| {
-                    let db = LensfunDb::load_system().expect("per-thread lensfun db");
+                    let db = system_db();
                     let c = Corrector::for_camera(
                         &db,
                         MAKE,

@@ -7,9 +7,9 @@
 3505 crates/lumina-core/src/render.rs
 3333 crates/lumina-sidecar/src/zdata.rs
 3264 crates/lumina-gpu/src/stages.rs
-2978 crates/lumina-gui/tests/kittest_snapshots.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (3040 -> 2978, build_harness/load_sample/assert_label_on_screen/open_collapsing_and_scroll_to nach tests/kittest_snapshots_support/)
+2898 crates/lumina-gui/tests/kittest_snapshots.rs  # 2026-09-25: GOLDEN-FIXT-31 (2978 -> 2898, R1-Fixture-Kontrakt nach tests/kittest_fixtures_support/, 11 synthetische .arw-Sentinel-Fixtures entfernt); zuvor 2026-09-19: UX-LOOK-HISTORY-18 (3040 -> 2978, build_harness/load_sample/assert_label_on_screen/open_collapsing_and_scroll_to nach tests/kittest_snapshots_support/)
 1919 crates/lumina-core/src/mask_loader.rs
-1789 crates/lumina-lensfun/src/lib.rs
+1531 crates/lumina-lensfun/src/lib.rs  # 2026-09-25: LENSFUN-DB-33 (1789 -> 1531, DB-Aufloesung nach db_path.rs/db_layers.rs/db_timestamp.rs/db_error.rs/system_load.rs extrahiert, corrector_rows.rs abgespalten; F1-Remediierung ergaenzt den User-DB-Merge und die echte timestamp.txt-Semantik, F3 entfernt den mutierenden env-Override-Test)
 1665 crates/lumina-core/src/generative.rs
 1572 crates/lumina-raw/src/lib.rs
 1564 crates/lumina-core/src/tone.rs

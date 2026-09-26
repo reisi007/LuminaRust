@@ -16,44 +16,43 @@
 //! ```
 
 use egui_kittest::Harness;
-use lumina_core::cache::{disk::DiskFolderCache, PreviewKind};
-use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_gui::{LuminaApp, Module};
-use std::collections::BTreeMap;
 use std::path::Path;
+
+// GOLDEN-FIXT-31: the real-RAW fixture contract, shared with
+// `kittest_snapshots` (staging the two licensed CR3s from `sample-data/raw/`
+// plus the "the worker really decoded" settle/guards).
+mod kittest_fixtures_support;
+use kittest_fixtures_support::*;
 
 /// Fixed, committed fixture directory (relative, so no tempdir randomness can
 /// leak into folder-tree / path-field pixels — same rationale as
-/// `kittest_snapshots::LIBRARY_FIXTURE_DIR`).
+/// `kittest_snapshots::LIBRARY_FIXTURE_DIR`). Nothing binary is committed
+/// here: the three CR3s are staged from `sample-data/raw/` per run.
 ///
-/// The sentinel files sit one level deeper (`…/images/`) on purpose: the
+/// The staged files sit one level deeper (`…/images/`) on purpose: the
 /// Library folder tree counts RAW files depth-limited to `FOLDER_SCAN_DEPTH`
-/// (= 3) below a node, so a fixture at `tests/fixtures/library_stack/*.arw`
+/// (= 3) below a node, so a fixture at `tests/fixtures/library_stack/*.cr3`
 /// would bump the un-pinned `library_people_empty` golden's `tests (7)` counter
-/// to `tests (10)`. At `…/library_stack/images/*.arw` the counter stays stable
+/// to `tests (10)`. At `…/library_stack/images/*.cr3` the counter stays stable
 /// and that unrelated golden needs no rebaseline (R5-STACKVIS-21).
 const FIXTURE_DIR: &str = "tests/fixtures/library_stack/images";
 
-/// RAW sentinels with the base color of their seeded Standard preview. The
-/// first two are the stack members (adjacent in name order), the third is the
-/// unstacked neighbor that must carry neither mark.
-const FIXTURE_FILES: &[(&str, [u8; 3])] = &[
-    ("a_stack1.arw", [200, 60, 50]),
-    ("b_stack2.arw", [60, 170, 80]),
-    ("z_solo.arw", [70, 110, 200]),
+/// Staged RAW files: the first two are the stack members (adjacent in name
+/// order), the third is the unstacked neighbor that must carry neither mark.
+const FIXTURE_FILES: &[(&str, &str)] = &[
+    ("a_stack1.cr3", "aircraft-landscape.cr3"),
+    ("b_stack2.cr3", "aircraft-portrait.cr3"),
+    ("z_solo.cr3", "aircraft-landscape.cr3"),
 ];
 
 /// The two stack members, cover first.
-const STACK_MEMBERS: [&str; 2] = ["a_stack1.arw", "b_stack2.arw"];
-const STACK_COVER: &str = "a_stack1.arw";
+const STACK_MEMBERS: [&str; 2] = ["a_stack1.cr3", "b_stack2.cr3"];
+const STACK_COVER: &str = "a_stack1.cr3";
 
 /// Amber membership color, mirrored from the production constant on purpose:
 /// the golden's pixel guard must not reuse the value it verifies.
 const STACK_AMBER: [u8; 3] = [0xE8, 0xA9, 0x1C];
-
-/// Seeded preview dimensions (same as the other Library goldens so the cells
-/// render real, distinct thumbnails).
-const PREVIEW_SIZE: (u32, u32) = (288, 192);
 
 fn build_harness() -> Harness<'static, LuminaApp> {
     Harness::builder()
@@ -63,101 +62,61 @@ fn build_harness() -> Harness<'static, LuminaApp> {
 }
 
 /// Drive the async folder scan (and the auto-load decode it starts) to settle
-/// before snapshotting — copied from `kittest_snapshots_support::settle_scan`.
+/// before snapshotting — copied from `kittest_snapshots_support::settle_scan`,
+/// including its GOLDEN-FIXT-31 deadline bound: a real 24-megapixel RAW fixture
+/// needs far more wall time than the old failing sentinel did.
 fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
         harness.step();
         if !harness.state().scan_pending() && !harness.state().decode_pending() {
             harness.step();
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "folder scan/decode did not settle within the bounded deadline"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    panic!("folder scan/decode did not settle within the bounded frame budget");
 }
 
-/// Deterministic preview pixels: vertical gradient around `base` (same helper
-/// shape as `kittest_snapshots::library_views_preview_png`).
-fn preview_png(base: [u8; 3]) -> Vec<u8> {
-    let (width, height) = PREVIEW_SIZE;
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height {
-        let factor = 192 + ((y * 63) / height.max(1));
-        for _ in 0..width {
-            for channel in base {
-                pixels.push(((u32::from(channel) * factor) / 255) as u8);
-            }
-            pixels.push(255);
-        }
-    }
-    ImageFrame::new(width, height, pixels)
-        .expect("fixture frame")
-        .encode(ImageFileFormat::Png)
-        .expect("fixture preview encodes")
-}
-
-/// (Re-)write the sentinel RAWs, seed their Standard previews and write the
+/// (Re-)stage the real RAW files, pre-create the folder cache and write the
 /// Sidecar-first stack membership (`SidecarDocument.stack`) into both members.
-/// Idempotent. The `.lumina/` cache is gitignored (rebuilt per run), so only
-/// the sentinel `.arw` files are committed.
-fn ensure_fixture() {
-    use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SidecarDocument, SourceIdentity};
+/// Idempotent. The `.lumina/` cache is gitignored (rebuilt per run) and stays
+/// **empty of previews**: the cells must be painted by the production
+/// thumbnail worker from a real CR3 decode, otherwise a cache hit could keep a
+/// broken decode green (GOLDEN-FIXT-31).
+fn ensure_fixture() -> Vec<StagedEntry> {
+    use lumina_sidecar::{SidecarDocument, StackMembership};
 
     let root = Path::new(FIXTURE_DIR);
     std::fs::create_dir_all(root).expect("create stack fixture dir");
     let _ = std::fs::remove_dir_all(root.join(".lumina"));
-    let bytes = b"lumina-raw-fixture";
-    let content_hash = format!("blake3:{}", blake3::hash(bytes).to_hex());
     let members: Vec<String> = STACK_MEMBERS
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
-    let section = lumina_sidecar::StackMembership::new(
-        lumina_sidecar::StackMembership::stack_id_for_members(&members),
+    let section = StackMembership::new(
+        StackMembership::stack_id_for_members(&members),
         STACK_COVER,
         members,
     )
     .expect("valid stack section");
 
-    for &(name, base) in FIXTURE_FILES {
-        std::fs::write(root.join(name), bytes).expect("write stack fixture");
-        let png = preview_png(base);
-        let cache = DiskFolderCache::for_image(root.join(name)).expect("stack fixture cache");
-        assert!(
-            cache
-                .store_preview(name, "vc-original", PreviewKind::Standard, &png)
-                .expect("seed stack preview"),
-            "Standard previews must be enabled for {name}"
-        );
-        let identity = SourceIdentity {
-            relative_name: name.to_owned(),
-            content_hash: content_hash.clone(),
-            byte_length: bytes.len() as u64,
-            modified_at: None,
-            raw_format: "ARW".to_owned(),
-            orientation: 1,
-            decode_fingerprint: DecodeFingerprint {
-                decoder: "kittest".to_owned(),
-                version: "1".to_owned(),
-                parameters: BTreeMap::new(),
-                extras: BTreeMap::new(),
-            },
-            geometry_fingerprint: GeometryFingerprint {
-                width: 2,
-                height: 2,
-                orientation: 1,
-                pixel_aspect_ratio: 1.0,
-                extras: BTreeMap::new(),
-            },
-            extras: BTreeMap::new(),
-        };
-        let mut document = SidecarDocument::new(identity, "raster-mvp-1");
+    let mut entries: Vec<StagedEntry> = Vec::new();
+    for &(name, source) in FIXTURE_FILES {
+        entries.push((stage_raw(root, name, source), source));
+        let mut document =
+            SidecarDocument::new(staged_source_identity(name, source), "raster-mvp-1");
         if STACK_MEMBERS.contains(&name) {
             document.stack = Some(section.clone());
         }
         let sidecar = lumina_sidecar::sidecar_path_for(&root.join(name));
         lumina_sidecar::save_sidecar(&sidecar, &document).expect("seed stack sidecar");
     }
+    prepare_folder_cache(root);
+    entries
 }
 
 /// Non-vacuous pixel guard: the rendered frame contains the exact amber
@@ -185,7 +144,7 @@ fn assert_stack_amber_painted(harness: &mut Harness<'_, LuminaApp>) {
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_library_stack -- --ignored"]
 fn library_stack_membership() {
-    ensure_fixture();
+    let entries = ensure_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     harness.state_mut().set_directory(FIXTURE_DIR.to_owned());
@@ -216,8 +175,9 @@ fn library_stack_membership() {
         );
     }
 
-    // Fixed frames (not `run()`): thumbnail jobs keep requesting repaints.
-    harness.run_steps(3);
+    // Wait for the real CR3 thumbnails instead of a fixed frame budget.
+    settle_thumbnails(&mut harness, &entries);
+    assert_no_raw_decode_failure(&mut harness);
     assert_stack_amber_painted(&mut harness);
     harness.snapshot("library_stack_membership");
 }

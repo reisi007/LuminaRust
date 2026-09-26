@@ -99,6 +99,11 @@ fn main() {
 
     verify_lfcamera_layout(&include_dirs);
 
+    // LENSFUN-DB-33: bake in the *profile database* location of this build so
+    // the Rust side can resolve it portably. See db_path.rs and
+    // feature/platform/capability-matrix.md § "Lensfun-Profil-Datenbank".
+    emit_compiled_datadir();
+
     // R2-LENS-04: track the *resolved* shared library so this script (and its
     // ABI layout probe) re-runs when the installed liblensfun changes, not
     // only when build.rs itself is edited.
@@ -108,6 +113,48 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=LIBLENSFUN_SYS_DIR");
     println!("cargo:rerun-if-env-changed=CC");
+}
+
+/// Emit `LUMINA_LENSFUN_COMPILED_DATADIR` for `option_env!` in `db_path.rs`.
+///
+/// Preferred source is `pkg-config --variable=datadir lensfun` (e.g.
+/// `/opt/homebrew/Cellar/lensfun/0.3.4/share` on Homebrew, `/usr/share` on
+/// Debian/Ubuntu). If pkg-config does not know the variable we fall back to the
+/// *target's* conventional location — never to nothing, so the Rust side always
+/// has a baked-in candidate and `platform_default_dirs()` is the last resort.
+///
+/// **The pkg-config query is host-side, not target-aware**: it reports the
+/// datadir of the lensfun installation this build machine can see. That is
+/// correct for a native build and wrong for a cross-compile, where only the
+/// fallback below is target-dependent. The limitation is stated in
+/// `feature/platform/capability-matrix.md` (§ LENSFUN-DB-33, precedence row 2);
+/// a cross-build against a foreign lensfun therefore needs an explicit
+/// `LUMINA_LENSFUN_DB` at run time.
+fn emit_compiled_datadir() {
+    let queried = Command::new("pkg-config")
+        .args(["--variable=datadir", "lensfun"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty());
+
+    let datadir = match queried {
+        Some(dir) => dir,
+        None => {
+            println!(
+                "cargo:warning=lumina-lensfun: `pkg-config --variable=datadir \
+                 lensfun` yielded nothing; baking in the target's conventional \
+                 database location instead."
+            );
+            if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+                "/opt/homebrew/share".to_owned()
+            } else {
+                "/usr/share".to_owned()
+            }
+        }
+    };
+    println!("cargo:rustc-env=LUMINA_LENSFUN_COMPILED_DATADIR={datadir}");
 }
 
 /// Shared-library file names to look for, per target OS.

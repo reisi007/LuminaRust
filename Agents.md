@@ -224,6 +224,17 @@ Agent derselben Änderung gelten.
 
 ## Verbindlicher Arbeitsablauf
 
+0. **Vor jedem Pull/Fetch/Merge/Rebase die lokale Arbeit committen
+   (User-Regel 2026-09-26).** Niemals in einen schmutzigen Arbeitsbaum
+   hinein aktualisieren. Der Commit dient der Sicherung — er wird auch
+   dann ausgeführt, wenn die Arbeit noch nicht verifiziert ist (der
+   Verifikationsstand steht dann im Commit-Text und in `Agents.todo.md`),
+   denn ein Merge mit ungesicherten Änderungen im Arbeitsbaum kann sie
+   stillschweigend zerstören. Reihenfolge: `git status` prüfen →
+   `scripts/check_file_sizes.sh` + die betroffenen Gates → committen →
+   holen → mergen. Nach dem Merge: die gelieferten Tests laufen lassen,
+   das Ratchet erneut prüfen und den Merge-Stand im Abschlussbericht
+   nennen.
 1. `Agents.md`, `Agents.todo.md`, `feature/README.md`, das betroffene
    Feature-Dokument und relevante ADRs lesen.
 2. Die betroffene Funktion anhand einer stabilen Feature-ID identifizieren.
@@ -275,6 +286,43 @@ Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
 AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen
 Modell-Download oder externen Netzwerkzugriff abhängen.
+
+### Testabdeckungs-Politik (User-Regel 2026-09-26)
+
+- **Grundregel: Alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
+  Migration, Persistenz, Pipeline oder Agentenregeln wird mit Tests geliefert,
+  die die **neue** Aussage tatsächlich abdecken. Ein Test, der die Aussage nicht
+  belegt, zählt nicht (DoD §7.5). Diese Regel wird **nicht** aus Bequemlichkeit
+  oder Laufzeitgründen relativiert; ein Verweis auf „zu langsam" oder „reicht
+  auch so" ist ein Befund, keine Abnahme.
+- **Gegenregel: Tests sind kein Selbstzweck.** Abdeckung ohne Informationswert
+  ist ein Defekt. Ein Test, der eine Konstante auf sich selbst prüft, eine
+  bereits durch einen anderen Test abgedeckte Eigenschaft ein zweites Mal
+  durchläuft, eine Implementierungsentscheidung statt des Verhaltens pinnt
+  oder der bei Wegfall der Logik nichts verlieren würde, wird als
+  **unnötiger Test** geführt. Erschwerte Tests verlieren außerdem ihre
+  eigentliche Funktion als Netz: 745 GUI-Tests in einem einzigen 3:11-CI-Shard
+  sind ein Wartbarkeitsproblem, kein Qualitätsnachweis.
+- **Rhythmus: höchstens einmal pro Woche ein Build-Agent für den
+  Test-Redundanz-Audit** (`TEST-AUDIT-36`, fortlaufend). Der Build-Agent prüft
+  die Suite auf unnötige Tests und **berichtet**; er entfernt nichts eigenmächtig
+  und ohne Rücksprache. Für jede Löschung gilt der normale Weg: SOLL zuerst,
+  Delegation an einen Implementierungs-Agent, danach unabhängige
+  Verifikation. Beim Audit wird ausdrücklich geprüft, ob der Test eine
+  **Fehlalarm-resistente** Aussage trägt — der Tausch „Tests weg" gegen
+  „Regression unentdeckt" ist ausgeschlossen.
+- **Der Audit darf keine Löschung als Abkürzung für fehlende Abdeckung
+  missbrauchen.** Wird beim Audit eine Lücke sichtbar (Feature, Klausel oder
+  Fehlerpfad ohne Anker), ist das eine **neue offene Aufgabe** — kein Anlass,
+  einen benachbarten Test zu streichen.
+- **Nachweispflicht:** Jeder umgesetzte Audit-Befund nennt Test-Name, Datei und
+  die konkrete Begründung (welche doppelte Aussage entfällt). Eine Löschung
+  ohne Begründung gilt als Regel-Umgehung.
+- **Git-Hygiene (User-Regel 2026-09-26):** Vor jedem Pull/Fetch/Merge/Rebase
+  wird die lokale Arbeit committet — auch wenn sie noch nicht verifiziert ist;
+  der Verifikationsstand steht dann im Commit-Text. Ein Merge in einen
+  schmutzigen Arbeitsbaum ist verboten, weil er ungesicherte Änderungen
+  stillschweigend zerstören kann.
 
 - **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff
   (kein Metal-Compute), daher kann die CI den GPU-Pfad nur kompilieren

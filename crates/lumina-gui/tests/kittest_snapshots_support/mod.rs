@@ -32,8 +32,16 @@ pub(crate) fn load_sample(harness: &mut Harness<'_, LuminaApp>) {
 /// listing, so drive frames until the in-flight scan lands (bounded), then one
 /// extra frame so the applied status/list is painted. Without this the golden
 /// would capture the transient "Scanning folder…" status.
+///
+/// GOLDEN-FIXT-31: the bound is a wall-clock deadline, not a frame count. A
+/// real 24-megapixel RAW fixture (the committed sentinels used to fail in
+/// microseconds) spends ~0.7 s in LibRaw, so a 500-frame budget could expire
+/// mid-decode under parallel test execution and turn a settling scan into a
+/// spurious failure. The deadline is generous on purpose: exceeding it is a
+/// real hang, and the fixtures are all local.
 pub(crate) fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
         // `step()` (not `run()`): a scheduled thumbnail/scan repaint would make
         // `run()` exceed its max_steps bound. Settle both async background
         // paths — the folder scan AND the auto-load decode it starts — so a
@@ -43,9 +51,12 @@ pub(crate) fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
             harness.step();
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "folder scan/decode did not settle within the bounded deadline"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    panic!("folder scan/decode did not settle within the bounded frame budget");
 }
 
 /// R2-MODSWITCH-1 F8: `LuminaApp::set_directory` (flat listing) followed by

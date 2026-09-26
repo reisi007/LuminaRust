@@ -2463,7 +2463,10 @@ mod tests {
     #[test]
     fn lensfun_corrector_changes_corner_pixels_vs_manual() {
         use lumina_lensfun::{Corrector, LensfunDb};
-        let db = LensfunDb::load_system().expect("system lensfun db available");
+        // LENSFUN-DB-33: the loud path, so a machine without a resolvable
+        // Lensfun profile database fails with the full named diagnostic
+        // (every probed location + remediation) instead of a silent skip.
+        let db = LensfunDb::resolve_system().expect("system lensfun db must resolve");
         let corrector = Corrector::for_camera(
             &db,
             "Nikon Corporation",
@@ -2538,7 +2541,10 @@ mod tests {
     #[test]
     fn unknown_camera_yields_identity_fallback_render() {
         use lumina_lensfun::{Corrector, LensfunDb};
-        let db = LensfunDb::load_system().expect("system lensfun db available");
+        // LENSFUN-DB-33: the loud path, so a machine without a resolvable
+        // Lensfun profile database fails with the full named diagnostic
+        // (every probed location + remediation) instead of a silent skip.
+        let db = LensfunDb::resolve_system().expect("system lensfun db must resolve");
         let corrector = Corrector::for_camera(
             &db,
             "NoSuchMake__XYZ",

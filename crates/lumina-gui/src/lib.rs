@@ -11168,9 +11168,10 @@ impl LuminaApp {
         ui.label(&self.status);
     }
 
-    /// A small sample RGBA PNG for headless snapshot / integration tests
-    /// (F-103-N9). Pure helper with no app side effects; the bytes decode via
-    /// [`Self::load_bytes`].
+    /// A **4x3-pixel** synthetic sample RGBA PNG for headless smoke / layout
+    /// tests (F-103-N9); fixture class S2 in `feature/quality/golden-fixtures.md`
+    /// — a Chrome-/Layout-Invariante source, never a render invariant. Pure
+    /// helper with no app side effects; the bytes decode via [`Self::load_bytes`].
     pub fn sample_image_png() -> Vec<u8> {
         ImageFrame::new(
             4,
