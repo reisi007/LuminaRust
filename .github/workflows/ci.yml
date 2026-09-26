@@ -330,3 +330,23 @@ jobs:
 
       - name: Validate workflow syntax
         uses: raven-actions/actionlint@v2
+
+      # GOLDEN-REF-30 guard suite. Deliberately in `docs` and NOT in the Rust
+      # container job: the guard is POSIX shell only, needs no GPU, no cargo and
+      # no macOS, and must be verifiable on a plain runner. It asserts the exit
+      # codes and refusal texts of scripts/golden_ref.sh and of the golden
+      # re-pin gate in .githooks/pre-commit. Runs entirely in a temp sandbox
+      # outside the checkout - it never writes the committed lock, never stages
+      # into the real index, and needs no network. Takes ~1-2 min because each
+      # check/record re-derives the full fingerprint.
+      - name: Test golden-reference guard (shell suite)
+        run: sh scripts/golden_ref_test.sh
+
+      # The golden re-pin gate is only as strong as its install. core.hooksPath
+      # is LOCAL config, so no clone (this one included) has the gate active
+      # until `git config core.hooksPath .githooks` is run. CI cannot install
+      # it for anyone, but it CAN catch the silent case where the hook file
+      # stops being executable - then the gate is dead for every developer who
+      # did install it, with no error anywhere.
+      - name: Check golden re-pin hook is executable
+        run: test -x .githooks/pre-commit

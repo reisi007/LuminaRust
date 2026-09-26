@@ -1,0 +1,31 @@
+# golden_ref.lock - gepinnter Golden-Referenz-Fingerabdruck (GOLDEN-REF-30).
+# Erzeugt von: sh scripts/golden_ref.sh record --confirm "<reason>"
+# Grund: GOLDEN-REF-30 Verifikationsrunde: kanonische Form erzwungen, record-Diff + min. Grundlaenge, pre-commit Re-Pin-Gate ergaenzt; Baseline-Erneuerung folgt in GOLDEN-BASELINE-32
+#
+# Format: eine Zeile pro Schluessel als <key>=<value>, '#'-Zeilen sind
+# Kommentar, Schluesselreihenfolge ist Teil des Formats (kanonisch, von
+# `check` erzwungen). Der Referenz-SOLL steht in
+# feature/quality/golden-references.md. Diese Goldens sind ein LOKALES
+# macOS-Gate und werden in CI nie verifiziert (kein GPU-Runner).
+#
+schema.golden_ref=1
+os.name=macOS
+os.macos=27.0
+os.arch=arm64
+os.cpu=Apple M5 Pro
+toolchain.channel=stable
+toolchain.rustc=1.98.0
+wgpu.version=30.0.1
+wgpu.backend=all->metal
+wgpu.backend_env=unset
+gpu.adapter=Apple M5 Pro
+gpu.metal=Metal 4
+font.resolution=egui-bundled-default
+font.egui=0.36.2
+ui.golden_px=1024x720
+ui.scale_factor=1.0
+libraw.version=0.22.2
+fixtures.count=16
+fixtures.digest=git:bcfe04b1d5bc21948f71659926393c42ad900a01bebcdd63243bbe5fae365bd0
+goldens.count=62
+goldens.digest=git:6410887849032701227c53a55bb2c65d2d4a5c7d8e9ad926e72cc465d8bbbdef
