@@ -242,9 +242,13 @@ Digests, nicht diese Tabelle — eine fehlende Zeile fällt dort nicht auf.
 4. **`library_people_empty.png` hängt an einem Ordnerbaum-Zähler.** Eine spätere
    Fixture-Umbenennung ist dort eine sichtbare Änderung (kein stiller Drift).
 5. **Die Goldens sind vor dieser Änderung nicht neu geschrieben.** Die
-   Baseline-Erneuerung gehört `GOLDEN-BASELINE-32`; bis dahin sind die fünf
-   Library-Render-Invarianten und die von der Ordnerbaum-/Badge-Textänderung
-   betroffenen Chrome-Invarianten planmäßig rot.
+   Baseline-Erneuerung gehört `GOLDEN-BASELINE-32`; bis dahin sind die **sechs**
+   Library-Render-Invarianten (Korrektur 2026-09-26: es sind sechs, nicht fünf —
+   `library_compare`, `library_loupe`, `library_survey`,
+   `library_rated_badges`, `library_subfolder_badges`,
+   `library_stack_membership`; §1 derselben Datei nennt genau diese sechs)
+   und die von der Ordnerbaum-/Badge-Textänderung betroffenen
+   Chrome-Invarianten planmäßig rot.
 
 ## 6. Offene Messfrage: Laufzeit der R1-Fixtures
 

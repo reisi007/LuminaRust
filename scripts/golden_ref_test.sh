@@ -25,13 +25,17 @@
 # runner, where `sw_vers` / `system_profiler` / `rustc` are missing and every
 # such value is legitimately `unavailable`.
 #
-# The price of that design, and the one place it is deliberately broken: a
+# The price of that design, and the two places it is deliberately broken: a
 # `record`/`check` pair only ever compares a value against a value the SAME code
 # produced, so a self-consistent change to a *derivation* (how `png_size` reads
-# the IHDR, how `ui.scale_factor` divides by the viewport) moves both sides and
-# stays green. The section "value detectors vs committed inputs" is the
+# the IHDR, how `ui.scale_factor` divides by the viewport, which files the golden
+# inventory enumerates and which of them the digest hashes) moves both sides and
+# stays green. The section "value detectors vs committed inputs" is the first
 # exception: it feeds the real derivations a committed fixture whose bytes are
 # stated in `scripts/fixtures/README.md` and asserts a LITERAL expected value.
+# The section "golden inventory layer" is the second: it re-derives the golden
+# inventory and the `goldens.digest` value OUTSIDE the guard, from `git ls-files`
+# and the golden bytes, and asserts the shipped layer equals it.
 #
 # Usage: sh scripts/golden_ref_test.sh        (exit 0 = all cases passed)
 # Normative spec: feature/quality/golden-references.md §4
@@ -218,6 +222,91 @@ sha_of() {
   fi
 }
 
+# sha256 of stdin, same helper order as the guard. Prints the literal
+# `no-sha-tool` when neither helper exists, so that a comparison against it fails
+# loudly instead of comparing two empty strings (DoD §10).
+sha_stdin() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    echo "no-sha-tool"
+  fi
+}
+
+# A plausible sha256: 64 lowercase hex characters, nothing else. Used as the
+# PRECONDITION of the "the real lock is byte-identical" guard: without it that
+# guard compares '' with '' whenever the hashing tool cannot read the file, and
+# passes.
+is_sha256() {
+  case "${1:-}" in
+    '' | *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq 64 ]
+}
+
+# A plausible git object id: 40 hex characters (sha1 repositories) or 64
+# (sha256 repositories). Used as the PRECONDITION of the "the real git index is
+# unchanged" guard, which otherwise compares the literal `no-index` with itself
+# whenever `git write-tree` cannot run.
+is_oid() {
+  case "${1:-}" in
+    '' | *[!0-9a-f]*) return 1 ;;
+  esac
+  case "${#1}" in
+    40 | 64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The tree OID the index currently writes to, or NOTHING plus a non-zero exit
+# when git cannot produce one.
+#
+# This helper deliberately does NOT end in `|| echo "no-index"`. That fallback is
+# what made the end-of-run index guard vacuous: a suite run outside a git work
+# tree captured `no-index` on both sides and reported "the real git index is
+# unchanged" without ever having read an index. A capture that cannot be made is
+# now reported as a failure of the capture, and the precondition assertion turns
+# it red.
+index_tree_oid() {
+  git -C "$1" write-tree 2>/dev/null
+}
+
+# chk_inventory <label> <enumerated-by-the-guard> <expected-list> <what-it-is>
+# Path-for-path equality, not a count: a list can hold the right number of
+# entries and still have dropped one golden and picked up a file that is not a
+# golden, which is precisely the "one missing classification row" case that
+# `golden_ref.sh check` cannot see (feature/quality/golden-fixtures.md §4).
+chk_inventory() {
+  ci_lbl=$1
+  ci_got=$2
+  ci_want=$3
+  ci_want_desc=$4
+  ci_got_n=$(printf '%s\n' "$ci_got" | grep -c . || true)
+  ci_want_n=$(printf '%s\n' "$ci_want" | grep -c . || true)
+  if [ "$ci_got" = "$ci_want" ]; then
+    ok "$ci_lbl ($ci_want_n paths)"
+  else
+    # `comm` and `diff` need real files - a multi-line list is not a filename -
+    # and a path list is the only honest way to say WHICH golden is missing. Both
+    # files land in the sandbox, which the trap removes.
+    ci_gf="$SANDBOX/inventory.got"
+    ci_wf="$SANDBOX/inventory.want"
+    printf '%s\n' "$ci_got" >"$ci_gf"
+    printf '%s\n' "$ci_want" >"$ci_wf"
+    ci_extra=$(LC_ALL=C comm -23 "$ci_gf" "$ci_wf")
+    ci_missing=$(LC_ALL=C comm -13 "$ci_gf" "$ci_wf")
+    ci_extra_n=$(printf '%s\n' "$ci_extra" | grep -c . || true)
+    ci_missing_n=$(printf '%s\n' "$ci_missing" | grep -c . || true)
+    no "$ci_lbl" "the guard enumerated $ci_got_n paths, $ci_want_desc has $ci_want_n
+inventored by the guard but not in $ci_want_desc: $ci_extra_n
+$(printf '%s\n' "$ci_extra" | head -n 5)
+in $ci_want_desc but NOT inventoried by the guard: $ci_missing_n
+$(printf '%s\n' "$ci_missing" | head -n 5)"
+  fi
+}
+
 # --- preflight: the tool under test must exist and be shell ------------------
 
 section "preflight"
@@ -234,8 +323,43 @@ else
 fi
 
 # Fingerprint the real lock and the real index; re-checked at the end.
+#
+# Both captures used to swallow their own failure. `sha_of` prints nothing when
+# the hashing tool errors, and the index capture fell back to the literal
+# `no-index`. Measured consequence: outside a git work tree the index guard
+# compared `no-index` with `no-index`, and with an unreadable lock the byte
+# guard compared '' with '' - both reported success without ever having compared
+# anything. The two guards themselves are kept exactly as they are (they exist so
+# that nobody mistakes this suite for verifying that *the suite itself* touched
+# nothing); what is added is a PRECONDITION per guard, right here and at the end
+# of the run: the captured value must be a plausible sha256 / object id. A
+# broken git or a missing lock therefore fails loudly instead of passing
+# silently.
 REAL_LOCK_SHA_BEFORE=$(sha_of "$REAL_LOCK")
-REAL_INDEX_BEFORE=$(git -C "$ROOT" write-tree 2>/dev/null || echo "no-index")
+REAL_INDEX_BEFORE=$(index_tree_oid "$ROOT")
+
+# Kills: "the real lock is byte-identical after the suite" passing on two empty
+# strings because `sha_of` could not read the lock (deleted, unreadable, or no
+# sha helper on PATH). With a plausible before-sha the comparison is a real
+# byte comparison; without one the suite is red instead of green.
+chk_true "$(is_sha256 "$REAL_LOCK_SHA_BEFORE" && echo 0 || echo 1)" \
+  "precondition: the real lock's before-sha is a sha256 digest, not an empty string" \
+  "sha_of $REAL_LOCK returned: '$REAL_LOCK_SHA_BEFORE'
+Without a real digest the 'byte-identical' comparison at the end of this run
+would compare two empty strings and pass without having read the lock."
+
+# Kills: "the real git index is unchanged after the suite" passing on the
+# `no-index` fallback constant. It also pins WHY that could not happen silently:
+# outside a work tree, or with an index git cannot write a tree from (an
+# unmerged index mid-rebase), the capture now fails and this assertion is red
+# instead of the guard reporting a comparison of `no-index` with `no-index`.
+chk_true "$(is_oid "$REAL_INDEX_BEFORE" && echo 0 || echo 1)" \
+  "precondition: the real index's before-OID is a tree object id, not the no-index fallback" \
+  "git -C $ROOT write-tree returned: '$REAL_INDEX_BEFORE'
+A 'no-index' or an empty string here means the end-of-run index comparison would
+compare a constant with itself (or nothing with nothing) and pass for the wrong
+reason. Outside a work tree, or with an unmerged index, this suite cannot
+establish that it touched nothing - resolve that state before running it."
 
 # --- the synthetic base lock ------------------------------------------------
 
@@ -404,6 +528,279 @@ fd_probe "$ROOT" 800 600
 chk_true "$([ "$FD_SCALE" = "non-unit:$PNG_IHDR_PROBE_W/800,$PNG_IHDR_PROBE_H/600" ] && echo 0 || echo 1)" \
   "ui.scale_factor reads the viewport out of the injected values, not out of a constant (800 x 600 viewport)" \
   "ui.scale_factor was: $FD_SCALE"
+
+# --- the golden inventory layer: the digest backstop --------------------------
+
+section "golden inventory layer (goldens.count / goldens.digest, the §3.1 backstop)"
+
+# WHAT this section is for. `feature/quality/golden-references.md` §3.1 makes
+# `goldens.digest` a hard part of the pin - "jede Änderung an einem committeten
+# Golden erzeugt einen Mismatch" - and §11.1 names `goldens.digest` plus
+# `goldens.count` as what is LEFT after a golden slipped in through
+# cherry-pick/revert/rebase/merge or through an uninstalled hook.
+# `feature/quality/golden-fixtures.md` §4 states the gap from the other side: the
+# R/S1/S2 classification table has one row per committed golden, and
+# "`golden_ref.sh check` vergleicht Digests, nicht diese Tabelle - eine fehlende
+# Zeile fällt dort nicht auf".
+#
+# WHY the sections above cannot close it: they are self-consistent by design.
+# `record` fills the base lock from the same code `check` reads, so any change to
+# the inventory layer moves the expected value along with it. Three mutations of
+# `scripts/golden_ref.sh` were applied one at a time; each of them left ALL 188
+# pre-existing assertions green, and each is now caught (measured, one suite run
+# per mutation):
+#
+#   M1  `list_goldens` reports only the `develop_*` subset (25 of the 66 goldens)
+#       -> 198 passed, 3 failed: the count, the set and the digest below
+#   M2  `goldens.digest` hashes only the FIRST golden
+#       -> 200 passed, 1 failed: the digest below
+#   M3  the digest mode is nailed to `walk:` although git is present
+#       -> 199 passed, 2 failed: the git: mode and the mode-in-value below
+#
+# Every assertion below names the mutation it kills.
+#
+# Precondition 1 - kills: all four inventory assertions below "passing" on a
+# machine where there is no git at all, because then the guard is CORRECTLY in
+# its `walk:` fallback and none of them can say anything about mode selection.
+# The suite needs git unconditionally anyway (the pre-commit matrix, the index
+# fingerprint at the end of this run), so requiring a work tree adds no new
+# environment assumption - it is asserted rather than assumed, so that a checkout
+# without git reports WHY instead of quietly moving the layer under test.
+chk_true "$(git -C "$ROOT" rev-parse --is-inside-work-tree 2>/dev/null |
+    grep -qx true && echo 0 || echo 1)" \
+  "precondition: git reports a work tree at the suite root" \
+  "git -C $ROOT rev-parse --is-inside-work-tree said: $(git -C "$ROOT" rev-parse --is-inside-work-tree 2>&1)"
+
+# The independent enumerations. Both are derived HERE, in the suite's own shell,
+# with plain `git` and `find` - never through the sourced `list_tracked` /
+# `list_goldens`. Comparing the guard's inventory with a list that came out of
+# the same functions would only prove that the guard agrees with itself, which is
+# the exact failure mode this section exists to remove.
+COMMITTED_GOLDENS=$(git -C "$ROOT" ls-files --cached -- \
+  'crates/lumina-gui/tests/snapshots/*.png' | LC_ALL=C sort)
+COMMITTED_GOLDEN_N=$(printf '%s\n' "$COMMITTED_GOLDENS" | grep -c . || true)
+
+# Precondition 2 - kills: `goldens.count == <n committed>` and the two inventory
+# comparisons below passing on two EMPTY lists, which is what a repository
+# without a golden baseline would look like.
+chk_true "$([ "$COMMITTED_GOLDEN_N" -gt 0 ] && echo 0 || echo 1)" \
+  "precondition: git lists a non-empty committed golden baseline ($COMMITTED_GOLDEN_N paths)" \
+  "git ls-files --cached -- 'crates/lumina-gui/tests/snapshots/*.png' returned nothing.
+Every count/list comparison in this section would then compare an empty side
+with an empty side and pass without having covered a single golden."
+
+# The same set from the FILESYSTEM, which is what the `walk:` fallback reads.
+# The run-artefact exclusions are the ones §3.1 names (`*.new.png` / `*.diff.png`
+# / `*.old.png` are egui_kittest output, never baseline). They are not cosmetic:
+# this checkout really does carry such artefacts on disk (a kittest run leaves
+# them next to the goldens), so a re-derivation without the exclusions would
+# count 90 files where the guard counts 66 - and the exclusion itself is
+# documented behaviour that nothing else checks.
+DISK_GOLDENS=$(find "$ROOT/crates/lumina-gui/tests/snapshots" -maxdepth 1 -type f -name '*.png' |
+  sed "s|^$ROOT/||" |
+  awk '!/\.new\.png$/ && !/\.diff\.png$/ && !/\.old\.png$/' |
+  LC_ALL=C sort)
+
+# The expected `goldens.digest`, re-derived from the independent list above in
+# the format §3.1 documents: `<mode>:<sha256>` over newline-terminated
+# `<pfad> <sha256>` lines, a listed but absent file counted as `absent`. The
+# format is duplicated here on purpose - it is the *only* thing that gives
+# `goldens.digest` a meaning outside the code that produces it. Without this
+# expectation a digest that hashes ONE golden is indistinguishable from a digest
+# that hashes all of them, which is exactly mutation M2.
+EXP_GOLDEN_LINES=$(printf '%s\n' "$COMMITTED_GOLDENS" |
+  while IFS= read -r gl_rel; do
+    [ -n "$gl_rel" ] || continue
+    if [ -f "$ROOT/$gl_rel" ]; then
+      printf '%s %s\n' "$gl_rel" "$(sha_of "$ROOT/$gl_rel")"
+    else
+      printf '%s absent\n' "$gl_rel"
+    fi
+  done)
+EXP_GOLDEN_SHA=$(printf '%s\n' "$EXP_GOLDEN_LINES" | sha_stdin)
+
+# gi_probe <suite root> <git-shim-dir-or-empty>
+#
+# Drives the REAL `emit_fingerprint` of the REAL `scripts/golden_ref.sh` with its
+# inventory layer UNTOUCHED. The difference to `fd_probe` is the point of this
+# section: nothing is overridden here - `list_goldens`, `digest_goldens` and the
+# mode selection are the shipped code, because the inventory IS the code under
+# test. Sourced, never copied, for the same reason as in `fd_probe`: re-typing
+# `list_goldens` into this suite would assert that the copy agrees with itself.
+# One replacement input only: `PATH`, optionally with a shim directory in front.
+#
+# The enumerated list is emitted between two marker lines so this suite can
+# compare "what the guard enumerated" against its own enumeration, instead of
+# trying to read a file list back out of a digest. `emit_fingerprint` runs the
+# inventory twice on its own (once for `goldens.count`, once for the digest), so
+# both values are taken from ONE run and are therefore known to describe the same
+# inventory.
+gi_probe() {
+  GI_OUT=$(
+    set -u
+    gi_want_root=$1
+    gi_git_shim=$2
+    if [ -n "$gi_git_shim" ]; then
+      # The subshell IS the isolation mechanism here: the shim must reach the
+      # guard's `git` call and nothing else, and `$( )` is what keeps it from
+      # leaking into the rest of the suite. Hence the SC2030.
+      # shellcheck disable=SC2030
+      PATH="$gi_git_shim:$PATH"
+      export PATH
+    fi
+    set -- print
+    # Sourced, not copied; see the SC1090 note in fd_probe above.
+    # shellcheck disable=SC1090
+    . "$SCRIPT" >/dev/null 2>&1
+    # The sourced script derives its repository root from `$0`, which is THIS
+    # suite's path. An accident of how `.` works, so it is checked, not assumed.
+    if [ "$ROOT" != "$gi_want_root" ]; then
+      echo "gi_probe: sourced ROOT=$ROOT but the suite root is $gi_want_root" >&2
+      exit 1
+    fi
+    emit_fingerprint
+    printf '%s\n' '### guard inventory begin'
+    list_goldens
+    printf '%s\n' '### guard inventory end'
+  ) || return 1
+  GI_COUNT=$(printf '%s\n' "$GI_OUT" | grep '^goldens\.count=' | head -n 1)
+  GI_DIGEST=$(printf '%s\n' "$GI_OUT" | grep '^goldens\.digest=' | head -n 1)
+  GI_COUNT=${GI_COUNT#goldens.count=}
+  GI_DIGEST=${GI_DIGEST#goldens.digest=}
+  GI_MODE=${GI_DIGEST%%:*}
+  GI_SHA=${GI_DIGEST#*:}
+  GI_LIST=$(printf '%s\n' "$GI_OUT" |
+    sed -n '/^### guard inventory begin$/,/^### guard inventory end$/p' |
+    sed '1d;$d')
+}
+
+# A git that does not work at all - the documented trigger for the fallback
+# (§3.1): `list_tracked` is `git ls-files ... || true`, so a failing git leaves it
+# empty and the inventory has to switch to `walk:` mode. Reaching the fallback
+# through production code with the environment changed beats patching the
+# selection. The shim lives in the sandbox and is prepended to PATH ONLY inside
+# the probe subshell, so the rest of this suite - which drives the real hook with
+# a real git - is unaffected.
+NO_GIT_DIR="$SANDBOX/shim-no-git"
+mkdir -p "$NO_GIT_DIR"
+{
+  echo '#!/bin/sh'
+  echo '# Test shim: no usable git at all, i.e. the documented trigger for the'
+  echo '# walk: digest fallback (golden-references.md §3.1).'
+  echo 'echo "fatal: simulated: git is unavailable in this shim" >&2'
+  echo 'exit 127'
+} >"$NO_GIT_DIR/git"
+chmod +x "$NO_GIT_DIR/git"
+
+# --- run 1: git available, so the guard must be in git: mode -----------------
+# Initialised so that a probe that cannot run leaves the run-2 assertions with
+# readable empty values instead of tripping `set -u`.
+gi_git_mode=
+gi_git_sha=
+gi_git_count=
+gi_git_list=
+gi_walk_mode=
+gi_walk_sha=
+gi_walk_list=
+
+if gi_probe "$ROOT" ''; then
+  gi_git_mode=$GI_MODE
+  gi_git_sha=$GI_SHA
+  gi_git_count=$GI_COUNT
+  gi_git_list=$GI_LIST
+
+  # Kills M3: the digest mode nailed to `walk:` although git is present. A
+  # `walk:`-only pin would make the whole repository's golden history hash
+  # through a fallback that cannot see the ignore rules, and it would look
+  # perfectly stable.
+  chk_true "$([ "$gi_git_mode" = git ] && echo 0 || echo 1)" \
+    "inventory/git: is the selected digest mode while git can enumerate (kills a mode nailed to walk:)" \
+    "goldens.digest was: $gi_git_mode:$gi_git_sha
+Expected the git: mode, because 'git -C $ROOT ls-files' lists $COMMITTED_GOLDEN_N goldens."
+
+  # Kills M1: `list_goldens` reporting only a subset (measured: the `develop_*`
+  # subset, 25 of 66). A narrower inventory shrinks the count AND the set the
+  # digest covers, so 41 changed goldens would no longer move the pin.
+  chk_true "$([ "$gi_git_count" = "$COMMITTED_GOLDEN_N" ] && echo 0 || echo 1)" \
+    "inventory/goldens.count covers every committed golden ($COMMITTED_GOLDEN_N)" \
+    "goldens.count was: $gi_git_count
+git ls-files --cached -- 'crates/lumina-gui/tests/snapshots/*.png' reports: $COMMITTED_GOLDEN_N
+A smaller count means the inventory layer dropped committed goldens."
+
+  # The same claim path-for-path instead of by count: a list can have the right
+  # length and still have dropped one golden in favour of a file that is not a
+  # golden. This is the assertion behind the sentence in
+  # feature/quality/golden-fixtures.md §4 that `check` cannot see a missing row
+  # of the classification table.
+  chk_inventory "inventory/git: enumerated set is exactly the committed baseline" \
+    "$gi_git_list" "$COMMITTED_GOLDENS" "the committed baseline (git ls-files)" \
+    "NOTE: by §3.1 the inventory also covers untracked, non-ignored files, so a
+FEWER entry usually means a filter dropped goldens and an EXTRA entry usually
+means an untracked PNG in the snapshots dir that should be staged or removed."
+
+  # Kills M2: `goldens.digest` hashing only the FIRST golden. The digest is the
+  # durable backstop (§3.1, §11.1) - a change to 65 of 66 goldens has to move
+  # it - and nothing in the self-consistent sections above can see that, because
+  # `record` would simply pin the shortened digest.
+  chk_true "$([ "$gi_git_sha" = "$EXP_GOLDEN_SHA" ] && echo 0 || echo 1)" \
+    "inventory/goldens.digest is the digest of the WHOLE committed inventory, not of one golden" \
+    "guard reported: $gi_git_mode:$gi_git_sha
+independently derived over all $COMMITTED_GOLDEN_N committed goldens: git:$EXP_GOLDEN_SHA
+A digest that covers fewer paths than the inventory has a checksum over less than
+the baseline it is supposed to protect."
+else
+  no "inventory/git: probe could not run the real emit_fingerprint" \
+     "the sourced scripts/golden_ref.sh produced no usable fingerprint output"
+fi
+
+# --- run 2: git cannot enumerate, so the guard must fall back to walk: -------
+
+if gi_probe "$ROOT" "$NO_GIT_DIR"; then
+  gi_walk_mode=$GI_MODE
+  gi_walk_sha=$GI_SHA
+  gi_walk_list=$GI_LIST
+
+  # Kills the mirror image of M3: a mode selection that ignores `list_tracked`
+  # and always reports `git:`, i.e. an untested fallback branch. A pin that can
+  # only ever be written in one mode also means the fallback is never exercised.
+  chk_true "$([ "$gi_walk_mode" = walk ] && echo 0 || echo 1)" \
+    "inventory/walk: is the selected digest mode when git cannot enumerate (kills a mode nailed to git:)" \
+    "with an unusable git on PATH, goldens.digest was: $gi_walk_mode:$gi_walk_sha
+list_tracked returned nothing, so §3.1 requires the walk: fallback."
+
+  # Kills a fallback that finds nothing (count 0, an empty digest over no paths)
+  # or one that sweeps the egui_kittest run artefacts into the pin. The second is
+  # not hypothetical: this checkout carries `*.new.png` / `*.diff.png` /
+  # `*.old.png` next to the goldens, and they are excluded by the documented rule
+  # §3.1 names, not by anything else.
+  chk_inventory "inventory/walk: enumerated set is exactly the on-disk baseline" \
+    "$gi_walk_list" "$DISK_GOLDENS" "the on-disk baseline (find, run artefacts excluded)" \
+    "NOTE: a difference here is a wrong find/filter in the fallback, e.g. the
+*.new.png / *.diff.png / *.old.png exclusions of §3.1 missing, or a maxdepth
+that stops covering the subdirectories git mode would list."
+
+  # The mode is PART of the digest value (§3.1: "ein Moduswechsel erscheint damit
+  # als Mismatch und nicht als unerklärlicher Hashwert"). In this checkout both
+  # modes enumerate the very same 66 files, so the two values differ exactly by
+  # that prefix - which is the whole content of the claim: it pins "the mode is
+  # in the value", not "the two modes see different files". A digest that dropped
+  # the prefix would be identical in both runs and would let a mode switch hide
+  # behind an unchanged hash.
+  if [ "$gi_git_mode:$gi_git_sha" != "$gi_walk_mode:$gi_walk_sha" ]; then
+    gi_digests_differ=yes
+  else
+    gi_digests_differ=no
+  fi
+  chk_true "$([ "$gi_digests_differ" = yes ] && echo 0 || echo 1)" \
+    "inventory/the digest value carries the mode, so a mode switch shows up as a mismatch" \
+    "git: mode: $gi_git_mode:$gi_git_sha
+walk: mode: $gi_walk_mode:$gi_walk_sha
+Both enumerations cover the same $COMMITTED_GOLDEN_N files here, so the mode
+prefix is the only difference - and it is the difference the pin must carry."
+else
+  no "inventory/walk: probe could not run the real emit_fingerprint" \
+     "the sourced scripts/golden_ref.sh produced no usable fingerprint output under the no-git shim"
+fi
 
 # --- canonical-form tamper variants -----------------------------------------
 
@@ -972,6 +1369,10 @@ fi
 # git call fails" is actually decided.
 mc_reset
 set_golden_and_repin
+# SC2031: the shim PATH is meant to be local to this command substitution - it
+# must reach the hook and nothing after it. shellcheck infers "a PATH modified in
+# a subshell" from the gi_probe subshell above, not from this line.
+# shellcheck disable=SC2031
 OUT=$(cd "$REPO" && PATH="$SHIM:$PATH" sh "$HOOK" 2>&1) && RC=0 || RC=$?
 chk_rc 1 "hook/git-diff-failure fails closed"
 chk_has "fails closed" "hook/git-diff-failure explains that it fails closed"
@@ -982,6 +1383,31 @@ mc_reset
 
 section "sandbox discipline (the real lock and index must be untouched)"
 REAL_LOCK_SHA_AFTER=$(sha_of "$REAL_LOCK")
+REAL_INDEX_AFTER=$(index_tree_oid "$ROOT")
+
+# The after-side preconditions, mirroring the ones taken before the first case.
+# They are what keeps the two comparisons below honest: if the after-capture
+# itself degrades - a shim that is still on PATH, a sha helper that disappeared,
+# a git that can no longer write a tree - the old code compared '' with '' and
+# `no-index` with `no-index` and reported "unchanged" for a value it never read.
+# With these two, the same situation is red.
+#
+# Kills: "scripts/golden_ref.lock is byte-identical after the suite" passing
+# because the lock went MISSING during the run (two empty strings are equal).
+chk_true "$(is_sha256 "$REAL_LOCK_SHA_AFTER" && echo 0 || echo 1)" \
+  "precondition/after: the real lock's after-sha is a sha256 digest, not an empty string" \
+  "sha_of $REAL_LOCK returned: '$REAL_LOCK_SHA_AFTER'
+The comparison below would have reported the lock as byte-identical without ever
+having read it."
+
+# Kills: "the real git index is unchanged after the suite" passing on the
+# `no-index` fallback constant.
+chk_true "$(is_oid "$REAL_INDEX_AFTER" && echo 0 || echo 1)" \
+  "precondition/after: the real index's after-OID is a tree object id, not the no-index fallback" \
+  "git -C $ROOT write-tree returned: '$REAL_INDEX_AFTER'
+The comparison below would have compared a fallback constant with itself (or
+nothing with nothing) and passed for the wrong reason."
+
 if [ "$REAL_LOCK_SHA_BEFORE" = "$REAL_LOCK_SHA_AFTER" ]; then
   ok "scripts/golden_ref.lock is byte-identical after the suite"
 else
@@ -989,7 +1415,13 @@ else
      "before=$REAL_LOCK_SHA_BEFORE
 after=$REAL_LOCK_SHA_AFTER"
 fi
-REAL_INDEX_AFTER=$(git -C "$ROOT" write-tree 2>/dev/null || echo "no-index")
+# REAL_INDEX_AFTER was captured above, together with REAL_LOCK_SHA_AFTER and
+# before the two preconditions. It is deliberately NOT captured a second time
+# here: a second `git write-tree ... || echo "no-index"` would overwrite the
+# helper's honest empty result with the fallback constant, and the comparison
+# below would then compare '' with `no-index` - i.e. fail for a reason that has
+# nothing to do with the index, while the real defect (git cannot read the
+# index) would already be reported by the precondition above.
 if [ "$REAL_INDEX_BEFORE" = "$REAL_INDEX_AFTER" ]; then
   ok "the real git index is unchanged after the suite"
 else

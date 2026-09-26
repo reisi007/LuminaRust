@@ -351,7 +351,11 @@ Pro geliefertem Headless-Feature prüft und ergänzt der Build-Agent:
 4. **Fixture-Klasse.** Neue Goldens brauchen eine echte Quelle. `R1` = echtes
    RAW/echte Bilddaten, `S1` = Layout-Sentinel, `S2` = Smoke-Raster
    (`feature/quality/golden-fixtures.md`). Ein Golden, das einen Decode-Fehler
-   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis.
+   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis — **die
+   Klassenabgrenzung ist in `golden-fixtures.md` Regel 5 verbindlich**
+   (verboten für Klasse R, erwarteter Inhalt für Klasse C). Die zwei Dokumente
+   waren bis 2026-09-26 im Widerspruch (absolute Formulierung vs.
+   Chrome-Ausnahme); die absolute Fassung ist zurückgenommen.
 5. **Aktions-Audit.** Jede neue `GuiAction`-Variante oder Enum-Variante erzwingt
    den `ALL_GUI_ACTIONS`-Audit (aktuell 110 Aktionen).
 6. **SOLL-Zuordnung.** Das headless gelieferte SOLL-Dokument ist zu lesen und um
