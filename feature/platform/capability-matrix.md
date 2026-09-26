@@ -357,12 +357,30 @@ prozessweiten `ReportOnce`-Sink über `with_diagnostics(|sink| …)`.
 leer, damit eine später installierte Datenbank noch aufgefaellt wird; nur das
 *Melden* ist dedupliziert.
 
-**Verbleibende, bewusst nicht behobene Grenze:** `lumina-cli` meldet über
-`StderrDiagnostics`, also **unlevellierte** Textlabels nach `stderr`. Das ist für
-ein Terminalprogramm korrekt und sichtbar; es ist nur keine Log-Aussage. Der
-`log`-Pfad ist auf die GUI beschränkt, weil nur dort ein Logger existiert und ein
-per Dock/Finder gestarteter Prozess **kein** `stderr` hat — das war der Grund
-für die F2-Reparatur.
+**Verbleibende, bewusst nicht behobene Grenzen:**
+
+1. `lumina-cli` meldet über `StderrDiagnostics`, also **unlevellierte**
+   Textlabels nach `stderr`. Das ist für ein Terminalprogramm korrekt und
+   sichtbar; es ist nur keine Log-Aussage. Der `log`-Pfad ist auf die GUI
+   beschränkt, weil nur dort ein Logger existiert und ein per Dock/Finder
+   gestarteter Prozess **kein** `stderr` hat — das war der Grund für die
+   F2-Reparatur.
+2. **Maschinenabhängigkeit des GUI-Produktionstests.** Der Test
+   `tests/lensfun_diagnostics::the_production_lookup_…` nimmt auf einem Host
+   **mit** Systemdatenbank den `resolved`/`debug`-Zweig, auf einem ohne den
+   `failed`/`error`-Zweig. Auf dieser Maschine (Homebrew-Lensfun unter
+   `/opt/homebrew/Cellar/lensfun`) wird der Fehlerzweig also **nicht**
+   berührt. Er ist maschinenunabhaengig gedeckt, indem die Senke lokal
+   konstruiert und direkt gefuettert wird (`an_identical_failure_is_reported_
+   once_per_session`, `every_lensfun_event_is_logged_at_its_documented_level`).
+   Beim Schreiben ist zu beachten: der Produktionstest darf **nicht** wieder so
+   gestellt werden, dass er den Fehlerzweig behauptet.
+3. **Der Lookup-Zähler belegt einen echten zweiten Lookup.** `LOOKUP_ATTEMPTS`
+   wird **nach** `load_system_with` hochgezaehlt, zaehlt also durchgefuehrte
+   Lookups und nicht bloss erreichten Code. Damit ist die Regression
+   "Deduplizierungszustand wird zum Ergebnis-Cache" (Senke gate't den Aufruf)
+   **und** ein "bereits versucht"-Memo vor dem Laden rot. Verifiziert: beide
+   Mutationen lassen `lensfun_diagnostics` rot laufen.
 
 <details><summary>Historie: der frühere, inzwischen überholte Stand</summary>
 
