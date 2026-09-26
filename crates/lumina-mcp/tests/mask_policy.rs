@@ -1,36 +1,41 @@
-//! MCP-MASKPOLICY: `lumina_preview` renders WITHOUT masks, even when the
-//! sidecar carries a confirmably valid mask — driven over the REAL MCP stdio
-//! server (the `lumina-mcp` binary, spawned as a subprocess, spoken to with
-//! newline-delimited JSON-RPC, exactly like an MCP client).
+//! MCP-MASK-APPLY: `lumina_preview` now APPLIES the persisted mask — driven
+//! over the REAL MCP stdio server (the `lumina-mcp` binary, spawned as a
+//! subprocess, spoken to with newline-delimited JSON-RPC, exactly like an MCP
+//! client).
 //!
 //! # Why this test exists
 //!
-//! Every MCP render path constructs `RenderContext` with `masks: None`
-//! (`crates/lumina-mcp/src/util.rs:308,382,404,627`,
-//! `tools/dust_removal.rs:232`); the F-048/F-051 mask decision layer is
-//! CLI-side. The CLI applies the same mask with policy `warn`. That
-//! divergence is documented in `feature/platform/mcp-server.md` § „Masken im
-//! MCP-Renderpfad" — this file pins it so it cannot drift silently.
+//! MCP-MASKPOLICY documented that every MCP render path constructed
+//! `RenderContext` with `masks: None` (`crates/lumina-mcp/src/util.rs:308,382,404,627`,
+//! `tools/dust_removal.rs:232`) while the CLI applied the same mask with
+//! policy `warn` — a divergence documented in `feature/platform/mcp-server.md`
+//! § „Masken im MCP-Renderpfad". MCP-MASK-APPLY closes that divergence: the
+//! MCP render path now resolves the persisted planes from the sidecar's
+//! `.lumina.zdata` bundle through the shared `lumina-stages` layer and passes
+//! them to `render_frame` as a `MaskContext` with policy `warn`. This file
+//! pins the FLIP so it cannot drift silently back to the divergence.
 //!
 //! # What is compared
 //!
-//! The preview bytes are decoded and compared BYTE-FOR-BYTE against a
-//! `masks: None` oracle computed in-process through the same public
-//! `render_frame` entry point. Two further assertions keep the test from
-//! being vacuous: the no-mask oracle MUST differ from a `warn` masked oracle
-//! (proving the fixture's mask is actually effective), and the preview MUST
-//! differ from the masked oracle (the divergence itself).
+//! The preview bytes are decoded and compared BYTE-FOR-BYTE against a `warn`
+//! masked oracle computed in-process through the same public `render_frame`
+//! entry point (the exact `RenderContext` shape the CLI's `process_selected`
+//! and the shared `regenerate op="matching"` render build). Two further
+//! assertions keep the test from being vacuous: the no-mask oracle MUST
+//! differ from the masked oracle (proving the fixture's mask is actually
+//! effective), and the preview MUST differ from the no-mask oracle (the
+//! mutation guard — the mask was really applied on the MCP path).
 //!
-//! The CLI half of the divergence (the CLI DOES apply the same mask) lives in
-//! `crates/lumina-cli/tests/mask_policy_divergence.rs`.
+//! The CLI half of the pair (the CLI DOES apply the same mask) lives in
+//! `crates/lumina-cli/tests/mask_policy_divergence.rs` and is unchanged.
 
 use lumina_core::{
     render_frame, ImageFileFormat, ImageFrame, MaskContext, MaskPolicy, RenderContext,
 };
 use lumina_sidecar::{
-    save_sidecar, save_zdata, sidecar_path_for, zdata_path_for, Extras, GeometryFingerprint,
-    MaskDefinition, MaskLayer, MaskOperation, MaskReference, MaskStatus, MaskTile, ModelIdentity,
-    Preprocessing, Resolution, SidecarDocument, ZDataContainer,
+    load_zdata, save_sidecar, save_zdata, sidecar_path_for, zdata_path_for, Extras,
+    GeometryFingerprint, MaskDefinition, MaskLayer, MaskOperation, MaskReference, MaskStatus,
+    MaskTile, ModelIdentity, Preprocessing, Resolution, SidecarDocument, ZDataContainer,
 };
 use lumina_stages::{
     decode::source_identity,
@@ -137,7 +142,7 @@ fn fixture(dir: &Path) -> (ImageFrame, SidecarDocument, PathBuf) {
     copy.mask_library = vec![valid_mask_definition("subject", &identity)];
     // The local adjustment lives on the MASK LAYER, not in the recipe: it is
     // only ever composited when a render resolves masks. The MCP render path
-    // never does — that is the divergence under test.
+    // now does (MCP-MASK-APPLY) — that application is what this test pins.
     copy.mask_layers = vec![MaskLayer {
         id: "layer-1".into(),
         mask: MaskReference {
@@ -346,15 +351,44 @@ fn preview_renders_without_masks_even_when_the_sidecar_carries_a_valid_one() {
 
     let preview_frame = ImageFrame::decode(&fs::read(&preview_path).unwrap()).unwrap();
     assert_eq!(
-        preview_frame.pixels, no_mask.pixels,
-        "MCP-MASKPOLICY: lumina_preview must render WITHOUT masks — the \
-         documented divergence from the CLI is observed over the real stdio \
-         server (masks: None), not just asserted"
+        preview_frame.pixels, masked.pixels,
+        "MCP-MASK-APPLY: lumina_preview must APPLY the persisted mask — the \
+         preview is byte-identical to the warn-masked oracle built through the \
+         public render_frame entry point, exactly like the CLI"
     );
     assert_ne!(
-        preview_frame.pixels, masked.pixels,
-        "the preview must not equal the masked CLI render of the same \
-         fixture — that equality would mean the mask was applied on the MCP \
-         path (the MCP-MASK-APPLY feature) and this pinning test is stale"
+        preview_frame.pixels, no_mask.pixels,
+        "the preview must not equal the no-mask render of the same fixture — \
+         that equality would mean the mask was NOT applied on the MCP path \
+         (the MCP-MASKPOLICY divergence) and MCP-MASK-APPLY regressed"
+    );
+}
+
+/// Mutation guard: flipping exactly one persisted mask-plane value MUST change
+/// the masked render, so the byte comparison in the pin test above is
+/// sensitive — a render that ignored the mask plane would make this fail.
+#[test]
+fn flipping_one_mask_plane_value_changes_the_masked_render() {
+    let root = tempfile::tempdir().unwrap();
+    let (frame, document, zdata_path) = fixture(root.path());
+    let baseline = masked_oracle(&frame, &document, &zdata_path);
+
+    // Flip one mask-plane value (a fully-masked pixel to fully-unmasked) and
+    // re-render through the same shared layers.
+    let container = load_zdata(&zdata_path).unwrap();
+    let copy_id = document.virtual_copies[0].id.clone();
+    let mut tile = container
+        .tile(&zdata_mask_tile_id(&copy_id, "subject"), 0, 0)
+        .unwrap();
+    assert_eq!(tile.values[0], u16::MAX);
+    tile.values[0] = 0;
+    let mutated = ZDataContainer::new(vec![tile]).unwrap();
+    save_zdata(&zdata_path, &mutated).unwrap();
+
+    let mutated_render = masked_oracle(&frame, &document, &zdata_path);
+    assert_ne!(
+        baseline.pixels, mutated_render.pixels,
+        "changing one mask-plane value must change the masked render — \
+         otherwise the byte comparison is insensitive to the mask"
     );
 }

@@ -177,7 +177,11 @@ fn batch_one(
             .ok_or(McpError::NoImageLoaded)?,
     };
     let white_balance = raw_metadata.as_ref().map(|meta| meta.camera_white_balance);
-    let rendered = render_recipe(&frame, &copy.recipe, white_balance)?;
+    // MCP-MASK-APPLY: apply the persisted mask planes (policy `warn`) exactly
+    // like the CLI batch, so MCP and CLI render byte-identical output.
+    let zdata_path = lumina_sidecar::zdata_path_for(source);
+    let masks = crate::masks::render_mask_context(&document, &copy.id, &zdata_path);
+    let rendered = render_recipe(&frame, &copy.recipe, white_balance, Some(&masks))?;
     let bytes = encode_with_quality(&rendered, format, quality)?;
 
     // Non-destructive guard + atomic write: the target must never resolve onto

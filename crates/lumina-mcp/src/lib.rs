@@ -7,6 +7,8 @@
 //! reimplements image processing.
 
 pub mod error;
+pub mod masks;
+pub mod output_guard;
 pub mod session;
 pub mod tools;
 pub mod util;

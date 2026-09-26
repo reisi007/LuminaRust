@@ -112,7 +112,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .and_then(|value| value.as_str())
         .map(PathBuf::from);
     if let Some(output) = &render_out {
-        crate::util::reject_protected_target(input, output)?;
+        crate::output_guard::reject_protected_target(input, output)?;
     }
 
     let (_bytes, frame, _raw) = read_and_decode(input)?;
@@ -220,16 +220,22 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     if let Some(output) = &render_out {
         let source_actions =
             resolve_source_actions(&document.virtual_copies[copy_index].recipe, &zdata_path)?;
-        // Same manual-model context as the CLI's verification render: no
-        // camera WB, no masks, no Lensfun — the point is to make the recorded
-        // source action visible end-to-end.
+        // MCP-MASK-APPLY: the persisted mask planes (policy `warn`) are applied
+        // exactly like the CLI's verification render, so the render shows the
+        // recorded source action AND the mask state end-to-end. No camera WB
+        // and no Lensfun, same manual-model context as the CLI.
+        let masks = crate::masks::render_mask_context(
+            &document,
+            &document.virtual_copies[copy_index].id,
+            &zdata_path,
+        );
         let rendered = lumina_core::render_frame(
             &frame,
             &RenderContext {
                 recipe: &document.virtual_copies[copy_index].recipe,
                 camera_white_balance: None,
                 source_actions: &source_actions,
-                masks: None,
+                masks: Some(masks),
                 lensfun: None,
                 depth: None,
             },
