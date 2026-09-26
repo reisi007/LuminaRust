@@ -283,6 +283,8 @@ pub(crate) fn process_args(input: &Path, output: &Path) -> ProcessArgs {
         preset: None,
         exposure: None,
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,

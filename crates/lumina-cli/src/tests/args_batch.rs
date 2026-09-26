@@ -1,4 +1,5 @@
 use super::*;
+use lumina_sidecar::Preset;
 
 #[test]
 fn parses_process_arguments() {
@@ -144,6 +145,8 @@ fn changed_source_is_rejected_without_overwriting_output() {
         preset: None,
         exposure: None,
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,
@@ -161,6 +164,8 @@ fn changed_source_is_rejected_without_overwriting_output() {
         preset: None,
         exposure: None,
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,
@@ -186,6 +191,8 @@ fn invalid_adjustment_and_unknown_key_are_cli_errors_without_output() {
         preset: None,
         exposure: Some(f64::INFINITY),
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,
@@ -214,6 +221,8 @@ fn invalid_adjustment_and_unknown_key_are_cli_errors_without_output() {
         preset: Some(preset_path),
         exposure: None,
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,
@@ -244,6 +253,14 @@ fn cli_rejects_non_finite_and_out_of_range_adjustments() {
             [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
         ),
         (
+            "whites",
+            [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+        ),
+        (
+            "blacks",
+            [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
+        ),
+        (
             "highlights",
             [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.1, 1.1],
         ),
@@ -260,6 +277,8 @@ fn cli_rejects_non_finite_and_out_of_range_adjustments() {
                 preset: None,
                 exposure: (name == "exposure").then_some(value),
                 contrast: (name == "contrast").then_some(value),
+                whites: (name == "whites").then_some(value),
+                blacks: (name == "blacks").then_some(value),
                 highlights: (name == "highlights").then_some(value),
                 shadows: (name == "shadows").then_some(value),
                 auto_tone: false,
@@ -283,6 +302,8 @@ fn cli_accepts_both_adjustment_boundaries() {
     for (name, values) in [
         ("exposure", [-10.0, 10.0]),
         ("contrast", [-1.0, 1.0]),
+        ("whites", [-1.0, 1.0]),
+        ("blacks", [-1.0, 1.0]),
         ("highlights", [-1.0, 1.0]),
         ("shadows", [-1.0, 1.0]),
     ] {
@@ -293,6 +314,8 @@ fn cli_accepts_both_adjustment_boundaries() {
                 preset: None,
                 exposure: (name == "exposure").then_some(value),
                 contrast: (name == "contrast").then_some(value),
+                whites: (name == "whites").then_some(value),
+                blacks: (name == "blacks").then_some(value),
                 highlights: (name == "highlights").then_some(value),
                 shadows: (name == "shadows").then_some(value),
                 auto_tone: false,
@@ -329,6 +352,8 @@ fn preset_process_and_inspect_use_sidecar() {
         preset: Some(preset_path),
         exposure: Some(0.0),
         contrast: None,
+        whites: None,
+        blacks: None,
         highlights: None,
         shadows: None,
         auto_tone: false,
