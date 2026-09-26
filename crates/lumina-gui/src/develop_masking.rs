@@ -325,6 +325,12 @@ impl LuminaApp {
                 // adjustment, and never a global recipe mutation.
                 ui.separator();
                 self.draw_mask_local_color(ui);
+                // MASK-LOCAL-P1.2c: the mask-local presence block. Same
+                // transaction, save and CPU-first routing as every other local
+                // adjustment, and it never touches the global
+                // `EditRecipe::presence`.
+                ui.separator();
+                self.draw_mask_local_presence(ui);
             }
         });
         if section_response.header_response.clicked() {

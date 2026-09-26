@@ -214,7 +214,7 @@ fn local_history_snapshot_restores_complete_state_and_reset_preserves_prior_snap
     let listed = mask_list(&input, false);
     assert_success(&listed, "list restored state");
     assert!(String::from_utf8_lossy(&listed.stdout)
-        .contains("local=v4 exposure=0.5 contrast=0.25 highlights=0 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0"));
+        .contains("local=v5 exposure=0.5 contrast=0.25 highlights=0 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0 presence=none"));
 
     let reset = reset_local(&input, &layer_id, "contrast");
     assert_success(&reset, "reset local adjustment");
@@ -280,7 +280,7 @@ fn local_status_text_is_stable_while_json_stays_structured() {
     let text_output = mask_list(&input, false);
     assert_success(&text_output, "list local adjustments as text");
     let stdout = String::from_utf8_lossy(&text_output.stdout);
-    assert!(stdout.contains("local=v4 exposure=1.25 contrast=0 highlights=-0.2 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0"));
+    assert!(stdout.contains("local=v5 exposure=1.25 contrast=0 highlights=-0.2 shadows=0 temperature_delta_k=0 tint_delta=0 curves=none hsl=none point_color=none color_grading=none vibrance=0 saturation=0 presence=none"));
     assert!(!stdout.contains("LocalAdjustments {"));
     assert!(!stdout.contains("version:"));
 

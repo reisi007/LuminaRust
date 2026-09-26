@@ -651,6 +651,147 @@ Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
   Verweigerung der weiterhin deaktivierten Presence/Detail/AI-Denoise/Optics-
   Stufen. Presence, Detail und Optics bleiben deaktiviert.
 
+## P1.2c SOLL — mask-local Presence (`MASK-LOCAL-P1.2c`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local Presence         (P1.2c)   ← texture / clarity / dehaze
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → fractional mask blend  (P0)
+```
+
+Presence steht damit an **exakt derselben Position** wie im globalen Kernel
+(Kanal-LUT → Presence → Kurve → Color). Die bereits verifizierte relative
+Reihenfolge von P1.2a/P1.2b (Kurve vor Color) bleibt **unverändert**; es wird
+nur die bislang fehlende Stufe an ihrer globalen Position eingefügt. Überlappende
+Layer werden in der **persistierten Listenreihenfolge** ausgewertet; ein
+Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem
+**Reset to As Shot** — kein stiller Fallback, kein relatives globales Alias,
+kein Auto-WB. Bis zur echten GPU-Parität ist die lokale Presence
+**CPU-first**: GPU-/Stand-in-Routen (VRAM-Present, GPU-Parity-Readback,
+Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 5**
+  gehoben. Neu ist ausschließlich `presence: Option<Presence>`, und zwar mit
+  **wörtlich wiederverwendetem** `lumina_sidecar::Presence` (`version == 1`,
+  `texture`/`clarity`/`dehaze` je endlich in `-1..=1`) und dem **wörtlich
+  wiederverwendeten** globalen Presence-Validator
+  (`validate_presence`, extrahiert nach
+  `crates/lumina-sidecar/src/presence_block.rs` und von globalem und lokalem
+  Rezept geteilt). Es gibt keine lokalen Typkopien, keine gelockerten Bereiche
+  und keinen stillen Fallback. Weiterhin deaktiviert bleiben lokales **Detail**,
+  **Sharpening**, **Noise Reduction**, **AI-Denoise** und **Optics**; ein
+  entsprechender Key ist ein lauter „unknown local adjustment"-Fehler, und der
+  lokale Renderer darf keinen Stub vortäuschen. **Optics bleibt dauerhaft
+  deaktiviert**, weil Linsenkorrektur und Perspektive geometrische Stufen
+  *vor* den Masken sind und nicht als per-Maske-Per-Pixel-Tone-Stufe sinnvoll
+  sind; Noise Reduction/AI-Denoise bleiben bis zum F-078-Modellgate
+  (Gewichts-Lizenz, Provenienz, Hash-Pin) deaktiviert.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta),
+  v3 (P1.2a-Kurve) und v4 (P1.2b-Color) migrieren **verlustfrei** nach v5 mit
+  `presence: None`. Ein v1..v4-Payload, der `presence` enthält (auch ein
+  explizites `null` oder ein Nicht-Objekt), ist ein **lauter** Fehler — kein
+  stiller Drop und kein Smuggling einer späteren Version. Weil die Einführung
+  von v5 die obere Versionsgrenze verschiebt, werden die bestehenden
+  Versions-Gates **versionsrichtig** verankert: der Kurven-Gate an
+  `CURVE_LOCAL_ADJUSTMENTS_VERSION` (3), der Color-Gate an
+  `COLOR_LOCAL_ADJUSTMENTS_VERSION` (4) und der Presence-Gate an
+  `PRESENCE_LOCAL_ADJUSTMENTS_VERSION` (5), jeweils mit `version < …`. Sonst
+  müsste ein v4-Dokument seinen eigenen Color-Block verlieren. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_presence` bleibt „unknown local adjustment". `None` und ein
+  persistierter Null-Block (`texture = clarity = dehaze = 0.0`) sind
+  byte-identisch neutral und fallen nach Reset vollständig weg.
+- **Nachbarschaft und Statistiken bleiben vollbildbasiert, die Maske blendet
+  nur:** Die DoG-Nachbarschaft (Textur-Radius `1 + round(|texture|·2)`, Radius
+  also 1..3; Klarheit-Radius `8 + round(|clarity|·24)`, also 8..32) und die
+  Dark-Channel-95 %-Perzentil-Statistik des Dehaze werden über das **ganze
+  Bild** berechnet, **nicht** auf die Maskenregion beschränkt und **nicht**
+  ROI- oder maskenabhängig skaliert. Die Maske steuert ausschließlich die
+  Blendmenge. Damit gibt es **keine** maskenabhängige Statistik, **keinen**
+  Resize-Fallback und **keine** Naht an der Maskenkante: die Render-Identität
+  hängt nur am persistierten Presence-Wert und am Masken-Plane, nicht an der
+  Bildgeometrie. Konkret heißt das: der Presence-Stage rechnet über die
+  komplette lokale Ebene, und der anschließende P0-Blend mischt das Ergebnis
+  fraktional ein — ein Pixel außerhalb der Maske sieht nie einen
+  maskenverkleinerten Nachbarschafts- oder Statistikwert, sondern exakt die
+  vom globalen Ergebnis vorgegebenen Bytes.
+- **Geteilte Mathematik, ehrlich benannte Quantisierungs-Divergenz:** Die
+  Presence-Mathematik (Box-Mittel/Detail, Dark-Channel, Perzentil,
+  Dehaze-Formel) wurde nach `crates/lumina-core/src/presence_stages.rs`
+  extrahiert und wird vom globalen und vom lokalen Kernel **wörtlich geteilt**.
+  Beide rufen dieselben Funktionen `texture_radius`/`clarity_radius`/
+  `box_bounds`/`box_count`/`box_mean`/`box_detail`/`dog_value`/`dog_channel`/
+  `dark_channel_pixel`/`dark_channel`/`airlight`/`dehaze_transmission`/
+  `dehaze_value` auf. Was sich unterscheidet, ist nur die **Ebene**, über die
+  die Nachbarschaft liest: der globale Kernel liest einen RGBA8-Snapshot
+  (`Rgba8Plane`), der lokale die un-quantisierte `f32`-Kette (`FloatPlane`) —
+  beide in `0..=255`, und ein `u8`-Sample konvertiert in das exakt darstellbare
+  `f32` desselben Werts, ist die `f32`-Arithmetik also bitweise dieselbe
+  Operation. Der globale Kernel quantisiert dabei — wie bisher — intern nach
+  jeder Teilstufe auf `u8` (nach jedem DoG-Durchgang und nach dem Dehaze), der
+  lokale Pfad **genau einmal** am Ende des Layers. Diese Divergenz ist
+  **bewusst, dokumentiert und getestet**; es gibt und darf **keinen** Test
+  geben, der Byte-Gleichheit des lokalen Presence-Pfads mit dem globalen
+  Presence-Stage behauptet, weil sie per Konstruktion falsch ist. Die
+  Presence-Nachbarschaft rechnet wie der globale Stage in `f32` — das ist die
+  geteilte numerische Domäne, **keine** zusätzliche Quantisierungsgrenze; die
+  *eine* Grenze bleibt die abschließende RGBA8-Rundung des lokalen Layers.
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, Presence, die Kurve und alle vier
+  Color-Stufen vollständig in Fließkomma ab und quantisiert **genau einmal** am
+  Ende auf RGBA8. Bild-Alpha bleibt unberührt. Alpha-0 lässt alle Bytes
+  unverändert, Alpha-1 übernimmt das vollständige lokale Rezept, partielle
+  Alpha bleiben deterministisch fraktional gemischt. Die Kernel-Pfadwahl ist
+  **inhaltsabhängig**: **ohne** lokalen Presence-Block (abwesend **oder** ein
+  persistierter Null-Block) bleiben die P0-, P1.1-, P1.2a- und P1.2b-Bytes exakt
+  erhalten, und ein P1.2b-Layer mit Curve+Color nimmt **ohne** Presence weiterhin
+  den bestehenden f64-Kernelpfad.
+- **Zustand, Reset und Persistenz:** Expliziter Reset für den gesamten
+  Presence-Block (Texture, Klarheit und Dehaze gemeinsam). History, Reset und
+  Previous der **aktuellen** virtuellen Kopie übernehmen den vollständigen
+  additiven `MaskStateSnapshot` **inklusive des kompletten Presence-Blocks**.
+  Der Block gehört in die kanonische `LocalAdjustments::digest` und
+  `mask_layers_digest` und damit in die Render-Identität. Ein lokaler Layer darf
+  keine globalen Rezeptfelder verändern; die lokale Presence-Sektion schreibt
+  nie `EditRecipe::presence`.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1/P1.2a/P1.2b-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-/P1.2b-/P1.2c-Deltas auf andere Bilder.
+  Nicht-neutraler lokaler Maskenzustand — auf der Quell-Kopie oder auf dem Ziel
+  — wird laut verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein
+  Ziel angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Ein lokaler Presence-Block allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1/P1.2a/P1.2b"-Ausnahme. Sync
+  Settings bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Presence-Editor (Texture, Klarheit,
+  Dehaze und Reset gesamt) mit **keiner** globalen `EditRecipe::presence`-
+  Mutation. Die CLI nutzt keine zweite, fast identische Flag-Partei, sondern den
+  bestehenden generischen Kanal:
+  `--set-local-adjustment 'presence.texture=<n>'` /
+  `'presence.clarity=<n>'` / `'presence.dehaze=<n>'` und
+  `--reset-local-adjustment presence`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Texture, Klarheit, Dehaze,
+  den vollen Stack (WB + Basic + Presence + Kurve + Color), Halbmaske,
+  Überlappungs-Reihenfolge, Null-Block-Byte-Identität, ungültige Werte
+  (Blockversion, Bereich, nicht-endlich), Legacy-v1..v4-Dokumente, die sichtbare
+  Verweigerung der weiterhin deaktivierten Detail/Sharpening/Noise-Reduction-/
+  AI-Denoise-/Optics-Stufen sowie CLI/GUI-Parität und History/Previous/Reset.
+  Die globalen Presence-Goldens müssen **unverändert** grün bleiben. Detail,
+  Sharpening, Noise Reduction, AI-Denoise und Optics bleiben deaktiviert.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

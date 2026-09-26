@@ -87,17 +87,23 @@ pub use color_blocks::{
     MAX_POINT_COLOR_ENTRIES,
 };
 
-// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b: typed local mask recipes and the loud legacy
-// migration.
+// The one validator for the `Presence` block, reused by the global recipe and
+// the typed mask-local recipe (P1.2c).
+mod presence_block;
+pub use presence_block::{presence_is_neutral, validate_presence, PRESENCE_FIELDS};
+
+// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b/P1.2c: typed local mask recipes and the loud
+// legacy migration.
 mod local_adjustments;
 pub use local_adjustments::mask_state::MAX_MASK_STATE_LAYERS;
 pub use local_adjustments::{
-    local_point_color_entry, mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments,
-    MaskLocalRecipe, MaskStateSnapshot, CURVE_LOCAL_ADJUSTMENTS_VERSION,
+    local_point_color_entry, mask_layers_digest, neutral_local_presence,
+    validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe, MaskStateSnapshot,
+    COLOR_LOCAL_ADJUSTMENTS_VERSION, CURVE_LOCAL_ADJUSTMENTS_VERSION,
     LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
     LOCAL_ADJUSTMENT_RANGES, LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
     LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
-    RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
+    PRESENCE_LOCAL_ADJUSTMENTS_VERSION, RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -4549,18 +4555,9 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_point_color(p)?;
     }
     if let Some(p) = &a.presence {
-        if p.version != 1 {
-            return invalid("unsupported presence version");
-        }
-        for (name, v) in [
-            ("texture", p.texture),
-            ("clarity", p.clarity),
-            ("dehaze", p.dehaze),
-        ] {
-            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                return invalid(format!("invalid presence {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2c block uses, so a local
+        // presence can never accept a value the global recipe rejects.
+        validate_presence(p)?;
     }
     if let Some(n) = &a.noise_reduction {
         if n.version != 1 {

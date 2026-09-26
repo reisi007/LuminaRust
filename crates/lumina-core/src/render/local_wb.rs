@@ -7,7 +7,9 @@
 //! This lives beside `local_adjustments` (the P0 compositor) because it is the
 //! same per-layer stage: the relative-WB pass runs inside the local compositing
 //! and shares its validation and quantization contract. The P1.2a tone stage
-//! extends the very same float chain in `local_tone`.
+//! extends the very same float chain in `local_tone`, and the P1.2c presence
+//! stage inserts the shared global presence mathematics between the Basic
+//! controls and the curve in `local_presence`.
 
 use crate::{for_each_rgba_mut, CoreError, ImageFrame};
 
@@ -15,14 +17,15 @@ impl ImageFrame {
     /// Apply one typed mask-local recipe to the current post-global frame.
     ///
     /// The local white balance is a relative delta, not a second absolute
-    /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a) and the
-    /// local colour block (MASK-LOCAL-P1.2b) are separate blocks that run
-    /// after the local Basic controls — mirroring the global kernel, where the
-    /// curve stage follows the scalar stage and the colour stages follow the
-    /// curve.
+    /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a), the
+    /// local colour block (MASK-LOCAL-P1.2b) and the local presence block
+    /// (MASK-LOCAL-P1.2c) are separate blocks that run after the local Basic
+    /// controls — mirroring the global kernel, where presence follows the
+    /// scalar stage, the curve follows presence, and the colour stages follow
+    /// the curve.
     ///
     /// The kernel path is selected by *what the layer actually contains*, so
-    /// every previously pinned P0/P1.1/P1.2a byte is preserved:
+    /// every previously pinned P0/P1.1/P1.2a/P1.2b byte is preserved:
     ///
     /// * no relative delta and no local curve → the established P0
     ///   `apply_recipe` delegation (global fused LUT, byte-identical),
@@ -31,9 +34,15 @@ impl ImageFrame {
     /// * a local curve but no local colour → the P1.2a float chain
     ///   (WB → Basic → tone curve, one quantization), whether or not a delta
     ///   is present,
-    /// * any local colour block → the P1.2b float chain
+    /// * any local colour block but no local presence → the P1.2b float chain
     ///   (WB → Basic → tone curve → HSL → Point Color → Vibrance/Saturation →
-    ///   Color Grading, one quantization).
+    ///   Color Grading, one quantization),
+    /// * any local presence block → the P1.2c float chain
+    ///   (WB → Basic → presence → tone curve → … → Color Grading, one
+    ///   quantization), with or without a colour block.
+    ///
+    /// A layer whose presence block is absent **or** persisted all-zero reads
+    /// as "no presence" and keeps the P1.2b path exactly.
     ///
     /// Alpha is never touched.
     pub fn apply_mask_local_recipe(
@@ -48,8 +57,18 @@ impl ImageFrame {
         let has_wb_delta = recipe.temperature_delta_k != 0.0 || recipe.tint_delta != 0.0;
         let has_curves = recipe.has_local_curves();
         let has_color = recipe.has_local_color();
-        if !has_wb_delta && !has_curves && !has_color {
+        let has_presence = recipe.has_local_presence();
+        if !has_wb_delta && !has_curves && !has_color && !has_presence {
             return self.apply_recipe(&recipe.as_recipe());
+        }
+        if has_presence {
+            super::local_presence::apply_mask_local_wb_basic_presence_tone_color(
+                &mut self.pixels,
+                self.width,
+                self.height,
+                recipe,
+            );
+            return Ok(());
         }
         if has_color {
             super::local_color::apply_mask_local_wb_basic_tone_color(&mut self.pixels, recipe);

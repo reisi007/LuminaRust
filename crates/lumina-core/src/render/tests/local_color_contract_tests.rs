@@ -229,8 +229,13 @@ fn a_local_color_edit_never_touches_the_global_recipe() {
 }
 
 /// The still-disabled stages must stay unreachable from a local layer: no
-/// presence, detail, AI-denoise, noise reduction, sharpening or optics field
-/// exists, and the local renderer must not fake one.
+/// detail, AI-denoise, noise reduction, sharpening or optics field exists, and
+/// the local renderer must not fake one.
+///
+/// Local presence is deliberately **not** in this list any more: MASK-LOCAL-P1.2c
+/// added it as a typed block with its own `presence.<field>` setters. What stays
+/// true is that the three presence *amounts* are not scalar keys and that the
+/// *default* recipe does not serialize the block at all.
 #[test]
 fn disabled_local_stages_stay_unreachable() {
     let json = serde_json::to_value(LocalAdjustments::default()).expect("serializable");
@@ -241,10 +246,6 @@ fn disabled_local_stages_stay_unreachable() {
         .cloned()
         .collect();
     for disabled in [
-        "presence",
-        "texture",
-        "clarity",
-        "dehaze",
         "detail",
         "noise_reduction",
         "denoise_ai",
@@ -260,6 +261,23 @@ fn disabled_local_stages_stay_unreachable() {
         assert!(
             recipe.set_value(disabled, 0.1).is_err(),
             "`{disabled}` must not be a local adjustment key"
+        );
+    }
+    // The presence block is absent by default and is never a scalar key: it is
+    // only reachable through the typed `presence.<field>` setters.
+    assert!(
+        !keys.iter().any(|key| key == "presence"),
+        "a never-edited layer must not persist a presence block"
+    );
+    for amount in ["texture", "clarity", "dehaze", "presence"] {
+        let mut recipe = LocalAdjustments::default();
+        assert!(
+            recipe.set_value(amount, 0.1).is_err(),
+            "`{amount}` must not be a scalar local adjustment key"
+        );
+        assert!(
+            recipe.set_local_presence_field(amount, 0.1).is_ok() || amount == "presence",
+            "`presence.{amount}` must be a typed presence field"
         );
     }
     // And a colour-only layer is still refused by the stand-in routes, i.e.

@@ -245,10 +245,15 @@ fn a_color_only_local_layer_refuses_the_stand_in_routes() {
         .local_adjustment_route_reason()
         .expect("a colour-only layer must refuse the stand-in routes");
     assert!(reason.contains("color"), "{reason}");
-    // No local presence/detail/denoise/optics stage is reachable at all.
+    // No local detail/denoise/optics stage is reachable at all, and local
+    // presence is reachable only through its own typed setter — never as a
+    // scalar key of the colour block's setter.
     assert!(app.set_mask_local_adjustment("presence", 0.5).is_err());
     assert!(app.set_mask_local_adjustment("detail", 0.5).is_err());
     assert!(app.set_mask_local_adjustment("sharpening", 0.5).is_err());
+    let (_directory, mut app, _source) = local_app();
+    app.set_mask_local_presence("texture", 0.5).unwrap();
+    assert!(app.has_mask_local_presence().unwrap());
 }
 
 /// The GUI and the CLI must produce the *same* persisted typed block for the

@@ -9,6 +9,7 @@
 //! global result
 //!   → local relative WB              (P1.1, `local_wb`)
 //!   → local Basic                    (P1.1, `local_wb`)
+//!   → local Presence                 (P1.2c, `local_presence`, optional)
 //!   → local tone curve               (P1.2a, `local_tone`)
 //!   → local HSL                      (P1.2b, this module)
 //!   → local Point Color              (P1.2b, this module)
@@ -44,6 +45,30 @@ use lumina_sidecar::MaskLocalRecipe;
 pub(super) fn apply_mask_local_wb_basic_tone_color(pixels: &mut [u8], recipe: &MaskLocalRecipe) {
     debug_assert!(recipe.has_local_color());
     let gains = recipe.relative_white_balance_gains();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        // Stage 1+2: relative WB then Basic, in float, per channel.
+        let mut scaled = [0.0_f64; 3];
+        for channel in 0..3 {
+            scaled[channel] =
+                scale_mask_local_wb_basic(f64::from(pixel[channel]), &gains, recipe, channel);
+        }
+        let out = local_tone_and_color_stages(scaled, recipe);
+        pixel[..3].copy_from_slice(&out);
+        // Deliberately leave pixel[3] (alpha) unchanged.
+    }
+}
+
+/// The chain tail shared by the P1.2b and the P1.2c local kernels: the local
+/// tone curve, the four local colour stages in the global colour order, and the
+/// layer's **one and only** RGBA8 quantization.
+///
+/// `scaled` is the un-quantized `(0..=255)` result of everything that ran
+/// before it. The two callers differ only in what produced it: the P1.2b kernel
+/// passes the `f64` WB+Basic result, the P1.2c kernel passes the `f32` presence
+/// plane promoted back to `f64`. That is why presence can be inserted before the
+/// curve without a second copy of the colour stages, and why a layer with no
+/// presence block keeps its exact P1.2b bytes.
+pub(super) fn local_tone_and_color_stages(scaled: [f64; 3], recipe: &MaskLocalRecipe) -> [u8; 3] {
     let curves = recipe.curves.as_ref().filter(|_| recipe.has_local_curves());
     let hsl = recipe.hsl.as_ref().filter(|_| recipe.has_local_hsl());
     let point_color = recipe
@@ -57,44 +82,36 @@ pub(super) fn apply_mask_local_wb_basic_tone_color(pixels: &mut [u8], recipe: &M
     let vibrance = recipe.vibrance as f32;
     let saturation = recipe.saturation as f32;
     let has_vibrance_saturation = vibrance != 0.0 || saturation != 0.0;
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        // Stage 1+2: relative WB then Basic, in float, per channel.
-        let mut scaled = [0.0_f64; 3];
-        for channel in 0..3 {
-            scaled[channel] =
-                scale_mask_local_wb_basic(f64::from(pixel[channel]), &gains, recipe, channel);
+    // Stage 3: the local tone curve on the *float* intermediate. Skipped
+    // entirely when the layer stores no curve, so a colour-only layer never
+    // pays for a curve it does not have.
+    let toned = curves.map_or(scaled, |curves| apply_local_tone(&scaled, curves));
+    // Stages 4..7: the local colour block, in the global colour order, on
+    // the same un-quantized float chain.
+    let mut rgb = [
+        toned[0] as f32 / 255.0,
+        toned[1] as f32 / 255.0,
+        toned[2] as f32 / 255.0,
+    ];
+    if let Some(hsl) = hsl {
+        if let Some(staged) = hsl_stage(rgb, hsl) {
+            rgb = staged;
         }
-        // Stage 3: the local tone curve on the *float* intermediate. Skipped
-        // entirely when the layer stores no curve, so a colour-only layer never
-        // pays for a curve it does not have.
-        let toned = curves.map_or(scaled, |curves| apply_local_tone(&scaled, curves));
-        // Stages 4..7: the local colour block, in the global colour order, on
-        // the same un-quantized float chain.
-        let mut rgb = [
-            toned[0] as f32 / 255.0,
-            toned[1] as f32 / 255.0,
-            toned[2] as f32 / 255.0,
-        ];
-        if let Some(hsl) = hsl {
-            if let Some(staged) = hsl_stage(rgb, hsl) {
-                rgb = staged;
-            }
-        }
-        if let Some(point_color) = point_color {
-            if let Some(staged) = point_color_stage(rgb, point_color) {
-                rgb = staged;
-            }
-        }
-        if has_vibrance_saturation {
-            rgb = vibrance_saturation_stage(rgb, vibrance, saturation);
-        }
-        if let Some(grading) = grading {
-            rgb = color_grading_stage(rgb, grading);
-        }
-        // The one and only quantization boundary of this layer.
-        for channel in 0..3 {
-            pixel[channel] = round_local_channel(f64::from(rgb[channel]) * 255.0);
-        }
-        // Deliberately leave pixel[3] (alpha) unchanged.
     }
+    if let Some(point_color) = point_color {
+        if let Some(staged) = point_color_stage(rgb, point_color) {
+            rgb = staged;
+        }
+    }
+    if has_vibrance_saturation {
+        rgb = vibrance_saturation_stage(rgb, vibrance, saturation);
+    }
+    if let Some(grading) = grading {
+        rgb = color_grading_stage(rgb, grading);
+    }
+    [
+        round_local_channel(f64::from(rgb[0]) * 255.0),
+        round_local_channel(f64::from(rgb[1]) * 255.0),
+        round_local_channel(f64::from(rgb[2]) * 255.0),
+    ]
 }

@@ -1,11 +1,14 @@
-//! MASK-LOCAL-P0/P1.1/P1.2a CLI mutation helpers.
+//! MASK-LOCAL-P0/P1.1/P1.2a/P1.2b/P1.2c CLI mutation helpers.
 //!
 //! The `mask` command keeps orchestration in `main`; parsing, target
 //! resolution and the typed local-state transaction live here so validation
 //! happens before the sidecar write. Local tone curves reuse the same generic
 //! `KEY=VALUE` flag with the `curves.` key namespace (see `mask_local_curves`),
-//! which is why no extra clap flag exists. Cross-image `previous` stays a
-//! recipe-only transfer and refuses non-neutral local mask state.
+//! the local colour block with the `hsl.`/`point_color.`/`color_grading.`
+//! namespaces (see `mask_local_color`), and the local presence block with the
+//! `presence.` namespace (see `mask_local_presence`) — which is why no extra
+//! clap flag exists. Cross-image `previous` stays a recipe-only transfer and
+//! refuses non-neutral local mask state.
 
 use super::mask_local_curves;
 use super::CliError;

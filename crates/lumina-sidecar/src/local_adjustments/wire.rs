@@ -1,8 +1,9 @@
 //! Versioned wire decoding for the local mask recipe.
 
 use super::{
-    LocalAdjustments, CURVE_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSION,
-    LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
+    LocalAdjustments, COLOR_LOCAL_ADJUSTMENTS_VERSION, CURVE_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
+    PRESENCE_LOCAL_ADJUSTMENTS_VERSION,
 };
 use crate::Curves;
 use serde::{Deserialize, Deserializer};
@@ -94,6 +95,11 @@ struct LocalAdjustmentsWire {
     vibrance: WireDelta,
     #[serde(default)]
     saturation: WireDelta,
+    /// The MASK-LOCAL-P1.2c presence block, kept raw for the same reason as the
+    /// colour blocks: a v1..v4 payload that writes `presence` is a loud error
+    /// instead of a silently dropped or silently coerced block.
+    #[serde(default)]
+    presence: WireBlock,
 }
 
 impl<'de> Deserialize<'de> for LocalAdjustments {
@@ -126,7 +132,10 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             )));
         }
         // The same rule for the P1.2b color block: an older version must not be
-        // able to smuggle a later field, not even a neutral one.
+        // able to smuggle a later field, not even a neutral one. The gate is
+        // anchored at the *introducing* version, not at the current one, so
+        // raising `LOCAL_ADJUSTMENTS_VERSION` for a later block cannot make a
+        // v4 document lose its own colour block.
         for (present, label) in [
             (wire.hsl.0.is_some(), "a local HSL block"),
             (wire.point_color.0.is_some(), "a local point color block"),
@@ -135,18 +144,27 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
                 "a local color grading block",
             ),
         ] {
-            if wire.version < LOCAL_ADJUSTMENTS_VERSION && present {
+            if wire.version < COLOR_LOCAL_ADJUSTMENTS_VERSION && present {
                 return Err(serde::de::Error::custom(format!(
                     "local_adjustments version {} cannot contain {label}",
                     wire.version
                 )));
             }
         }
-        if wire.version < LOCAL_ADJUSTMENTS_VERSION
+        if wire.version < COLOR_LOCAL_ADJUSTMENTS_VERSION
             && (wire.vibrance.0.is_some() || wire.saturation.0.is_some())
         {
             return Err(serde::de::Error::custom(format!(
                 "local_adjustments version {} cannot contain local vibrance or saturation",
+                wire.version
+            )));
+        }
+        // And the same rule for the P1.2c presence block: absent is the only
+        // "no presence" case on the wire. An explicit `null`, a number, a
+        // string or an object-shaped sentinel in a v1..v4 payload is loud.
+        if wire.version < PRESENCE_LOCAL_ADJUSTMENTS_VERSION && wire.presence.0.is_some() {
+            return Err(serde::de::Error::custom(format!(
+                "local_adjustments version {} cannot contain a local presence block",
                 wire.version
             )));
         }
@@ -160,6 +178,7 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             parse_wire_block(wire.color_grading.0, "color grading", "local color grading")?;
         let vibrance = parse_wire_number(wire.vibrance.0, "vibrance")?;
         let saturation = parse_wire_number(wire.saturation.0, "saturation")?;
+        let presence = parse_wire_block(wire.presence.0, "presence", "local presence")?;
         let value = Self {
             version: LOCAL_ADJUSTMENTS_VERSION,
             exposure: wire.exposure,
@@ -174,6 +193,7 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             color_grading,
             vibrance,
             saturation,
+            presence,
         };
         value
             .validate()

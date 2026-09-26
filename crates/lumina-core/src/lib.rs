@@ -27,6 +27,10 @@ pub mod masks;
 pub mod memory;
 pub mod merge_geom;
 pub mod pipeline;
+// MASK-LOCAL-P1.2c: the presence mathematics, literally shared by the global
+// recipe and the mask-local presence kernel. The module is crate-private
+// because the two callers are the only legal users of it.
+pub(crate) mod presence_stages;
 pub mod preview_cache;
 pub mod range_masks;
 pub mod red_eye;
@@ -1070,7 +1074,7 @@ impl ImageFrame {
             },
         );
         if let Some(presence) = &recipe.presence {
-            apply_presence(&mut self.pixels, self.width, self.height, presence);
+            presence_stages::apply_presence(&mut self.pixels, self.width, self.height, presence);
         }
         if let Some(curves) = &recipe.curves {
             for_each_rgba_mut(&mut self.pixels, |pixel| {
@@ -2531,79 +2535,6 @@ fn validate_curve(name: &str, curve: &[lumina_sidecar::CurvePoint]) -> Result<()
         });
     }
     Ok(())
-}
-
-/// F-094 deterministic raster heuristic. DoG is `x - box_blur(x, radius)`;
-/// radius is 1..3 for Texture and 8..32 for Clarity. A box kernel is used as
-/// the portable, separable Gaussian approximation (edge pixels replicate).
-fn apply_presence(pixels: &mut [u8], width: u32, height: u32, p: &lumina_sidecar::Presence) {
-    let texture_radius = 1 + (p.texture.abs() * 2.0).round() as usize;
-    let clarity_radius = 8 + (p.clarity.abs() * 24.0).round() as usize;
-    apply_dog(pixels, width, height, texture_radius, p.texture);
-    apply_dog(pixels, width, height, clarity_radius, p.clarity);
-    if p.dehaze == 0.0 {
-        return;
-    }
-    // Dark channel is min(R,G,B) followed by a radius-2 local minimum. A is
-    // the deterministic 95th percentile of that channel, with a floor.
-    let n = width as usize * height as usize;
-    let mut dark = vec![0.0f32; n];
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let mut m: f32 = 1.0;
-            for yy in y.saturating_sub(2)..=(y + 2).min(height as usize - 1) {
-                for xx in x.saturating_sub(2)..=(x + 2).min(width as usize - 1) {
-                    let i = (yy * width as usize + xx) * 4;
-                    m = m.min(pixels[i].min(pixels[i + 1]).min(pixels[i + 2]) as f32 / 255.0);
-                }
-            }
-            dark[y * width as usize + x] = m;
-        }
-    }
-    let mut sorted = dark.clone();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let a = sorted[((sorted.len() as f32 * 0.95) as usize).min(sorted.len().saturating_sub(1))]
-        .max(0.05);
-    for (index, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let base_t = (1.0 - 0.95 * dark[index] / a).clamp(0.05, 1.0);
-        let t = if p.dehaze > 0.0 {
-            1.0 - p.dehaze * (1.0 - base_t)
-        } else {
-            1.0 + (-p.dehaze) * 0.5 * (1.0 - base_t)
-        };
-        for c in &mut px[..3] {
-            let x = *c as f32 / 255.0;
-            *c = (((x - a) / t + a).clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    }
-}
-
-fn apply_dog(pixels: &mut [u8], width: u32, height: u32, radius: usize, amount: f32) {
-    if amount == 0.0 {
-        return;
-    }
-    let source = pixels.to_vec();
-    let w = width as usize;
-    let h = height as usize;
-    for y in 0..h {
-        for x in 0..w {
-            for c in 0..3 {
-                let mut sum = 0.0;
-                for yy in y.saturating_sub(radius)..=(y + radius).min(h - 1) {
-                    for xx in x.saturating_sub(radius)..=(x + radius).min(w - 1) {
-                        sum += source[(yy * w + xx) * 4 + c] as f32;
-                    }
-                }
-                let count = ((y + radius).min(h - 1) - y.saturating_sub(radius) + 1)
-                    * ((x + radius).min(w - 1) - x.saturating_sub(radius) + 1);
-                let i = (y * w + x) * 4 + c;
-                let detail = source[i] as f32 - sum / count as f32;
-                pixels[i] = (source[i] as f32 + amount * detail)
-                    .clamp(0.0, 255.0)
-                    .round() as u8;
-            }
-        }
-    }
 }
 
 /// F-096: Y is filtered with a 5x5 bilateral kernel

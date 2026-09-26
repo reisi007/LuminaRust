@@ -348,7 +348,9 @@ fn legacy_extras_still_accept_only_the_four_p0_keys() {
 
 /// The local tone curve itself is still addressed only through the typed
 /// `curves` block: a curve is not a scalar key, and the P1.2b colour controls
-/// are not curve controls. The presence/detail/optics stages stay disabled.
+/// are not curve controls. The detail/optics stages stay disabled. (Local
+/// presence is a P1.2c *typed block*, not a scalar key, so `presence` is still
+/// rejected here — for the same reason `curves` is.)
 #[test]
 fn curves_are_not_a_scalar_key_and_detail_stages_stay_rejected() {
     let mut local = LocalAdjustments::default();

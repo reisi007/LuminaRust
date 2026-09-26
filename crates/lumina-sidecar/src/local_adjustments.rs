@@ -22,6 +22,8 @@ pub use color::{
 };
 pub(crate) mod mask_state;
 mod migration;
+mod presence;
+pub use presence::neutral_local_presence;
 mod wire;
 pub use mask_state::{mask_layers_digest, MaskStateSnapshot};
 use migration::normalize_legacy_layer_extras;
@@ -31,24 +33,36 @@ pub use migration::validate_mask_layer_local_state;
 ///
 /// Version 1 is the P0 object (the four scalar local controls only). Version 2
 /// adds the explicitly relative white-balance delta. Version 3
-/// (`MASK-LOCAL-P1.2a`) adds the local tone curve, and version 4
-/// (`MASK-LOCAL-P1.2b`) adds the local per-pixel color block. Loading an older
+/// (`MASK-LOCAL-P1.2a`) adds the local tone curve, version 4
+/// (`MASK-LOCAL-P1.2b`) adds the local per-pixel color block, and version 5
+/// (`MASK-LOCAL-P1.2c`) adds the local presence block. Loading an older
 /// version is an explicit, lossless migration: the fields that version cannot
 /// express stay absent, and a payload that writes them is rejected instead of
 /// dropped.
-pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 4;
+///
+/// Because each release raises this constant, the "a version that cannot
+/// express a block must not carry one" gates are anchored at the *introducing*
+/// version, not at `LOCAL_ADJUSTMENTS_VERSION`: a v4 document keeps its own
+/// colour block, a v3 document keeps its curve, and only `version < 5` is
+/// refused a presence block.
+pub const LOCAL_ADJUSTMENTS_VERSION: u8 = 5;
 /// The P0-only typed version (four scalar controls).
 pub const LEGACY_LOCAL_ADJUSTMENTS_VERSION: u8 = 1;
 /// The P1.1 typed version (P0 scalars plus the relative white-balance delta).
 pub const RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION: u8 = 2;
 /// The P1.2a typed version (adds the local tone curve).
 pub const CURVE_LOCAL_ADJUSTMENTS_VERSION: u8 = 3;
+/// The P1.2b typed version (adds the local per-pixel colour block).
+pub const COLOR_LOCAL_ADJUSTMENTS_VERSION: u8 = 4;
+/// The P1.2c typed version (adds the local presence block).
+pub const PRESENCE_LOCAL_ADJUSTMENTS_VERSION: u8 = 5;
 /// Every typed version that may be read and migrated forward. A version
 /// outside this list is a loud error, never a best-effort interpretation.
-pub const LEGACY_LOCAL_ADJUSTMENTS_VERSIONS: [u8; 3] = [
+pub const LEGACY_LOCAL_ADJUSTMENTS_VERSIONS: [u8; 4] = [
     LEGACY_LOCAL_ADJUSTMENTS_VERSION,
     RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
     CURVE_LOCAL_ADJUSTMENTS_VERSION,
+    COLOR_LOCAL_ADJUSTMENTS_VERSION,
 ];
 
 /// Local scalar controls.  The P0 ranges intentionally mirror the global
@@ -74,11 +88,15 @@ pub const LOCAL_WB_TINT_DELTA_RANGE: (f64, f64) = (-1.0, 1.0);
 
 /// A typed, versioned local recipe.  The P0 scalar fields, the P1.1 relative
 /// WB delta and the P1.2a tone curve are retained; version 4 adds the local
-/// per-pixel color block.  In particular, this type has no absolute
-/// `wb_temperature`/`wb_tint` fields: those names belong to the global recipe
-/// and are rejected here rather than being ambiguous aliases.  There is
-/// deliberately no local presence, detail, AI-denoise, noise-reduction,
-/// sharpening or optics field either — those stay disabled.
+/// per-pixel color block and version 5 (`MASK-LOCAL-P1.2c`) the local presence
+/// block.  In particular, this type has no absolute `wb_temperature`/`wb_tint`
+/// fields: those names belong to the global recipe and are rejected here rather
+/// than being ambiguous aliases.  There is deliberately still no local detail,
+/// AI-denoise, noise-reduction, sharpening or optics field — those stay
+/// disabled.  Optics stays disabled *permanently*: lens correction and
+/// perspective are geometric stages ahead of the masks, not a per-mask
+/// per-pixel tone stage.  Noise reduction and AI-denoise stay disabled until
+/// the F-078 model gate (weight licence, provenance, hash pin) clears.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LocalAdjustments {
     pub version: u8,
@@ -113,6 +131,12 @@ pub struct LocalAdjustments {
     pub vibrance: f64,
     /// MASK-LOCAL-P1.2b additive local saturation (`-1..=1`, `0` = neutral).
     pub saturation: f64,
+    /// MASK-LOCAL-P1.2c local presence block, reusing the global `Presence`
+    /// type and the shared presence validator. `None` and an all-zero block
+    /// are both pixel-neutral *and* byte-identical to the pre-P1.2c local
+    /// kernel path, so a neutral block never costs a byte change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<crate::Presence>,
 }
 
 /// The task-facing name for the typed local recipe.  Keep the P0 name as an
@@ -135,27 +159,29 @@ impl Default for LocalAdjustments {
             color_grading: None,
             vibrance: 0.0,
             saturation: 0.0,
+            presence: None,
         }
     }
 }
 
 /// Stable human-readable representation used by CLI status output.
 ///
-/// The documented grammar is `v4 exposure=<number> contrast=<number>
+/// The documented grammar is `v5 exposure=<number> contrast=<number>
 /// highlights=<number> shadows=<number> temperature_delta_k=<number>
 /// tint_delta=<number> curves=<summary> hsl=<summary> point_color=<summary>
-/// color_grading=<summary> vibrance=<number> saturation=<number>`, always in
-/// that field order. The `curves` summary is `curves=none` for a neutral block,
-/// otherwise `curves=<channel>:<point-count>[,...]` in the canonical
+/// color_grading=<summary> vibrance=<number> saturation=<number>
+/// presence=<summary>`, always in that field order. The `curves` summary is
+/// `curves=none` for a neutral block, otherwise
+/// `curves=<channel>:<point-count>[,...]` in the canonical
 /// master/red/green/blue order, listing only stored channels. The color
-/// summaries use the same `none` convention. It is a presentation contract
-/// independent of the derived `Debug` layout; JSON consumers should continue to
-/// use the structured object instead.
+/// summaries use the same `none` convention, and so does `presence`. It is a
+/// presentation contract independent of the derived `Debug` layout; JSON
+/// consumers should continue to use the structured object instead.
 impl fmt::Display for LocalAdjustments {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={} curves={} hsl={} point_color={} color_grading={} vibrance={} saturation={}",
+            "v{} exposure={} contrast={} highlights={} shadows={} temperature_delta_k={} tint_delta={} curves={} hsl={} point_color={} color_grading={} vibrance={} saturation={} presence={}",
             self.version,
             self.exposure,
             self.contrast,
@@ -169,6 +195,7 @@ impl fmt::Display for LocalAdjustments {
             self.color_grading_summary(),
             self.vibrance,
             self.saturation,
+            self.presence_summary(),
         )
     }
 }
@@ -203,10 +230,13 @@ impl LocalAdjustments {
                 self.version
             )));
         }
-        // Same rule for the P1.2b color block: a v1/v2/v3 object must not carry
-        // it, not even a neutral one, so no surface can smuggle a later field
-        // into an older version.
-        if self.version < LOCAL_ADJUSTMENTS_VERSION {
+        // Same rule for the P1.2b color block: a version older than the one
+        // that introduced it must not carry it, not even a neutral one, so no
+        // surface can smuggle a later field into an older version. The gate is
+        // anchored at `COLOR_LOCAL_ADJUSTMENTS_VERSION`, *not* at
+        // `LOCAL_ADJUSTMENTS_VERSION`: raising the current version to 5 for
+        // P1.2c must not make a v4 document lose its own colour block.
+        if self.version < COLOR_LOCAL_ADJUSTMENTS_VERSION {
             if self.hsl.is_some() {
                 return Err(SidecarError::Invalid(format!(
                     "local_adjustments version {} cannot contain a local HSL block",
@@ -231,6 +261,16 @@ impl LocalAdjustments {
                     self.version
                 )));
             }
+        }
+        // And the same rule for the P1.2c presence block. A v1..v4 object must
+        // not carry `presence` — not even a neutral one, and not an explicit
+        // `null` on the wire (that is refused by the decoder, which keeps raw
+        // key presence).
+        if self.version < PRESENCE_LOCAL_ADJUSTMENTS_VERSION && self.presence.is_some() {
+            return Err(SidecarError::Invalid(format!(
+                "local_adjustments version {} cannot contain a local presence block",
+                self.version
+            )));
         }
         for (name, value) in [
             ("exposure", self.exposure),
@@ -271,6 +311,12 @@ impl LocalAdjustments {
             crate::validate_color_grading(grading)
                 .map_err(|error| SidecarError::Invalid(format!("local color grading: {error}")))?;
         }
+        // Same validator as the global recipe: a local presence can never
+        // accept a value the global pipeline would reject, or vice versa.
+        if let Some(presence) = &self.presence {
+            crate::validate_presence(presence)
+                .map_err(|error| SidecarError::Invalid(format!("local presence: {error}")))?;
+        }
         Ok(())
     }
 
@@ -293,6 +339,7 @@ impl LocalAdjustments {
             && self.saturation == 0.0
             && self.curves.as_ref().is_none_or(Curves::is_identity)
             && !self.has_local_color()
+            && !self.has_local_presence()
     }
 
     /// Return one scalar value by its stable local key.

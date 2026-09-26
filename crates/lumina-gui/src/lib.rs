@@ -120,9 +120,11 @@ pub use mask_visibility::MaskOverlayMode;
 mod mask_persistence;
 // MASK-LOCAL-P0: typed local-control transactions live outside the app root.
 mod mask_local_controls;
-// MASK-LOCAL-P1.2a: the mask-local tone-curve editor and its setters.
+// MASK-LOCAL-P1.2a/P1.2b/P1.2c: the mask-local tone-curve, colour and presence
+// editors and their setters.
 mod mask_local_color;
 mod mask_local_curves;
+mod mask_local_presence;
 // R5-DUST-23: interactive Spot-Heal tool (dab + live-size cursor + `[`/`]`
 // size shortcuts).
 mod spot_tool;
@@ -12362,6 +12364,7 @@ mod tests {
     mod mask_local_color;
     mod mask_local_curve_graph;
     mod mask_local_curves;
+    mod mask_local_presence;
     mod mask_local_previous;
     mod mask_visibility;
     mod masking_g03;

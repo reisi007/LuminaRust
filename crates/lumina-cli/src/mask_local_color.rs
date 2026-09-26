@@ -22,10 +22,11 @@
 //! | `--reset-local-adjustment color_grading[.<target>]`              | reset one range / the whole block   |
 //! | `--reset-local-adjustment color`                                 | reset every local colour control    |
 //!
-//! The local presence, detail, AI-denoise, noise-reduction, sharpening and
-//! optics controls stay deliberately unimplemented: they have no key here, so a
-//! request for one is the generic "unknown local adjustment" error rather than
-//! a silent no-op.
+//! The local detail, AI-denoise, noise-reduction, sharpening and optics
+//! controls stay deliberately unimplemented: they have no key here, so a request
+//! for one is the generic "unknown local adjustment" error rather than a silent
+//! no-op. The local presence block is implemented (MASK-LOCAL-P1.2c) but lives
+//! in its own key namespace; see `mask_local_presence`.
 
 use super::CliError;
 use lumina_sidecar::{

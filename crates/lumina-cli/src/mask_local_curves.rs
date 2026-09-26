@@ -19,15 +19,25 @@
 //!
 //! MASK-LOCAL-P1.2b extends the same generic channel with the colour key
 //! namespaces (`hsl.`, `point_color.`, `color_grading.`, plus the `vibrance` /
-//! `saturation` scalars and the `color` reset); see `mask_local_color`. The
-//! local presence, detail, AI-denoise, noise-reduction, sharpening and optics
-//! controls stay deliberately unimplemented: they have no key here, so a
-//! request for one is the generic "unknown local adjustment" error rather than
-//! a silent no-op.
+//! `saturation` scalars and the `color` reset); see `mask_local_color`.
+//! MASK-LOCAL-P1.2c extends it once more with the `presence.` key namespace
+//! and the `presence` reset; see the [`presence`] child module. The local
+//! detail, sharpening, noise-reduction, AI-denoise and optics controls stay
+//! deliberately unimplemented: they have no key here, so a request for one is
+//! the generic "unknown local adjustment" error rather than a silent no-op.
+//!
+//! The presence namespace is declared as a *child* of this module rather than as
+//! a fourth sibling in `main.rs`, so the oversized CLI entrypoint stays exactly
+//! at its 11398-line ratchet baseline: adding a key namespace to the existing
+//! generic channel must not cost the entrypoint a single line.
 
 use super::mask_local_color::{self, LocalColorResetSpec, LocalColorSetSpec};
 use super::CliError;
 use lumina_sidecar::{CurvePoints, LocalAdjustments};
+
+#[path = "mask_local_presence.rs"]
+mod presence;
+use presence::LocalPresenceSetSpec;
 
 /// One parsed `--set-local-adjustment` request.
 pub(crate) enum LocalSetSpec {
@@ -40,6 +50,7 @@ pub(crate) enum LocalSetSpec {
         points: CurvePoints,
     },
     Color(LocalColorSetSpec),
+    Presence(LocalPresenceSetSpec),
 }
 
 /// One parsed `--reset-local-adjustment` request.
@@ -48,6 +59,7 @@ pub(crate) enum LocalResetSpec {
     Channel(String),
     All,
     Color(LocalColorResetSpec),
+    Presence,
 }
 
 /// The key prefix that routes a local-adjustment spec to the tone curve.
@@ -72,9 +84,12 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
             "invalid --set-local-adjustment `{spec}`; expected KEY=VALUE"
         ))
     })?;
-    // The colour namespaces are checked before the curve namespace so a
-    // `hsl.`/`point_color.`/`color_grading.` key never reaches the scalar
-    // parser, and vice versa.
+    // The presence and colour namespaces are checked before the curve namespace
+    // so a `presence.`/`hsl.`/`point_color.`/`color_grading.` key never reaches
+    // the scalar parser, and vice versa.
+    if let Some(presence) = presence::parse_presence_set_spec(spec)? {
+        return Ok(LocalSetSpec::Presence(presence));
+    }
     if let Some(color) = mask_local_color::parse_color_set_spec(spec)? {
         return Ok(LocalSetSpec::Color(color));
     }
@@ -110,6 +125,9 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
 
 /// Parse one `--reset-local-adjustment KEY` request.
 pub(crate) fn parse_local_reset_spec(key: &str) -> Result<LocalResetSpec, CliError> {
+    if presence::parse_presence_reset_key(key)?.is_some() {
+        return Ok(LocalResetSpec::Presence);
+    }
     if let Some(color) = mask_local_color::parse_color_reset_spec(key)? {
         return Ok(LocalResetSpec::Color(color));
     }
@@ -131,6 +149,7 @@ pub(crate) fn action_label(spec: &LocalSetSpec) -> String {
             format!("local:curves.{channel}={}pts", points.len())
         }
         LocalSetSpec::Color(color) => mask_local_color::set_label(color),
+        LocalSetSpec::Presence(presence) => presence::set_label(presence),
     }
 }
 
@@ -141,6 +160,7 @@ pub(crate) fn reset_label(spec: &LocalResetSpec) -> String {
         LocalResetSpec::Channel(channel) => format!("local-reset:curves.{channel}"),
         LocalResetSpec::All => "local-reset:curves".into(),
         LocalResetSpec::Color(color) => mask_local_color::reset_label(color),
+        LocalResetSpec::Presence => presence::reset_label(),
     }
 }
 
@@ -161,6 +181,9 @@ pub(crate) fn apply_set_spec(
             .set_local_curve_channel(channel, points.clone())
             .map_err(CliError::Message),
         LocalSetSpec::Color(color) => mask_local_color::apply_set_spec(adjustments, color),
+        LocalSetSpec::Presence(presence) => adjustments
+            .set_local_presence_field(&presence.field, presence.value)
+            .map_err(CliError::Message),
     }
 }
 
@@ -179,5 +202,9 @@ pub(crate) fn apply_reset_spec(
             Ok(())
         }
         LocalResetSpec::Color(color) => mask_local_color::apply_reset_spec(adjustments, color),
+        LocalResetSpec::Presence => {
+            adjustments.reset_local_presence();
+            Ok(())
+        }
     }
 }
