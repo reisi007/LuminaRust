@@ -98,9 +98,10 @@ jobs:
       # All static and supported-feature gates stay here; the test shards own
       # runtime tests only and do not duplicate the lint/check gates.
       # Clippy on workspace crates only, with `-D warnings`. We do NOT use
-      # `--all-features` here: `lumina-gpu/gpu` remains the only hard CI
-      # exclusion (requires Metal hardware; only `cargo check -p lumina-gpu
-      # --features gpu` in CI, see below). `lumina-onnx/onnx-rt` IS now
+      # `--all-features` here: it would also enable the native/network feature
+      # sets (`lumina-onnx/onnx-rt`, `lumina-gpu/lensfun`). The plain `gpu` path
+      # is default and is no longer excluded from the CI test step (see the
+      # measured comment at the GPU check below). `lumina-onnx/onnx-rt` IS now
       # CI-checked: the image ships `libssl-dev` + `clang` for `openssl-sys`
       # and CI runners have network to fetch the `ort` prebuilt ONNX Runtime
       # binaries (see crates/lumina-onnx/Cargo.toml). The dedicated
@@ -109,7 +110,7 @@ jobs:
       # pure-Rust features:
       #   - lumina-sidecar/zdata (zstd-compressed binary sidecar)
       #   - lumina-bench/raw-bench (LibRaw decode benchmarks)
-      # Only GPU stays hard CI-excluded; onnx-rt has no runner-hardware reason.
+      # onnx-rt has no runner-hardware reason to be a separate clippy target.
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings
 
@@ -134,11 +135,23 @@ jobs:
       - name: Check onnx-rt feature compiles
         run: cargo check -p lumina-onnx --features onnx-rt
 
-      # The `gpu`-gated path in lumina-gpu cannot be runtime-tested in CI
-      # (GitHub runners have no GPU/Metal compute). We at least compile-check
-      # it here so that changes to the GPU code do not silently bit-rot.
-      # Runtime GPU tests MUST be run locally (see Agents.md "GPU-Tests").
-      # Only GPU remains hard CI-excluded; onnx-rt has no hardware reason.
+      # Measured split of `lumina-gpu` with default features (same on this dev
+      # machine and on the CI runner): `cargo test -p lumina-gpu` reports
+      # 70 passed / 28 ignored.
+      #   * Runs in CI (the workspace test step below now includes lumina-gpu):
+      #     the 56 `src/` unit tests (geometry/tiling/validate/stages/
+      #     lens_blur/lensfun pure logic) plus the adapter-free integration
+      #     tests (metrics, validators, routing, bind guards).
+      #   * `#[ignore]`d, NOT excluded: the 28 integration tests that exercise a
+      #     real wgpu adapter and assert CPU↔GPU parity. Without the opt-in
+      #     `gpu-adapter-tests` feature libtest reports them as ignored, so a
+      #     GPU-less runner never counts a vacuous early `return` as passed.
+      #     Run them on hardware (Metal/Vulkan) with:
+      #       cargo test -p lumina-gpu --features gpu-adapter-tests
+      #     `tests/support::require_adapter` turns a missing adapter into a hard
+      #     failure, so the opt-in cannot produce a silent pass either.
+      # This `--features gpu` check additionally compile-checks the GPU code so
+      # it cannot silently bit-rot; onnx-rt has no runner-hardware reason.
       - name: Check GPU feature compiles
         run: cargo check -p lumina-gpu --features gpu
 
@@ -212,16 +225,18 @@ jobs:
           # Same shared input as rust-fast and rust-test-gui.
           shared-key: lumina-rust-shards
 
-      # Partition invariant: every workspace package except GUI, GPU runtime,
-      # sidecar/zdata, and the lumina-bench harness is covered here; GUI and
-      # zdata have dedicated runtime steps. GPU parity is local-only (hosted
-      # runners have no hardware adapter); rust-fast retains the
-      # `lumina-gpu --features gpu` compile check. `lumina-bench`'s default GPU
-      # bench target is likewise compile/bench-only in CI: rust-fast
-      # compile-checks the harness, and the dedicated bench job owns its
-      # optional, non-blocking execution.
+      # Partition invariant: every workspace package except GUI, sidecar/zdata,
+      # and the lumina-bench harness is covered here; GUI and zdata have
+      # dedicated runtime steps. `lumina-gpu` is INCLUDED: its unit and
+      # adapter-free tests run, and its adapter-dependent tests are reported as
+      # `#[ignore]`d (they need a real adapter; `cargo test -p lumina-gpu
+      # --features gpu-adapter-tests` runs them on a GPU host) — so GPU parity
+      # is no longer an unqualified "local-only" gap. `lumina-bench`'s default
+      # GPU bench target is compile/bench-only in CI: rust-fast compile-checks
+      # the harness, and the dedicated bench job owns its optional,
+      # non-blocking execution.
       - name: Run non-GUI workspace tests
-        run: cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-gpu --exclude lumina-sidecar --exclude lumina-bench
+        run: cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench
 
       # vendor/libraw-sys is intentionally NOT a workspace member, so the
       # `cargo test --workspace` above never enters it. These ABI-layout
