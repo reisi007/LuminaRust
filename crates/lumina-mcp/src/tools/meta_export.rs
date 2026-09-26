@@ -121,7 +121,11 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
             .ok_or(McpError::NoImageLoaded)?,
     };
     let white_balance = raw_metadata.as_ref().map(|meta| meta.camera_white_balance);
-    let rendered = render_recipe(&frame, &copy.recipe, white_balance)?;
+    // MCP-MASK-APPLY: apply the persisted mask planes (policy `warn`) exactly
+    // like the CLI export, so MCP and CLI render byte-identical output.
+    let zdata_path = lumina_sidecar::zdata_path_for(source);
+    let masks = crate::masks::render_mask_context(&document, &copy.id, &zdata_path);
+    let rendered = render_recipe(&frame, &copy.recipe, white_balance, Some(&masks))?;
     let mut encoded = encode_with_quality(&rendered, format, quality)?;
 
     // Opt-in bake-in (S6 `bake_metadata_into_jpeg` parity, post-encode splice;

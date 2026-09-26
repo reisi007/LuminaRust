@@ -4,7 +4,7 @@
 use crate::error::{map_core_error, McpError};
 use crate::session::ImageState;
 use lumina_core::{
-    render_frame, BitDepth, ExportOptions, ImageFileFormat, ImageFrame, RenderContext,
+    render_frame, BitDepth, ExportOptions, ImageFileFormat, ImageFrame, MaskContext, RenderContext,
 };
 #[cfg(feature = "gpu")]
 use lumina_gpu::{log_cpu_routing_once, unsupported_gpu_stages_with_context, GpuContext};
@@ -276,19 +276,25 @@ where
 }
 
 /// Renders `frame` with `recipe` through the shared `render_frame` entry
-/// point — the single choke point used by preview/save/analyze. With the
-/// `gpu` feature enabled this prefers the GPU adapter and falls back to the
-/// CPU pipeline when none is available (backend logged once per process).
+/// point — the single choke point used by preview/save/analyze/batch/
+/// trigger_export. With the `gpu` feature enabled this prefers the GPU
+/// adapter and falls back to the CPU pipeline when none is available (backend
+/// logged once per process).
+///
+/// MCP-MASK-APPLY: `masks` carries the resolved [`MaskContext`] (persisted
+/// planes from the sidecar bundle, policy `warn`); pass `None` only when no
+/// sidecar is in scope (routing tests). See [`crate::masks`].
 #[cfg(feature = "gpu")]
 pub fn render_recipe(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
+    masks: Option<&MaskContext<'_>>,
 ) -> Result<ImageFrame, McpError> {
     GPU_CTX.with(|cell| {
         let ctx = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
         let inner: &Option<GpuContext> = ctx;
-        render_best_effort(inner.as_ref(), frame, recipe, camera_white_balance)
+        render_best_effort(inner.as_ref(), frame, recipe, camera_white_balance, masks)
     })
 }
 
@@ -298,6 +304,7 @@ pub fn render_recipe(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
+    masks: Option<&MaskContext<'_>>,
 ) -> Result<ImageFrame, McpError> {
     let output = render_frame(
         frame,
@@ -305,7 +312,7 @@ pub fn render_recipe(
             recipe,
             camera_white_balance,
             source_actions: &[],
-            masks: None,
+            masks: masks.cloned(),
             lensfun: None,
             depth: None,
         },
@@ -315,14 +322,23 @@ pub fn render_recipe(
 }
 
 /// Renders a virtual copy from the decoded source frame using the shared
-/// `render_frame` entry point. No masks or source actions are applied in the
-/// MVP (see F-101 architecture boundaries).
+/// `render_frame` entry point. MCP-MASK-APPLY: the persisted mask planes are
+/// resolved from the sidecar's `.lumina.zdata` bundle (policy `warn`) and
+/// passed to the render, so preview/save/analyze apply masks exactly like the
+/// CLI — no source actions are applied in the MVP (see F-101 boundaries).
 pub fn render_copy(
     state: &ImageState,
     copy: &lumina_sidecar::VirtualCopy,
     camera_white_balance: Option<[f32; 4]>,
 ) -> Result<ImageFrame, McpError> {
-    render_recipe(&state.frame, &copy.recipe, camera_white_balance)
+    let zdata_path = lumina_sidecar::zdata_path_for(&state.source_path);
+    let masks = crate::masks::render_mask_context(&state.document, &copy.id, &zdata_path);
+    render_recipe(
+        &state.frame,
+        &copy.recipe,
+        camera_white_balance,
+        Some(&masks),
+    )
 }
 
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
@@ -341,6 +357,7 @@ fn render_best_effort(
     frame: &ImageFrame,
     recipe: &EditRecipe,
     camera_white_balance: Option<[f32; 4]>,
+    masks: Option<&MaskContext<'_>>,
 ) -> Result<ImageFrame, McpError> {
     // Consult the shared routing gate BEFORE entering the GPU path. Recipe
     // stages alone would also be caught inside `render_with_gpu`; checking
@@ -379,7 +396,7 @@ fn render_best_effort(
                         recipe,
                         camera_white_balance,
                         source_actions: &[],
-                        masks: None,
+                        masks: masks.cloned(),
                         lensfun: None,
                         depth: None,
                     },
@@ -401,7 +418,7 @@ fn render_best_effort(
                     recipe,
                     camera_white_balance,
                     source_actions: &[],
-                    masks: None,
+                    masks: masks.cloned(),
                     lensfun: None,
                     depth: None,
                 },
@@ -482,107 +499,11 @@ pub fn encode_with_quality(
     frame.encode_with_options(options).map_err(map_core_error)
 }
 
-/// Non-destructive output guard (F-101-F1 bulk tools; since Review R2 also
-/// `lumina_save`).
-///
-/// Refuses when `target` resolves onto the source image or one of its Lumina
-/// bundle files (`<source>.lumina.json`, `<source>.lumina.zdata`). Two
-/// identity checks are combined (defense in depth):
-///
-/// * **Candidate path equality** — canonical aliases including
-///   not-yet-existing targets and symlinks (canonicalization follows them),
-///   resolved against the canonical parent for missing paths. This mirrors
-///   the CLI's `reject_protected_output`.
-/// * **`(dev, inode)` identity** (Unix) — catches hard links between distinct
-///   directory entries, which canonicalization cannot see.
-///
-/// Called before any mutation by `lumina_save`, `lumina_dust_removal` and
-/// every bulk write.
-pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpError> {
-    let target_resolved = resolve_candidate(target).map_err(|error| {
-        McpError::Encode(format!(
-            "could not resolve output path `{}`: {error}",
-            target.display()
-        ))
-    })?;
-    let protected: Vec<(&str, PathBuf)> = vec![
-        ("source image", source.to_path_buf()),
-        ("sidecar", lumina_sidecar::sidecar_path_for(source)),
-        (
-            "mask/source-action bundle",
-            lumina_sidecar::zdata_path_for(source),
-        ),
-    ];
-    for (kind, path) in protected {
-        // Both sides use the candidate convention (existing paths are
-        // canonicalized; missing ones resolve against their canonical parent),
-        // mirroring the CLI's `reject_protected_output`. A plain
-        // canonicalize-the-first-argument comparison would fail on the
-        // not-yet-existing sidecar/zdata candidates.
-        let path_resolved = resolve_candidate(&path).map_err(|error| {
-            McpError::Encode(format!("could not resolve `{}`: {error}", path.display()))
-        })?;
-        if path_resolved == target_resolved {
-            return Err(McpError::Encode(format!(
-                "output `{}` would overwrite the {kind} `{}`; refusing (non-destructive guarantee)",
-                target.display(),
-                path.display()
-            )));
-        }
-        // Hard-link alias: the same underlying file under a different
-        // directory entry. A rename over the alias would not touch the
-        // protected file's own entry, but writing through it must still be
-        // refused loudly so a future non-rename write path can never
-        // silently clobber the bundle (REVIEW R2-MCP-02 defense in depth).
-        #[cfg(unix)]
-        if paths_are_same_file(&path, target).unwrap_or(false) {
-            return Err(McpError::Encode(format!(
-                "output `{}` is a hard-link alias of the {kind} `{}`; \
-                 refusing (non-destructive guarantee)",
-                target.display(),
-                path.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Unix: true when both paths refer to the same underlying file via
-/// `(dev, inode)` identity — catches hard links between distinct paths.
-#[cfg(unix)]
-fn paths_are_same_file(a: &Path, b: &Path) -> std::io::Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-    if !(a.exists() && b.exists()) {
-        return Ok(false);
-    }
-    let (meta_a, meta_b) = (fs::metadata(a)?, fs::metadata(b)?);
-    Ok(meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino())
-}
-
-/// Non-unix fallback: no portable inode identity exists; only candidate path
-/// equality (checked separately above) applies.
-#[cfg(not(unix))]
-fn paths_are_same_file(_a: &Path, _b: &Path) -> std::io::Result<bool> {
-    Ok(false)
-}
-
-/// Resolves `path` to a comparable identity (CLI `resolve_candidate` parity):
-/// existing paths are canonicalized, missing ones are resolved against their
-/// canonical parent directory.
-fn resolve_candidate(path: &Path) -> std::io::Result<PathBuf> {
-    if path.exists() {
-        fs::canonicalize(path)
-    } else {
-        let parent = fs::canonicalize(path.parent().unwrap_or_else(|| Path::new(".")))?;
-        Ok(parent.join(path.file_name().unwrap_or_default()))
-    }
-}
-
-/// Guard + atomic write (see [`reject_protected_target`]). Used by
-/// `lumina_batch`, `lumina_dust_removal` and — since Review R2 —
+/// Guard + atomic write (see [`crate::output_guard::reject_protected_target`]).
+/// Used by `lumina_batch`, `lumina_dust_removal` and — since Review R2 —
 /// `lumina_save`.
 pub fn write_output_guarded(source: &Path, target: &Path, bytes: &[u8]) -> Result<(), McpError> {
-    reject_protected_target(source, target)?;
+    crate::output_guard::reject_protected_target(source, target)?;
     lumina_sidecar::write_atomically(target, bytes)
         .map_err(|error| McpError::Encode(format!("could not write `{target:?}`: {error}")))
 }
@@ -642,7 +563,7 @@ mod routing_tests {
         let wb = [1.7f32, 1.0, 1.3, 1.0];
         let recipe = EditRecipe::default();
         let routed =
-            render_best_effort(None, &frame, &recipe, Some(wb)).expect("CPU branch renders");
+            render_best_effort(None, &frame, &recipe, Some(wb), None).expect("CPU branch renders");
         assert_eq!(routed.pixels, cpu_oracle(&frame, &recipe, Some(wb)).pixels);
     }
 
@@ -658,7 +579,7 @@ mod routing_tests {
         let recipe = EditRecipe::default();
 
         // Without an adapter the CPU branch validates directly …
-        assert!(render_best_effort(None, &frame, &recipe, Some(bad_wb)).is_err());
+        assert!(render_best_effort(None, &frame, &recipe, Some(bad_wb), None).is_err());
 
         // … and with an adapter the route must still reach that validation.
         let Ok(ctx) = GpuContext::new() else {
@@ -670,7 +591,7 @@ mod routing_tests {
             return;
         }
         assert!(
-            render_best_effort(Some(&ctx), &frame, &recipe, Some(bad_wb)).is_err(),
+            render_best_effort(Some(&ctx), &frame, &recipe, Some(bad_wb), None).is_err(),
             "a bound adapter must not bypass As-Shot gain validation"
         );
     }
@@ -694,7 +615,7 @@ mod routing_tests {
             eprintln!("GPU adapter unavailable - routing assertion skipped");
             return;
         }
-        let routed = render_best_effort(Some(&ctx), &frame, &recipe, Some(wb))
+        let routed = render_best_effort(Some(&ctx), &frame, &recipe, Some(wb), None)
             .expect("WB-context render must succeed");
         assert_eq!(
             routed.pixels, expected.pixels,
