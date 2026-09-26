@@ -1330,25 +1330,49 @@ Klick-Abdeckung. (Korrektur 2026-09-26 nach dem Verifikationsbefund: Zeile 24
 fuhr zuvor „ja — `mask_local_reload`", obwohl dieser Test **weder**
 Presence **noch** Clarity anfasst — `grep -c` auf `mask_local_reload.rs` ergibt
 0. Clarity wird von keinem GUI-Test angeklickt. Damit sind es 22/13, nicht
-23/12.) Für die **dreizehn** gilt der ehrliche Nachweis: sie teilen sich
-entweder **exakt** den Helper/Setter mit einem geklickten Geschwister oder
-stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
-das nicht gelten lässt, braucht 13 weitere Drag-/Click-Tests über dieselben
-Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
-unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
-Für die **Color**-Schleife deckt das der Mutationstest in 6.1 auf (`local_color_slider`
-schreibt nicht mehr → rot). Für die **Presence**- und **Detail**-Schleifen
-(Zeilen 23/24, 28/29/30, 32) gibt es **keinen** Schleifen-Mutationstest; eine
-Vertauschung der Feldindizes in ihnen wäre also nicht nachweisbar. Die
-`nein`-Einstufung selbst bleibt richtig — sie sagt nichts über Klicks —, aber
-der diese Absatz stützende Satz gilt **nur** für Zeile 18 und ihre Geschwister.
-(Zeilen 18/16/17 sind die *Color*-Schleife und **sind** durch den Mutationstest
-gedeckt. Zeilen 6/8 sind die HSL-Bänder und stehen unter derselben Mutation: der
-Saturation-Klick in `mask_local_editors.rs` macht eine Vertauschung der
-`HSL_FIELDS`-Indizes sichtbar, weil `mask_local_color.rs` dieselbe Form hat —
-Label aus Index, Feld aus Array. Korrektur 2026-09-26 nach
-Verifikationsbefund N3; Zeilengruppierung berichtigt nach F-10, wo eine
-Zwischenfassung die Zeilen 6/8 faelschlich Presence/Detail zurechnete.)
+23/12.)
+
+Für **elf** der dreizehn gilt der ehrliche Nachweis: sie teilen sich **exakt**
+den Helper/Setter mit einem geklickten Geschwister, und eine Mutation des
+gemeinsamen Aufrufs oder eine Vertauschung der Feldindizes macht die Abweichung
+sichtbar (Tabelle unten). Für diese elf wäre ein zusätzlicher Drag-/Click-Test
+der von der Testabdeckungs-Politik verlangte **unnötige** Test.
+
+**Für zwei gilt er nicht: die HSL-Bänder Hue und Luminance (Zeilen 6 und 8).**
+Bei ihnen macht eine Mutation die Abweichung **nicht** sichtbar (0↔2 bleibt
+grün), und kein Test klickt ihre Schiene. Sie brauchen also **echten**
+Click-Test — das ist die eine echte Lücke, die diese Tabelle offenlegt, und sie
+ist hier benannt statt weggeredet. (Korrektur 2026-09-26 nach
+Verifikationsbefund N1: der vorige Absatz behauptete für **alle** dreizehn, ein
+Mutationsversuch mache die Abweichung sichtbar, oder er seien sonst
+unnötige Tests. Für elf stimmt das, für Zeilen 6 und 8 ist es falsch.)
+
+Geschwister. Wie gut das den Index→Feld-Zusammenhang festnagelt, ist **pro
+Schleife gemessen** und nicht gleich:
+
+| Schleife | angeklicktes Geschwister (Index) | Mutation: Feldindizes vertauscht | Ergebnis |
+|---|---|---|---|
+| Color (Z. 16/17/18, 20) | Hue (0), Saturation (1) | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
+| HSL (Z. 6/7/8) | Saturation (**1**) | `HSL_FIELDS` 0↔1 | **rot** (`mask_local_color_controls.rs:225`) |
+| HSL (Z. 6/8) | — | `HSL_FIELDS` **0↔2** | **grün, 926/926** |
+| Presence (Z. 23/24) | Dehaze (2) | `PRESENCE_FIELDS` 0↔2 | **rot** (`mask_local_editors.rs:87`) |
+| Sharpening (Z. 28/29/30) | Amount (0) | 0↔3 | **rot** (`mask_local_editors.rs:325`) |
+| Noise Reduction (Z. 32) | Luminance (0) | 0↔1 | **rot** (`mask_local_editors.rs:360`) |
+
+**Die eine gemessene Lücke der Tabelle: die HSL-Bänder Hue und Luminance
+(Zeilen 6 und 8).** Der Saturation-Klick pinnt nur Index 1, eine Vertauschung
+0↔2 zwischen Hue und Luminance bleibt unsichtbar, und **kein** GUI-Test klickt
+die HSL-`Hue`- oder HSL-`Luminance`-Schiene (`grep` über `crates/lumina-gui/tests/`
+findet keinen solchen Klick). Für **alle** anderen `nein`-Zeilen ist der
+Index→Feld-Zusammenhang durch das angeklickte Geschwister messbar gedeckt.
+
+(Korrektur 2026-09-26 nach Verifikationsbefund N1. Zwei frühere Fassungen
+dieses Absatzes waren **beide** falsch und in entgegengesetzte Richtungen: die
+eine behauptete, Presence- und Detail-Schleifen seien gar nicht nachweisbar —
+sie sind es (alle drei Mutationen rot); die andere behauptete, der
+Saturation-Klick decke jede Vertauschung der `HSL_FIELDS`-Indizes — er deckt
+nur 0↔1, nicht 0↔2. Der Satz ist jetzt aus den Mutationen abgeleitet statt
+aus einer Annahme über die Form des Codes.)
 
 #### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
 
