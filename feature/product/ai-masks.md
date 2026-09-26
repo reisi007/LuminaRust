@@ -1149,7 +1149,9 @@ Je mask-local Editor gilt verbindlich **beides**:
    andere. Zwei weitere Ziele kamen in der Verifikationsrunde dazu:
    `tests/mask_local_color_controls.rs` (die fünf vorher ungeklickten Controls
    der Farb-Fläche, DoD §3) und `tests/mask_local_reload.rs` (das Reload-Glied
-   der Kette aus DoD §1). Geteilte Testhilfen liegen in
+   der Kette aus DoD §1). Ein drittes kam mit `HSL-BAND-KLICK-43` hinzu:
+   `tests/mask_local_hsl_bands.rs` (die HSL-`Hue`- und HSL-`Luminance`-Schiene
+   mit Zeugenband und Datei-Assertion). Geteilte Testhilfen liegen in
    `tests/mask_local_editors_support/` (Harness, Frame-Uhr, Label-Lookups,
    Persistenz-Readback), `tests/mask_local_slider_support/` (Regler-Drags),
    `tests/mask_local_label_support/` (richtungsbasierte Label-Lookups) und
@@ -1307,6 +1309,9 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | dieselbe | `Remove` ignoriert seine Eintrags-id | **rot** (`Remove must delete exactly one entry`) |
   | dieselbe | `Remove` löscht immer den **ersten** Eintrag | **rot** |
   | dieselbe | Per-Bereich-`Reset` ruft den Gesamtblock-Reset | **rot** (`must NOT clear the other ranges`) |
+  | `the_hsl_hue_rail_writes_only_the_hue_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`mask_local_hsl_bands.rs:195`, `must move the stored hue, got 0`) |
+  | dieselbe | nur der Label-`match` 0↔2, `HSL_FIELDS` korrekt | **rot** (`mask_local_hsl_bands.rs:129`, `canonical hue -> saturation -> luminance stack`) |
+  | `the_hsl_luminance_rail_writes_only_the_luminance_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`mask_local_hsl_bands.rs:255`, `must be non-neutral before the luminance drag, got (0.0, 0.0, 0.62…)`) |
   | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — die drei anderen *mask-local* Ziele bleiben grün. **Zusätzlich** werden drei **vorbestehende** Lib-Tests rot (`brush_lifecycle::invert_uses_the_automatic_slider_save_path_and_reloads`, `brush_management::copy_selection_and_reload_ignore_cross_copy_layers`, `mask_local_previous::previous_transfers_full_local_state_but_sync_keeps_target_layers`); das ist **mehr** Abdeckung, kein Defekt — das fette „nur" wäre irreführend gewesen. |
   | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
   | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
@@ -1368,9 +1373,9 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 4 | `all local curves reset` | ja — `mask_local_editors_wiring` | `reset_mask_local_curves` | — |
 | **P1.2b Color** |||||
 | 5 | HSL-Bandwahl (8 Bänder) | ja — `mask_local_editors` (cyan), `mask_local_color_controls` (cyan, yellow) | `selectable_label` | — |
-| 6 | HSL **Hue** | **nein** | Schleife `HSL_FIELDS` → `local_color_slider` → `set_mask_local_hsl_band` | nur Mechanik (Hue/Saturation/Luminance laufen durch **denselben** Helper; Saturation ist geklickt) |
+| 6 | HSL **Hue** | ja — `mask_local_hsl_bands` (`the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band`, +0.8 gezogen, Band-Scope mit `yellow`-Zeuge) | Schleife `HSL_FIELDS` → `local_color_slider` → `set_mask_local_hsl_band` | — |
 | 7 | HSL **Saturation** | ja — `mask_local_editors` | dito | — |
-| 8 | HSL **Luminance** | **nein** | dito | nur Mechanik |
+| 8 | HSL **Luminance** | ja — `mask_local_hsl_bands` (`the_hsl_luminance_rail_writes_only_the_luminance_field_of_the_selected_band`, −0.6 gezogen, Band-Scope mit `yellow`-Zeuge) | dito | — |
 | 9 | Reset pro Band | ja — `mask_local_color_controls` (Band-Scope mit Zeuge) | `reset_mask_local_hsl_band(band)` | — |
 | 10 | **Vibrance** | ja — `mask_local_color_controls` | `local_color_slider` → `set_mask_local_vibrance_saturation` | — |
 | 11 | **Saturation** (Vibrance-Paar) | ja — `mask_local_color_controls` (negativ gezogen) | dito | — |
@@ -1401,47 +1406,57 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 34 | `local Noise Reduction reset` | **nein** | `reset_mask_local_detail_field("noise_reduction")` | nur Mechanik: **derselbe** Aufruf in **derselben** `for`-Schleife, anderer `field`-String; die Bereichs-Semantik ist am Sharpening-Fall belegt |
 | 35 | `all local detail reset` | ja — `mask_local_editors` | `reset_mask_local_detail` | — |
 
-**Bilanz:** 22 der 35 Gruppen sind angeklickt; **13 sind es nicht** und sind
+**Bilanz:** 24 der 35 Gruppen sind angeklickt; **11 sind es nicht** und sind
 oben mit ihrer Mechanik benannt. Kein Element der letzten Spalte behauptet
 Klick-Abdeckung. (Korrektur 2026-09-26 nach dem Verifikationsbefund: Zeile 24
 fuhr zuvor „ja — `mask_local_reload`", obwohl dieser Test **weder**
 Presence **noch** Clarity anfasst — `grep -c` auf `mask_local_reload.rs` ergibt
 0. Clarity wird von keinem GUI-Test angeklickt. Damit sind es 22/13, nicht
-23/12.)
+23/12. Korrektur 2026-09-26 nach `HSL-BAND-KLICK-43`: die Zeilen 6 und 8 sind
+hinzugekommen, also 24/11 statt 22/13.)
 
-Für **elf** der dreizehn gilt der ehrliche Nachweis: sie teilen sich **exakt**
-den Helper/Setter mit einem geklickten Geschwister, und eine Mutation des
+Für **alle elf** gilt der ehrliche Nachweis: sie teilen sich **exakt** den
+Helper/Setter mit einem geklickten Geschwister, und eine Mutation des
 gemeinsamen Aufrufs oder eine Vertauschung der Feldindizes macht die Abweichung
 sichtbar (Tabelle unten). Für diese elf wäre ein zusätzlicher Drag-/Click-Test
 der von der Testabdeckungs-Politik verlangte **unnötige** Test.
 
-**Für zwei gilt er nicht: die HSL-Bänder Hue und Luminance (Zeilen 6 und 8).**
-Bei ihnen macht eine Mutation die Abweichung **nicht** sichtbar (0↔2 bleibt
-grün), und kein Test klickt ihre Schiene. Sie brauchen also **echten**
-Click-Test — das ist die eine echte Lücke, die diese Tabelle offenlegt, und sie
-ist hier benannt statt weggeredet. (Korrektur 2026-09-26 nach
-Verifikationsbefund N1: der vorige Absatz behauptete für **alle** dreizehn, ein
-Mutationsversuch mache die Abweichung sichtbar, oder er seien sonst
-unnötige Tests. Für elf stimmt das, für Zeilen 6 und 8 ist es falsch.)
+**Die beiden HSL-Bänder Hue und Luminance (Zeilen 6 und 8) brauchten echten
+Click-Test — und haben ihn.** Sie waren die einzige Stelle, an der der
+Nachweis „angeklicktes Geschwister genügt" **nicht** trug: der
+Saturation-Klick pinnt nur Index 1, eine Vertauschung 0↔2 zwischen Hue und
+Luminance blieb grün. `tests/mask_local_hsl_bands.rs` schließt das mit je einem
+Test und einem **zweiten, nicht-neutralen Zeugenband** (`yellow`, jeweils über
+das *andere* Feld vorbelegt: Saturation zeugt für Hue, Hue zeugt für Luminance),
+sowie je einer Datei-Assertion direkt nach `settle_persisted` (F-4). Der
+0↔2-Tausch ist damit rot; die **elf** verbleibenden `nein`-Zeilen bleiben
+darum genau die elf, für die der Geschwister-Nachweis trägt — kein Element
+dieser Tabelle behauptet mehr Click-Abdeckung ohne Klick.
 
 Geschwister. Wie gut das den Index→Feld-Zusammenhang festnagelt, ist **pro
 Schleife gemessen** und nicht gleich:
 
-| Schleife | angeklicktes Geschwister (Index) | Mutation: Feldindizes vertauscht | Ergebnis |
+| Schleife | angeklicktes Geschwister (Index) | Mutation | Ergebnis |
 |---|---|---|---|
 | Color (Z. 16/17/18, 20) | Hue (0), Saturation (1) | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
-| HSL (Z. 6/7/8) | Saturation (**1**) | `HSL_FIELDS` 0↔1 | **rot** (`mask_local_color_controls.rs:225`) |
-| HSL (Z. 6/8) | — | `HSL_FIELDS` **0↔2** | **grün, 926/926** |
+| HSL (Z. 6/7/8) | Saturation (**1**), Hue (**0**), Luminance (**2**) | `HSL_FIELDS` 0↔1 | **rot** (`mask_local_color_controls.rs:225`; zusätzlich `mask_local_hsl_bands.rs:165` und `:255`) |
+| HSL (Z. 6/8) | Hue (**0**), Luminance (**2**) | `HSL_FIELDS` **0↔2** | **rot** (`mask_local_hsl_bands.rs:195` und `:255`) — **vor** diesem Test: **grün, 931/931** |
+| HSL (Z. 6/7/8) | Hue (0), Luminance (2) | nur der Label-`match` 0↔2, `HSL_FIELDS` unberührt | **rot** (`mask_local_hsl_bands.rs:129`) |
 | Presence (Z. 23/24) | Dehaze (2) | `PRESENCE_FIELDS` 0↔2 | **rot** (`mask_local_editors.rs:87`) |
 | Sharpening (Z. 28/29/30) | Amount (0) | 0↔3 | **rot** (`mask_local_editors.rs:325`) |
 | Noise Reduction (Z. 32) | Luminance (0) | 0↔1 | **rot** (`mask_local_editors.rs:360`) |
 
-**Die eine gemessene Lücke der Tabelle: die HSL-Bänder Hue und Luminance
-(Zeilen 6 und 8).** Der Saturation-Klick pinnt nur Index 1, eine Vertauschung
-0↔2 zwischen Hue und Luminance bleibt unsichtbar, und **kein** GUI-Test klickt
-die HSL-`Hue`- oder HSL-`Luminance`-Schiene (`grep` über `crates/lumina-gui/tests/`
-findet keinen solchen Klick). Für **alle** anderen `nein`-Zeilen ist der
-Index→Feld-Zusammenhang durch das angeklickte Geschwister messbar gedeckt.
+**Die dritte HSL-Zeile ist der Komplementärfall und war vorher unbenannt:** die
+Feldindizes können korrekt sein und die **Beschriftungen** trotzdem vertauscht
+(`match index { 0 => Hue, … }` gegenüber `HSL_FIELDS[index]`). Das ist eine
+eigene Achse derselben Schleife und durch einen Wertetest nicht abgedeckt;
+`mask_local_hsl_bands.rs:129` pinnt sie über die Reihenfolge der drei
+Schienen unterhalb der Bandreihe (Hue → Saturation → Luminance) und über die
+Tatsache, dass der HSL-Block mit **genau einem** `Reset` endet (von beiden
+Blockenden identifiziert). Für **alle** übrigen `nein`-Zeilen ist der
+Index→Feld-Zusammenhang weiterhin durch das angeklickte Geschwister messbar
+gedeckt; die **Label-Achse** (Beschriftung ↔ Index) ist nur dort eine echte
+Lücke gewesen, wo Feldschleife **und** Beschriftung auseinanderlaufen können.
 
 (Korrektur 2026-09-26 nach Verifikationsbefund N1. Zwei frühere Fassungen
 dieses Absatzes waren **beide** falsch und in entgegengesetzte Richtungen: die
@@ -1449,7 +1464,9 @@ eine behauptete, Presence- und Detail-Schleifen seien gar nicht nachweisbar —
 sie sind es (alle drei Mutationen rot); die andere behauptete, der
 Saturation-Klick decke jede Vertauschung der `HSL_FIELDS`-Indizes — er deckt
 nur 0↔1, nicht 0↔2. Der Satz ist jetzt aus den Mutationen abgeleitet statt
-aus einer Annahme über die Form des Codes.)
+aus einer Annahme über die Form des Codes. Korrektur 2026-09-26 nach
+`HSL-BAND-KLICK-43`: die 0↔2-Zeile ist von **grün** auf **rot** gewechselt und
+der Absatz nennt keine offene Lücke mehr.)
 
 #### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
 
