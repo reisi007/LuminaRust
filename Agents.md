@@ -374,6 +374,21 @@ kittest-Stand ausdrücklich.
 - **Nachweispflicht:** Jeder umgesetzte Audit-Befund nennt Test-Name, Datei und
   die konkrete Begründung (welche doppelte Aussage entfällt). Eine Löschung
   ohne Begründung gilt als Regel-Umgehung.
+- **Eine extrahierte Testnaht ist noch kein Test der Produktion (User-Klarstellung
+  2026-09-26).** Wird eine Funktion extrahiert, um sie testbar zu machen, muss
+  der **Produktionspfad sie aufrufen**. Sonst existiert eine byte-gleiche
+  Zweitimplementierung, die nur der Test benutzt, während der echte Pfad
+  ungetestet bleibt. **Pflichtnachweis:** eine Mutation am Produktionspfad muss
+  den Test rot machen. Konkret belegt in `LENSFUN-DB-33` Runde 4: `report_with`
+  war eine Kopie von `resolve_system_with`, die nur `tests/production_seam.rs`
+  aufrief; das Löschen von `pin_displaced` **im echten Pfad** ließ alle 84 Tests
+  grün. Ein Test, der die falsche Funktion prüft, ist schlimmer als keiner —
+  er erzeugt genau die grüne Deckung, die er zu belegen vorgibt.
+- **Eine Behauptung über „gemessen" ist ein Prüfauftrag, keine Aussage.** Werte,
+  die als gemessen bezeichnet werden, müssen aus einer Messung stammen. Ein
+  Build-Agent, der eine Zahl, Matrixgröße oder Abweichungsmenge angibt, hat sie
+  gegen die Quelle zu prüfen — nachgewiesen durch Nachrechnen oder eine
+  unabhängige Gegenmessung, nicht durch Behauptung.
 - **Git-Hygiene (User-Regel 2026-09-26):** Vor jedem Pull/Fetch/Merge/Rebase
   wird die lokale Arbeit committet — auch wenn sie noch nicht verifiziert ist;
   der Verifikationsstand steht dann im Commit-Text. Ein Merge in einen
