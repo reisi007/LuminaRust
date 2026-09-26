@@ -25,6 +25,14 @@
 # runner, where `sw_vers` / `system_profiler` / `rustc` are missing and every
 # such value is legitimately `unavailable`.
 #
+# The price of that design, and the one place it is deliberately broken: a
+# `record`/`check` pair only ever compares a value against a value the SAME code
+# produced, so a self-consistent change to a *derivation* (how `png_size` reads
+# the IHDR, how `ui.scale_factor` divides by the viewport) moves both sides and
+# stays green. The section "value detectors vs committed inputs" is the
+# exception: it feeds the real derivations a committed fixture whose bytes are
+# stated in `scripts/fixtures/README.md` and asserts a LITERAL expected value.
+#
 # Usage: sh scripts/golden_ref_test.sh        (exit 0 = all cases passed)
 # Normative spec: feature/quality/golden-references.md §4
 #
@@ -73,6 +81,21 @@ OTHER_REASON="guard test: a different, still legitimate written reason"
 NL='
 '
 CR=$(printf '\r')
+
+# --- the one committed input the guard suite checks against literals ---------
+#
+# A 33-byte IHDR probe, written from a literal byte list (provenance and
+# regeneration command in `scripts/fixtures/README.md`). The guard's `png_size`
+# reads the 8 bytes at file offset 16..23, which the PNG spec defines as width
+# then height, each 4x u32 BIG endian.
+PNG_IHDR_PROBE_REL='scripts/fixtures/png_ihdr_probe.png'
+# The literal expectations, spelled out here as decimal and NOT computed: the
+# committed bytes are 01 02 03 04 (0x01020304) and 05 06 07 08 (0x05060708).
+# Every byte of both dimensions is non-zero and distinct, so a swapped byte
+# pair, a swapped half, a little endian read and a truncated read all produce a
+# different string and cannot pass by accident.
+PNG_IHDR_PROBE_W=16909060
+PNG_IHDR_PROBE_H=84281096
 
 pass=0
 fail=0
@@ -281,6 +304,106 @@ $OUT"
 $OUT" ;;
   esac
 done
+
+# --- value detectors vs committed, hand-checkable inputs --------------------
+
+section "value detectors vs committed inputs (the derivations, not the keys)"
+
+# Everything above is self-consistent by design: `record` fills the base lock
+# with the same code that `check` later reads, so a change to a derivation
+# moves the expected value along with it. Two derivations were measured to be
+# completely uncovered that way: swapping the two high width bytes in
+# `png_size`, and forcing the `ui.scale_factor` case to always report `1.0`,
+# each left the whole suite green.
+#
+# fd_probe closes that for both. It runs the REAL `emit_fingerprint` of the
+# REAL `scripts/golden_ref.sh` - sourced, never copied, because re-typing
+# `png_size` or the scale case into this suite would assert that the copy
+# agrees with itself - with exactly two things replaced: the golden inventory
+# (`list_goldens`, so the committed probe stands in for the real goldens) and
+# the logical viewport (`VIEWPORT_W` / `VIEWPORT_H`). Every line of the
+# derivation under test is the shipped one. The values land in $FD_PX
+# (`ui.golden_px`) and $FD_SCALE (`ui.scale_factor`).
+#
+# The subshell matters: sourcing brings the script's own `set -eu` and its ~20
+# globals with it, and the caller's positional parameters survive `.` (so the
+# subcommand dispatch is steered with an explicit `set --`).
+fd_probe() {
+  FD_OUT=$(
+    set -u
+    fd_want_root=$1
+    fd_want_w=$2
+    fd_want_h=$3
+    set -- print
+    # Sourced, not copied. Shellcheck cannot follow a non-constant source, and
+    # the file under test is linted in its own right by the same shellcheck run
+    # - following it here would only re-report its assignments as changes to the
+    # suite's own variables (SC2031). SC2034 on the two viewport lines: they are
+    # read by the sourced `emit_fingerprint`, not by this suite.
+    # shellcheck disable=SC1090
+    . "$SCRIPT" >/dev/null 2>&1
+    # The sourced script derives its repository root from `$0`, which is THIS
+    # suite's path. That is not a contract, it is an accident of how `.` works,
+    # so it is checked instead of assumed: a wrong root would silently make
+    # png_size read a file that does not exist and report `?`.
+    if [ "$ROOT" != "$fd_want_root" ]; then
+      echo "fd_probe: sourced ROOT=$ROOT but the suite root is $fd_want_root" >&2
+      exit 1
+    fi
+    list_goldens() { printf '%s\n' "$PNG_IHDR_PROBE_REL"; }
+    # shellcheck disable=SC2034
+    VIEWPORT_W=$fd_want_w
+    # shellcheck disable=SC2034
+    VIEWPORT_H=$fd_want_h
+    emit_fingerprint
+  ) || return 1
+  FD_PX=$(printf '%s\n' "$FD_OUT" | grep '^ui\.golden_px=' | head -n 1)
+  FD_SCALE=$(printf '%s\n' "$FD_OUT" | grep '^ui\.scale_factor=' | head -n 1)
+  FD_PX=${FD_PX#ui.golden_px=}
+  FD_SCALE=${FD_SCALE#ui.scale_factor=}
+}
+
+# (a) png_size: the IHDR byte order and endianness. `ui.golden_px` is the
+# single-golden case of the real `goldens_size`, i.e. `png_size` verbatim.
+if [ -f "$ROOT/$PNG_IHDR_PROBE_REL" ]; then
+  ok "fixture/$PNG_IHDR_PROBE_REL is committed"
+else
+  no "fixture/$PNG_IHDR_PROBE_REL is committed" "missing: $ROOT/$PNG_IHDR_PROBE_REL"
+fi
+# The fixture's own bytes are read here straight from the file, without
+# png_size, so the literal expectation below is not produced by the code under
+# test and a corrupted fixture fails here first, with a readable message.
+probe_hex=$(od -An -tx1 -j 16 -N 8 -v "$ROOT/$PNG_IHDR_PROBE_REL" 2>/dev/null | tr -d ' \n')
+if [ "$probe_hex" = "0102030405060708" ]; then
+  ok "fixture/$PNG_IHDR_PROBE_REL really carries the stated IHDR bytes 01 02 03 04 05 06 07 08"
+else
+  no "fixture/$PNG_IHDR_PROBE_REL really carries the stated IHDR bytes 01 02 03 04 05 06 07 08" \
+     "bytes 16..23 read as: $probe_hex"
+fi
+
+fd_probe "$ROOT" 1024 720
+chk_true "$([ "$FD_PX" = "$PNG_IHDR_PROBE_W"x"$PNG_IHDR_PROBE_H" ] && echo 0 || echo 1)" \
+  "png_size reads the IHDR big endian: $PNG_IHDR_PROBE_W x $PNG_IHDR_PROBE_H" \
+  "ui.golden_px was: $FD_PX (a byte swap, a swapped half or a little endian read would all differ)"
+
+# (b) ui.scale_factor: the comparison against the logical viewport, reached with
+# a synthetic one. A golden that matches the viewport is the unit case; a
+# golden that does not is the documented `non-unit:<w>/<VIEWPORT_W>,<h>/<VIEWPORT_H>`
+# form, and BOTH divisors have to come from the injected viewport.
+fd_probe "$ROOT" "$PNG_IHDR_PROBE_W" "$PNG_IHDR_PROBE_H"
+chk_true "$([ "$FD_SCALE" = "1.0" ] && echo 0 || echo 1)" \
+  "ui.scale_factor is 1.0 when the golden matches the viewport ($PNG_IHDR_PROBE_W x $PNG_IHDR_PROBE_H)" \
+  "ui.scale_factor was: $FD_SCALE"
+
+fd_probe "$ROOT" 1024 720
+chk_true "$([ "$FD_SCALE" = "non-unit:$PNG_IHDR_PROBE_W/1024,$PNG_IHDR_PROBE_H/720" ] && echo 0 || echo 1)" \
+  "ui.scale_factor names both divisors for a non-matching golden (1024 x 720 viewport)" \
+  "ui.scale_factor was: $FD_SCALE"
+
+fd_probe "$ROOT" 800 600
+chk_true "$([ "$FD_SCALE" = "non-unit:$PNG_IHDR_PROBE_W/800,$PNG_IHDR_PROBE_H/600" ] && echo 0 || echo 1)" \
+  "ui.scale_factor reads the viewport out of the injected values, not out of a constant (800 x 600 viewport)" \
+  "ui.scale_factor was: $FD_SCALE"
 
 # --- canonical-form tamper variants -----------------------------------------
 
@@ -719,6 +842,19 @@ set_index_differs_from_worktree() {
   set_golden_modified
   git -C "$REPO" show "HEAD:$GOLDENS_REL" >"$REPO/$GOLDENS_REL" 2>/dev/null
 }
+# The LOCK side of that same clause, the mirror image of the row above. The
+# staged lock keeps the `# Grund:` line it has in HEAD (only a comment is
+# appended, so the lock IS staged and its reason is byte-identical), while the
+# WORKING COPY is given a different reason that is never staged. Judged on the
+# index, the reason is unchanged and the commit must be refused. A gate that
+# read the working copy would accept a commit that carries no new written
+# justification at all - the attack this row exists to close.
+set_lock_index_differs_from_worktree() {
+  set_golden_lock_unchanged_grund
+  sed 's|^# Grund: .*|# Grund: the working copy claims this different reason|' \
+    "$REPO/$LOCK_REL" >"$REPO/$LOCK_REL.worktree-differs" &&
+    mv "$REPO/$LOCK_REL.worktree-differs" "$REPO/$LOCK_REL"
+}
 set_lock_only() {
   mc_repin "only the lock was re-pinned, no golden changed in the guard test"
 }
@@ -744,6 +880,7 @@ mc_commit "golden-renamed-with-repin"      0 set_golden_renamed_repin
 mc_commit "golden-new-in-subdir-no-lock"   1 set_new_golden_subdir_no_lock
 mc_commit "golden-new-in-subdir-with-repin" 0 set_new_golden_subdir_repin
 mc_commit "index-differs-from-worktree"    1 set_index_differs_from_worktree
+mc_commit "lock-index-differs-from-worktree" 1 set_lock_index_differs_from_worktree
 mc_commit "lock-only-no-golden"            0 set_lock_only
 mc_commit "non-golden-png-no-lock"         0 set_non_golden_png
 
@@ -765,6 +902,24 @@ set_golden_lock_unchanged_grund
 OUT=$(git -C "$REPO" commit -q -m "should refuse" 2>&1) && RC=0 || RC=$?
 chk_rc 1 "hook/refusal exits 1 when the reason is unchanged"
 chk_has "is unchanged" "hook/refusal names the unchanged-reason reason"
+
+# The index/worktree row must refuse for THAT cause and not for some incidental
+# one ("lock is not staged", a broken index, a missing reason line) - those
+# would make the matrix row above pass for the wrong reason. The staged lock is
+# staged, has a `# Grund:` line, and that line is the one from HEAD.
+mc_reset
+set_lock_index_differs_from_worktree
+OUT=$(git -C "$REPO" commit -q -m "the index carries no new reason" 2>&1) && RC=0 || RC=$?
+gr_cause=other
+case "$OUT" in
+  *"is unchanged"*) gr_cause=unchanged-reason ;;
+esac
+chk_true "$([ "$RC" -eq 1 ] && [ "$gr_cause" = unchanged-reason ] && echo 0 || echo 1)" \
+  "hook/lock-index-differs-from-worktree refuses because the STAGED reason is the HEAD reason" \
+  "rc=$RC, refusal cause: $gr_cause
+--- hook output ---
+$OUT"
+mc_reset
 
 # Fail-closed: if `git diff --cached` itself fails, the gate must NOT read that
 # as "nothing staged" and let the commit through.

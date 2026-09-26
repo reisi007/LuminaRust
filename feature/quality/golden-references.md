@@ -27,6 +27,7 @@ Verifikationsregeln).
 - [4. `scripts/golden_ref.sh`](#4-scriptsgolden_refsh)
   - [4.1 Pre-Commit-Gate: die tatsächlich lasttragende Schranke](#41-pre-commit-gate-die-tatsächlich-lasttragende-schranke)
   - [4.2 Regressions-Suite des Wächters: `scripts/golden_ref_test.sh`](#42-regressions-suite-des-wächters-scriptsgolden_ref_testsh)
+    - [4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war](#421-der-eine-bruch-in-der-selbstkonsistenz--und-warum-er-nötig-war)
 - [5. `UPDATE_SNAPSHOTS`-Sperre (Geltung: `check` und `gate`)](#5-update_snapshots-sperre-geltung-check-und-gate)
 - [6. Fixture-Set der Goldens](#6-fixture-set-der-goldens)
 - [7. Golden-Inventar](#7-golden-inventar)
@@ -160,6 +161,19 @@ angehängten Eintrags nehmen.
 | `fixtures.digest` | `<modus>:<sha256>` über `pfad sha256`-Zeilen des Fixture-Baums | Laufzeit |
 | `goldens.count` | Anzahl committeter Golden-PNGs | `crates/lumina-gui/tests/snapshots/*.png` |
 | `goldens.digest` | `<modus>:<sha256>` über `pfad sha256`-Zeilen der Golden-Baselines | Laufzeit |
+
+**Die beiden abgeleiteten Werte sind gegen eine committete Fixture gepinnt.**
+`ui.golden_px` und `ui.scale_factor` sind **Ableitungen**, und die Suite
+gleicht sie sonst nur gegen sich selbst ab (§4.2). Der Anker dafür ist
+`scripts/fixtures/png_ihdr_probe.png` (33 Byte, Herkunft und
+Reproduktionskommando in `scripts/fixtures/README.md`): die Suite lässt die
+echte `emit_fingerprint` des echten `scripts/golden_ref.sh` über diese Datei
+laufen und prüft den **literalen** Wert `16909060x84281096` — damit ist die
+Byte-Reihenfolge des IHDR-Lesens (`4x u32 big endian`, siehe die Zeile
+`ui.golden_px` in dieser Tabelle) an etwas festgemacht, das die Ableitung
+nicht selbst erzeugt hat, und `ui.scale_factor` ist mit derselben Fixture über
+einen **synthetischen** Viewport (`1.0` bei Passung,
+`non-unit:<w>/<viewport>,<h>/<viewport>` bei Abweichung) erreichbar.
 
 `scripts/golden_ref.lock` ist eine normale Textdatei:
 
@@ -299,6 +313,15 @@ passenden Pin committet wurde (§3.1, §9.3) — ein einsames, über
 `cherry-pick`/`revert`/`rebase` committetes Golden ist also nicht *stumm*, nur
 nicht im Moment seines Entstehens blockiert.
 
+> **Beide Seiten der Index-Klausel sind getestet.** „Vergleich `HEAD:` gegen
+> den **Index**, nicht gegen die Arbeitskopie" (Punkt 3) hat zwei Seiten, und
+> beide sind Matrixzeilen in §4.2: `index-differs-from-worktree` (Goldenseite:
+> die Änderung steckt nur im Index) und
+> `lock-index-differs-from-worktree` (Lockseite: die `# Grund:`-Zeile steckt
+> nur im Index, während die Arbeitskopie eine andere behauptet). Gemessen: der
+> Hook las vorher nur die Goldenseite — ein Hook, der `git show ":$LOCK_PATH"`
+> durch `cat "$repo_root/$LOCK_PATH"` ersetzt, blieb bei 180/180 grün.
+
 **Installation — nach jedem frischen Clone einmal auszuführen.**
 
 ```sh
@@ -347,18 +370,50 @@ kein macOS) und ist plattformunabhängig: sie behauptet **nie**, dass die
 ausführende Maschine die Referenzplattform ist, sondern pinnt zuerst einen
 synthetischen Lock aus der laufenden Umgebung und prüft gegen diesen.
 
-Abgedeckt (180 Prüfungen, Exit 0 = alles grün):
+Abgedeckt (188 Prüfungen, Exit 0 = alles grün):
 
 | Bereich | Inhalt |
 | --- | --- |
 | Schlüssel-Sweep | jede der **21** Schlüssel einzeln perturbiert → `check` Exit 1, und der Diff nennt **genau** diesen einen Schlüssel (kein Schlüssel ist unlasttragend) |
+| Wertableiter | `png_size` und `ui.scale_factor` gegen **committete, handgeprüfte** Eingaben statt gegen sich selbst: IHDR-Probe `scripts/fixtures/png_ihdr_probe.png` mit literal erwartetem `16909060x84281096`, `ui.scale_factor` mit `1.0` bei passendem und `non-unit:<w>/<Viewport>,<h>/<Viewport>` bei abweichendem synthetischem Viewport — Details in §4.2.1 |
 | Lock-Kanonik | 8 Varianten → Exit 1: angehängter Doppelschlüssel, umgestellte Reihenfolge, unbekannter Schlüssel, fehlender Schlüssel, Zeile ohne `=`, abschließendes Leerzeichen (dann über den **Wert**vergleich), ungültiges Schlüsselzeichen, leerer Schlüssel |
 | Legitime Formen | 7 Formen → Exit 0: wie aufgezeichnet, nur Schlüsselzeilen, handgeschriebener Kopf, Kommentar mitten im Block, Leerzeilen, **CRLF** (siehe §3), Wert mit Leerzeichen **und** `=` |
 | `record`-Verweigerungen | 9 Fälle → Exit 2 **und** keine Lock-Datei entstanden: kein `--confirm`, `--confirm` ohne Wert, leerer Grund, 19 Zeichen, LF, CR, CRLF, `--` im Grund, unerwartetes Argument |
 | `record`-Annahmen | 20 Zeichen, Grund mit Leerzeichen, erneutes Aufzeichnen mit anderem Grund, `old -> new`-Diff **vor** dem Pin |
 | `UPDATE_SNAPSHOTS` | 8 falsche Werte (`''`, `0`, `false`, `no`, `off` + Großschreibung) bleiben still, 6 wahre (`1`, `true`, `yes`, `on`, `force`, `garbage`) lösen die Verweigerung aus — jeweils über `gate` und mit der Zusicherung, dass das gated Kommando **nicht** gelaufen ist; auf passendem Pin läuft es |
-| Pre-Commit-Matrix | 14 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook: geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie, Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
+| Pre-Commit-Matrix | 15 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook: geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie auf **beiden** Seiten (Goldenseite und Lockseite, §4.1), Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
 | Sandbox-Disziplin | `scripts/golden_ref.lock` ist am Ende byte-identisch, der echte Git-Index unverändert, keine `golden_ref.lock.tmp.*` übrig |
+
+### 4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war
+
+Die Suite ist absichtlich **selbstkonsistent**: sie behauptet nie, dass die
+ausführende Maschine die Referenz ist, sondern pinnt zuerst einen synthetischen
+Lock aus der laufenden Umgebung und prüft dagegen. Der Preis ist messbar —
+der Basiswert und der Erwartungswert entstehen beide aus **demselben** Code,
+also verschiebt eine selbstkonsistente Änderung einer *Ableitung* beide Seiten
+gleichzeitig. Gemessen wurde genau das an zwei Stellen, bevor die zugehörigen
+Zeilen existierten:
+
+| Mutation (nur die Ableitung, Produktionstest unverändert) | vorher | jetzt |
+| --- | --- | --- |
+| `png_size`: die beiden hohen Breitenbytes vertauscht | **180/180 grün** | 184/188, 4 rot |
+| `ui.scale_factor`-Fall auf immer `1.0` festgenagelt | **180/180 grün** | 185/188, 2 rot (nur die `non-unit`-Zeilen; die `1.0`-Zeile bleibt grün — genau deshalb sind es zwei) |
+
+Geschlossen wird das nicht durch eine Kopie der Ableitung im Test (eine Kopie
+prüft sich selbst), sondern indem die Suite die **echte** `emit_fingerprint`
+mit zwei ersetzten Eingaben fährt: dem committierten Golden-Inventar
+ersetzt durch `scripts/fixtures/png_ihdr_probe.png` und dem logischen Viewport
+(`VIEWPORT_W`/`VIEWPORT_H`). `scripts/golden_ref.sh` wird dafür **gesourct**,
+nicht nachgebaut; der abgeleitete Repository-Root des Skripts wird dabei
+geprüft statt vorausgesetzt, weil er aus `$0` kommt.
+
+Die Fixture ist eine Datei aus einem **literalen Byte-List**-Kommando, nicht aus
+`png_size` erzeugt; IHDR-Bytes `01 02 03 04 05 06 07 08` stehen im Kommentar
+und in `scripts/fixtures/README.md`, unabhängig bestätigt durch `file`
+(„PNG image data, 16909060 x 84281096"). Die Dimensionen sind bewusst
+unrealistisch groß, damit **jedes** der vier Bytes je Dimension lasttragend ist:
+ein vertauschtes Bytepaar, eine vertauschte Hälfte, ein Little-Endian-Lesen
+und ein auf zwei Bytes gekürztes Lesen liefern alle einen anderen String.
 
 Die Suite schreibt **nie** in das echte Repository: alle Locks liegen in einem
 `mktemp -d`-Sandbox-Verzeichnis **außerhalb** des Repos (über die
@@ -366,7 +421,9 @@ dokumentierte Test-Override `GOLDEN_REF_LOCK`), das Pre-Commit-Gate läuft in
 einem Wegwerf-Repo, und ein `trap` räumt den Sandbox bei Erfolg, Fehler und
 Abbruch auf. Laufzeit auf einem echten Checkout: grob **eineinhalb bis zwei
 Minuten** (jeder `check`/`record`-Aufruf erfasst den Fingerabdruck neu und
-läuft `dd|od|awk` über 66 Goldens).
+läuft `dd|od|awk` über 66 Goldens; die drei zusätzlichen Läufe aus §4.2.1
+kosten zusammen wenige Sekunden, weil dort nur das Golden-Inventar
+ausgetauscht wird).
 
 ---
 
