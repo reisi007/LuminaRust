@@ -240,10 +240,14 @@ jobs:
         # ci-libraw-image.yml). This step covers the `lumina-lensfun` FFI
         # (`native` feature) plus the `lumina-core` `lensfun` pipeline
         # integration (byte-identical fallback + real distortion/vignette
-        # correction against the system Lensfun database). Per F-098-N3 / M2 we
-        # do NOT build the whole workspace with mixed features; the two crates
+        # correction against the system Lensfun database) AND the `lumina-cli`
+        # `lensfun` wiring, whose `tests::lensfun` module (10 tests, including
+        # the LENSFUN-CALLER-PRODSEAM-40 production-seam test) is behind
+        # `#[cfg(feature = "lensfun")]` and therefore never compiled — let alone
+        # run — by the default-feature workspace test above. Per F-098-N3 / M2 we
+        # do NOT build the whole workspace with mixed features; the three crates
         # are selected explicitly with their synchronized features.
-        run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun
+        run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun
 
       # onnx-rt remains a required test gate; its Clippy/check counterpart is
       # in rust-fast, while this shard owns the feature-specific test run.
