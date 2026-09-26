@@ -134,6 +134,13 @@ fn a_persisted_mask_local_edit_is_restored_in_a_reopened_project() {
 
     // 5) The restored layer is *editable*, not merely present: the panel paints
     //    the reloaded entry's own Remove button, and clicking it writes through.
+    //
+    //    The `all local color reset` lookup below is a **layout** precondition,
+    //    not an edit: it asserts the point-colour block is painted exactly once
+    //    on the reopened panel. Without it, a `Remove` lookup could match
+    //    against a panel that has not drawn the block yet and pass for the
+    //    wrong reason. `only_rect` returns a rect, so the value is discarded
+    //    deliberately — the assertion lives inside the call.
     only_rect(&reopened, "all local color reset");
     let target = only_rect(&reopened, "Remove");
     click(&mut reopened, target);

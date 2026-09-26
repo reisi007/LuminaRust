@@ -247,8 +247,14 @@ fn mask_local_color() {
 /// and the block reset.
 ///
 /// Class C / S2. Pinned in full: the whole presence block (texture, clarity,
-/// dehaze) **and** its `all local presence reset` button are above the fold;
-/// the detail block below is not.
+/// dehaze) **and** its `all local presence reset` button are above the fold.
+/// Read from the committed frame, not assumed: the **detail** block is *mostly*
+/// visible too — its caption, all four sharpening rows, `Noise Reduction` with
+/// both its rows, and `local Sharpening reset`. Only `local Noise Reduction
+/// reset` and `all local detail reset` fall below the cut. (Corrected
+/// 2026-09-26: an earlier version of this comment claimed the whole detail
+/// block was out of frame, which understates what the PNG shows — the same
+/// error direction F-5 was raised for.)
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
 fn mask_local_presence() {

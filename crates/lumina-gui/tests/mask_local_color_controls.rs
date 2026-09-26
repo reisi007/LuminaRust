@@ -39,6 +39,16 @@
 //! state — but "the file contains my edit *now*" is only true once the
 //! debounce has run, and that is what each assertion checks.
 //!
+//! # The one deliberate exception
+//!
+//! The rule above is stated for **value gestures**: drags and field clicks that
+//! a later gesture could overwrite before its debounce expires. The two
+//! consecutive `Add color` clicks below are *not* value gestures — each appends
+//! a distinct entry to the list, neither can clobber the other, and the
+//! assertion that follows needs both to exist. The file is read once, after
+//! that pair, and `entries.len() == 2` on disk is then unambiguous. No value
+//! assertion in this file relies on a gesture that skipped its own settle.
+//!
 //! # What makes the two resets worth their own test
 //!
 //! A reset that clears too much is the classic silent defect, so each reset is

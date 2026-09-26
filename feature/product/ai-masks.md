@@ -1140,15 +1140,19 @@ Je mask-local Editor gilt verbindlich **beides**:
    ein gezogener Skalar (Vibrance/Saturation) **und** ein geklickter Button
    (Point-Color-Eintrag, incl. stabiler id) — und die neu geladene Layer muss
    danach wieder beschreibbar sein.
-2. **kittest-Golden** im feature-spezifischen Target
+3. **kittest-Golden** im feature-spezifischen Target
    `crates/lumina-gui/tests/kittest_mask_local.rs` bei `1024 × 720`, mit dem
    `#[ignore]`-Grund `headless GPU required; …` — also **lokal**es macOS-Gate
    über den wgpu-Adapter und in CI **nie** verifiziert (kein GPU-Runner). Kein
-   Golden schreibt einen Decode-Fehler als Soll fest (Wächter
-   `assert_no_raw_decode_failure`); die Mask-local-Editoren laufen auf der
-   S2-Smoke-Fixture und sind damit **Chrome-/Layout-Invarianten der Klasse C**,
-   **keine** Render-Invarianten und **kein** Beleg für eine Bildpipeline-
-   Regression.
+   Golden schreibt einen Decode-Fehler als Soll fest. **Anker-Korrektur
+   2026-09-26 (Verifikationsbefund 13, vorbestehend seit `2e9827f`):** dieser
+   Wächter heißt im Target `assert_no_decode_failure` (lokale Kopie in
+   `kittest_mask_local.rs:181`), **nicht** `assert_no_raw_decode_failure` — das
+   ist der Helper in `kittest_fixtures_support`, den dieses Target nicht
+   aufruft. Die Funktion ist damit gemeint, der Name war falsch. Die
+   Mask-local-Editoren laufen auf der S2-Smoke-Fixture und sind damit
+   **Chrome-/Layout-Invarianten der Klasse C**, **keine** Render-Invarianten
+   und **kein** Beleg für eine Bildpipeline-Regression.
 
 ### 4. Aktions-Audit: die mask-local Editoren sind **bewusst außerhalb**
 
@@ -1236,7 +1240,7 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | dieselbe | `Remove` ignoriert seine Eintrags-id | **rot** (`Remove must delete exactly one entry`) |
   | dieselbe | `Remove` löscht immer den **ersten** Eintrag | **rot** |
   | dieselbe | Per-Bereich-`Reset` ruft den Gesamtblock-Reset | **rot** (`must NOT clear the other ranges`) |
-  | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — und **nur** dieser Test, die drei anderen Ziele bleiben grün |
+  | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — die drei anderen *mask-local* Ziele bleiben grün. **Zusätzlich** werden drei **vorbestehende** Lib-Tests rot (`brush_lifecycle::invert_uses_the_automatic_slider_save_path_and_reloads`, `brush_management::copy_selection_and_reload_ignore_cross_copy_layers`, `mask_local_previous::previous_transfers_full_local_state_but_sync_keeps_target_layers`); das ist **mehr** Abdeckung, kein Defekt — das fette „nur" wäre irreführend gewesen. |
   | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
   | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
 - **`SIDECAR-SAVE-STRAND-39` ist hier reproduziert worden — und die Ursache ist
@@ -1293,15 +1297,15 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 15 | Grading-Bereichswahl (3) | ja — `mask_local_editors` (midtones), `mask_local_color_controls` (midtones, highlights) | `selectable_label` | — |
 | 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
 | 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
-| 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (5 Grading-Regler sind 5 ausgeschriebene `Slider`-Blöcke mit **derselben** Setter-Funktion; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
-| 19 | Grading **Balance** | **nein** | dito, Feld `"balance"` | nur Mechanik |
-| 20 | Grading **Blending** | **nein** | dito, Feld `"blending"` | nur Mechanik |
+| 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (Hue/Saturation/Luminance sind **drei** ausgeschriebene `Slider`-Blöcke mit **derselben** Aufrufform `set_mask_local_grading_field(<range>, "<feld>", wert)`; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
+| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Die Validierung dieses Astes ist von **keinem** Test abgedeckt. |
+| 20 | Grading **Blending** | **nein** | `set_mask_local_grading_field("blending", "value", …)` | dito wie Zeile 19 |
 | 21 | Reset pro Bereich | ja — `mask_local_color_controls` (Bereichs-Scope mit Zeuge) | `reset_mask_local_grading(range)` | — |
 | 22 | `all local color reset` | ja — `mask_local_editors` | `reset_mask_local_color` | — |
 | **P1.2c Presence** |||||
-| 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler, ein Aufruf; Dehaze **und** Clarity sind geklickt, Clarity im Reload-Test auf der neu geladenen Layer) |
-| 24 | Clarity | ja — `mask_local_reload` | dito | — |
-| 25 | Dehaze | ja — `mask_local_editors`, `mask_local_reload` | dito | — |
+| 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler in **einer** `for`-Schleife über `PRESENCE_FIELDS`; Dehaze **und** Clarity sind angeklickt) |
+| 24 | Clarity | **nein** | dito | nur Mechanik (drittes Element derselben Schleife wie Zeile 25) |
+| 25 | Dehaze | ja — `mask_local_editors` | dito | — |
 | 26 | `all local presence reset` | ja — `mask_local_editors` | `reset_mask_local_presence` | — |
 | **P1.2d Detail** |||||
 | 27 | Sharpening **Amount** | ja — `mask_local_editors` | Schleife `["amount","radius","detail","masking"]` → `set_mask_local_sharpening` | — |
@@ -1314,9 +1318,13 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 34 | `local Noise Reduction reset` | **nein** | `reset_mask_local_detail_field("noise_reduction")` | nur Mechanik: **derselbe** Aufruf in **derselben** `for`-Schleife, anderer `field`-String; die Bereichs-Semantik ist am Sharpening-Fall belegt |
 | 35 | `all local detail reset` | ja — `mask_local_editors` | `reset_mask_local_detail` | — |
 
-**Bilanz:** 23 der 35 Gruppen sind angeklickt; **12 sind es nicht** und sind
+**Bilanz:** 22 der 35 Gruppen sind angeklickt; **13 sind es nicht** und sind
 oben mit ihrer Mechanik benannt. Kein Element der letzten Spalte behauptet
-Klick-Abdeckung. Für die zwölf gilt der ehrliche Nachweis: sie teilen sich
+Klick-Abdeckung. (Korrektur 2026-09-26 nach dem Verifikationsbefund: Zeile 24
+fuhr zuvor „ja — `mask_local_reload`", obwohl dieser Test **weder**
+Presence **noch** Clarity anfasst — `grep -c` auf `mask_local_reload.rs` ergibt
+0. Clarity wird von keinem GUI-Test angeklickt. Damit sind es 22/13, nicht
+23/12.) Für die zwölf gilt der ehrliche Nachweis: sie teilen sich
 entweder **exakt** den Helper/Setter mit einem geklickten Geschwister oder
 stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
 das nicht gelten lässt, braucht 12 weitere Drag-/Click-Tests über dieselben
@@ -1347,8 +1355,15 @@ schreibt.
     `Point Color`-Caption, `Add color`, `Color Grading`-Caption, Bereichs-Reihe
     **und die `Hue`-Zeile**. Unter dem Fold: Grading-`Saturation`/`Luminance`/
     `Balance`/`Blending`, der Per-Bereich-`Reset` und `all local color reset`.
-  * `mask_local_presence.png` — der **ganze** Presence-Block inklusive
-    `all local presence reset`; darunter der Detail-Block.
+  * `mask_local_presence.png` — sichtbar: der **ganze** Presence-Block inklusive
+    `all local presence reset` — **und** der Detail-Block bis auf seine beiden
+    unteren Reset-Buttons: `Detail`-Caption, alle vier Sharpening-Zeilen,
+    `Noise Reduction` mit beiden Zeilen sowie `local Sharpening reset`. Unter dem
+    Fold: nur `local Noise Reduction reset` und `all local detail reset`.
+    (Korrektur 2026-09-26 nach eigenem Framework-Lesen des PNG: die frühere
+    Fassung schrieb „darunter der Detail-Block" und **unterstellte damit weniger
+    Sichtbarkeit, als das Frame zeigt** — genau die Fehlerrichtung, die F-5
+    abstellen sollte.)
   * `mask_local_detail.png` — der **ganze** Detail-Block inklusive **aller drei**
     Reset-Buttons (`local Sharpening reset`, `local Noise Reduction reset`,
     `all local detail reset`). Die Behauptung, die unteren Reset-Buttons lägen
