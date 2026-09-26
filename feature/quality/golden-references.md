@@ -817,6 +817,16 @@ Daraus folgt:
 > Hand-editieren des Locks in kanonischer Form (§9.3); und der Blick auf den
 > Golden-Diff wird unterlassen.
 >
+> **Zwei weitere Mechanismen sind bewusst auf Klasse 1, obwohl sie dort nicht
+> aufgeführt waren (Korrektur 2026-09-26, Verifikationsbefund):** ein Commit,
+> der **einen geschwächten `.githooks/pre-commit` zusammen mit dem Golden**
+> enthält — genau der Commit, den der Wächter beaufsichtigt, und
+> `git -c core.hooksPath=/dev/null commit`. Beide sind bewusst und gehören zur
+> Klasse, aber die Aufzählung war **nicht vollständig**, und ein Leser konnte
+> daraus schließen, `--no-verify` sei die einzige „Schranke aus“-Variante. Die
+> Formulierung ist als Aufzählung markiert, aber der Eindruck der Vollständigkeit
+> ist ein Fehler.
+>
 > **Klasse 2 — unbeabsichtigt, weil git gar keinen Pre-Commit-Hook ausführt.**
 > Das ist die Klasse, die man nicht auf dem Schirm hat, weil sie aussieht wie
 > ganz normale Git-Arbeit. Nachgemessen in einem Wegwerf-Repo mit dem echten
