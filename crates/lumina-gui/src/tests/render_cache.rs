@@ -58,7 +58,7 @@ fn render_hash_gate_hides_hash_in_empty_library_only() {
     // Listing a RAW entry makes the (unfiltered) raster non-empty: the
     // hash returns.
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("img.arw"), b"lumina-raw-fixture").unwrap();
+    std::fs::write(dir.path().join("img.arw"), b"lumina-raw-listing-sentinel").unwrap();
     app.set_directory(dir.path().display().to_string());
     assert!(!app.entries().is_empty());
     assert!(

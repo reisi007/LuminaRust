@@ -3,15 +3,19 @@
 //!
 //! Normative SOLL: [`feature/quality/golden-fixtures.md`](../../../../feature/quality/golden-fixtures.md).
 //!
-//! Before this module the Library fixtures were 11 committed `.arw` files of 18
+//! Before this module the Library fixtures were 12 committed `.arw` files of 18
 //! literal bytes (`lumina-raw-fixture`). LibRaw rejected them, so the committed
 //! Library goldens captured a *decode-failure banner* plus colour-block
 //! placeholders — a picture that can never reveal an image-pipeline regression.
+//! (Korrektur 2026-09-26: die Zahl war hier mit **11** verzeichnet; gemessen sind
+//! **12** — 3 badges + 3 rated + 3 stack + 3 views.)
 //!
 //! The contract implemented here:
 //!
 //! * **R1 — real RAW fixture.** The two licensed Canon EOS R1 CR3s in
-//!   `sample-data/raw/` (provenance/licence: `sample-data/raw/README.md` §4/§8)
+//!   `sample-data/raw/` (provenance/licence: `feature/quality/fixtures-licensing.md`
+//!   §4/§8 — der Verweis auf `sample-data/raw/README.md` §4/§8 war unerfüllbar und
+//!   wird nicht wiederholt)
 //!   are the only RAW bytes a fixture may contain. They are committed
 //!   **once**; a test stages a byte-identical copy into its own (relative,
 //!   gitignored) fixture directory at setup time. Nothing is duplicated into

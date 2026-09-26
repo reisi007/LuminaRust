@@ -66,7 +66,7 @@ Median/p95-Vergleich neu aufzeichnen.
 | Datei | Maße | Orientierung | Verwendung |
 | --- | --- | --- | --- |
 | `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench |
-| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 5 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench |
+| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`) |
 
 Decode-Benchmarks lesen das Verzeichnis über die Env-Variablen
 **`LUMINA_RAW_FIXTURE`**; ohne sie wird sauber übersprungen (kein Panic, kein
