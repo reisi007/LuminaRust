@@ -1,18 +1,17 @@
-//! GUI-INT-MASKLOCAL-38: **addressing the mask-local tone-curve editor** —
-//! locating the graph (a painted area, not an accesskit node), disambiguating
-//! its labels, and driving the gestures the shared `curve_graph_gesture`
-//! decoder turns pointer input into: set (click on the drawn curve), move
-//! (drag), delete (double click) and the two resets. Every frame-time
-//! precondition the gestures need is documented at its helper.
+//! GUI-INT-MASKLOCAL-38: the mask-local **curve-graph** geometry and gestures
+//! — locating the graph (a painted area, not an accesskit node) and driving the
+//! gestures the shared `curve_graph_gesture` decoder turns pointer input into:
+//! set (click on the drawn curve), move (drag) and delete (double click).
+//! Every frame-time precondition the gestures need is documented at its helper.
 //!
-//! Used only by `mask_local_editors_wiring.rs`. The label lookups live
-//! here rather than in the shared core because the curve block is the reason
-//! they exist: it contributes a second "Red" (a curve channel next to the HSL
-//! band) and a third "Reset" (per-channel next to the block-wide one) to a
-//! panel that already repeats both labels several times.
+//! Used only by `mask_local_editors_wiring.rs`. The graph's *label* addressing
+//! is not here but in `mask_local_label_support`: "Red" and "Reset" are
+//! ambiguous in the Masking panel for reasons that have nothing to do with the
+//! curve, and the colour target needs the same lookups.
 
-use super::mask_local_editors_support::{nodes, settle};
+use super::mask_local_editors_support::settle;
 use eframe::egui::{Pos2, Rect};
+use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use lumina_gui::LuminaApp;
 
@@ -21,16 +20,15 @@ use lumina_gui::LuminaApp;
 /// purpose: the golden guard must not reuse the constant it verifies.
 pub const CURVE_GRAPH_SIDE: f32 = 184.0;
 
-/// The mask-local curve graph rectangle: the panel's unique
-/// `CURVE_GRAPH_SIDE` square among the frame's painted shapes.
+/// Every unique `CURVE_GRAPH_SIDE` square in the frame, top to bottom.
 ///
 /// The graph is a painted `Ui::interact` area, not an accesskit node, so it is
 /// found by geometry. Only the *outermost* square counts: egui paints the
 /// filled background **and** the border stroke at the same rect, and every
 /// control point is a 4pt circle — so filtering on the exact side length
 /// excludes the points and the dedup merges fill and stroke.
-pub fn curve_graph_rect(harness: &Harness<'_, LuminaApp>) -> eframe::egui::Rect {
-    let mut found: Vec<eframe::egui::Rect> = harness
+pub fn curve_graph_rects(harness: &Harness<'_, LuminaApp>) -> Vec<Rect> {
+    let mut found: Vec<Rect> = harness
         .output()
         .shapes
         .iter()
@@ -42,11 +40,18 @@ pub fn curve_graph_rect(harness: &Harness<'_, LuminaApp>) -> eframe::egui::Rect 
         .collect();
     found.sort_by(|a, b| {
         a.min
-            .x
-            .total_cmp(&b.min.x)
-            .then_with(|| a.min.y.total_cmp(&b.min.y))
+            .y
+            .total_cmp(&b.min.y)
+            .then_with(|| a.min.x.total_cmp(&b.min.x))
     });
     found.dedup_by(|a, b| a.center().distance(b.center()) < 0.5);
+    found
+}
+
+/// The mask-local curve graph rectangle: the panel's unique
+/// `CURVE_GRAPH_SIDE` square among the frame's painted shapes.
+pub fn curve_graph_rect(harness: &Harness<'_, LuminaApp>) -> Rect {
+    let found = curve_graph_rects(harness);
     assert_eq!(
         found.len(),
         1,
@@ -56,71 +61,48 @@ pub fn curve_graph_rect(harness: &Harness<'_, LuminaApp>) -> eframe::egui::Rect 
     found[0]
 }
 
-/// The rect of the single occurrence of `label`, or `None`.
+/// The global and the mask-local curve graph rect, `(global, local)`.
 ///
-/// A slider contributes two accesskit nodes with the same label (the caption
-/// and its numeric readout), so "present" must not mean "unique" here — the
-/// anchor-based lookups below filter by direction, and the panel's caption
-/// lookups belong to `mask_local_slider_support::slider_rail`.
-pub fn find_rect(harness: &Harness<'_, LuminaApp>, label: &str) -> Option<Rect> {
-    let found = nodes(harness, label);
-    match found.len() {
-        0 => None,
-        1 => Some(found[0]),
-        _ => panic!("expected at most one {label:?} node in the Masking panel, got {found:?}"),
-    }
-}
-
-/// The nearest `label` node strictly **below** `anchor`.
-///
-/// Used for the curve block's channel selector: "Red" under the panel-unique
-/// "Channel" caption is the curve channel, the HSL band of the same name sits
-/// further down. `anchor` must be a panel-unique label.
-pub fn below(harness: &Harness<'_, LuminaApp>, anchor: &str, label: &str) -> Rect {
-    let anchor_y = find_rect(harness, anchor)
-        .unwrap_or_else(|| panic!("anchor label {anchor:?} is not painted in the Masking panel"))
-        .max
-        .y;
-    let found: Vec<Rect> = nodes(harness, label)
-        .into_iter()
-        .filter(|rect| rect.min.y >= anchor_y)
-        .collect();
-    let nearest = found
+/// Which of the two painted squares is which is **not** assumed from the
+/// section order: the mask-local block prints a readout line no global block
+/// has (`local curves.<channel>: N pts, mid X`) directly below its own graph,
+/// so the local graph is the square **immediately** above that unique text.
+/// Deriving the discriminator from the editor's own output keeps this correct
+/// even if the two Develop sections are ever reordered on screen.
+pub fn global_and_local_graph_rects(harness: &Harness<'_, LuminaApp>) -> (Rect, Rect) {
+    let readout_rect = harness
+        .query_all_by_label_contains("local curves.")
+        .next()
+        .expect("the mask-local curve block must print its `local curves.` readout")
+        .rect();
+    let squares = curve_graph_rects(harness);
+    assert_eq!(
+        squares.len(),
+        2,
+        "opening Tone Curve next to Masking must paint exactly two curve graphs, got {squares:?}"
+    );
+    // The readout is below *both* graphs, so "above" alone cannot pick one:
+    // the local graph is the *nearest* one above it.
+    let mut above: Vec<Rect> = squares
         .iter()
-        .min_by(|a, b| {
-            a.min
-                .y
-                .total_cmp(&b.min.y)
-                .then_with(|| a.min.x.total_cmp(&b.min.x))
-        })
-        .copied();
-    nearest.unwrap_or_else(|| panic!("no {label:?} node below {anchor:?} in the Masking panel"))
-}
-
-/// The nearest `label` node strictly **above** `anchor`. See [`below`].
-///
-/// Used for the per-channel reset: anchored on the panel-unique "all local
-/// curves reset" button, the nearest "Reset" above it is the selected
-/// channel's reset.
-pub fn above(harness: &Harness<'_, LuminaApp>, anchor: &str, label: &str) -> Rect {
-    let anchor_y = find_rect(harness, anchor)
-        .unwrap_or_else(|| panic!("anchor label {anchor:?} is not painted in the Masking panel"))
-        .min
-        .y;
-    let found: Vec<Rect> = nodes(harness, label)
-        .into_iter()
-        .filter(|rect| rect.max.y <= anchor_y)
-        .collect();
-    found
-        .iter()
-        .max_by(|a, b| {
-            a.min
-                .y
-                .total_cmp(&b.min.y)
-                .then_with(|| a.min.x.total_cmp(&b.min.x))
-        })
         .copied()
-        .unwrap_or_else(|| panic!("no {label:?} node above {anchor:?} in the Masking panel"))
+        .filter(|rect| rect.max.y <= readout_rect.min.y)
+        .collect();
+    above.sort_by(|a, b| b.max.y.total_cmp(&a.max.y));
+    let local = above
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no curve graph above the mask-local readout in {squares:?}"));
+    let global = squares
+        .iter()
+        .copied()
+        .find(|rect| rect.center().distance(local.center()) > 1.0)
+        .expect("the second curve graph");
+    assert!(
+        readout_rect.min.y - local.max.y <= readout_rect.min.y - global.max.y,
+        "the local graph must be the one directly above its readout, got {local:?} / {global:?}"
+    );
+    (global, local)
 }
 
 /// Map graph fractions (input right, output up) to a screen position.

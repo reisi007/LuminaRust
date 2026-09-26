@@ -18,9 +18,6 @@ use lumina_gui::LuminaApp;
 /// Horizontal inset keeping a 0.0/1.0 press strictly inside the slider.
 const RAIL_INSET: f32 = 3.0;
 
-/// Number of intermediate pointer positions a [`drag_slider`] walks through.
-pub const DRAG_STEPS: usize = 3;
-
 /// Which vertical direction a looked-up widget lies in relative to its anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
@@ -118,41 +115,40 @@ pub fn slider_rail(
 
 /// Drag a real `egui::Slider` from its current value to `fraction` of `rail`.
 ///
-/// Three measured properties, all of them load-bearing:
+/// The press, the move and the release sit in **three separate frames**, and
+/// that is the whole requirement. Measured, not assumed:
 ///
-/// 1. **Multi-frame.** A slider is a drag widget, not a click widget: a
-///    same-frame press+release never moves it. The press and the release
-///    therefore sit in separate frames, so each frame runs `ui.interact` and
-///    records its own event.
-/// 2. **Distinct intermediate positions.** The pointer walks from the rail
-///    position the handle currently sits at through [`DRAG_STEPS`] further
-///    positions to the target, one frame each. This is what a real drag looks
-///    like, and it is also what the app's save path requires: the debounced
-///    sidecar commit is armed by `mark_recipe_dirty` on *each* value change and
-///    the drag branch of the scheduler sets `last_edit_time` per drag frame. A
-///    gesture that parks the pointer and then releases changes the value in a
-///    single frame; `render_schedule.rs` then takes the `!pointer_down` branch
-///    with `last_edit_time` still at its pre-drag value, and the armed save is
-///    only flushed by a *later*, unrelated edit. Measured, not assumed: with a
-///    parked pointer the value lands in memory but never reaches the sidecar.
-/// 3. **A final position-changing frame before the release**, so the last
-///    `mark_recipe_dirty` happens while the pointer is still down and the
-///    release frame takes the debounce branch.
+/// * a same-frame press+release never moves an egui slider at all — the widget
+///   needs a `dragged()` event, which only a *frame* between press and release
+///   produces; and
+/// * the value change has to happen while the pointer is still down, so the
+///   debounced save arms (`mark_recipe_dirty` → `pending_slider_commit`) and
+///   `schedule_render` refreshes `last_edit_time` for that drag.
+///
+/// # Why there are no intermediate pointer positions
+///
+/// An earlier version walked `DRAG_STEPS` intermediate positions and documented
+/// that as *required*: the claim was that a drag which changes its value in a
+/// single frame strands the debounced save (`SIDECAR-SAVE-STRAND-39`). That
+/// justification is **measured to be false** — every interaction test of this
+/// feature passes unchanged with 0, 1, 2 and 3 intermediate positions. What
+/// matters is the frame separation, not the number of steps.
+///
+/// The workaround is therefore gone on purpose. `SIDECAR-SAVE-STRAND-39`
+/// requires that its reproduction must not be explained by workaround logic
+/// ("sonst ist die Abdeckung vakuos"), and a helper that drags through five
+/// positions to dodge a bug is exactly that.
 pub fn drag_slider(harness: &mut Harness<'_, LuminaApp>, rail: Rect, fraction: f32) {
     let y = rail.center().y;
     let at = |f: f32| Pos2::new(rail.min.x + rail.width() * f.clamp(0.0, 1.0), y);
     // Press where the handle already is (the middle of the rail is the neutral
-    // value of every slider these editors offer), then walk to the target.
+    // value of every slider these editors offer), move to the target, release —
+    // one frame each.
     let from = 0.5;
     let to = fraction.clamp(0.0, 1.0);
     harness.hover_at(at(from));
     harness.drag_at(at(from));
     harness.step();
-    for step in 1..=DRAG_STEPS {
-        let position = from + (to - from) * (step as f32) / (DRAG_STEPS as f32 + 1.0);
-        harness.hover_at(at(position));
-        harness.step();
-    }
     harness.hover_at(at(to));
     harness.step();
     harness.drop_at(at(to));

@@ -52,9 +52,37 @@
 //! One consequence is named rather than hidden: at the 1024x720 reference
 //! viewport a mask-local block is taller than the panel, so each golden pins
 //! the part of its editor that fits above the fold (the `scroll_into_view`
-//! guard proves the anchor is pixel-visible). The rows below the fold — the
-//! grading block of the colour editor, the block resets of the lower editors —
-//! are covered by the interaction target, not by these pixels.
+//! guard proves the anchor is pixel-visible). Exactly what that is, per
+//! golden, is stated at the test — the four frames were read individually
+//! (Vision pass, 2026-09-26) because a blanket claim about "the grading block"
+//! and "the lower resets" was measurably wrong for two of the four.
+//!
+//! # Vision pass (DoD §6) — 2026-09-26
+//!
+//! All four committed frames were read individually before the independent
+//! verification (DoD §6 makes a vision pass on new snapshots mandatory).
+//! Findings, none blocking:
+//!
+//! * **No layout defect** in any of the four: no overlap, no clipped panel,
+//!   no missing or misplaced element; the Navigator/Preview/right-panel columns
+//!   are intact and the pinned editor is fully rendered wherever it is
+//!   claimed to be.
+//! * **The title-bar warning is an accepted committed baseline.** All four
+//!   frames carry `Warning: mask unavailable (layer layer-mask-<hash>), it is
+//!   not applied in the preview`. It is kept deliberately: the S2 fixture has a
+//!   mask layer with **no** mask artifact, so this is the truthful state, and
+//!   the product principle (reproducibility over a silent fallback) requires the
+//!   app to say so rather than render as if a mask were applied. A golden that
+//!   hid it would pin a fiction. The `layer-mask-<hash>` id is a deterministic
+//!   hash over the fixed, per-test mask name, which is why the bytes are stable
+//!   across runs (proved by a `shasum` before/after re-run).
+//! * `mask_local_tone_curve.png` additionally shows the yellow status line
+//!   `local WB sample is missing: render an effective source stage first`. That
+//!   belongs to the **global** local-white-balance eyedropper, not to a
+//!   mask-local editor, and is the same truthful-fallback rule: a class-C
+//!   fixture has no effective source stage.
+//! * Because the preview shows an *unmasked* image, no frame here may ever be
+//!   cited as a render/mask proof. The frames claim layout only.
 //!
 //! # Running them
 //!
@@ -174,8 +202,13 @@ fn assert_no_decode_failure(harness: &Harness<'static, LuminaApp>) {
 /// (Master/R/G/B), the drawn curve graph with its two mandatory `(0,0)`/`(1,1)`
 /// endpoints, and the per-channel + block reset levels.
 ///
-/// Class C / S2. Pinned above the fold: the channel row, the graph, both reset
-/// buttons and the numeric readout.
+/// Class C / S2. Pinned in full, read from the committed frame: the `Channel`
+/// row, the `Point curve` caption, the graph with both mandatory endpoints,
+/// both reset buttons and the `local curves.master: … pts, mid …` readout. The
+/// HSL block below is out of frame. The title bar additionally carries the
+/// honest `Warning: mask unavailable (layer layer-mask-…)` banner — the
+/// fixture has a mask layer without a mask artifact, and the frame records
+/// that instead of hiding it (see the module docs).
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
 fn mask_local_tone_curve() {
@@ -190,9 +223,16 @@ fn mask_local_tone_curve() {
 /// Hue/Saturation/Luminance rows, vibrance/saturation, the point-colour block
 /// and the block reset.
 ///
-/// Class C / S2. Pinned above the fold: the band row through the point-colour
-/// block. The grading block sits below the 1024x720 fold and is covered by
-/// `mask_local_editors.rs`, not by these pixels.
+/// Class C / S2. Read from the committed frame, not assumed: visible are the
+/// HSL caption, all eight band buttons, Hue/Saturation/Luminance, the
+/// per-band `Reset`, Vibrance, Saturation, the `Point Color` caption, `Add
+/// color`, the `Color Grading` caption, the range row **and the `Hue` row**.
+/// Below the fold are grading Saturation/Luminance/Balance/Blending, the
+/// per-range `Reset` and `all local color reset`; those are covered by
+/// `mask_local_editors.rs` and `mask_local_color_controls.rs`, not by these
+/// pixels. The point-colour `Remove` and block `Reset` buttons are absent for
+/// a different reason: they are only painted for a non-empty entry list, and
+/// this frame carries no edit.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
 fn mask_local_color() {
@@ -206,7 +246,9 @@ fn mask_local_color() {
 /// MASK-LOCAL-P1.2c: the mask-local presence editor — texture, clarity, dehaze
 /// and the block reset.
 ///
-/// Class C / S2. Pinned in full: the block is short enough to fit above the fold.
+/// Class C / S2. Pinned in full: the whole presence block (texture, clarity,
+/// dehaze) **and** its `all local presence reset` button are above the fold;
+/// the detail block below is not.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
 fn mask_local_presence() {
@@ -221,8 +263,11 @@ fn mask_local_presence() {
 /// (amount/radius/detail/masking), the noise-reduction rows (luminance/color)
 /// and the three reset levels.
 ///
-/// Class C / S2. Pinned above the fold: both sub-blocks and the two sub-block
-/// resets. The block reset is the last row and may sit at the fold.
+/// Class C / S2. Pinned in full: both sub-blocks, all six slider rows **and
+/// all three reset buttons** (`local Sharpening reset`, `local Noise
+/// Reduction reset`, `all local detail reset`) are above the fold. An earlier
+/// version of this comment claimed the block reset "may sit at the fold" — the
+/// frame shows all three, so the claim was wrong and is corrected here.
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
 fn mask_local_detail() {

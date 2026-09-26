@@ -12,23 +12,27 @@
 //! * **here** — each of the four editors is painted by its **own** production
 //!   `draw_*` path, reached through the real `LuminaApp::draw_masking` chain,
 //!   and the labels used to address them belong to the mask-local editors
-//!   rather than to the global Develop sections;
-//! * `mask_local_editors.rs` — each editor is **clickable** and writes through
-//!   to the persisted sidecar.
+//!   rather than to the global Develop sections; plus the tone-curve surface
+//!   itself (UXG-16 gestures, the two reset levels) and the proof that the
+//!   mask-local graph shares no interaction state with the global one;
+//! * `mask_local_editors.rs` — the scalar-valued editors are **clickable** and
+//!   write through to the persisted sidecar.
 //!
-//! The split is a real module boundary (paint provenance vs. input contract),
-//! not a size hack: it also keeps the two failure modes apart, because a
-//! mis-wired `draw_` call breaks this file while a non-clickable widget breaks
-//! its sibling.
+//! The split is a real module boundary (paint provenance and graph contract vs.
+//! input contract for scalars), not a size hack: it also keeps the two failure
+//! modes apart, because a mis-wired `draw_` call breaks this file while a
+//! non-clickable widget breaks its sibling.
 //!
 //! The harness, the frame clock and the label lookups are shared with
-//! `mask_local_editors_support`; the graph location, the curve gestures and the
-//! curve block's label lookups live in `mask_local_curve_graph_support`.
+//! `mask_local_editors_support` / `mask_local_label_support`; the graph
+//! location and the curve gestures live in `mask_local_curve_graph_support`.
 
 mod mask_local_curve_graph_support;
 mod mask_local_editors_support;
+mod mask_local_label_support;
 use mask_local_curve_graph_support::*;
 use mask_local_editors_support::*;
+use mask_local_label_support::*;
 
 /// `SECTION_MASKING` — the section that hosts all four mask-local editors.
 const SECTION_MASKING: usize = lumina_gui::SECTION_MASKING;
@@ -215,5 +219,98 @@ fn the_masking_panel_paints_each_mask_local_editor_from_its_own_draw_path() {
         nodes(&harness, "Point curve").len(),
         2,
         "the local and the global curve graph must be independent widgets"
+    );
+}
+
+/// The mask-local graph has its **own** widget id, so with the global Tone
+/// Curve section open next to it neither graph can move the other's points.
+///
+/// This is the behavioural anchor for the SOLL sentence "eigene, stabile
+/// Widget-Id … damit er im selben UI-Baum neben dem globalen Graph keine
+/// egui-Interaktionszustände teilt". A test that compared the two id *strings*
+/// would be the "constant tested against itself" defect the test policy
+/// forbids: identical-looking ids could still be combined into one
+/// `egui::Id` at runtime. So both directions are driven with real pointer
+/// input on the real painted graphs, and each direction starts from a
+/// **non-identity** state on the *other* editor, which is what makes "unchanged"
+/// mean something.
+#[test]
+fn the_local_and_global_curve_graphs_do_not_share_interaction_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = open_masking_panel(&dir);
+    for index in 0..lumina_gui::SECTION_COUNT {
+        let open = matches!(index, SECTION_MASKING | lumina_gui::SECTION_TONE_CURVE);
+        harness.state_mut().set_section_open(index, open);
+    }
+    // The full settle matters here: the gesture targets an absolute screen
+    // position, so the layout must be final before the rects are read. Opening
+    // a second section re-arms the debounced full render, and the panel height
+    // it settles to differs from the one-frame snapshot.
+    settle_persisted(&mut harness);
+    let (global, local) = global_and_local_graph_rects(&harness);
+    assert!(
+        global.center().distance(local.center()) > 1.0,
+        "the two graphs must be two distinct painted rects, got {global:?} / {local:?}"
+    );
+
+    // Seed a **non-identity** local curve first, so a later global drag has
+    // something it could plausibly clobber.
+    edit_curve_point(&mut harness, local, 0.5, 0.5, 0.5, 0.8);
+    let local_before = harness.state().selected_mask_local_curve("master").unwrap();
+    assert_eq!(local_before.len(), 3, "the local seed must be in place");
+
+    // Direction 1: drag the **global** graph. Its own curve must take the
+    // point, and the local one must be untouched.
+    edit_curve_point(&mut harness, global, 0.25, 0.25, 0.25, 0.45);
+    let global_after = harness
+        .state()
+        .recipe()
+        .curves
+        .as_ref()
+        .expect("a global graph gesture must write the global curves block")
+        .master
+        .clone();
+    assert_eq!(
+        global_after.len(),
+        3,
+        "the global master curve must take the point: {global_after:?}"
+    );
+    assert_eq!(
+        harness.state().selected_mask_local_curve("master").unwrap(),
+        local_before,
+        "a drag on the GLOBAL graph must not touch the mask-local curve"
+    );
+
+    // Direction 2: drag the **local** graph again. The global curve — now
+    // carrying three points, i.e. not the identity — must survive unchanged.
+    // The click has to land on the local graph's *current* spline: the seed
+    // lifted the middle point to 0.8, so (0.5, 0.5) is no longer on the drawn
+    // curve and a click there would be the documented no-op. Landing on the
+    // point itself means this gesture *moves* it instead of inserting one.
+    edit_curve_point(&mut harness, local, 0.5, 0.8, 0.5, 0.6);
+    let local_after = harness.state().selected_mask_local_curve("master").unwrap();
+    assert_eq!(
+        local_after.len(),
+        3,
+        "moving an existing local point must not insert another: {local_after:?}"
+    );
+    assert!(
+        close(f64::from(local_after[1].output), 0.6),
+        "the second local drag must land where it was dropped: {local_after:?}"
+    );
+    assert_ne!(
+        local_after, local_before,
+        "the second local drag must really be a change, or this test is vacuous"
+    );
+    assert_eq!(
+        harness
+            .state()
+            .recipe()
+            .curves
+            .as_ref()
+            .expect("the global block must still be there")
+            .master,
+        global_after,
+        "a drag on the LOCAL graph must not touch the global curve"
     );
 }

@@ -1049,6 +1049,14 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
   * Der mask-local Graph hat eine **eigene, stabile Widget-Id**
     (`lumina.local_tone_curve_graph.<channel>`), damit er im selben UI-Baum
     neben dem globalen Graph keine egui-Interaktionszustände teilt.
+    **Anker (Verifikationsbefund F-2):** ein Id-Vergleich wäre der
+    „Konstante gegen sich selbst"-Defekt, also wird das **Verhalten** gefahren —
+    `tests/mask_local_editors_wiring.rs::the_local_and_global_curve_graphs_do_
+    not_share_interaction_state` öffnet Masking **und** Tone Curve nebeneinander,
+    zieht den **globalen** Graphen und prüft, dass die lokale Kurve unverändert
+    bleibt, und umgekehrt — jeweils ausgehend von einem **nicht-neutralen**
+    Zustand der anderen Seite. Mutation: lässt der globale Graph die lokale Id
+    benutzen, wird der Test rot.
   * Die **Kanalwahl** Master/R/G/B ist eine echte Auswahl-Reihe
     (`selectable_label`) und schaltet den dargestellten und bearbeiteten Kanal
     um; ein Kanalwechsel ist eine reine Ansichtsumschaltung und schreibt
@@ -1066,12 +1074,25 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
 - **Kein globaler Seiteneffekt:** nach jedem mask-local Klick gilt
   `recipe().curves.is_none()`-entsprechend: das globale Rezept
   (`EditRecipe::curves`/`hsl`/`point_color`/`color_grading`/`presence`/
-  `sharpening`/`noise_reduction`/`adjustments`) ist byteweise unverändert. Das ist
-  eine **Zusicherung**, keine Beobachtung — ein Test, der sie nicht prüft,
-  deckt die Editor-Transaktion nicht ab.
+  `sharpening`/`noise_reduction`/`adjustments`) ist **strukturell
+  unverändert**. Die Zusage ist bewusst **kein** Bytevergleich: die Tests
+  vergleichen mit `assert_eq!(app.recipe(), &before)` — ein abgeleitetes
+  `PartialEq` über die `EditRecipe`-Felder — und prüfen zusätzlich die
+  einzelnen globalen Felder auf `None` bzw. auf Abwesenheit im flachen
+  `adjustments`-Map. *Nicht* behauptet wird: Byte-Identität des globalen
+  Blocks im persistierten Sidecar. Das ist eine **Zusicherung**, keine
+  Beobachtung — ein Test, der sie nicht prüft, deckt die Editor-Transaktion
+  nicht ab.
 - **Lauter Fehler statt stillem No-Op:** ein Refused Edit (unbekannter Kanal,
-  Endpunkt, ungültige Punktliste) verlässt Layer und ausstehenden
-  History-Snapshot byteweise unverändert und setzt eine sichtbare Statuszeile.
+  Endpunkt, ungültige Punktliste) verlässt den Masken-Layer und den
+  ausstehenden History-Snapshot **strukturell** unverändert und setzt eine
+  sichtbare Statuszeile. Anker:
+  `src/tests/mask_local_curves.rs::invalid_local_curve_edits_are_refused_without_mutating`
+  (`assert_eq!` über `active_mask_layers_snapshot()` plus unveränderte
+  History-Länge) und
+  `src/tests/mask_local_curve_graph.rs::the_local_graph_refuses_to_move_an_endpoint`
+  (der Endpunkt-Drag aus dem echten Gesten-Decoder). Auch hier ist „unverändert"
+  ein `PartialEq` über die Strukturen, **kein** Bytevergleich der Datei.
 
 ### 3. Testabdeckung: zwei Anker je sichtbarer Fläche
 
@@ -1084,14 +1105,19 @@ Je mask-local Editor gilt verbindlich **beides**:
    „ist anklickbar" (Eingabevertrag) sind verschiedene Ansprüche und liegen
    deshalb in verschiedenen Zielen: `tests/mask_local_editors_wiring.rs`
    (Paint-Provenienz plus der Graph-Vertrag UXG-16, dessen Wert eine Punktliste
-   und kein Skalar ist) und `tests/mask_local_editors.rs` (Presence/Color/Detail,
-   deren Wert ein Skalar ist). Ein Miswire bricht das eine Ziel, ein nicht
-   anklickbares Widget das andere. Geteilte Testhilfen liegen in
-   `tests/mask_local_editors_support/` (Harness, Frame-Uhr, Label-Lookups),
-   `tests/mask_local_slider_support/` (Regler-Drags) und
+   und kein Skalar ist, plus die Id-Unabhängigkeit beider Graphen) und
+   `tests/mask_local_editors.rs` (Presence/Color/Detail, deren Wert ein Skalar
+   ist). Ein Miswire bricht das eine Ziel, ein nicht anklickbares Widget das
+   andere. Zwei weitere Ziele kamen in der Verifikationsrunde dazu:
+   `tests/mask_local_color_controls.rs` (die fünf vorher ungeklickten Controls
+   der Farb-Fläche, DoD §3) und `tests/mask_local_reload.rs` (das Reload-Glied
+   der Kette aus DoD §1). Geteilte Testhilfen liegen in
+   `tests/mask_local_editors_support/` (Harness, Frame-Uhr, Label-Lookups,
+   Persistenz-Readback), `tests/mask_local_slider_support/` (Regler-Drags),
+   `tests/mask_local_label_support/` (richtungsbasierte Label-Lookups) und
    `tests/mask_local_curve_graph_support/` (Graph-Geometrie und -Gesten); keine
-   Datei dieser drei Module wird von `#[allow(dead_code)]` am Liveness-Gate
-   vorbeigetragen, jede wird nur von ihrem Verbraucher deklariert.
+   Datei dieser vier Module wird von `#[allow(dead_code)]` am Liveness-Gate
+   vorbeigetragen, jede wird nur von ihren Verbrauchern deklariert.
 1. **Klickbarer headless Test** (läuft in `cargo test -p lumina-gui`, **ohne**
    GPU): `egui::Context` + `LuminaApp` im tempdir bzw. der 4×3-Smoke-PNG, echte
    Zeiger-Events auf die echten Widgets der echten `draw_masking`-Kette, und
@@ -1099,6 +1125,21 @@ Je mask-local Editor gilt verbindlich **beides**:
    (`selected_mask_local_*` / `has_mask_local_*` / `recipe()`). Ein reiner
    „das Widget wurde gepaint"-Test ist **kein** Interaktionsnachweis und deckt
    Abschnitt 2 nicht ab.
+   **Reihenfolge-Regel (F-4):** auf **jedes** Gest folgt erst `settle_persisted`
+   und **dann** die Datei-Assertion, und erst danach das nächste Gest. Grund ist
+   in 6.1 gemessen: die 150-ms-Uhr des entprellten Saves wird von jedem Edit neu
+   gestartet, eine Datei-Assertion am Testende könnte also von einem *späteren*
+   Gest erfüllt werden, ohne dass das geprüfte Gest etwas gespeichert hat.
+2. **Reload-Glied (F-6, DoD §1):** `tests/mask_local_reload.rs` schließt die
+   Kette `Edit → Commit/Debounce → Sidecar-Datei → Reload → Wert wieder da`:
+   ein **zweites** `LuminaApp` über demselben tempdir liest den Wert über den
+   Produktionspfad (`open_file` → Decode → `finish_decode` adoptiert das
+   Sidecar, löst die virtuelle Kopie **per Identität** und selektiert die
+   persistierte Layer). Kein zweites `create_mask`, denn ein frisch angelegter
+   Layer würde die Aussage entwerten. Geprüft wird für **beide** Eingabearten —
+   ein gezogener Skalar (Vibrance/Saturation) **und** ein geklickter Button
+   (Point-Color-Eintrag, incl. stabiler id) — und die neu geladene Layer muss
+   danach wieder beschreibbar sein.
 2. **kittest-Golden** im feature-spezifischen Target
    `crates/lumina-gui/tests/kittest_mask_local.rs` bei `1024 × 720`, mit dem
    `#[ignore]`-Grund `headless GPU required; …` — also **lokal**es macOS-Gate
@@ -1109,15 +1150,54 @@ Je mask-local Editor gilt verbindlich **beides**:
    **keine** Render-Invarianten und **kein** Beleg für eine Bildpipeline-
    Regression.
 
-### 4. Aktions-Audit
+### 4. Aktions-Audit: die mask-local Editoren sind **bewusst außerhalb**
 
-Die mask-local Editoren armieren **keine** neue `GuiAction`-Variante: sie laufen
-über die vorhandenen typisierten Setter und den bestehenden `instrument_gui_action!`-
-Pfad der Maskenaktionen. Führt eine Änderung an diesem Vertrag eine neue Variante
-ein, ist `ALL_GUI_ACTIONS` (aktuell 110 Aktionen, gepinnt in
-`gpu_audit_exception_table_is_complete_without_gpu`) mitzupflegen; der
+**Korrektur 2026-09-26 (Verifikationsbefund F-1).** Eine frühere Fassung dieses
+Abschnitts behauptete, die mask-local Editoren liefen „über die vorhandenen
+typisierten Setter und den bestehenden `instrument_gui_action!`-Pfad der
+Maskenaktionen". Das ist **falsch und war messbar falsch**:
+`grep instrument_gui_action` über `mask_local_color.rs`, `mask_local_curves.rs`,
+`mask_local_presence.rs`, `mask_local_detail.rs`, `mask_local_controls.rs` und
+`develop_masking.rs` liefert **null** Treffer.
+
+Was der Code tatsächlich tut:
+
+- **Keine `GuiAction`-Variante.** Die vier Editoren erzeugen **keine** Aktion
+  aus `ALL_GUI_ACTIONS`; sie sind damit **nicht** Teil des F-100-Audits
+  („jede Aktion hat einen Shortcut und einen Button") und mussten die
+  110-Aktionen-Pinnung in `gpu_audit_exception_table_is_complete_without_gpu`
+  **nicht** anfassen.
+- **Kein `instrument_gui_action!`.** Das Makro ist ein **Debug-Jank-Timer**
+  (`#[cfg(debug_assertions)]` plus `#[cfg(all(feature = "janklog",
+  debug_assertions))]`); in einem Release-Build expandiert es auf **nichts**. Es
+  ist **nicht** der Save-Pfad und nichts, was `ALL_GUI_ACTIONS` definiert.
+- **Stattdessen:** die typisierten Setter (`set_mask_local_*` / `reset_mask_local_*`)
+  loggen selbst mit `info!("GUI interaction: local …")` (DoD §4: mindestens
+  `info!` für jede user-sichtbare Aktion) und armen über
+  `mark_recipe_dirty(action, 0.0)` — also `pending_slider_commit` plus
+  `mark_dirty()`. Das ist derselbe Eintieg wie bei jedem anderen Rezept-Edit
+  und erfüllt `GUI-SLIDER-SAVE-1` (CAS, entprellter Save, reine View-Edits
+  schreiben nichts).
+
+**Warum der Ausschluss gewollt ist.** `GuiAction`/`ALL_GUI_ACTIONS` ist die
+**globale Kommandofläche** (Tastatur-Shortcut + Button je Aktion, F-100). Ein
+mask-local Regler ist kein Kommando, sondern ein Panel-lokales Widget an genau
+einer ausgewählten Masken-Layer. Eine `GuiAction`-Variante pro Feld würde für
+alle masken-lokalen Felder einen Shortcut **und** einen Button erzwingen — das
+ist nicht der Zweck des Audits, sondern eine Umgehung seiner Absicht.
+
+**Was der Ausschluss kostet (laut benannt, nicht beschönigt):** ein
+mask-local Edit erzeugt **keinen** Jank-Record und taucht in keiner
+Action-Liste auf. Wer die Vollständigkeit der Bedienoberflächen-Aktionen
+prüft, sieht die 47 Controls dieses Abschnitts nicht. Das ist eine bewusste
+Lücke der *Aktions*-Instrumentierung, **keine** Lücke der *Test*-Abdeckung —
+die Bedienbarkeit ist je Control in §6 klassifiziert und durch Klick-Tests
+belegt.
+
+Führt eine Änderung an diesem Vertrag doch eine `GuiAction`-Variante ein, ist
+`ALL_GUI_ACTIONS` (aktuell 110 Aktionen) mitzupflegen **und** der
 F-100-Button-Audit (`f100_shortcut_audit_every_action_has_a_button`) muss
-ebenfalls grün bleiben.
+weiterhin grün bleiben.
 
 ### 5. Ausdrückliche Grenze der Prüfbarkeit
 
@@ -1132,32 +1212,192 @@ Log-Redirect) — das ist eine User-Aktion und **kein** Ersatz für die
 headless-Anker. Was headless prinzipiell nicht belegt, ist als **laut
 benannte Lücke** zu führen, nicht zu beschönigen.
 
-### 6. Erreichter Stand und bekannte Grenzen (Stand 2026-09-26)
+### 6. Erreichter Stand, Vollständigkeits-Klassifikation und Grenzen
+
+#### 6.1 Verifikationsstand (Stand 2026-09-26, nach F-1…F-8)
 
 - **Verdrahtung war kein offener Punkt.** `draw_mask_local_tone_curve` ist
   bereits aufgerufen (`develop_masking.rs`, Commit `1c490b7`); es fehlten
-  ausschließlich der klickbare Nachweis und die Goldens. Die Nicht-Vakuums-
-  Gegenprobe (alle vier `draw_mask_local_*`-Aufrufe auskommentiert) lässt alle
-  vier Interaktionstests rot werden.
+  ausschließlich der klickbare Nachweis und die Goldens.
 - **Geteilte Testhilfen ohne Liveness-Ausnahme** (Modulgrenze, siehe Punkt 0):
-  Der erste Entwurf hatte eine Support-Datei mit allen Helfern; die beiden
-  Testziele ließen 13 bzw. 6 Helfer ungenutzt, was das Clippy-Gate
-  `-D warnings` reißt. Die Aufteilung folgt der tatsächlichen Nutzung, nicht
-  einer `allow`-Regel.
-- **Bekannte Grenze der Goldens (Klasse C, Layout):** bei `1024 × 720` fallen
-  die Color-Grading-Zeilen und die Reset-Buttons der unteren Blöcke unter den
-  Fold. Sie werden nicht per Golden, sondern im Interaktionsziel geprüft
-  (Viewport bewusst `1100 × 3600`, siehe `PANEL_VIEWPORT`).
-- **Folgekonflikt, nicht mask-local-spezifisch (nicht hier behoben):** ein
-  Slider-Drag, der seinen Wert in **einzelnen** Frame ändert, strandet den
-  debounced Sidecar-Save — `render_schedule.rs` nimmt im `!pointer_down`-Zweig
-  den Zweig mit `last_edit_time` auf dem Vor-Drag-Wert, der scharfwertende
-  `pending_slider_commit` wird erst von einer **späteren**, fremden Änderung
-  geflusht (gemessen: Grading-Hue kam im Speicher an, nie ins Sidecar;
-  `set_rating(3)` flushte ihn nach). Der Drag-Helper
-  `mask_local_slider_support::drag_slider` umgeht das mit mehreren
-  Zwischenpositionen, der Bug selbst liegt im gemeinsamen Render-Pfad und
-  braucht eine eigene Aufgabe.
+  Der erste Entwurf hatte eine Support-Datei mit allen Helfern; die Testziele
+  ließen 13 bzw. 6 Helfer ungenutzt, was das Clippy-Gate `-D warnings` reißt.
+  Die Aufteilung folgt der tatsächlichen Nutzung, nicht einer `allow`-Regel. In
+  dieser Runde kam eine vierte Schnittstelle hinzu
+  (`tests/mask_local_label_support/`), weil die Farb-Ziele dieselben
+  richtungsbasierten Label-Lookups brauchen wie das Kurven-Ziel.
+- **Nicht-Vakuums-Nachweis je neuem Test** (alle mit einer Mutation am
+  **Produktionspfad** belegt, nicht durch Umbenennung):
+  | Test | Mutation | Ergebnis |
+  |---|---|---|
+  | `the_local_and_global_curve_graphs_do_not_share_interaction_state` | der globale Graph benutzt `local_tone_curve_graph_id` | **rot** (der globale Gest landet nirgends) |
+  | `the_remaining_mask_local_color_controls_…` | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
+  | dieselbe | Per-Band-Reset räumt den **ganzen** HSL-Block | **rot** (`must NOT clear the other bands`) |
+  | dieselbe | `Remove` ignoriert seine Eintrags-id | **rot** (`Remove must delete exactly one entry`) |
+  | dieselbe | `Remove` löscht immer den **ersten** Eintrag | **rot** |
+  | dieselbe | Per-Bereich-`Reset` ruft den Gesamtblock-Reset | **rot** (`must NOT clear the other ranges`) |
+  | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — und **nur** dieser Test, die drei anderen Ziele bleiben grün |
+  | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
+  | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
+- **`SIDECAR-SAVE-STRAND-39` ist hier reproduziert worden — und die Ursache ist
+  gemessen, nicht vermutet.** Mit einem `log::Log`-Tap auf Trace-Level
+  sichtbar: ein mask-local Edit hochstuft seinen Draft-Tick zu einem
+  **Vollrender** (`render_tick.rs`: „absolute-frame or local-mask stage
+  active"), und der entprellte Save läuft nur im Zweig
+  `!pointer_down && pending_full_render` von `schedule_render`. Die
+  150-ms-Uhr wird von **jedem** Edit neu gestartet, und `pending_slider_commit`
+  ist last-write-wins: ein zweites Gest innerhalb des Fensters schiebt den
+  Commit des ersten hinaus. **Kein Wert geht dabei verloren** — der Save trägt
+  den kompletten Layer-Zustand —, aber „die Datei enthält meinen Edit *jetzt*"
+  gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
+  **jedes** Gest ein `settle_persisted` **und** eine Datei-Assertion, bevor das
+  nächste Gest kommt (F-4). Ein erster Entwurf von
+  `mask_local_color_controls.rs` hatte genau diesen Defekt (kein Settle
+  zwischen zwei Drags), und der Trace zeigte, dass der erste Commit sein
+  Debounce-Fenster nie bekam.
+- **Der `DRAG_STEPS`-Workaround ist entfernt.** Er war als „notwendig"
+  dokumentiert; **gemessen** ist das falsch — alle Interaktionstests bestehen
+  unverändert mit 0, 1, 2 **und** 3 Zwischenpositionen. Notwendig ist die
+  Frame-Trennung von Press/Move/Release, nicht die Schrittzahl. Da
+  `SIDECAR-SAVE-STRAND-39` ausdrücklich verlangt, dass die Reproduktion **nicht**
+  durch Workaround-Logik erklärt wird („sonst ist die Abdeckung vakuos"), ist
+  der Umweg weg.
+
+#### 6.2 Vollständigkeits-Klassifikation **jedes** Controls (DoD §3)
+
+Gezählt werden **35 Bediengruppen** (je ein Widget oder eine Widget-Familie mit
+einem Schreibpfad). Zählt man jede einzelne Schaltfläche statt der Gruppe —
+8 HSL-Bänder, 4 Kurvenkanäle, 3 Grading-Bereiche einzeln — sind es **47
+Widgets**. DoD §3 verlangt keine Stichprobe, sondern die Klassifikation **aller**
+Mitglieder; die Spalte „Klick-abgedeckt" nennt den Test, die Spalte „Mechanik"
+nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
+
+| # | Control | Klick-abgedeckt (Test) | Mechanik | Nur Mechanik / nicht abgedeckt |
+|---|---|---|---|---|
+| **P1.2a Tone Curve** |||||
+| 1 | Kanalwahl M/R/G/B | ja — `mask_local_editors_wiring` (Klick auf „Red") | `selectable_label` + `info!` | — |
+| 2 | Graph: Setzen/Verschieben/Löschen | ja — `mask_local_editors_wiring` | `curve_graph_gesture` | — |
+| 3 | Reset pro Kanal | ja — `mask_local_editors_wiring` | `reset_mask_local_curve_channel` | — |
+| 4 | `all local curves reset` | ja — `mask_local_editors_wiring` | `reset_mask_local_curves` | — |
+| **P1.2b Color** |||||
+| 5 | HSL-Bandwahl (8 Bänder) | ja — `mask_local_editors` (cyan), `mask_local_color_controls` (cyan, yellow) | `selectable_label` | — |
+| 6 | HSL **Hue** | **nein** | Schleife `HSL_FIELDS` → `local_color_slider` → `set_mask_local_hsl_band` | nur Mechanik (Hue/Saturation/Luminance laufen durch **denselben** Helper; Saturation ist geklickt) |
+| 7 | HSL **Saturation** | ja — `mask_local_editors` | dito | — |
+| 8 | HSL **Luminance** | **nein** | dito | nur Mechanik |
+| 9 | Reset pro Band | ja — `mask_local_color_controls` (Band-Scope mit Zeuge) | `reset_mask_local_hsl_band(band)` | — |
+| 10 | **Vibrance** | ja — `mask_local_color_controls` | `local_color_slider` → `set_mask_local_vibrance_saturation` | — |
+| 11 | **Saturation** (Vibrance-Paar) | ja — `mask_local_color_controls` (negativ gezogen) | dito | — |
+| 12 | Point Color **Remove** | ja — `mask_local_color_controls` (2 Einträge, der **zweite** Button) | `remove_mask_local_point_color(id)` | — |
+| 13 | Point Color `Add color` | ja — `mask_local_editors`, `mask_local_reload` | `add_mask_local_point_color` | — |
+| 14 | Reset Point-Color-Block | **nein** (Button nicht geklickt) | `remove_mask_local_point_color("")` | nur Mechanik: dieselbe Wirkung wie der geklickte Gesamtblock-Reset, der den Block mitlöscht |
+| 15 | Grading-Bereichswahl (3) | ja — `mask_local_editors` (midtones), `mask_local_color_controls` (midtones, highlights) | `selectable_label` | — |
+| 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
+| 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
+| 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (5 Grading-Regler sind 5 ausgeschriebene `Slider`-Blöcke mit **derselben** Setter-Funktion; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
+| 19 | Grading **Balance** | **nein** | dito, Feld `"balance"` | nur Mechanik |
+| 20 | Grading **Blending** | **nein** | dito, Feld `"blending"` | nur Mechanik |
+| 21 | Reset pro Bereich | ja — `mask_local_color_controls` (Bereichs-Scope mit Zeuge) | `reset_mask_local_grading(range)` | — |
+| 22 | `all local color reset` | ja — `mask_local_editors` | `reset_mask_local_color` | — |
+| **P1.2c Presence** |||||
+| 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler, ein Aufruf; Dehaze **und** Clarity sind geklickt, Clarity im Reload-Test auf der neu geladenen Layer) |
+| 24 | Clarity | ja — `mask_local_reload` | dito | — |
+| 25 | Dehaze | ja — `mask_local_editors`, `mask_local_reload` | dito | — |
+| 26 | `all local presence reset` | ja — `mask_local_editors` | `reset_mask_local_presence` | — |
+| **P1.2d Detail** |||||
+| 27 | Sharpening **Amount** | ja — `mask_local_editors` | Schleife `["amount","radius","detail","masking"]` → `set_mask_local_sharpening` | — |
+| 28 | Sharpening **Radius** | **nein** | dieselbe Schleife | nur Mechanik |
+| 29 | Sharpening **Detail** | **nein** | dieselbe Schleife | nur Mechanik |
+| 30 | Sharpening **Masking** | **nein** | dieselbe Schleife | nur Mechanik |
+| 31 | Noise Reduction **Luminance** | ja — `mask_local_editors` | Schleife `["luminance","color"]` → `set_mask_local_noise_reduction` | — |
+| 32 | Noise Reduction **Color** | **nein** | dieselbe Schleife | nur Mechanik |
+| 33 | `local Sharpening reset` | ja — `mask_local_editors` (nur Sharpening, NR bleibt) | `reset_mask_local_detail_field("sharpening")` | — |
+| 34 | `local Noise Reduction reset` | **nein** | `reset_mask_local_detail_field("noise_reduction")` | nur Mechanik: **derselbe** Aufruf in **derselben** `for`-Schleife, anderer `field`-String; die Bereichs-Semantik ist am Sharpening-Fall belegt |
+| 35 | `all local detail reset` | ja — `mask_local_editors` | `reset_mask_local_detail` | — |
+
+**Bilanz:** 23 der 35 Gruppen sind angeklickt; **12 sind es nicht** und sind
+oben mit ihrer Mechanik benannt. Kein Element der letzten Spalte behauptet
+Klick-Abdeckung. Für die zwölf gilt der ehrliche Nachweis: sie teilen sich
+entweder **exakt** den Helper/Setter mit einem geklickten Geschwister oder
+stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
+das nicht gelten lässt, braucht 12 weitere Drag-/Click-Tests über dieselben
+Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
+unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
+Der eine Mutationstest pro Schleife (siehe 6.1) deckt genau diese
+Gemeinsamkeit auf: er wird rot, sobald der gemeinsame Helper nicht mehr
+schreibt.
+
+#### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
+
+- **Kein echter Fenster-Test.** DPI, Multi-Monitor, echte Maus-Hardware und ein
+  für den Menschen sichtbares Bild sind **nicht** belegt — und werden nach
+  `Agents.md` auch nicht verlangt. Alles Above-the-Fold in den Goldens ist
+  Layout, nicht Interaktion.
+- **Bekannte Grenze der Goldens (Klasse C, Layout) — je Golden einzeln, nicht
+  pauschal (Korrektur 2026-09-26, Verifikationsbefund F-5).** Eine frühere
+  Fassung behauptete pauschal, die Color-Grading-Zeilen und die Reset-Buttons
+  der unteren Blöcke lägen unter dem Fold. Das war **falsch und in beiden
+  Richtungen**: es unterstellte weniger Sichtbarkeit, als die Frames zeigen.
+  Gelesen aus den vier committeten PNGs (Vision-Pass, siehe 6.4):
+  * `mask_local_tone_curve.png` — sichtbar: Channel-Reihe (Master/R/G/B),
+    Graph mit beiden Pflicht-Endpunkten, Per-Kanal-`Reset`,
+    `all local curves reset`, Readout `local curves.master: 2 pts, mid 0.500`.
+    Unter dem Fold: der HSL-Block.
+  * `mask_local_color.png` — sichtbar: HSL-Caption, alle acht Bandknöpfe,
+    Hue/Saturation/Luminance, Per-Band-`Reset`, Vibrance, Saturation,
+    `Point Color`-Caption, `Add color`, `Color Grading`-Caption, Bereichs-Reihe
+    **und die `Hue`-Zeile**. Unter dem Fold: Grading-`Saturation`/`Luminance`/
+    `Balance`/`Blending`, der Per-Bereich-`Reset` und `all local color reset`.
+  * `mask_local_presence.png` — der **ganze** Presence-Block inklusive
+    `all local presence reset`; darunter der Detail-Block.
+  * `mask_local_detail.png` — der **ganze** Detail-Block inklusive **aller drei**
+    Reset-Buttons (`local Sharpening reset`, `local Noise Reduction reset`,
+    `all local detail reset`). Die Behauptung, die unteren Reset-Buttons lägen
+    unter dem Fold, war für dieses Golden **falsch**.
+  * Die Point-Colour-Controls `Remove` und der Point-Colour-Block-`Reset`
+    sind in **keinem** Frame sichtbar — aus einem **anderen** Grund: sie werden
+    nur bei nicht-leerer Eintragsliste gezeichnet (`!entries.is_empty()`), und
+    die Goldens enthalten bewusst keinen Edit. Ihr Bedienpfad ist in
+    `mask_local_color_controls.rs` abgedeckt.
+- **Ein hue-only Grading-Block wird nicht persistiert — und das ist
+  Absicht, kein Defekt.** `color_grading_is_neutral` ist das *Pixel*-Prädikat
+  und ignoriert `hue_degrees` bewusst (ein Hue wählt nur den Tint; der Kernel
+  überspringt `saturation == 0`). Ein Block, der nur einen Hue trägt, ist
+  pixelneutral und wird deshalb nicht abgelegt — **global wie mask-local**
+  (dieselbe Prädikat-Funktion). Praktische Folge: nach einem reinen
+  Hue-Drag ist der Block nach einem Reload weg, sobald die Range neutral
+  wird. Der Hue überlebt nur zusammen mit Saturation/Luminance. Das ist beim
+  Testen sichtbar geworden und wird hier festgehalten, damit es niemand als
+  Datenverlust missversteht.
+- **Folgekonflikt, nicht mask-local-spezifisch (nicht hier behoben):**
+  `SIDECAR-SAVE-STRAND-39`, im Kern in 6.1 gemessen. Der gemeinsame
+  Render-/Save-Pfad ist betroffen, nicht die Editoren; die Aufgabe bleibt dort
+  und wird **nicht** von einem Test-Helper umgangen.
+
+#### 6.4 Vision-Pass der vier Goldens (DoD §6, 2026-09-26)
+
+Alle vier committeten Frames wurden vor der unabhängigen Verifikation einzeln
+gelesen. Befunde, keiner blockierend:
+
+* **Kein Layout-Defekt**: keine Überlappung, kein abgeschnittenes Panel, kein
+  fehlendes oder versetztes Element; die Spalten Navigator/Preview/Rechtes
+  bleiben intakt, und der gepinnte Editor ist überall dort vollständig
+  gerendert, wo er beansprucht wird.
+* **Der Titelbanner `Warning: mask unavailable (layer layer-mask-<hash>), it is
+  not applied in the preview` ist eine bewusst akzeptierte Baseline.** Er bleibt
+  drin: die S2-Fixture hat eine Masken-Layer **ohne** Masken-Artefakt, das ist
+  der wahre Zustand, und das Produktprinzip (Reproduzierbarkeit vor stillem
+  Fallback) verlangt, das zu sagen, statt so zu rendern, als wäre eine Maske
+  angewendet. Ein Golden, das ihn verbergen würde, pinnte eine Fiktion. Die
+  `layer-mask-<hash>`-Id ist ein deterministischer Hash über den festen,
+  je Golden verschiedenen Maskennamen — deshalb sind die Bytes über Läufe
+  stabil (per `shasum` vor/nach Re-Run belegt).
+* `mask_local_tone_curve.png` zeigt zusätzlich die gelbe Statuszeile `local WB
+  sample is missing: render an effective source stage first`. Sie gehört zum
+  **globalen** Local-White-Balance-Picker, nicht zu einem mask-local Editor,
+  und folgt derselben Fallback-Regel: eine Klasse-C-Fixture hat keine effective
+  source stage.
+* Weil die Vorschau ein **unmaskiertes** Bild zeigt, darf **kein** frame als
+  Render- oder Masken-Nachweis zitiert werden. Die Frames beanspruchen Layout.
 
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 

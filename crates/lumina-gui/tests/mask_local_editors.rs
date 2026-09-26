@@ -16,27 +16,34 @@
 //! `recipe()`, and — because the fixture is a real file in a `tempfile::tempdir`
 //! — the debounced save's actual sidecar bytes on disk.
 //!
-//! # Scope split (why three tests here and not four)
+//! # Scope split (why three tests here)
 //!
 //! * **This target** — the three surfaces whose value proof *is* a value: a
 //!   slider/selector gesture must move a number that survives to disk. Presence
 //!   (2 sliders + block reset), Color (HSL band row, grading range row, point
-//!   color), Detail (slider + reset).
+//!   color), Detail (slider + reset). Every gesture is followed by
+//!   `settle_persisted` **and** a disk assertion before the next one, so no
+//!   later click can be what makes a file assertion pass.
 //! * [`mask_local_editors_wiring`](../mask_local_editors_wiring.rs) — the
 //!   **tone-curve** surface, whose value is a whole point set rather than one
 //!   scalar, plus the paint-provenance guard that all four editors are reached
-//!   from the Masking section. The curve gestures have their own timing and
-//!   geometry rules; they are documented in `mask_local_curve_graph_support`
-//!   and keep the harness file small.
+//!   from the Masking section and that the local and the global graph share no
+//!   interaction state.
+//! * [`mask_local_color_controls`](../mask_local_color_controls.rs) — the five
+//!   controls of the colour editor that the representative-per-block approach
+//!   left unclicked (DoD §3), including the two *scoped* resets.
+//! * [`mask_local_reload`](../mask_local_reload.rs) — the **reload** leg of
+//!   DoD §1's chain, in a second `LuminaApp` over the same tempdir.
 //! * [`kittest_mask_local`](../kittest_mask_local.rs) — the four `#[ignore]`d
 //!   visual goldens.
 //!
-//! Both targets share `mask_local_editors_support` (harness, frame clock,
-//! label lookups, persisted readback); the slider gestures live in
-//! `mask_local_slider_support`, the curve-graph gestures and the curve block's
-//! label lookups in `mask_local_curve_graph_support`. A helper only one target
-//! calls would be dead code, and `Agents.md` forbids closing a `-D warnings`
-//! gate with an `allow` attribute.
+//! All four interaction targets share `mask_local_editors_support` (harness,
+//! frame clock, label lookups, persisted readback); the slider gestures live in
+//! `mask_local_slider_support`, the directional label lookups in
+//! `mask_local_label_support`, the curve-graph gestures in
+//! `mask_local_curve_graph_support`. A helper only one target calls would be
+//! dead code, and `Agents.md` forbids closing a `-D warnings` gate with an
+//! `allow` attribute.
 //!
 //! No GPU and no wgpu adapter are needed: the harness only has to lay out and
 //! dispatch input, not rasterize. That keeps this target inside the normal
@@ -160,6 +167,24 @@ fn the_mask_local_color_editor_is_clickable_and_writes_through() {
         "dragging the cyan saturation slider must change the stored band, got {saturation}"
     );
     assert!(close(hue, 0.0) && close(luminance, 0.0));
+    // …and on disk **before** the next click. Asserting the file only at the
+    // end of the test would let a later gesture's flush satisfy it (F-4).
+    settle_persisted(&mut harness);
+    assert!(
+        close(
+            f64::from(
+                persisted_local_recipe(&dir)
+                    .hsl
+                    .as_ref()
+                    .expect("persisted HSL block")
+                    .cyan
+                    .expect("persisted cyan channel")
+                    .saturation
+            ),
+            saturation
+        ),
+        "the HSL drag must reach the sidecar on its own, before any later click"
+    );
     // A different band is still neutral: the slider edited the *selected* one.
     assert_eq!(
         harness
@@ -196,6 +221,15 @@ fn the_mask_local_color_editor_is_clickable_and_writes_through() {
         "Add color must create one entry: {entries:?}"
     );
     assert!(harness.state().recipe().point_color.is_none());
+    settle_persisted(&mut harness);
+    assert_eq!(
+        persisted_local_recipe(&dir)
+            .point_color
+            .as_ref()
+            .map(|block| block.entries.len()),
+        Some(1),
+        "the added entry must reach the sidecar before the next gesture"
+    );
 
     // 3) Color Grading: pick a range, then drag its hue slider. "Midtones" is
     //    unique in the panel (the local-adjustment block uses "Highlights" and
@@ -223,29 +257,22 @@ fn the_mask_local_color_editor_is_clickable_and_writes_through() {
     assert!(close(grading_saturation, 0.0) && close(grading_luminance, 0.0));
     assert!(harness.state().recipe().color_grading.is_none());
     assert_eq!(harness.state().recipe(), &global_before);
-
-    // …and all three sub-surfaces are in the persisted bytes.
+    // Each sub-surface is on disk **before** the next gesture, not only at the
+    // end of the test (F-4: a later click could flush an earlier stranded
+    // commit and make a single end-of-test assertion pass).
     settle_persisted(&mut harness);
     let persisted = persisted_local_recipe(&dir);
-    let hsl = persisted.hsl.as_ref().expect("persisted HSL block");
     assert!(close(
-        f64::from(hsl.cyan.expect("persisted cyan channel").saturation),
-        saturation
+        f64::from(
+            persisted
+                .color_grading
+                .as_ref()
+                .expect("persisted grading block")
+                .midtones
+                .hue_degrees
+        ),
+        hue_degrees
     ));
-    assert_eq!(
-        persisted
-            .point_color
-            .as_ref()
-            .map(|block| block.entries.len()),
-        Some(1)
-    );
-    let grading = &persisted
-        .color_grading
-        .as_ref()
-        .expect("persisted grading block")
-        .midtones;
-    assert!(close(f64::from(grading.hue_degrees), hue_degrees));
-
     // 4) The block reset clears all of it.
     let target = only_rect(&harness, "all local color reset");
     click(&mut harness, target);
@@ -302,6 +329,24 @@ fn the_mask_local_detail_editor_is_clickable_and_writes_through() {
     assert!(close(f64::from(sharpening.radius), 1.0) && close(f64::from(sharpening.detail), 0.5));
     assert!(harness.state().has_mask_local_sharpening().unwrap());
     assert!(harness.state().recipe().sharpening.is_none());
+    // On disk before the next gesture, not only at the end of the test (F-4).
+    settle_persisted(&mut harness);
+    assert!(
+        close(
+            f64::from(
+                persisted_local_recipe(&dir)
+                    .detail
+                    .as_ref()
+                    .expect("persisted detail block")
+                    .sharpening
+                    .as_ref()
+                    .expect("persisted sharpening sub-block")
+                    .amount
+            ),
+            f64::from(sharpening.amount)
+        ),
+        "the sharpening drag must reach the sidecar before the next click"
+    );
 
     // 2) The sub-block reset returns only sharpening to neutral and keeps the
     //    noise-reduction block untouched (it is not neutral yet, so the check
@@ -318,6 +363,25 @@ fn the_mask_local_detail_editor_is_clickable_and_writes_through() {
     );
     assert!(close(f64::from(noise.color), 0.0));
     assert!(harness.state().recipe().noise_reduction.is_none());
+    // On disk before the sub-block reset click, so that click cannot be what
+    // makes the assertion pass (F-4).
+    settle_persisted(&mut harness);
+    assert!(
+        close(
+            f64::from(
+                persisted_local_recipe(&dir)
+                    .detail
+                    .as_ref()
+                    .expect("persisted detail block")
+                    .noise_reduction
+                    .as_ref()
+                    .expect("persisted noise-reduction sub-block")
+                    .luminance
+            ),
+            f64::from(noise.luminance)
+        ),
+        "the noise-reduction drag must reach the sidecar before the reset click"
+    );
 
     let sharpening_reset = only_rect(&harness, "local Sharpening reset");
     click(&mut harness, sharpening_reset);
