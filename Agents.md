@@ -343,6 +343,38 @@ jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
 Baseline-Einträge, fmt/Clippy clean, und das Feature-Dokument nennt den GUI- und
 kittest-Stand ausdrücklich.
 
+### Modellwechsel nach dreifacher Verifikations-Niederlage (User-Regel 2026-09-26)
+
+**Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
+Verifikation durch (`NICHT BESTANDEN` dreimal für dieselbe Findings-Gruppe),
+wechselt der Build-Agent das Modell für die Verifikation und alle
+weiteren Fix-Runden dieser Aufgabe.**
+
+- **Modell:** `opencode-go/deepseek-v4.1-flash` (User: „deepseek v 4.1").
+  Ein Modellwechsel bricht die Fehlerserie, indem eine andere Modellfamilie
+  dieselbe Evidenz neu bewertet — drei Runden desselben Modells hatten
+  denselben Denkfehler dreimal wiederholt.
+- **Gilt für:** die Verifikation **und** die anschließenden
+  Implementierungs-/Remediierungsrunden. Ein frisches `continue` oder eine
+  neue Session ändert daran nichts: das Modell ist der Wechsel, nicht die
+  Sitzung.
+- **Nicht ersetzt durch:** „mehr Kontext", „frischer Agent", „einmal
+  genauer hinsehen". Erschwerte Fehlschläge sind ein Signal zum
+  Perspektivwechsel, nicht zur Wiederholung.
+- **Zählung:** aufeinanderfolgende Runden **derselben** Aufgabe. Ein
+  zwischenzeitlich bestandener Task setzt die Zählung zurück; ein
+  dazwischen liegender, sachlich unabhängiger Task ebenfalls nicht.
+- **Dokumentation:** der Modellwechsel und der auslösende Befund stehen im
+  Commit-Text und im Task-Eintrag, damit die Historie nachvollziehbar
+  bleibt, **warum** ein anderes Modell eingesetzt wurde.
+
+Begründung aus der Praxis: `LENSFUN-DB-33` fiel viermal durch. Alle vier
+Runden behaupteten eine exakte upstream-Parität, die jeweils messbar
+falsch war — der Fehler war nicht Sorgfalt, sondern die Art, wie geprüft
+wurde (aus der C++-Quelle schließen statt das exportierte Symbol messen).
+Ein anderes Modell ist die naheliegendste Gegenmaßnahme, weil die
+Fehlerkette eine Denk- und nicht eine Sorgfaltfrage war.
+
 ### Testabdeckungs-Politik (User-Regel 2026-09-26)
 
 - **Grundregel: Alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
