@@ -2,8 +2,11 @@
 //! how a label that the panel repeats is addressed without a magic offset.
 //!
 //! Used by `mask_local_editors_wiring.rs` (the curve block's channel "Red" and
-//! its per-channel "Reset") and by `mask_local_color_controls.rs` (the
-//! per-band and per-range "Reset"). It is a separate module from
+//! its per-channel "Reset"), by `mask_local_color_controls.rs` (the per-band
+//! and per-range "Reset") and by `mask_local_hsl_bands.rs` (the HSL block's
+//! single `Reset`, identified from both ends of the block: the first below the
+//! colour caption, the nearest above the Point-Colour `Add color` button).
+//! It is a separate module from
 //! `mask_local_curve_graph_support` because its reason for existing is *not*
 //! the curve: the Masking panel repeats short labels across unrelated blocks —
 //! "Red" is an HSL band **and** a curve channel, "Saturation" is the HSL, the

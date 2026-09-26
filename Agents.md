@@ -13,6 +13,7 @@ unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
 - [Persistenz und Sidecars](#persistenz-und-sidecars)
 - [Architekturgrenzen](#architekturgrenzen)
 - [Rollen und Delegation](#rollen-und-delegation)
+- [Branch- und Merge-Konvention](#branch--und-merge-konvention-user-regel-2026-09-26)
 - [Verbindlicher Arbeitsablauf](#verbindlicher-arbeitsablauf)
 - [Verifizierung und Tests](#verifizierung-und-tests)
 - [Definition of Done](#definition-of-done) (normativ: [`DoD.md`](DoD.md))
@@ -221,6 +222,28 @@ Implementierungs-Agent arbeiten. Er:
 
 Ein Implementierungs-Agent darf nicht zugleich als alleiniger Verifizierungs-
 Agent derselben Änderung gelten.
+
+## Branch- und Merge-Konvention (User-Regel 2026-09-26)
+
+- **Es werden hier keine Pull Requests verwendet.** Der Build-Agent merged
+  direkt nach `main` (`git checkout main && git merge <branch> && git push
+  origin main`). Ein PR wird **nicht** eröffnet — auch nicht, um CI anzustoßen.
+- **`main` ist nicht branch-protected**, es gibt also keine required checks, auf
+  die ein Merge warten könnte. Die lokalen Gates des Build-Agents sind damit
+  das **einzige** Gate vor dem Merge und werden vor jedem Merge vollständig
+  gefahren. Ein Merge erfolgt erst, wenn die betroffenen Suites, `fmt`,
+  Clippy, das Ratchet und `golden_ref.sh check` grün sind.
+- **Nach dem Merge wird die CI beobachtet, nicht vorher.** `main` löst per
+  `push` die CI aus; der Build-Agent prüft deren Ergebnis und behebt einen
+  roten Lauf **sofort**, weil er ihn selbst verursacht hat. Ein rotes `main`
+  gilt als offener Befund des Build-Agents, nicht als Flake.
+- **Maßgeblich ist der Stand auf `main`.** Arbeit auf einem Feature-Branch ohne
+  Merge zählt nicht als geliefert; der Abschlussbericht nennt den Merge-Commit
+  und das CI-Ergebnis. Ein Task gilt erst mit dem Merge als erfüllt, die
+  Verifikation bleibt davon unberührt.
+- Vor dem Merge ist `origin/main` zu holen und bei vorhandenen Upstream-
+  Commits zu mergen. Merge-Konflikte werden **nachgemessen** entschieden
+  (Zeilenzahlen, Testzahlen), nicht nach Erinnerung.
 
 ## Verbindlicher Arbeitsablauf
 
@@ -458,6 +481,18 @@ erst fertig, wenn:
 - der Verifizierungsbericht die BESTANDEN-Checkliste aus [`DoD.md`](DoD.md) §7
   vollständig mit Belegen beantwortet (End-to-End-Kette, zeitbasierte Pfade,
   Klassen-Vollständigkeit, Log-Level, Spez→Test-Mapping, Gates).
+- jede **Abdeckungs- oder Ursachenaussage** entweder mutationsbewiesen am
+  Produktionspfad oder ausdrücklich als ungeprüft gekennzeichnet ist
+  ([`DoD.md`](DoD.md) §9); eine Aussage, die eine Messung widerlegt hat, wurde an
+  ihrer Fundstelle zurückgenommen (§9);
+- kein Test eine Aussage stützt, die er nicht falsch machen kann — keine
+  Adress-Identität, keine selbstbezügliche Erwartung, keine Umgebungs- oder
+  Timing-Annahme ([`DoD.md`](DoD.md) §10);
+- ein behobener Defekt **vorher rot reproduziert** war und ein nicht
+  reproduzierbarer Befund als zurückgenommen gekennzeichnet ist
+  ([`DoD.md`](DoD.md) §11);
+- die CI auf dem gelieferten Stand **nachweislich gelaufen** ist, oder das
+  verbleibende Risiko ausdrücklich benannt wurde ([`DoD.md`](DoD.md) §12).
 
 ## Dokumentations- und Todo-Regeln
 

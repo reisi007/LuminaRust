@@ -99,3 +99,101 @@ beantwortet sind:
   prüft den Diff (Logik-Wachstum bei gleichzeitigem Kommentar-Schwund =
   Befund) und weist das Ergebnis in der BESTANDEN-Checkliste (§7, Punkt 7)
   explizit aus.
+
+## 9. Behauptung braucht Beleg; Vermutung ist als solche zu kennzeichnen
+
+- Jede **normative oder factual** Aussage über Verhalten, Abdeckung, Ursache oder
+  Anzahl trägt ihren Beleg **an derselben Stelle**: der Name der Mutation, die
+  rot wurde, das Kommando mit Ergebnis, oder die nachgezaehlte Zahl. „Sollte",
+  „wird behandelt", „verifiziert" ohne Beleg gelten als **ungeprüft**.
+- Eine Aussage, die eine Messung widerlegt hat, wird **an der Fundstelle
+  zurückgenommen** — nicht stillschweigend ersetzt. Der Widerlegungsgrund steht
+  im Text, damit sie beim nächsten Anfassen nicht wiederholt wird.
+- Eine Zahl, die man nicht nachzählen kann, wird **nicht hingesrieben**. Statt
+  „27 offene Tasks" gehört der Zählweg daneben (`grep -c '^- \[ \]' Agents.todo.md`).
+  Tabellensummen und Klassenbilanzen werden **maschinell ausgezählt** und die
+  Herleitung genannt.
+- Eine Coverage-Angabe („Control X ist angeklickt") verweist auf den Test **und
+  die Geste** — nicht auf den Testnamen allein. Existiert der Test, führt er die
+  Geste aber nicht aus, ist die Angabe falsch.
+- Ein aus einem Verifikationsbericht übernommener Befund wird **vorher selbst
+  gemessen**, bevor ein Task daraus entsteht. Wird er widerlegt, wird er
+  **gestrichen**, nicht verfeinert. Ein Phantom-Task bindet Arbeitszeit auf
+  etwas, das es nicht gibt, und ist schlimmer als gar keiner.
+- Ein Task wird nicht durch die Summe seiner Einzelfixings geschlossen,
+  sondern durch ein Urteil über ihn als Ganzes.
+
+## 10. Tests, die nicht scheitern können
+
+- **Eine Abdeckungsaussage ohne Mutation am Produktionspfad ist unbelegt.**
+  Mindestens eine Mutation, die die Aussage widerlegt, wird angewandt,
+  ausgeführt und mit Fehlermeldung berichtet. Bleibt die Suite grün, ist die
+  Aussage falsch — nicht der Test „grün".
+- **Keine Umgebungsannahme im Test.** Ein Test darf nicht darauf setzen, dass
+  der Prozess ein bestimmter Benutzer ist, dass Dateirechte greifen, dass ein
+  Werkzeug existiert oder dass ein Zeitstempel feiner ist als der Abstand
+  zweier Operationen. `chmod 000` als „unlesbar" gilt für einen unprivilegierten
+  Prozess, **nicht** für einen root in einem Container-Runner. Was nicht
+  umgebungsunabhängig ausdrückbar ist, wird über den **Effekt** geprüft (die
+  Folge, nicht das Flag).
+- **Keine selbstbezügliche Erwartung.** Ein Test, der seine Erwartung aus
+  derselben Funktion ableitet, die er prüft, ist keine Prüfung. Die Erwartung
+  ist ein **Literal** oder ein committiertes, unabhängig nachgeprüftes
+  Artefakt (z. B. ein PNG mit von Hand verifiziertem IHDR).
+- **Keine Identität über Adressen.** `as *const _`, Zeigervergleich oder ein
+  `Debug`-Rendering beweisen im Debug-Build **keinen** Zustand über Aufrufgrenzen:
+  ein frisch erzeugtes Objekt kann denselben Stack-Slot belegen. Geprüft wird
+  **beobachtbarer Zustand**, der die Aufrufe überlebt.
+- **Keine zeitabhängigen Assertions**, deren Auflösung feiner sein müsste als
+  der Abstand zweier Operationen. Lässt sich die Eigenschaft nicht stabil
+  prüfen, wird sie als **nicht getestet** dokumentiert statt behauptet.
+- Ein **Clausel-Invariant**, die kein Test erzwingen kann, wird als
+  „durch Begründung getragen, nicht durch einen Test" ausgewiesen. Erfundene
+  Tests, die ihn nur symbolisch berühren, sind schlimmer als die ehrliche
+  Kennzeichnung.
+
+## 11. Kein Fix ohne Reproduktion
+
+- Ein als Defekt gemeldeter Pfad wird **zuerst reproduziert** — rot vor dem
+  Fix, mit Ausgabe. Ist er nicht reproduzierbar, wird die **Ursachenbehauptung
+  zurückgenommen**, nicht die vermutete Stelle geändert.
+- Eine Ursache gilt als belegt, wenn sie **mechanisch ausgeschlossen** oder
+  **gemessen** ist. „Verdächtig", „wahrscheinlich", „sollte" ist kein Befund und
+  geht nicht in eine Fix-Begründung ein. Ein Debounce, der einen Wert nur
+  verzögern und nie abbrechen kann, kann keinen Save verlieren.
+- Findet die Reproduktion einen **anderen** Defekt, wird dieser als eigener Task
+  mit eigener Reproduktion geführt und der ursprüngliche **ausdrücklich
+  zurückgenommen**. Zwei Befunde werden nicht zu einer Geschichte vermischt.
+- Eine Testregression, die **im Betrieb** auftritt, wird nicht wegoptimiert,
+  indem man die Annahme im Test durch eine Formulierung in der Doku ersetzt.
+
+## 12. Ein Gate, das nicht lief, ist kein Gate
+
+- Vor jeder Fertigmeldung wird geprüft, **ob die CI auf dem geänderten Stand
+  gelaufen ist** — nicht, ob die lokale Suite grün ist.
+- Löst der `push`-Trigger eines Feature-Branches **keine** CI aus (häufig:
+  Trigger nur auf `main`), ist das eine **Lücke im Nachweis** und wird
+  berichtet, nicht übergangen. Am Ende gilt: es gibt ein CI-Ergebnis, oder ein
+  ausdrücklich benanntes Restrisiko mit Begründung.
+- Ein Test, der **lokal grün und in CI rot** war, ist ein Befund und kein Flake.
+  Die häufigste Ursache ist eine Umgebungsannahme (§10), die nächste ein
+  Timing-Anker (§2).
+
+## 13. Messung schlägt Bericht
+
+- Verifikationsberichte sind **Messungen, keine Wahrheit**. Jede Angabe daraus,
+  die einen Task, eine Codeänderung oder eine Fertigmeldung auslöst, wird
+  **vorher selbst gemessen**. Ein Agent, der zweimal danebenlag, macht den
+  dritten Bericht nicht richtiger.
+- **`cp -p` nach einem Restore erhält die mtime.** Cargo nutzt daraufhin
+  möglicherweise ein veraltetes Artefakt, und ein Test schlägt mit der Signatur
+  der Mutation fehl, obwohl der Baum sauber ist. Nach jedem Restore
+  `cargo clean -p <crate>` vor der nächsten Messung; Restore per
+  `diff <(git show HEAD:<datei>) <datei>` prüfen, **nicht** per `git status`.
+- **Shell-Quoting ist eine Fehlerquelle.** `cargo check -p x $f --all-targets`
+  mit `f="--features lensfun"` reicht das Flag als **ein** Argument durch
+  (`unexpected argument`). Sieht ein Build nach einem Build-Fehler aus, ist es
+  das nicht. Konfigurationen einzeln aufrufen.
+- Ein Subagent, der mitten in der Arbeit abbricht, kann eine Mutation
+  **angewandt im Baum** hinterlassen. Nach jedem Abbruch wird der Arbeitsbaum
+  gegen `HEAD` geprüft, nicht nur auf neue Dateien.
