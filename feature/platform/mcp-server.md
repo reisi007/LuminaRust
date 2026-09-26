@@ -171,7 +171,10 @@ Lädt ein Bild und gibt seine Metadaten zurück.
 ### `lumina_edit`
 
 Setzt globale Tonwert-Regler im Rezept und schreibt den Sidecar
-write-through.
+write-through. **`lumina_edit` rendert nicht** (kein Render-Pfad im
+Tool); Masken sind hier gegenstaendlich — die Render-Divergenz
+(Abschnitt „Masken im MCP-Renderpfad") wird erst beim naechsten
+renderfaehigen Aufruf sichtbar.
 
 **Input:**
 ```json
@@ -288,6 +291,9 @@ Rendert und exportiert das Bild.
 
 - Nutzt den bestehenden `render_frame`-Einstiegspunkt und
   `ImageFrame::encode` (F-037).
+- **`masks: none`** — der Export rendert ohne Masken; die CLI wendet
+  dieselbe Konfiguration mit Policy `warn` an. Begruendung und Default:
+  Abschnitt „Masken im MCP-Renderpfad".
 - `format` akzeptiert `"png"`, `"jpeg"`, `"webp"`.
 - `quality` ist optional (Default 90), nur für JPEG/WebP relevant
   (`1..=100`).
@@ -350,6 +356,10 @@ für den AI-Agent-Feedback-Loop.
   Vision-Modell analysieren zu lassen.
 - Determinismus: Gleicher Rezeptstand + gleiche Quelle = gleiche
   Vorschau-Bytes (getestet).
+- **`masks: none`** — die Vorschau rendert ohne Masken, auch wenn der
+  Sidecar eine gueltige Maske traegt; die CLI rendert dieselbe Eingabe
+  mit Policy `warn` und wendet die Maske an. Begruendung, Default und
+  die beiden Divergenz-Tests: Abschnitt „Masken im MCP-Renderpfad".
 - Die Vorschau ist ein Matrix-bild im RGBA8/sRGB-Arbeitsraum der
   Pipeline; sie enthält keine EXIF- oder Metadaten.
 
@@ -585,6 +595,65 @@ keinen Sidecar, daher kann `-32010` dort nicht auftreten (R2-MCP-03).
   Feature, das die `lumina-onnx`-Abhängigkeit in `lumina-mcp` bringen
   würde.
 
+## Masken im MCP-Renderpfad: `masks: none` (dokumentierte Divergenz)
+
+**Stand (code-verifiziert 2026-09-26):** Jeder MCP-Renderpfad konstruiert
+`RenderContext` mit `masks: None` — `crates/lumina-mcp/src/util.rs:308,382,404,627`
+sowie `crates/lumina-mcp/src/tools/dust_removal.rs:232`; der Generativ-Pfad
+baut denselben Kontext in `crates/lumina-stages/src/generative_artifact.rs:266`.
+`RenderContext` hat **kein** `mask_policy`-Feld; die Policy liegt in
+`MaskContext.policy` und kann nur gesetzt werden, wenn Masken überhaupt
+aufgelöst werden. Es gibt also keinen Policy-Parameter, den ein Tool
+exponieren könnte — ein `mask_policy`-Feld wäre ein Feld ohne Wirkung und
+eine eigene Lücke.
+
+**Begründung (F-101-MVP-Grenze):** Die Masken-Entscheidungsschicht
+(F-048/F-051: Plane-Aufloesung aus dem `.lumina.zdata`-Bundle,
+Gueltigkeitspruefung, Re-Inferenz, `warn`/`strict`-Policy) ist CLI-seitig
+(und GUI-seitig). Der MCP-Server loest Masken-Ebenen **nicht** auf: Kein
+Tool laedt Persistenz-Ebenen, kein Tool ruft die Entscheidungsschicht.
+Masken-Status bleibt ueber `lumina_inspect` sichtbar (obiger Abschnitt).
+
+**Je renderfaehigem Tool — `masks: none`, keine Ausnahme:**
+
+| Tool | Render-Pfad | Masken |
+| --- | --- | --- |
+| `lumina_preview` | `render_copy` → `render_recipe` | `masks: none` |
+| `lumina_save` | `render_copy` → `render_recipe` | `masks: none` |
+| `lumina_analyze` | `render_copy` → `render_recipe` | `masks: none` |
+| `lumina_batch` | `render_recipe` | `masks: none` |
+| `lumina_trigger_export` | `render_recipe` | `masks: none` |
+| `lumina_dust_removal` (`render_out`) | `render_frame` | `masks: none` |
+| `lumina_generative` | `render_frame_with_generative` (geteilte `lumina-stages`-Schicht) | `masks: none` |
+
+**Ausnahmen, benannt damit sie nicht als stillschweigende Divergenz
+gelesen werden:**
+
+- `lumina_regenerate op="matching"` wendet Masken **an** — mit Policy
+  `warn`, ueber die geteilte `lumina-stages`-Schicht
+  (`crates/lumina-stages/src/regenerate.rs:376-392`). Das ist **Paritaet**
+  mit der CLI, kein Divergenzfall; der Renderpfad ist gemeinsam
+  (`RenderContext` inkl. Masken-Ebenen baut die geteilte Schicht, nicht
+  der Adapter — siehe MCP-PARITY-B-Abschnitt).
+- `lumina_edit` rendert **nicht** (Write-through nur); Masken sind hier
+  gegenstaendlich. Die Divergenz wird erst beim naechsten renderfaehigen
+  Aufruf sichtbar.
+
+**Dokumentierter Default fuer den Tag, an dem Masken dazukommen**
+(Folge-Task `MCP-MASK-APPLY`, echte Feature-Arbeit): Sobald der
+MCP-Renderpfad Masken anwendet, ist der wirksame Policy-Default **`warn`**
+— identisch zur harmonisierten CLI-Default (warn-and-continue, `strict`
+nur auf explizite Anfrage). Kein stiller Default-Wechsel, kein
+`mask_policy`-Tool-Feld in diesem Slice.
+
+**Divergenz gepinnt (Tests):** `crates/lumina-mcp/tests/mask_policy.rs`
+belegt ueber den echten MCP-stdio-Server, dass `lumina_preview` mit einer
+gueltigen Maske im Sidecar **ohne** Masken rendert (byte-identisch zum
+`masks: None`-Oracle); `crates/lumina-cli/tests/mask_policy_divergence.rs`
+belegt, dass die CLI dieselbe Maske **anwendet** (byte-identisch zum
+`warn`-Masken-Oracle, verschieden vom No-Mask-Oracle). Die Divergenz ist
+damit nachweisbar, nicht nur behauptet.
+
 ## Nicht-Ziele (Pre-MVP)
 
 - Kein HTTP/WebSocket-Transport — stdio reicht für Agent-in-Terminal.
@@ -733,6 +802,9 @@ Ein Aufruf = ein Verzeichnis. Rendert jede Bilddatei des Verzeichnisses
 (rekursiv, deterministische Reihenfolge) mit dem aktiven Rezept ihres
 Sidecars über denselben Choke-Point wie `lumina_save` und schreibt
 atomar nach `<output>/<dateiname>.<format-extension>`.
+- **`masks: none`** — wie `lumina_save` rendert Batch ohne Masken; die
+  CLI wendet Masken mit Policy `warn` an. Abschnitt „Masken im
+  MCP-Renderpfad".
 
 - **Input:** `{ input, output, format?, quality?, virtual_copy? }`
   (`format` Default `"png"`; `quality` Default 90, nur JPEG/WebP;
@@ -794,7 +866,10 @@ Das Original bleibt unverändert.
   angewandter Source-Action (Auflösung aus dem Bundle inklusive
   Prüfsummenkontrolle — fehlendes Artefakt oder Prüfsummen-Divergenz
   ist ein lauter Fehler). `render_out` darf niemals auf die Quelle
-  oder deren Bundle-Dateien auflösen.
+  oder deren Bundle-Dateien auflösen. Dieser Render laeuft mit
+  **`masks: none`** (Abschnitt „Masken im MCP-Renderpfad"): die
+  verifizierende Darstellung zeigt die Source-Action, nicht den
+  Masken-Stand des Sidecars.
 - **Output:** `{ ok: true, input, virtual_copy, artifact_id, bundle,
   checksum }`.
 - Fehler: `FileNotFound`, `UnsupportedFormat`, `DecodeError`,
@@ -1004,6 +1079,14 @@ eine Aussage und keine Hoffnung ist.
   (`GPU-PARITY-HW-28`) offen ist. Die Render-Eingabe (`RenderContext` inkl.
   Masken-Ebenen und Source-Actions) baut in beiden Fällen die geteilte
   Schicht, nicht der Adapter.
+- `lumina_regenerate op="matching"` wendet **Masken an** (Policy `warn`,
+  persistierte Ebenen aus dem Sidecar-Bundle) — ueber die geteilte
+  `lumina-stages`-Schicht, also **Paritaet mit der CLI**, kein
+  Divergenzfall (Abschnitt „Masken im MCP-Renderpfad").
+- `lumina_generative op="generate"` rendert die Auto-Fill-/Expand-Ebene
+  mit **`masks: none`** (geteilte Schicht
+  `crates/lumina-stages/src/generative_artifact.rs:266`) — wie alle
+  renderfaehigen MCP-Tools ausser `lumina_regenerate op="matching"`.
 
 Abnahme: Byte-Identität MCP-gegen-CLI je Kommando in beiden Richtungen (roher
 Byte-Vergleich, Mutationsnachweis), Kollisions- und Abbruch-Tests für
@@ -1029,7 +1112,7 @@ nicht) und eine Read-only-Resource. Normative Fachregeln:
 | `lumina_update_metadata_draft` | `{ path, fields?, clear_fields? }` → `{ ok, rev }` | Write-Through per CAS; CAS-Konflikt → `SidecarConflict` (`-32010`, analog `lumina_edit`) |
 | `lumina_apply_meta_preset` | `{ paths, preset, vars? }` → per-Pfad-Report | Statisch ohne `vars`; dynamisch verlangt alle Platzhalter-Variablen als JSON-Objekt — unaufgelöst/unbekannt = lauter Tool-Fehler |
 | `lumina_batch_sync_metadata` | `{ source, targets, fields }` → Report | Feld-selektiv (`fields` Pflicht), pro Ziel CAS/atomar, Fehler pro Bild isoliert |
-| `lumina_trigger_export` | `{ path, output_path, format, quality?, virtual_copy?, write_metadata: true }` | Wrappt denselben Choke-Point wie `lumina_save`; `write_metadata` + Nicht-JPEG = `InvalidParams` (laut) |
+| `lumina_trigger_export` | `{ path, output_path, format, quality?, virtual_copy?, write_metadata: true }` | Wrappt denselben Choke-Point wie `lumina_save`; `write_metadata` + Nicht-JPEG = `InvalidParams` (laut); rendert mit **`masks: none`** (Abschnitt „Masken im MCP-Renderpfad") |
 
 **Resource (Read-only):** `metadata://draft/<urlencoded-pfad>` — stabile
 Adresse über den **Pfad**, nicht `image_id` (prozess-lokal, Server-Neustart →
@@ -1055,7 +1138,9 @@ Zwei komplementäre Wege, den Bearbeitungszustand zu beurteilen:
    (quantisiert, mit Häufigkeit) und einen Expositionsschätzwert
    (EV bis Mitttelgrau 0.5, Median-basiert, geclampt auf ±10 EV) —
    gerendert über denselben Choke-Point wie Preview/Save, also immer
-   der aktuelle Rezeptstand. Damit ist die SOLL-Anforderung
+   der aktuelle Rezeptstand, und — wie alle renderfaehigen MCP-Tools
+   ausser `lumina_regenerate op="matching"` — mit **`masks: none`**
+   (Abschnitt „Masken im MCP-Renderpfad"). Damit ist die SOLL-Anforderung
    (Histogramm, Farbstatistiken, Dominante Farben, Exposition)
    vollständig erfüllt; Auto-Tone-Vorschläge und Maskenstatus gehören
    bewusst NICHT zu `lumina_analyze` (Maskenstatus: `lumina_inspect`;
