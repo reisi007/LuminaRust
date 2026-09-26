@@ -1392,9 +1392,12 @@ laut benannte Abwägung und keine stille Optimierung:
   **pro Schlüssel** (`hashes` je Memo-Eintrag, siehe 5.) und damit gegen die
   Parallelität der Testsuite immun: ein Test auf einem `tempdir`-Pfad liest
   seine eigene Zahl, unbeeinflusst von Tests, die andere Dateien hashen.
-- Jeder Miss emittiert **genau eine** `trace!`-Zeile
+- Jeder Miss, der einen **Vollhash abschließt**, emittiert **genau eine**
+  `trace!`-Zeile
   (`GUI source identity hashed (cache miss) path=… bytes=… hash_ms=…`) über
-  `timing::emit`; ein **Treffer** emittiert **nichts**. Damit kann ein manueller
+  `timing::emit`; ein **Treffer** emittiert **nichts**. Die beiden Miss-Arten
+  ohne Hash — `Missing` (kein `stat`) und `Unavailable` (`open` scheitert) —
+  emittieren **nichts**, dort wären `bytes`/`hash_ms` sinnlos. Damit kann ein manueller
   `RUST_LOG=trace`-Akzeptanzlauf (R5-LOG-1) die Hashes einer Browse-Session
   **zählen** und sehen, dass sie nach dem ersten Frame aufhören. Kosten: auf
   einem Miss ein `Instant::now()` (unvermeidbar, um `hash_ms` zu messen) und

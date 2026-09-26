@@ -229,12 +229,23 @@ der Gegenbeweis: `settle_thumbnails` wartet bewusst **ohne** UI-Frames (der
 Worker-Pool läuft in eigenen Threads) — dadurch sank die Einzeltestzeit von
 23 s auf 17 s, **ohne dass sich ein einziges gerendertes Pixel änderte**.
 
-**Status: offen — Entscheidung liegt beim Build-Agenten.** Optionen:
+**Status: GELÖST als `THUMB-HASH-PERF-35`** (umgesetzt, unabhängig verifiziert
+2026-09-26, Commit `767c756` + `b5c5253`). Die Empfehlung (a) wurde umgesetzt —
+**aber nicht mit dem ursprünglich vorgeschlagenen Cache-Schlüssel.**
 
-- **(a) Produktfix** (empfohlen): Quellidentität pro `(Pfad, mtime, len)`
-  cachen bzw. aus dem UI-Thread auslagern. Das behebt zugleich die reale
-  UI-Latenz beim Browsen eines RAW-Ordners (~1 fps bei 3 Bildern) und macht die
-  Fixtures billig. Außerhalb des Umfangs von `GOLDEN-FIXT-31` (kein Produktcode).
+- **(a) Produktfix — UMGESETZT als `THUMB-HASH-PERF-35`.** Quellidentität wird
+  pro **`(Pfad, mtime, ctime, len)`** gecacht, nicht pro `(Pfad, mtime, len)`.
+  ⚠ **`(Pfad, mtime, len)` ist nachweislich unsicher und darf nicht
+  reimplementiert werden:** zwei committete Regressionstests
+  (`thumbnail_source_replacement_invalidates_cached_and_pending_state`,
+  `thumbnail_artifact_change_drops_ram_pixels_and_requeues_worker`) fallen unter
+  diesem Schlüssel um, denn er kann eine Datei derselben Länge und mit
+  wiederhergestelltem `mtime` nicht von der Vorversion unterscheiden. `ctime` ist
+  kernelgepflegt, per `utimensat`/`touch -r` **nicht** zurücksetzbar und kostet
+  keinen zusätzlichen Syscall. Messung: 12 MB CR3, ~115 ms pro Lookup vorher,
+  ~0,004 ms warm nachher; ~0,79 s pro Frame bei 3 Zellen → vernachlässigbar.
+  Normativ in `feature/platform/cli-gui-wasm.md` § *Quell-Identitäts-Cache im
+  UI-Thread*.
 - **(b) Fixture-seitig**: ein herunterskaliertes echtes RAW-Derivat als
   committete Fixture (z. B. ~1–2 MP statt 24 MP). Senkt Hash **und** Decode
   um ~12×. Erfordert eine neue Fixture-Formatentscheidung und ist deshalb
