@@ -1298,12 +1298,12 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
 | 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
 | 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (Hue/Saturation/Luminance sind **drei** ausgeschriebene `Slider`-Blöcke mit **derselben** Aufrufform `set_mask_local_grading_field(<range>, "<feld>", wert)`; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
-| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Die Validierung dieses Astes ist von **keinem** Test abgedeckt. |
+| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Der **Annahmepfad** ist getestet (`src/tests/mask_local_color.rs:102-105` setzt, `:114-115` liest zurück, `:136-139` belegt das Überleben eines Bereichs-Resets); **ungedeckt** ist der *Ablehnungspfad* — `invalid_local_color_edits_are_refused_without_mutating` kennt keinen Fall `("balance"/"blending", "value", außerhalb des Bereichs)` und kein unbekanntes Target. |
 | 20 | Grading **Blending** | **nein** | `set_mask_local_grading_field("blending", "value", …)` | dito wie Zeile 19 |
 | 21 | Reset pro Bereich | ja — `mask_local_color_controls` (Bereichs-Scope mit Zeuge) | `reset_mask_local_grading(range)` | — |
 | 22 | `all local color reset` | ja — `mask_local_editors` | `reset_mask_local_color` | — |
 | **P1.2c Presence** |||||
-| 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler in **einer** `for`-Schleife über `PRESENCE_FIELDS`; Dehaze **und** Clarity sind angeklickt) |
+| 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler in **einer** `for`-Schleife über `PRESENCE_FIELDS`; angeklickt ist davon **nur** Dehaze, Zeile 25) |
 | 24 | Clarity | **nein** | dito | nur Mechanik (drittes Element derselben Schleife wie Zeile 25) |
 | 25 | Dehaze | ja — `mask_local_editors` | dito | — |
 | 26 | `all local presence reset` | ja — `mask_local_editors` | `reset_mask_local_presence` | — |
@@ -1324,10 +1324,10 @@ Klick-Abdeckung. (Korrektur 2026-09-26 nach dem Verifikationsbefund: Zeile 24
 fuhr zuvor „ja — `mask_local_reload`", obwohl dieser Test **weder**
 Presence **noch** Clarity anfasst — `grep -c` auf `mask_local_reload.rs` ergibt
 0. Clarity wird von keinem GUI-Test angeklickt. Damit sind es 22/13, nicht
-23/12.) Für die zwölf gilt der ehrliche Nachweis: sie teilen sich
+23/12.) Für die **dreizehn** gilt der ehrliche Nachweis: sie teilen sich
 entweder **exakt** den Helper/Setter mit einem geklickten Geschwister oder
 stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
-das nicht gelten lässt, braucht 12 weitere Drag-/Click-Tests über dieselben
+das nicht gelten lässt, braucht 13 weitere Drag-/Click-Tests über dieselben
 Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
 unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
 Der eine Mutationstest pro Schleife (siehe 6.1) deckt genau diese

@@ -294,4 +294,31 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
         "a repeated identical outcome must not add a second record — the \
          reporting is de-duplicated even though the lookup did run again"
     );
+
+    // Third rebuild with the **same** dimensions as the second. This is the
+    // case a key-scoped memo would hide: the first two calls changed the key, so
+    // a memo keyed on the cache key never fires and the assertion above cannot
+    // see it. Repeating a key is exactly the real-world shape — the user keeps
+    // previewing the same photo at the same size — and it is the shape that
+    // decides whether a database installed *later* is ever noticed. Because the
+    // miss left `lensfun_cache` empty, `fresh` is still true here, so the lookup
+    // must run again.
+    let after_second_attempts = lensfun_lookup_attempts();
+    app.ensure_lensfun_cache(65, 49);
+    assert!(
+        lensfun_lookup_attempts() > after_second_attempts,
+        "rebuilding with an unchanged key after a miss must still run the \
+         lookup: nothing is cached, so an 'already tried' memo keyed on the \
+         cache key would pin the miss and hide a database installed later"
+    );
+    assert!(
+        app.lensfun_cache.is_none(),
+        "a miss must leave the cache empty, never a placeholder entry"
+    );
+    assert_eq!(
+        records_at(Level::Error).len() + records_at(Level::Debug).len(),
+        after_first,
+        "the third lookup produced the same outcome and must be de-duplicated \
+         like the second"
+    );
 }

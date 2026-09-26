@@ -350,12 +350,24 @@ GUI-eigenen `LogDiagnostics` (`src/lensfun_diag.rs`): eigener Log-Level je
 Ereignis (`resolved` = `debug`, `file_rejected`/`layer_skipped`/
 `pin_displaced` = `warn`, `failed` = `error`) und eine prozessweite
 Deduplizierung über Ereignis-Identitäten, damit eine nicht auflösbare
-Datenbank **eine** Warnung erzeugt und nicht eine pro Render. `lumina-cli`
-(`src/lensfun_cli.rs`) nutzt `load_system_with` mit einem
+Datenbank **genau einen** Datensatz erzeugt und nicht einen pro Render.
+`lumina-cli` (`src/lensfun_cli.rs`) nutzt `load_system_with` mit einem
 prozessweiten `ReportOnce`-Sink über `with_diagnostics(|sink| …)`.
 **Der Lookup wird in beiden Pfaden nicht gecacht** — ein Miss lässt den Cache
 leer, damit eine später installierte Datenbank noch aufgefaellt wird; nur das
 *Melden* ist dedupliziert.
+
+**Auflösungsentscheidung zum Level (2026-09-26, `Agents.md` § *SOLL zuerst*).**
+Die Aufgabenstellung verlangte wörtlich eine `warn!` für den Miss. Das ist hier
+**nicht** umgesetzt und wird hiermit bewusst abweichend festgelegt: eine nicht
+auflösbare Lensfun-Datenbank ist **keine Warnung, sondern ein harter
+Konfigurationsfehler** — es gibt keine Linsenkorrektur, und das Rezept
+beschreibt etwas anderes als das Bild. `failed` steht daher auf `error`. Das
+Level ist an einem echten Log-Datensatz **und** an Testanker
+(`every_lensfun_event_is_logged_at_its_documented_level`, Mutation `error` →
+`warn` rot) festgeschrieben. DoD §4 („nicht `info!`") ist damit erfüllt; die
+Abweichung von der ursprünglichen Formulierung wird hier getragen, nicht
+versteckt.
 
 **Verbleibende, bewusst nicht behobene Grenzen:**
 

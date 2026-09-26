@@ -56,8 +56,15 @@ pub(crate) fn lensfun_lookup_attempts() -> u64 {
 pub(crate) struct CachedLensCorrector {
     pub(crate) corrector: lumina_lensfun::Corrector,
     /// The database handle is kept alive alongside the corrector because the
-    /// modifier references DB-owned lens data. **Field order matters**:
-    /// `corrector` (modifier destroy) must drop before `_db`.
+    /// modifier references DB-owned lens data.
+    ///
+    /// `corrector` is declared **first** so that it is dropped first: Rust
+    /// drops struct fields in declaration order, and the modifier must be
+    /// destroyed while the database it points into is still alive. Reversing
+    /// these two fields compiles and leaves the whole suite green — provoking a
+    /// use-after-free through liblensfun is not something a test can do
+    /// cheaply — so this is a **maintainer invariant carried by the
+    /// declaration order, not by a test**. Do not reorder them.
     pub(crate) _db: lumina_lensfun::LensfunDb,
     /// Identity + frame dimensions this corrector was built for.
     pub(crate) key: (
