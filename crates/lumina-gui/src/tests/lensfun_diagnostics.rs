@@ -234,10 +234,11 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
         focal_length: Some(50.0),
         aperture: Some(4.0),
     });
-    // Read *before* the first call, so "the counter is wired to the lookup"
-    // is proven independently of "the lookup was retried". Without this first
-    // read, a counter that is never incremented at all would satisfy the
-    // second assertion vacuously.
+    // Read the counter once before the first call so that "the counter is wired
+    // to the lookup at all" is a *separately* reported fact. It is defence in
+    // depth, not the load-bearing check: with the counter frozen at zero the
+    // second assertion below is still red (`0 > 0` is false), which a mutation
+    // confirmed.
     let before_any_lookup = lensfun_lookup_attempts();
     app.ensure_lensfun_cache(64, 48);
     let after_first = records_at(Level::Error).len() + records_at(Level::Debug).len();
@@ -265,21 +266,24 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // `!fresh` early-out cannot swallow the call.
     app.ensure_lensfun_cache(65, 49);
     let after_second = records_at(Level::Error).len() + records_at(Level::Debug).len();
-    // The *decisive* clause: the lookup really ran again. Asserting only "no
-    // new record" cannot tell a retried lookup from an abandoned one — both
-    // leave the record count unchanged — so a de-duplication sink that
-    // accidentally **gated** the call (turning reporting state into a result
-    // cache) would satisfy such a test while pinning a stale miss for the rest
-    // of the session. The attempt counter is what separates the two.
+    // The *decisive* clause: the second rebuild really ran the lookup again.
+    // Asserting only "no new record" cannot tell a retried lookup from an
+    // abandoned one — both leave the record count unchanged — so a
+    // de-duplicating sink that accidentally **gated** the call, or an "already
+    // tried" memo in front of the load, would satisfy such a test while pinning
+    // a stale miss for the rest of the session. The counter, which the
+    // production call site increments *after* the load returns, separates them.
     //
-    // `>` rather than `== +1`: the counter is process-wide and the suite is
-    // multi-threaded, so a concurrent test may add attempts of its own.
-    // Freezing is the regression, and freezing fails this.
+    // `>` rather than `== +1`. As of this writing no other test both sets
+    // `loaded_lens_identity` and drives a render, so an exact `+1` would be
+    // deterministic today — but the counter is process-wide, and a future test
+    // rendering a RAW with EXIF would make `== +1` flaky. Freezing is the
+    // regression, and freezing fails this.
     assert!(
         lensfun_lookup_attempts() > after_first_attempts,
-        "a second rebuild with a changed key must retry the lookup: a miss must \
-         cache nothing, or a database installed later would stay invisible for \
-         the rest of the session"
+        "a second rebuild with a changed key must run the lookup again: a miss \
+         must cache nothing, or a database installed later would stay invisible \
+         for the rest of the session"
     );
     assert!(
         app.lensfun_cache.is_none(),

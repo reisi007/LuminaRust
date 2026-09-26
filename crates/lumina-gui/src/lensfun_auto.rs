@@ -21,16 +21,19 @@ use super::lensfun_diag::with_diagnostics;
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// How many times the system Lensfun database has been looked up this process.
+/// How many times the system Lensfun database has actually been looked up.
 ///
 /// LENSFUN-CALLER-37: the cache above deliberately caches **no** miss, so a
 /// render whose key changed retries the lookup. That contract has **no other
 /// observable**: `lensfun_cache == None` after a miss is equally consistent with
 /// "retried and missed again" and with "gave up after one try", and a
-/// de-duplicating sink makes both look identical in the log. So the attempts are
-/// counted where they happen, in front of the call rather than behind the
-/// de-duplication, which makes a sink that accidentally *gated* the lookup
-/// visible instead of silent.
+/// de-duplicating sink makes both look identical in the log — "no second
+/// record" cannot tell a retried lookup from an abandoned one.
+///
+/// So the lookups are counted where they happen, **after** the load returns.
+/// A sink that gated the call, or an "already tried" memo placed in front of
+/// the load, both freeze the counter; a counter read before the call would let
+/// the second of those through.
 ///
 /// The reader is currently test-only (hence the `cfg`), so the counter's only
 /// production cost is one relaxed atomic add per rebuild. It is kept in
@@ -38,10 +41,52 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// maintains itself would prove nothing about the production call site.
 static LOOKUP_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 
-/// This process's Lensfun lookup-attempt count (see [`LOOKUP_ATTEMPTS`]).
+/// This process's Lensfun lookup count (see [`LOOKUP_ATTEMPTS`]).
 #[cfg(test)]
 pub(crate) fn lensfun_lookup_attempts() -> u64 {
     LOOKUP_ATTEMPTS.load(Ordering::Relaxed)
+}
+
+/// Cached Lensfun auto-corrector pair (G-06).
+///
+/// Moved here from the crate root by LENSFUN-CALLER-37: the type is the cache's
+/// own value, so it belongs with the code that fills and reads it rather than in
+/// the binary root next to unrelated app state.
+#[cfg(feature = "lensfun")]
+pub(crate) struct CachedLensCorrector {
+    pub(crate) corrector: lumina_lensfun::Corrector,
+    /// The database handle is kept alive alongside the corrector because the
+    /// modifier references DB-owned lens data. **Field order matters**:
+    /// `corrector` (modifier destroy) must drop before `_db`.
+    pub(crate) _db: lumina_lensfun::LensfunDb,
+    /// Identity + frame dimensions this corrector was built for.
+    pub(crate) key: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        u32,
+        u32,
+        u32,
+        u32,
+    ),
+    /// GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: whether this corrector
+    /// changes pixels (`!Corrector::is_identity()`, probing
+    /// distortion/vignetting/TCA). Computed once at build time so neither the
+    /// present gate nor the per-frame map bind pays the FFI probe; mirrors the
+    /// CLI's `lensfun_corrector_active`. An inactive (identity) corrector is a
+    /// no-op on the CPU oracle and binds no map, so the manual model stays in
+    /// effect on both paths. GPU-only: the non-GPU build has no bind path that
+    /// could consume it.
+    #[cfg(feature = "gpu")]
+    pub(crate) active: bool,
+    /// GPU-LENSFUN-PARITY-1: CPU-precomputed warp/gain map for this corrector at
+    /// the dimensions it was last built for (`LensfunMap::from_corrector`).
+    /// Built lazily by [`lensfun_gpu::bind`] on the GPU present path and reused
+    /// across frames/tool moves (the per-pixel FFI build is expensive); `None`
+    /// until first use. Fine to keep on the CPU: the map is a pure derived
+    /// artifact, the recipe/sidecar stay authoritative.
+    #[cfg(feature = "gpu")]
+    pub(crate) gpu_map: Option<lumina_core::LensfunMap>,
 }
 
 impl LuminaApp {
@@ -86,11 +131,18 @@ impl LuminaApp {
         // correction, same contract as the CLI `build_lensfun_corrector`).
         // LENSFUN-CALLER-37: the lookup goes through the app's own sink, so
         // the outcome is a real log record at a real level. The *result* is
-        // still not cached — only the reporting is de-duplicated. The counter
-        // sits in front of the call, not behind the dedup, so a sink that
-        // accidentally *gated* the lookup would freeze it visibly.
+        // still not cached — only the reporting is de-duplicated.
+        //
+        // The attempt is counted **after** the load returns, so the counter
+        // means "lookups actually performed" and not merely "reached this
+        // line". That placement is load-bearing: a "already tried" memo between
+        // the counter and the load — the obvious way to accidentally turn
+        // reporting state into a result cache — would leave the counter frozen
+        // and turn the retry assertion red. Counting before the call would let
+        // exactly that regression through.
+        let db = with_diagnostics(lumina_lensfun::LensfunDb::load_system_with);
         LOOKUP_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-        let Some(db) = with_diagnostics(lumina_lensfun::LensfunDb::load_system_with) else {
+        let Some(db) = db else {
             return;
         };
         let Some(corrector) = db.for_camera(

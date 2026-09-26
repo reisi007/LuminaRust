@@ -57,6 +57,11 @@ mod lensfun_gpu;
 mod lensfun_auto;
 #[cfg(feature = "lensfun")]
 mod lensfun_diag;
+// LENSFUN-CALLER-37: the cache's own value type moved to `lensfun_auto` with the
+// logic that fills it; re-exported so the existing users (`gpu_routing`,
+// `lensfun_gpu`, the `LuminaApp` field) are untouched.
+#[cfg(feature = "lensfun")]
+pub(crate) use lensfun_auto::CachedLensCorrector;
 // F-009: file-backed user presets (`<name>.lumina-preset.json`).
 mod presets;
 // UX-LOOK-HISTORY-18: the presets group tree (relative-folder grouping, own
@@ -2498,44 +2503,6 @@ fn lens_identity_from_metadata(metadata: &lumina_raw::RawMetadata) -> Option<Len
     } else {
         Some(identity)
     }
-}
-
-/// Cached Lensfun auto-corrector pair (G-06, `lensfun` feature only).
-/// The database handle is kept alive alongside the corrector (the modifier
-/// references DB-owned lens data); field order matters — `corrector`
-/// (modifier destroy) drops before `_db`.
-#[cfg(feature = "lensfun")]
-struct CachedLensCorrector {
-    corrector: lumina_lensfun::Corrector,
-    _db: lumina_lensfun::LensfunDb,
-    /// Identity + frame dimensions this corrector was built for.
-    key: (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        u32,
-        u32,
-        u32,
-        u32,
-    ),
-    /// GUI-LENSFUN-GATE-1 / GPU-LENSFUN-PARITY-1: whether this corrector
-    /// changes pixels (`!Corrector::is_identity()`, probing
-    /// distortion/vignetting/TCA). Computed once at build time so neither the
-    /// present gate nor the per-frame map bind pays the FFI probe; mirrors the
-    /// CLI's `lensfun_corrector_active`. An inactive (identity) corrector is a
-    /// no-op on the CPU oracle and binds no map, so the manual model stays in
-    /// effect on both paths. GPU-only: the non-GPU build has no bind path that
-    /// could consume it.
-    #[cfg(feature = "gpu")]
-    active: bool,
-    /// GPU-LENSFUN-PARITY-1: CPU-precomputed warp/gain map for this corrector at
-    /// the dimensions it was last built for (`LensfunMap::from_corrector`).
-    /// Built lazily by [`lensfun_gpu::bind`] on the GPU present path and reused
-    /// across frames/tool moves (the per-pixel FFI build is expensive); `None`
-    /// until first use. Fine to keep on the CPU: the map is a pure derived
-    /// artifact, the recipe/sidecar stay authoritative.
-    #[cfg(feature = "gpu")]
-    gpu_map: Option<lumina_core::LensfunMap>,
 }
 
 /// Whether a background decode is allowed to adopt its target directory.
@@ -12241,7 +12208,10 @@ mod tests {
     mod iptc;
     mod layout;
     mod lens_blur;
-    // LENSFUN-CALLER-37: the diagnostics sink's three contract clauses.
+    // LENSFUN-CALLER-37: the diagnostics sink's three contract clauses. Gated on
+    // the same feature as the module under test — without the gate the lean
+    // `--no-default-features` build loses both `lensfun_diag` and `lumina_lensfun`.
+    #[cfg(feature = "lensfun")]
     mod lensfun_diagnostics;
     mod library_scan;
     mod library_sort;
