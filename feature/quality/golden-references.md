@@ -28,6 +28,7 @@ Verifikationsregeln).
   - [4.1 Pre-Commit-Gate: die tatsächlich lasttragende Schranke](#41-pre-commit-gate-die-tatsächlich-lasttragende-schranke)
   - [4.2 Regressions-Suite des Wächters: `scripts/golden_ref_test.sh`](#42-regressions-suite-des-wächters-scriptsgolden_ref_testsh)
     - [4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war](#421-der-eine-bruch-in-der-selbstkonsistenz--und-warum-er-nötig-war)
+    - [4.2.2 Der zweite Bruch: die Golden-Inventar-Ebene war nicht verankert](#422-der-zweite-bruch-die-golden-inventar-ebene-war-nicht-verankert)
 - [5. `UPDATE_SNAPSHOTS`-Sperre (Geltung: `check` und `gate`)](#5-update_snapshots-sperre-geltung-check-und-gate)
 - [6. Fixture-Set der Goldens](#6-fixture-set-der-goldens)
 - [7. Golden-Inventar](#7-golden-inventar)
@@ -370,19 +371,20 @@ kein macOS) und ist plattformunabhängig: sie behauptet **nie**, dass die
 ausführende Maschine die Referenzplattform ist, sondern pinnt zuerst einen
 synthetischen Lock aus der laufenden Umgebung und prüft gegen diesen.
 
-Abgedeckt (188 Prüfungen, Exit 0 = alles grün):
+Abgedeckt (201 Prüfungen, Exit 0 = alles grün):
 
 | Bereich | Inhalt |
 | --- | --- |
 | Schlüssel-Sweep | jede der **21** Schlüssel einzeln perturbiert → `check` Exit 1, und der Diff nennt **genau** diesen einen Schlüssel (kein Schlüssel ist unlasttragend) |
 | Wertableiter | `png_size` und `ui.scale_factor` gegen **committete, handgeprüfte** Eingaben statt gegen sich selbst: IHDR-Probe `scripts/fixtures/png_ihdr_probe.png` mit literal erwartetem `16909060x84281096`, `ui.scale_factor` mit `1.0` bei passendem und `non-unit:<w>/<Viewport>,<h>/<Viewport>` bei abweichendem synthetischem Viewport — Details in §4.2.1 |
+| Golden-Inventar-Ebene | die Schranke aus §3.1/§11.1 selbst, gegen eine **unabhängige** Ableitung: `goldens.count` = Zahl der committeten Golden-PNGs aus `git ls-files` (**66**, nicht 25), das vom Wächter enumerierte Set **pfadweise** gleich diesem, `goldens.digest` = der über alle committeten Goldens unabhängig berechnete Wert, `git:` als Modus bei vorhandenem git und `walk:` unter einem `git`-Shim, und die Aussage, dass der Modus **Teil des Wertes** ist — Details in §4.2.2 |
 | Lock-Kanonik | 8 Varianten → Exit 1: angehängter Doppelschlüssel, umgestellte Reihenfolge, unbekannter Schlüssel, fehlender Schlüssel, Zeile ohne `=`, abschließendes Leerzeichen (dann über den **Wert**vergleich), ungültiges Schlüsselzeichen, leerer Schlüssel |
 | Legitime Formen | 7 Formen → Exit 0: wie aufgezeichnet, nur Schlüsselzeilen, handgeschriebener Kopf, Kommentar mitten im Block, Leerzeilen, **CRLF** (siehe §3), Wert mit Leerzeichen **und** `=` |
 | `record`-Verweigerungen | 9 Fälle → Exit 2 **und** keine Lock-Datei entstanden: kein `--confirm`, `--confirm` ohne Wert, leerer Grund, 19 Zeichen, LF, CR, CRLF, `--` im Grund, unerwartetes Argument |
 | `record`-Annahmen | 20 Zeichen, Grund mit Leerzeichen, erneutes Aufzeichnen mit anderem Grund, `old -> new`-Diff **vor** dem Pin |
 | `UPDATE_SNAPSHOTS` | 8 falsche Werte (`''`, `0`, `false`, `no`, `off` + Großschreibung) bleiben still, 6 wahre (`1`, `true`, `yes`, `on`, `force`, `garbage`) lösen die Verweigerung aus — jeweils über `gate` und mit der Zusicherung, dass das gated Kommando **nicht** gelaufen ist; auf passendem Pin läuft es |
 | Pre-Commit-Matrix | 16 Fälle in einem Wegwerf-`git init`-Repo mit dem **echten** Hook (14 `mc_commit`-Zeilen + "nichts gestaged" + kaputter Index als Positivkontrolle): geändert/angelegt/gelöscht/umbenannt/in Unterordner, mit und ohne Lock, mit unverändertem, geändertem und fehlendem `# Grund:`, Index ≠ Arbeitskopie auf **beiden** Seiten (Goldenseite und Lockseite, §4.1), Lock ohne Golden, PNG außerhalb des Snapshot-Baums, nichts gestaged, kaputter Index |
-| Sandbox-Disziplin | `scripts/golden_ref.lock` ist am Ende byte-identisch, der echte Git-Index unverändert, keine `golden_ref.lock.tmp.*` übrig |
+| Sandbox-Disziplin | `scripts/golden_ref.lock` ist am Ende byte-identisch, der echte Git-Index unverändert, keine `golden_ref.lock.tmp.*` übrig — und **jeweils mit Vorbedingung**: der Before-/After-Wert muss ein `sha256` bzw. ein Tree-OID sein, sonst ist der Vergleich nicht aussagekräftig und die Prüfung wird rot statt grün (§4.2.2) |
 
 ### 4.2.1 Der eine Bruch in der Selbstkonsistenz — und warum er nötig war
 
@@ -398,6 +400,13 @@ Zeilen existierten:
 | --- | --- | --- |
 | `png_size`: die beiden hohen Breitenbytes vertauscht | **180/180 grün** | 184/188, 4 rot |
 | `ui.scale_factor`-Fall auf immer `1.0` festgenagelt | **180/180 grün** | 186/188, 2 rot (nur die `non-unit`-Zeilen; die `1.0`-Zeile bleibt grün — genau deshalb sind es zwei) |
+
+**Suite-Stand beim Messen: 188 Prüfungen.** Die Zahlen in dieser Tabelle sind
+also *historisch* und beziehen sich auf den Stand **vor** der Ergänzung in
+§4.2.2; die Suite hat heute 201. Sie sind hier behalten, weil der Nachweis genau
+darin liegt: zu diesem Zeitpunkt war die Mutation **grün**, und genau das war die
+Lücke. (Die Tabelle in §4.2.2 zeigt dieselben Klassen auf dem aktuellen Stand
+und ist dort mit dem Stand gekennzeichnet.)
 
 Geschlossen wird das nicht durch eine Kopie der Ableitung im Test (eine Kopie
 prüft sich selbst), sondern indem die Suite die **echte** `emit_fingerprint`
@@ -424,6 +433,71 @@ Minuten** (jeder `check`/`record`-Aufruf erfasst den Fingerabdruck neu und
 läuft `dd|od|awk` über 66 Goldens; die drei zusätzlichen Läufe aus §4.2.1
 kosten zusammen wenige Sekunden, weil dort nur das Golden-Inventar
 ausgetauscht wird).
+
+### 4.2.2 Der zweite Bruch: die Golden-Inventar-Ebene war nicht verankert
+
+§4.2.1 hat den ersten selbstkonsistenten Blindfleck geschlossen (die beiden
+*Ableitungen* `png_size` und `ui.scale_factor`). Der zweite war die Schicht, die
+§3.1 und §11.1 als **dauerhaften Restschutz** benennen: `goldens.count` und
+`goldens.digest`. Sie hatte im Wächter **keinen** Anker, und
+`feature/quality/golden-fixtures.md` §4 sagt dasselbe von der anderen Seite —
+"`golden_ref.sh check` vergleicht Digests, nicht diese Tabelle — eine fehlende
+Zeile fällt dort nicht auf".
+
+Gemessen wurde der Blindfleck an drei Mutationen, jede einzeln auf
+`scripts/golden_ref.sh` angewandt und die Suite gefahren. Alle drei ließen
+**alle 188 bis dahin grünen Prüfungen** grün, jede wird jetzt gefangen:
+
+| Mutation (nur die Inventar-Ebene, Produktionstest unverändert) | vorher | jetzt (Suite-Stand 201) |
+| --- | --- | --- |
+| `list_goldens` meldet nur die `develop_*`-Teilmenge (25 von 66) | **188/188 grün** | 198 grün, 3 rot: `goldens.count`, enumeriertes Set, `goldens.digest` |
+| `goldens.digest` hasht nur das **erste** Golden | **188/188 grün** | 200 grün, 1 rot: `goldens.digest` |
+| Digest-Modus auf `walk:` festgenagelt, obwohl git vorhanden ist | **188/188 grün** | 199 grün, 2 rot: Moduswahl `git:` und „Modus ist Teil des Wertes" |
+
+Geschlossen wird das wie in §4.2.1 **nicht** mit einer Kopie der Ableitung im
+Test, sondern indem die Suite die **echte** `emit_fingerprint` **ohne jeden
+Ersatz** fährt — diesmal ist `list_goldens`/`digest_goldens` selbst der
+Gegenstand, also wird nichts überschrieben. Die Erwartungen kommen von außerhalb
+des Wächters und je für sich:
+
+- `goldens.count` gleich der Zahl der committeten Golden-PNGs aus
+  `git ls-files --cached -- 'crates/lumina-gui/tests/snapshots/*.png'`
+  (gemessen: **66**);
+- das vom Wächter **enumerierte** Set **pfadweise** gleich dieser Liste — nicht
+  nur gleicher Anzahl: eine Liste kann richtig lang sein und trotzdem ein Golden
+  gegen eine Datei eingetauscht haben, und genau das ist der „eine Zeile fehlt
+  in der Klassifikationstabelle"-Fall, den `check` nicht sieht;
+- `goldens.digest` gleich dem über **alle** committeten Goldens unabhängig
+  berechneten Wert im dokumentierten Format `<modus>:<sha256>` über
+  `<pfad> <sha256>`-Zeilen. Das ist der einzige Anker, der einen Digest über
+  *ein* Golden von einem über *alle* unterscheidbar macht — der Rows 1 der
+  Tabelle.
+- der Modus: `git:` bei vorhandenem git, `walk:` unter einem `git`-Shim, der
+  **nur** die Enumeration unbrauchbar macht (der dokumentierte Auslöser aus
+  §3.1), und die Aussage, dass der Modus **Teil des Wertes** ist. Beide Richtungen
+  werden geprüft, damit kein Modus festgenagelt sein kann.
+
+**Was diese Prüfungen nicht behaupten.** In diesem Checkout enumerieren beide
+Modi dieselben 66 Dateien, `git:` und `walk:` unterscheiden sich also allein im
+Präfix — die Aussage ist damit „der Modus steckt im Wert", nicht „die Modi sehen
+verschiedene Dateien". Und die `walk:`-Enumerierung wird gegen eine
+`find`-Ableitung geprüft, die die dokumentierten Artefakt-Ausschlüsse
+(`*.new.png` / `*.diff.png` / `*.old.png`) anwendet; dieser Checkout trägt solche
+Artefakte tatsächlich auf der Platte, die also lasttragend sind.
+
+**Zwei Vorbedingungen, die vorher fehlten (DoD §10).** Die beiden
+„nichts wurde angefasst"-Wächter am Suite-Ende verglichen
+`git write-tree … || echo "no-index"` und einen `sha_of`-Wert, der den Fehler
+schluckt und **nichts** ausgibt. Gemessen: außerhalb eines Git-Arbeitsbaums war
+beides konstant, also verglichen beide Wächter eine Konstante mit sich selbst
+und meldeten Erfolg, ohne je etwas gelesen zu haben. Beide Wächter bleiben
+unverändert (sie verhindern, dass jemand diese Suite für den Nachweis hält, sie
+habe selbst nichts angefasst); **ergänzt** ist je eine Vorbedingung — der
+Before-Wert muss ein `sha256`, der Index-OID muss ein Tree-OID sein. Ein kaputtes
+git oder ein fehlender Lock macht die Suite damit **rot** statt still grün;
+nachgemessen über einen `git`-Shim, der ausschließlich `write-tree` scheitern
+lässt (2 rot, beide Vorbedingungen), während der unveränderte Wächter daneben
+weiterhin „ok" meldet.
 
 ---
 
