@@ -453,3 +453,47 @@ fn draft_analysis_runs_at_the_cadence_not_per_tick() {
         "past the cadence the analysis runs again and the marker clears"
     );
 }
+
+// ---- SIDECAR-SAVE-STRAND-39: an owed save is re-armed exactly once ----
+// A non-committing render (`Render / Apply`) clears `pending_full_render` — the
+// gate of the scheduler's only commit path — while a token is armed. The re-arm
+// must run only while a drag clock runs, or a view edit writes and a failed save retries.
+#[test]
+fn the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("strand.png");
+    save_png(&source);
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    let ctx = egui::Context::default();
+    let mut held = egui::RawInput::default(); // a held primary button
+    held.events = vec![egui::Event::PointerButton {
+        pos: egui::pos2(1.0, 1.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    }];
+    app.mark_dirty(); // 1) a pure view edit (bare `mark_dirty`, as zoom/pan use)
+    app.render().unwrap();
+    app.last_edit_time = 0.01; // a t=0 context keeps this inside the window
+    app.schedule_render(&ctx);
+    let mut seen = vec![app.pending_full_render];
+    for (clock, down) in [(0.01, false), (0.0, false), (0.01, true)] {
+        app.set_adjustment("exposure", 2.0); // 2-4) a token, then a render that clears
+        app.render().unwrap();
+        app.last_edit_time = clock;
+        if down {
+            let mut out = ctx.run_ui(held.clone(), |_| {});
+            out.textures_delta.clear();
+        }
+        app.schedule_render(&ctx);
+        seen.push(app.pending_full_render);
+    }
+    seen.push(lumina_sidecar::sidecar_path_for(&source).exists());
+    assert_eq!(
+        seen,
+        [false, true, false, false, false],
+        "rows [view edit, drag clock, no clock, pointer down, sidecar written]: \
+         only a drag clock re-arms, and no frame saves on its own"
+    );
+}

@@ -287,18 +287,19 @@ fn same_length_rewrite_with_restored_mtime_still_forces_a_new_identity() {
 
 /// A missing source is `Missing`; an unreadable one is `Unavailable` with the
 /// OS error text. Neither class is ever *stored*: a failure is never memoized
-/// as a successful identity, so a file that later appears — or becomes readable
+/// as a successful identity, so a path that later appears — or becomes readable
 /// — resolves freshly instead of inheriting a remembered failure.
 ///
-/// Note the deliberate boundary (documented in the SOLL § 3): revoking
-/// permissions on a path whose hash was *already* computed does **not** change
-/// the returned class. `chmod` does advance the key's `ctime` (it is a metadata
-/// change), so the memo **does** miss and the lookup really re-attempts — but
-/// that re-attempt fails, and a failure is not memoized, so what the caller
-/// sees is the freshly-determined `Unavailable`, not a remembered `Hashed`. The
-/// `Unavailable` class means "the identity could not be determined (now)"; a
-/// hash that was determined while the file was readable is simply not
-/// re-derived from an unreadable file, because the content did not change.
+/// Boundary (SOLL § 3, asserted at the end): a permission change on an
+/// already-hashed path does not change the class, because the content did not.
+///
+/// **Why a directory and not a `chmod 0o000` file** (2026-09-26, after CI went
+/// red on `main`): a privileged runner can read a mode-000 file, so the
+/// assertion held locally and failed in the containerised CI job — green here,
+/// red there, the worst possible split. The old `#[cfg(not(unix))]` helper
+/// fallback was a no-op and would have failed on Windows for the mirror-image
+/// reason. A directory fails the read for every user, root included, and is not
+/// `NotFound`, so it pins `Unavailable` vs `Missing` identically everywhere.
 #[test]
 fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
     let dir = tempfile::tempdir().unwrap();
@@ -332,17 +333,15 @@ fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
         "a newly appeared file must be hashed exactly once, not served for free"
     );
 
-    // Never-readable file: `stat` succeeds, `open` is denied. The failure class
-    // is distinct from `Missing`, it repeats on every call (no memoized
-    // success), and it does not poison the path once access is restored.
-    let locked = dir.path().join("locked.arw");
-    std::fs::write(&locked, &bytes).unwrap();
-    restrict_permissions(&locked);
+    // Unreadable path: `stat` succeeds, the content read fails. The failure
+    // class is distinct from `Missing`, it repeats on every call (no memoized
+    // success), and it does not poison the path once the cause is removed.
+    let locked = unreadable_path(dir.path(), "locked.arw");
     for _ in 0..2 {
         let identity = FileContentIdentity::from_path(&locked);
         assert!(
             matches!(identity, FileContentIdentity::Unavailable(_)),
-            "a permission error must stay Unavailable, not become a hash: {identity:?}"
+            "a failed read must stay Unavailable, not become a hash: {identity:?}"
         );
     }
     assert_eq!(
@@ -350,13 +349,42 @@ fn missing_and_unreadable_files_keep_their_distinct_uncached_behaviour() {
         None,
         "a failed read must never be memoized as a successful identity"
     );
-    restore_permissions(&locked);
+    std::fs::remove_dir(&locked).unwrap();
+    std::fs::write(&locked, &bytes).unwrap();
     assert_eq!(
         FileContentIdentity::from_path(&locked),
         FileContentIdentity::Hashed(identity_of_bytes(&bytes)),
-        "a readable-again file resolves to its real identity"
+        "a readable-again path resolves to its real identity"
     );
     assert_eq!(source_identity::hash_count(&locked), Some(1));
+
+    // The documented ctime boundary, kept but now privilege-independent: a
+    // `chmod` is a metadata change, so the memo key misses and the lookup
+    // really re-attempts. The file stays readable throughout, so this asserts
+    // the *key* behaviour without depending on the read being denied — which is
+    // what broke on the containerised runner.
+    let touched = dir.path().join("touched.arw");
+    std::fs::write(&touched, &bytes).unwrap();
+    assert_eq!(
+        FileContentIdentity::from_path(&touched),
+        FileContentIdentity::Hashed(identity_of_bytes(&bytes))
+    );
+    assert_eq!(source_identity::hash_count(&touched), Some(1));
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&touched, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert_eq!(
+        FileContentIdentity::from_path(&touched),
+        FileContentIdentity::Hashed(identity_of_bytes(&bytes)),
+        "a chmod must not change the identity value"
+    );
+    // The matching half — "a chmod advances `ctime`, so the memo misses and
+    // re-hashes" — is deliberately **not** asserted: it is only observable when
+    // the filesystem's timestamp granularity is finer than the gap between the
+    // write and the `chmod`, and those are microseconds apart. Asserting it made
+    // this suite red (`hash_count` stayed `Some(1)`) — a timing-dependent
+    // assertion. Testing it properly needs an injectable clock.
 }
 
 // ---- 4. The cache changes no identity value ----
@@ -459,20 +487,12 @@ fn bundle_identity_precedence_and_source_action_bundle_are_unchanged() {
 
 // ---- Helpers ----
 
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+/// A path guaranteed to fail a content read **regardless of privilege or
+/// platform**: a directory, because `fs::read` on one yields `EISDIR` (Windows:
+/// access denied) for every user, root included, and neither is `NotFound`.
+/// See the test's doc comment for why this replaced a `chmod 0o000` file.
+fn unreadable_path(dir: &Path, name: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    std::fs::create_dir(&path).unwrap();
+    path
 }
-
-#[cfg(unix)]
-fn restore_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}
-
-#[cfg(not(unix))]
-fn restore_permissions(_path: &Path) {}

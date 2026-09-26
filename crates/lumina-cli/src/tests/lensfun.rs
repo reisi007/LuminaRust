@@ -1,6 +1,12 @@
 // F-098-N2: feature-gated CLI->Lensfun wiring tests (see mod.rs cfg).
 
 use super::*;
+// The merge of `origin/main` (2026-09-26) moved the lens corrector into
+// `src/lensfun_cli.rs`, so `RawMetadata` is no longer in scope through the
+// binary root's imports. Named explicitly, like every other payload type here:
+// a test that depends on which `use` lines the root happens to carry breaks on
+// an unrelated extraction.
+use lumina_raw::RawMetadata;
 
 // Build a `RawMetadata` from the minimal EXIF fields the CLI wiring
 // inspects. All other fields are left at inert defaults — the wiring
