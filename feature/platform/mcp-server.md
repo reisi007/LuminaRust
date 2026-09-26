@@ -6,8 +6,10 @@
 **F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
-in `lumina-cli`, Default an). Insgesamt 12 Tools. Verträge und dokumentierte
-Grenzen: Abschnitt „Erweiterter MVP-Scope“.
+in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
+Metadaten-Tools aus LRPAR-G15-IPTC-S7 sind es heute **17**. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (14 von 32
+Subcommands): Abschnitt „Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
@@ -604,25 +606,55 @@ keinen Sidecar, daher kann `-32010` dort nicht auftreten (R2-MCP-03).
 
 ## Erweiterter MVP-Scope (2026-08-19 User-Anforderung; F-101-F1 umgesetzt 2026-08-26)
 
-Der MCP-Server bildet **alle CLI-Funktionalitäten** ab, nicht nur die
-sieben ursprünglichen Editing-Tools. Zusätzliche Anforderungen:
+Der MCP-Server deckt den session- und pfadbasierten **Kern** der
+CLI-Funktionalitäten ab, nicht die vollständige Befehlsliste. Der
+ursprüngliche Scope lautete „alle CLI-Funktionalitäten"; diese Zusage war
+**zu weit gefasst** und wird hier auf den geprüften Stand
+zurückgenommen (siehe „Ist-Abdeckung" unten).
 
-### Volle CLI-Abdeckung (12 Tools)
+### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26)
 
-Jeder `lumina`-CLI-Befehl ist als MCP-Tool erreichbar:
+`lumina-cli` hat **32** Subcommands. Abgedeckt sind **18**, offen sind
+**14**. Der Abgleich erfolgte gegen die tatsächlich implementierten
+Tool-Beschreibungen, nicht nur gegen diese Tabelle.
+
+**Abgedeckt (18):**
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
 | `lumina import` | `lumina_import` | F-101-F1 |
 | `lumina develop` / `lumina render` / `lumina export` | `lumina_edit` + `lumina_save` (Render/Export-Choke-Point) | bereits spezifiziert |
 | `lumina process` | `lumina_edit` + `lumina_save` (Rezept vor Render setzen) | bereits spezifiziert |
-| `lumina info` | `lumina_inspect` | bereits spezifiziert |
+| `lumina inspect` | `lumina_inspect` | bereits spezifiziert |
 | `lumina batch` | `lumina_batch` (ein Aufruf = ein Verzeichnis) | F-101-F1 |
 | `lumina reindex` | `lumina_reindex` | F-101-F1 |
 | `lumina dust-removal` | `lumina_dust_removal` | F-101-F1 |
-| `lumina mask` | Maskenstatus via `lumina_inspect` sichtbar; Re-Refresh über Sidecar-Rezept (`update_masks`), Inferenz selbst bewusst Post-MVP | Grenze dokumentiert |
+| `lumina mask` | Maskenstatus via `lumina_inspect` sichtbar; Re-Refresh über Sidecar-Rezept (`lumina_get_recipe`); Inferenz selbst bewusst Post-MVP | Grenze dokumentiert |
 | `lumina validate` | `lumina_import`/`lumina_load` (Identitäts- und Validierungsprüfung beim Laden) | bereits spezifiziert |
+| `lumina meta` (Keywords, Presets, Export, Sync) | `lumina_get_metadata_draft`, `lumina_update_metadata_draft`, `lumina_apply_meta_preset`, `lumina_batch_sync_metadata`, `lumina_trigger_export` | LRPAR-G15-IPTC-S7 |
+| `lumina color` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
+| `lumina red-eye` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
+| `lumina face` | Rezeptfelder via `lumina_edit`/`lumina_get_recipe` | bereits spezifiziert |
 | `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
+
+**Offen — kein MCP-Weg weder implementiert noch als Grenze dokumentiert (14):**
+`spot`, `lens-blur`, `geometry`, `upright`, `collections`,
+`smart-collections`, `relocate`, `merge-hdr`, `merge-pano`, `matrix`,
+`generative`, `regenerate`, `denoise`, `cull`.
+
+Diese Lücke ist **offen, nicht abgesichert**: die früher hier
+formulierte Zusage „Jeder `lumina`-CLI-Befehl ist als MCP-Tool
+erreichbar" trifft auf die obigen 14 nicht zu und wird nicht mehr
+behauptet. Die Schliessung erfolgt in benannten Slices (Aufgaben
+`MCP-PARITY-A/B/C` in `Agents.todo.md`), **nicht** durch einen einzigen
+Blindumbau: `denoise` und `cull` sind über das F-078-Modellgate
+gesperrt — ein Tool dafür würde immer nur den Modellfehler
+durchreichen und wird deshalb als **modellgegated** geführt statt als
+Stub gebaut.
+
+**Namenskorrektur:** die frühere Fassung dieser Tabelle nannte
+`lumina info`; das CLI-Kommando heisst `lumina inspect`. Es gibt kein
+`lumina info`.
 
 #### Gemeinsame Eigenschaften der Bulk-/Pfad-Tools
 

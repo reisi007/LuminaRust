@@ -651,6 +651,44 @@ Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
   Verweigerung der weiterhin deaktivierten Presence/Detail/AI-Denoise/Optics-
   Stufen. Presence, Detail und Optics bleiben deaktiviert.
 
+## Red-Eye in der Mask-Local-Kette: bewusst nicht vorgesehen (Stand 2026-09-26)
+
+Die globale Kernel-Kette hat **elf** pixelwirkende Stufen:
+Kanal-LUT → Presence → Kurve → HSL → Point Color → Vibrance/Saturation →
+Color Grading → AI-Denoise → Noise Reduction → Sharpening → **Red-Eye**.
+Die mask-lokale Kette hat dafür Entsprechungen für **zehn**.
+
+`red_eye` ist die eine Stufe ohne lokales Gegenstück. Bis 2026-09-26 war
+das nirgends festgehalten — weder als Ausnahme mit Begründung noch als
+offener Task. Das ist genau die Art Lücke, die dieses Feature gerade
+vermeiden soll, deshalb wird sie hier geschlossen.
+
+**Warum kein lokales Red-Eye:** Das globale Red-Eye ist **kein**
+Per-Pixel-Tone-Parameter, sondern eine Liste **normalisierter Regionen**
+(`RedEyeRegion` mit `center_x`/`center_y`/`radius`/`desaturate`/`darken`),
+die der Renderer gegen das **Gesamtbild** auswertet. Ein maskenlokales
+Gegenstück würde zwei unvereinbare Dinge verlangen: die Regionen müssten
+einmal global und einmal pro Maske existieren, und die Regionsgeometrie
+müsste zwei unabhängig editierbare Kopien derselben Sache sein. Beides
+widerspricht dem P0-Vertrag „sequenzielle lokale Layer auf dem global
+adjustierten Ergebnis" — die Regionen sind bereits global persistiert
+und werden global angewendet, eine zweite Kopie pro Maske wäre eine
+dritte Wahrheit.
+
+**Also gilt, bis sich das ändert:** Es gibt **kein** `red_eye`-Feld im
+`MaskLocalRecipe`, **keinen** CLI-Key und **keinen** Renderer-Stub. Ein
+Schlüssel `adjustment_red_eye` oder `red_eye` ist ein **lauter**
+„unknown local adjustment"-Fehler, genau wie die anderen deaktivierten
+Stufen. Wer Red-Eye pro Maske braucht, braucht zuerst eine Entscheidung
+über die Regions-Quelle (eine gemeinsame Regionsliste, die global
+angewendet und pro Maske nur maskiert wird) — das ist **kein** Slice,
+sondern eine SOLL-Frage und als solche hier offen gelassen.
+
+**Abgrenzung zu den anderen Ausnahmen:** Optics ist **dauerhaft**
+ausgeschlossen (geometrische Stufen vor den Masken), AI-Denoise und
+Noise-Reduction-als-eigenes-Tool sind **modellgegated** (F-078). Red-Eye
+ist **begründet ausgeschlossen** und damit abweichend von beiden.
+
 ## P1.2c SOLL — mask-local Presence (`MASK-LOCAL-P1.2c`)
 
 **Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
