@@ -41,6 +41,13 @@ gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # feature (the `LensfunMap::from_corrector` builder) and the native
 # `lumina-lensfun` wrapper. NOT default — default builds never link liblensfun.
 lensfun = ["lumina-core/lensfun", "dep:lumina-lensfun", "lumina-lensfun/native"]
+# Opt-in gate for the adapter-dependent integration tests. Without it those
+# tests carry `#[ignore]`, so a plain `cargo test -p lumina-gpu` (as CI runs it
+# on a GPU-less runner) reports them as **ignored** rather than vacuously
+# passing. With it they are real tests and a missing adapter is a hard failure
+# (`tests/support`). Run the real GPU suite locally with:
+#   cargo test -p lumina-gpu --features gpu-adapter-tests
+gpu-adapter-tests = ["gpu"]
 
 [dev-dependencies]
 # Used by the golden-image equivalence harness to report a blake3 content hash

@@ -18,6 +18,7 @@
 // Every test here drives GPU hardware paths; in pure-CPU builds (`--no-default-
 // features`) the whole harness is compiled out.
 #![cfg(feature = "gpu")]
+mod support;
 
 use lumina_core::render::SourceActionArtifact;
 use lumina_core::{render_frame, ImageFrame, MaskPlane, RenderContext};
@@ -105,13 +106,13 @@ fn max_abs_diff(a: &[u8], b: &[u8]) -> u8 {
         .unwrap_or(0)
 }
 
-/// The dedicated source-action GPU stage must composite exactly like the CPU
-/// oracle. With a neutral recipe the whole pipeline is pure copying, so the
-/// outputs have to be **byte-identical**; with an exposure slider stacked on
-/// top, the combined output stays within the golden tolerance (the tone math
-/// itself is already gated by `golden.rs`).
-#[test]
-fn source_action_stage_matches_cpu_reference() {
+support::gated_test!(
+    /// The dedicated source-action GPU stage must composite exactly like the CPU
+    /// oracle. With a neutral recipe the whole pipeline is pure copying, so the
+    /// outputs have to be **byte-identical**; with an exposure slider stacked on
+    /// top, the combined output stays within the golden tolerance (the tone math
+    /// itself is already gated by `golden.rs`).
+    source_action_stage_matches_cpu_reference, {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -119,7 +120,7 @@ fn source_action_stage_matches_cpu_reference() {
             return;
         }
     };
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("{SKIP_MESSAGE}");
         return;
     }
@@ -204,13 +205,13 @@ fn source_action_stage_matches_cpu_reference() {
         !unsupported_gpu_stages_for(&neutral, false).is_empty(),
         "without bound artifacts source_actions must CPU-route again"
     );
-}
+});
 
-/// Without bound artifacts the pre-GPU-STAGE-1 contract holds unchanged: a
-/// recipe referencing source actions routes to the CPU pipeline and produces
-/// byte-identical pixels there.
-#[test]
-fn unbound_source_actions_still_route_to_cpu() {
+support::gated_test!(
+    /// Without bound artifacts the pre-GPU-STAGE-1 contract holds unchanged: a
+    /// recipe referencing source actions routes to the CPU pipeline and produces
+    /// byte-identical pixels there.
+    unbound_source_actions_still_route_to_cpu, {
     let frame = gradient_frame(48, 48);
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
@@ -225,7 +226,7 @@ fn unbound_source_actions_still_route_to_cpu() {
     };
     assert!(!unsupported_gpu_stages_for(&recipe, false).is_empty());
 
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("{SKIP_MESSAGE} - validator-only assertions");
         return;
     }
@@ -248,13 +249,13 @@ fn unbound_source_actions_still_route_to_cpu() {
         0,
         "CPU-routed renders must stay byte-identical to the CPU oracle"
     );
-}
+});
 
-/// The evaluated-mask data path uploads `u16` planes byte-exactly into the
-/// VRAM mask texture (GPU-STAGE-1). Read back through a staging buffer and
-/// compared against the source plane in the exact u16 domain.
-#[test]
-fn upload_mask_plane_roundtrip_is_byte_exact() {
+support::gated_test!(
+    /// The evaluated-mask data path uploads `u16` planes byte-exactly into the
+    /// VRAM mask texture (GPU-STAGE-1). Read back through a staging buffer and
+    /// compared against the source plane in the exact u16 domain.
+    upload_mask_plane_roundtrip_is_byte_exact, {
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -262,7 +263,7 @@ fn upload_mask_plane_roundtrip_is_byte_exact() {
             return;
         }
     };
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("{SKIP_MESSAGE}");
         return;
     }
@@ -294,7 +295,7 @@ fn upload_mask_plane_roundtrip_is_byte_exact() {
         readback, values,
         "the VRAM mask data path must preserve the exact u16 domain"
     );
-}
+});
 
 /// Artifact validation rejects mismatched geometries before any binding
 /// changes (no silent fallback, no partial mutation).

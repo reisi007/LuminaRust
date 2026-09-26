@@ -42,6 +42,7 @@
 //! CPU rendering"). The equivalence check itself only runs when a real adapter
 //! is bound (see above); absent one it is skipped, never silently passed.
 
+mod support;
 use blake3::Hasher;
 use lumina_core::{render_frame, ImageFrame, RenderContext};
 use lumina_gpu::{unsupported_gpu_stages, GpuContext};
@@ -360,8 +361,7 @@ fn blake3_hex(data: &[u8]) -> String {
 // Harness
 // ---------------------------------------------------------------------------
 
-#[test]
-fn cpu_gpu_golden_equivalence() {
+support::gated_test!(cpu_gpu_golden_equivalence, {
     // Probe the GPU once. `GpuContext::new` is graceful: it returns `Ok` even
     // when no adapter is bound (the context then degrades to the CPU fallback).
     let ctx = match GpuContext::new() {
@@ -373,7 +373,7 @@ fn cpu_gpu_golden_equivalence() {
     };
 
     // No adapter → skip the equivalence check (do not fail headless CI).
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("{SKIP_MESSAGE}");
         return;
     }
@@ -453,17 +453,17 @@ fn cpu_gpu_golden_equivalence() {
          (see per-pair report above; tolerances: maxAbsDiff<= {MAX_ABS_DIFF_TOLERANCE}, \
          PSNR>= {MIN_PSNR_DB} dB)"
     );
-}
+});
 
-/// REVIEW-GPU-DIVERGENCE-1: recipes containing stages the GPU tone stage does
-/// not implement must never be rendered by the shader. `render_with_gpu` has
-/// to route them to the CPU pipeline so GPU-enabled builds stay pixel-safe.
-///
-/// This test runs even without a GPU adapter: with an adapter it proves the
-/// routing produces byte-identical output to the CPU oracle; without one the
-/// CPU fallback trivially matches (and the validator assertions still hold).
-#[test]
-fn unsupported_recipes_route_to_cpu_byte_identically() {
+support::gated_test!(
+    /// REVIEW-GPU-DIVERGENCE-1: recipes containing stages the GPU tone stage does
+    /// not implement must never be rendered by the shader. `render_with_gpu` has
+    /// to route them to the CPU pipeline so GPU-enabled builds stay pixel-safe.
+    ///
+    /// This test runs even without a GPU adapter: with an adapter it proves the
+    /// routing produces byte-identical output to the CPU oracle; without one the
+    /// CPU fallback trivially matches (and the validator assertions still hold).
+    unsupported_recipes_route_to_cpu_byte_identically, {
     let frame = gradient_frame(64, 64);
     let ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
@@ -489,7 +489,7 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
 
         // …and the render must CPU-route to byte-identical pixels. A real
         // divergence (shader dropping the stage) would show up here.
-        if !ctx.is_available() {
+        if !support::require_adapter(&ctx) {
             eprintln!("{SKIP_MESSAGE} - validator-only assertions for {name}");
             continue;
         }
@@ -518,7 +518,7 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
             report.max_abs_diff
         );
     }
-}
+});
 
 /// Always-runs unit checks for [`unsupported_gpu_stages`]: supported recipes
 /// stay unflagged; every still-unsupported stage produces its reason.

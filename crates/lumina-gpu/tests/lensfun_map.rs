@@ -21,6 +21,7 @@
 //! loudly without an adapter, matching `tests/parity.rs`.
 
 #![cfg(feature = "gpu")]
+mod support;
 
 use lumina_core::{CoreError, ImageFrame, LensfunMap};
 use lumina_gpu::{GpuContext, GpuError};
@@ -73,9 +74,9 @@ fn cropped_recipe() -> EditRecipe {
     }
 }
 
-/// F1: a map dimension mismatch is a loud planner error on both entry points.
-#[test]
-fn f1_mismatched_map_dimensions_are_refused_loudly() {
+support::gated_test!(
+    /// F1: a map dimension mismatch is a loud planner error on both entry points.
+    f1_mismatched_map_dimensions_are_refused_loudly, {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -113,10 +114,11 @@ fn f1_mismatched_map_dimensions_are_refused_loudly() {
             other => panic!("readback must refuse a mismatched map loudly, got {other:?}"),
         }
     } else {
+        support::require_adapter(&ctx);
         eprintln!("F1 readback planner assertion skipped (no GPU adapter)");
     }
     ctx.set_lensfun_map(None).expect("clear map");
-}
+});
 
 /// F3: a bound map turns a would-be CPU fallback into a loud refusal.
 #[test]
@@ -200,11 +202,11 @@ fn f4_malformed_map_is_rejected_on_bind() {
     assert_eq!(out.height, frame.height);
 }
 
-/// F2: a vignetting-only corrector (no distortion, no explicit crop) renders on
-/// the GPU with CPU-oracle parity.
 #[cfg(feature = "lensfun")]
-#[test]
-fn f2_vignetting_only_corrector_matches_cpu_oracle() {
+support::gated_test!(
+    /// F2: a vignetting-only corrector (no distortion, no explicit crop) renders on
+    /// the GPU with CPU-oracle parity.
+    f2_vignetting_only_corrector_matches_cpu_oracle, {
     use lumina_core::{render_frame, LensfunCorrectorRef, RenderContext};
     use lumina_lensfun::{Corrector, LensfunDb};
 
@@ -215,7 +217,7 @@ fn f2_vignetting_only_corrector_matches_cpu_oracle() {
             return;
         }
     };
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("F2 skipped (no GPU adapter)");
         return;
     }
@@ -309,4 +311,4 @@ fn f2_vignetting_only_corrector_matches_cpu_oracle() {
         );
     }
     ctx.set_lensfun_map(None).expect("clear map");
-}
+});

@@ -27,6 +27,7 @@
 //! against) are only available there.
 
 #![cfg(all(feature = "gpu", feature = "lensfun"))]
+mod support;
 
 use lumina_core::{render_frame, ImageFrame, LensfunCorrectorRef, LensfunMap, RenderContext};
 use lumina_gpu::GpuContext;
@@ -231,8 +232,7 @@ fn assert_bounded_match(label: &str, cpu: &[u8], gpu: &[u8], dims: (u32, u32)) {
     );
 }
 
-#[test]
-fn manual_ca_skipped_under_tca_map_and_applied_without() {
+support::gated_test!(manual_ca_skipped_under_tca_map_and_applied_without, {
     let mut ctx = match GpuContext::new() {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -240,7 +240,7 @@ fn manual_ca_skipped_under_tca_map_and_applied_without() {
             return;
         }
     };
-    if !ctx.is_available() {
+    if !support::require_adapter(&ctx) {
         eprintln!("{SKIP_MESSAGE}");
         return;
     }
@@ -338,4 +338,4 @@ fn manual_ca_skipped_under_tca_map_and_applied_without() {
         &gpu_ca.pixels,
         (gpu_ca.width, gpu_ca.height),
     );
-}
+});
