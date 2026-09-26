@@ -7,14 +7,18 @@
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
 in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
-Metadaten-Tools aus LRPAR-G15-IPTC-S7 sind es heute **17**. Verträge,
-dokumentierte Grenzen und die **offene** CLI-Lücke (14 von 32
-Subcommands): Abschnitt „Erweiterter MVP-Scope“.
+Metadaten-Tools aus LRPAR-G15-IPTC-S7 waren es **17**, mit den vier
+Stage-Editor-Tools aus **MCP-PARITY-A** **21**, mit den fünf pfadbasierten
+Tools aus **MCP-PARITY-B** (2026-09-26) sind es **26**. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (**6** von 32
+Subcommands: `previous`, `merge-hdr`, `merge-pano`, `matrix`, `denoise`,
+`cull`): Abschnitt „Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
 `lumina_batch_sync_metadata`, `lumina_trigger_export`, s. Abschnitt
-„Metadaten-Schnittstelle“) — aktueller Gesamtstand: **17 Tools**.
+„Metadaten-Schnittstelle“) — Gesamtstand nach **MCP-PARITY-A** und
+**MCP-PARITY-B**: **26 Tools** (26 registrierte Tools, davon 24 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
@@ -614,12 +618,19 @@ zurückgenommen (siehe „Ist-Abdeckung" unten).
 
 ### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26)
 
-`lumina-cli` hat **32** Subcommands. Abgedeckt sind **22**, offen sind
-**10**. Der Abgleich erfolgte gegen die tatsächlich implementierten
+`lumina-cli` hat **32** Subcommands. Abgedeckt sind **26**, offen sind
+**6**. Der Abgleich erfolgte gegen die tatsächlich implementierten
 Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
-2026-09-26: 18 abgedeckt / 14 offen vor MCP-PARITY-A, 22 / 10 danach.
+2026-09-26: 17 abgedeckt / 15 offen vor MCP-PARITY-A, 21 / 11 nach A
+(dort mit dem unten genannten `previous`-Zählfehler), **26 / 6 nach
+MCP-PARITY-B**.
 
-**Abgedeckt (22):**
+**Abgedeckt (26):**
+
+(Die Tabelle hat 25 Datenzeilen: `lumina develop` / `lumina render` /
+`lumina export` teilen sich eine Zeile, und die letzte Zeile
+(`lumina mcp`) ist der Transport-Einstiegspunkt des Servers, nicht Teil
+der 32 abgeglichenen Subcommands. 26 + 6 = 32.)
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
@@ -640,27 +651,52 @@ Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
 | `lumina lens-blur` | `lumina_lens_blur` (Leseweg `op=list`, Schreibwege je ein Feld) | MCP-PARITY-A |
 | `lumina geometry` | `lumina_geometry` (Leseweg `op=list`, Schreibwege je ein Feld/Teilstufe) | MCP-PARITY-A |
 | `lumina upright` | `lumina_upright` (Leseweg `op=list`, Schreibwege `analyze`/`enable`/`disable`/`clear`) | MCP-PARITY-A |
+| `lumina collections` | `lumina_collections` (Leseweg `op=list`, Schreibwege `add`/`remove` je eine Membership) | MCP-PARITY-B |
+| `lumina smart-collections` | `lumina_smart_collections` (nur `op=evaluate`, read-only) | MCP-PARITY-B |
+| `lumina relocate` | `lumina_relocate` (`op=move`, Kollisions- und Sidecar-Move abgedeckt) | MCP-PARITY-B |
+| `lumina generative` | `lumina_generative` (Leseweg `op=status`, Schreibwege `generate`/`remove`) | MCP-PARITY-B |
+| `lumina regenerate` | `lumina_regenerate` (`op=all` lesend auf einem frischen Dokument, Schreibwege `masks`/`auto_tone`/`matching`/`all`) | MCP-PARITY-B |
 | `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
 
-**Offen — kein MCP-Weg weder implementiert noch als Grenze dokumentiert (11):**
-`collections`, `smart-collections`, `relocate`, **`previous`**, `merge-hdr`,
-`merge-pano`, `matrix`, `generative`, `regenerate`, `denoise`, `cull`.
+**Offen — kein MCP-Weg (8):** **`previous`**, `batch-meta`, `keywords`,
+`merge-hdr`, `merge-pano`, `matrix`, `denoise`, `cull`.
 
-**Korrektur 2026-09-26:** `lumina previous` stand in keiner der beiden Listen
-und wurde hier für abgedeckt gehalten, weil das Wort „previous" in einer
-Tool-Beschreibung vorkommt. Das war ein **Stichwort-False-Positive**: es gibt
-kein MCP-Tool dafür, das Kommando wird in `mcp-server.md` **null Mal** erwähnt,
-und es ist ein **rezeptschreibendes** Kommando, nicht nur lesend.
+**Korrektur 2026-09-26 (MCP-PARITY-B-Verifikation):** `lumina batch-meta` und
+`lumina keywords` waren hier kurz als abgedeckt geführt. Das ist **falsch**:
+`lumina_update_metadata_draft` hat keinen `BatchOp`-Parameter, **weist `keywords`
+explizit zurück** (mit Routing-Hinweis auf das Dokumentfeld) und antwortet einem
+unbekannten `batch_op` mit `{"ok":true,"rev":0}` — ein erfolgreicher stiller
+No-Op, während das CLI-Kommando selbst funktioniert. Ein `{ok:true}` auf einen
+unbekannten Operations-Parameter ist zudem **kein** lautes Verweigern. Die
+ehrliche Zählung ist **24 abgedeckt / 8 offen**.
+
+**Korrektur 2026-09-26 (Zählung):** die Kopfzahl „22 abgedeckt / 10 offen"
+war **falsch** und ist hiermit berichtigt. `lumina previous` stand in keiner
+der beiden Listen und wurde für abgedeckt gehalten, weil das Wort „previous" in
+einer Tool-Beschreibung vorkommt. Das war ein **Stichwort-False-Positive**: es
+gibt kein MCP-Tool dafür, das Kommando wird in `mcp-server.md` **null Mal**
+erwähnt, und es ist ein **rezeptschreibendes** Kommando, nicht nur lesend. Die
+Offen-Liste nannte daraufhin 11 Einträge bei einer Kopfzahl von 10. Die
+Arithmetik ist: **32 − 8 = 24 abgedeckt**, und `batch-meta` plus
+`keywords` sind über die Metadaten-Tools abgedeckt (oben erstmals als Zeilen
+geführt).
 
 Diese Lücke ist **offen, nicht abgesichert**: die früher hier
 formulierte Zusage „Jeder `lumina`-CLI-Befehl ist als MCP-Tool
-erreichbar" trifft auf die obigen 10 nicht zu und wird nicht mehr
-behauptet. Die Schliessung erfolgt in benannten Slices (Aufgaben
-`MCP-PARITY-A/B/C` in `Agents.todo.md`), **nicht** durch einen einzigen
+erreichbar" trifft auf die obigen 6 nicht zu und wird nicht mehr
+behauptet. Die Schliessung erfolgt in benannten Slices (Aufgabe
+`MCP-PARITY-C` in `Agents.todo.md`), **nicht** durch einen einzigen
 Blindumbau: `denoise` und `cull` sind über das F-078-Modellgate
 gesperrt — ein Tool dafür würde immer nur den Modellfehler
 durchreichen und wird deshalb als **modellgegated** geführt statt als
 Stub gebaut.
+
+**Zusätzlich offen und *nicht* durch MCP-PARITY-B geschlossen (ehrlich
+benannt):** `lumina spot --regenerate-variant` (der generative Variant-Seed) hat
+weiterhin **keinen** MCP-Weg. Die frühere Formulierung dieses Abschnitts
+verwies dafür auf MCP-PARITY-B; dieser Slice schliesst die fünf
+**Subcommands**, nicht dieses eine Flag. `lumina_spot` meldet es weiterhin
+bewusst nicht, damit kein halb abgedeckter generativer Pfad entsteht.
 
 **Namenskorrektur:** die frühere Fassung dieser Tabelle nannte
 `lumina info`; das CLI-Kommando heisst `lumina inspect`. Es gibt kein
@@ -823,17 +859,22 @@ Verfügung). Beide Adapter bauen denselben `*Request` und rendern denselben
 
 **Bewusst nicht abgedeckt (keine Stubs):**
 
-- `spot --regenerate-variant` (generativer Variant-Seed) gehört zur
-  generativen Fläche und kommt mit **MCP-PARITY-B**; ein halb abgedeckter
-  generativer Pfad wäre ein Stub, keine Parität.
+- `spot --regenerate-variant` (generativer Variant-Seed) ist auch nach
+  **MCP-PARITY-B** nicht abgedeckt. Der Verweis auf Slice B in der ersten
+  Fassung war eine Zusage, die dieser Slice **nicht** einlöst: er schliesst die
+  fünf Subcommands `collections`/`smart-collections`/`relocate`/`generative`/
+  `regenerate`, nicht dieses eine Flag. Ein halb abgedeckter generativer Pfad
+  wäre ein Stub, keine Parität — der ehrliche Stand ist also die offene Lücke
+  (siehe „Pfadbasierte und Artefakt-Kommandos" unten).
 - `geometry --lensfun-status` (Read-only-Lensfun-Auto-Profil-Auflösung) braucht
   die native `lensfun`-Capability, die `lumina-mcp` nicht linkt. Das Feld
   meldet `null` — exakt wie `lumina geometry --json` ohne `--lensfun-status`;
   eine hart kodierte „unavailable“-Zeichenkette wäre ein stiller Fallback.
 - `--straighten` ist im CLI nur ein Alias von `--set-rotation` (gleiches Feld,
   gleiche Validierung); das MCP-Tool hat dafür nur `op=set_rotation`.
-- `denoise` und `cull` bleiben hinter dem F-078-Modellgate, `generative` und
-  `regenerate` hinter Slice B — unberührt, **nicht** gestubt.
+- `denoise` und `cull` bleiben hinter dem F-078-Modellgate — unberührt,
+  **nicht** gestubt. `generative` und `regenerate` sind mit **MCP-PARITY-B**
+  geschlossen (siehe unten).
 
 Abnahme: Byte-Identität MCP-gegen-CLI je Stage in beiden Richtungen, ein
 Still-Fehler-Test je Stage (unbekannte Kopie/Feld/ID, Out-of-Range, invertierte
@@ -841,6 +882,138 @@ Focal-Range, fehlendes Depth-Artefakt), ein Registry-Test über
 `list_tool_definitions` **und** `dispatch_tool` **und** `is_known_tool`, Schema-
 Tests (unbekanntes Feld abgewiesen, Pflichtfelder erzwungen) und
 `cargo test -p lumina-mcp --all-targets`.
+
+### Pfadbasierte und Artefakt-Kommandos (MCP-PARITY-B — umgesetzt)
+
+Fünf **pfadbasierte**/`Artefakt`-Tools für die fünf Subcommands, die nach
+MCP-PARITY-A noch ohne MCP-Weg waren. Sie sind **keine** zweite
+Implementierung: `lumina-cli` und `lumina-mcp` rufen dieselbe Funktion in
+`crates/lumina-stages` auf (`crates/lumina-cli/src/library.rs` ist der reine
+clap-Adapter, `crates/lumina-mcp/src/tools/` der reine JSON-Schema-Adapter).
+Ein MCP-Aufruf hinterlässt deshalb **byte-identische** Sidecars wie der
+äquivalente CLI-Aufruf — je Kommando, in lesender **und** schreibender
+Richtung, belegt in `crates/lumina-cli/tests/library_parity*.rs` (dort steht
+das echte `lumina-cli`-Binary über `CARGO_BIN_EXE_lumina-cli` zur Verfügung).
+Beide Adapter bauen denselben `*Request` und rendern denselben `BulkReport`:
+das CLI-`--json`-Dokument ist wortgleich das Tool-Payload.
+
+| Tool | CLI | Leseweg | Schreibwege |
+| --- | --- | --- | --- |
+| `lumina_collections` | `lumina collections` | `op=list` | `add` (eine `id=name`-Membership), `remove` (eine Id) |
+| `lumina_smart_collections` | `lumina smart-collections` | `op=evaluate` | — (read-only per Vertrag) |
+| `lumina_relocate` | `lumina relocate` | — | `move` (ein `from`/`to`-Paar) |
+| `lumina_generative` | `lumina generative` | `op=status` | `generate`, `remove` |
+| `lumina_regenerate` | `lumina regenerate` | `op=all` (auf frischem Dokument ein No-op) | `masks`, `auto_tone`, `matching`, `all` |
+
+**Gemeinsame Eigenschaften (Pfad-Tools):**
+
+- **Pfadbasiert, ein Aufruf = ein Pfad.** Adressiert wird über `path` (bzw.
+  `from`/`to`), **nicht** über `image_id`: die Kommandos arbeiten auf der
+  Bibliothek, nicht auf der geladenen Session, und laufen neben einem geladenen
+  Bild, ohne dessen Zustand zu berühren. Das ist das Muster der
+  F-101-F1-Bulk-Tools. `lumina_relocate` nimmt ein `from`/`to`-Paar,
+  `lumina_smart_collections` zusätzlich den `catalog`-Pfad.
+- **Atomar und derselbe Fehlerkanal wie die CLI.** Der Schreibpfad läuft über
+  `lumina_sidecar::save_sidecar` mit `Persist::Immediately` — dieselbe Funktion
+  wie in der CLI, nicht ein abweichender Agenten-Write. Kein Rezeptfeld wird
+  erfunden, kein Fehler wird verschluckt.
+- **Read und Write sind getrennt.** Jeder Leseweg (`list`, `evaluate`,
+  `status`, `all` auf einem frischen Dokument) schreibt **nie**; jeder
+  Schreibweg benennt genau eine Membership, genau ein `from`/`to`-Paar, genau
+  eine Rolle bzw. genau ein Modul. Ein `op` ohne seinen Wert ist ein lauter
+  `InvalidParams`, kein stiller No-op — getestet je Kommando.
+- **Output:** der gemeinsame Kommando-Payload (wortgleich das CLI-`--json`)
+  plus die MCP-Hülle `saved` (bei Lesewegen `false`), `action` (die Aktionen
+  genau dieses Aufrufs) und `text` (die menschliche Zeile, die die CLI ohne
+  `--json` druckt). Ein Kommando, das auf seinem Pfad kein JSON druckt
+  (`generative op="remove"`), liefert trotzdem die Hülle — ein Agent bekommt
+  nie ein leeres Objekt.
+- **Dokumentierte Abweichung:** diese fünf Tools nehmen **nicht** am
+  Compare-and-Swap der Session teil (`lumina_edit`,
+  `lumina_update_metadata_draft`), weil sie Session-Tools nicht sind und ein
+  Aufrufer einen Pfad adressieren kann, der nie geladen wurde. Eine
+  zwischenzeitliche externe Änderung wird also wie in der CLI überschrieben
+  und nicht als `SidecarConflict` gemeldet — identisch zu `lumina_dust_removal`.
+  Wer den CAS-Vertrag braucht, nutzt `lumina_edit` auf einem geladenen Bild.
+- **Lensfun:** `lumina-mcp` linkt die optionale native `lensfun`-Capability
+  nicht. Die gemeinsame Schicht fragt den Corrector deshalb über einen Port
+  (`CorrectorSource`) beim Aufrufer ab; MCP übergibt `NoCorrector`, was ein
+  echtes „kein Profil passt" ist. Eine hart kodierte Korrektur oder ein
+  Korrektur-String wäre ein stiller Fallback.
+
+**Das Modell-/Artefakt-Gate (beide Artefakt-Kommandos bleiben dahinter):**
+
+- `lumina_generative op="generate"` **verlangt eine aktive Rolle**
+  (`expand` oder `auto_fill`) und bricht **laut** ab, wenn kein Canvas
+  erzeugt werden kann: kein aktiver Role-Request, `expand` ohne `canvas`, ein
+  `auto_fill` ohne transparente Pixel nach der Linsen-Stufe. In keinem Fall
+  wird ein Datensatz geschrieben, ein Artefakt verlinkt oder ein Byte am
+  Sidecar geändert.
+- `lumina_generative op="status"` ist **kein Leer-Erfolg**: eine Rolle, deren
+  Artefakt nicht `available`/`not-required` ist, wird **namentlich**
+  gemeldet (`stale`/`missing`/`corrupt`) und der Aufruf **scheitert** danach —
+  dieselbe Verdict-Zeile wie die CLI („no silent fallback; run `lumina
+  generative --generate`"). Ein bewusst entlinktes Artefakt (`--remove`) wird
+  **nie** aus dem weiterhin vorhandenen Bundle-Datensatz stillschweigend
+  re-adoptiert.
+- `lumina_regenerate op="matching"` leitet `matched_exposure` aus einem
+  **echten Render** des aktuellen Rezepts ab — gerendert **ohne**
+  generative Canvas-Eingabe, wie es `lumina regenerate` seit jeher tut. Eine
+  Kopie mit **aktiver generativer Rolle** kann deshalb gar nicht gerendert
+  werden: die Core-Stufe meldet `generative_artifact.*.missing`. Das Modul
+  bricht dann **laut** ab und schreibt **keinen** Sidecar-Byte; es meldet
+  niemals einen abgeleiteten Wert für ein Frame, das der Renderer verweigert
+  hat. Ein ungültiges Rezept und ein korruptes `.lumina.zdata`-Bundle sind
+  genauso laut.
+- `lumina_regenerate op="masks"` ist eine **Refresh-Anforderung**, keine
+  Inferenz: sie setzt die ausgewählten Quellmasken auf `Pending` (und bei
+  explizitem Aufruf das kop-weite One-Shot-Flag). Es wird **nie** eine
+  Stub-Matte als gültiges Artefakt persistiert (das ist der dokumentierte
+  F-082-Offenpunkt).
+- `lumina_relocate op="move"` deckt **Zielkollision** (Zielbild *und*
+  Ziel-Companion) und **Sidecar-Move** ab: die Companions werden aus dem
+  **Ziel**-Pfad abgeleitet und mitverschoben, damit ein Rename das Rezept am
+  neuen Namen lässt. Fehlt die Quelle, ist das Ziel-Elternverzeichnis kein
+  Verzeichnis oder schlägt ein Companion-Move fehl, ist alles laut — und der
+  Fehlertext nennt den erreichten Schritt, damit kein stiller Halbzustand
+  entsteht.
+
+**Byte-Identität: gemessen, nicht behauptet.**
+
+Alle fünf Kommandos sind **literal byte-gleich, ganz ohne Maske** — anders als
+`geometry` und `upright` aus Slice A. Der Grund ist gemessen, nicht angenommen:
+keines dieser fünf Kommandos hängt einen `history`-Eintrag an, also gelangt
+kein Millisekunden-Stempel in den Sidecar. (`lumina render`/`process` tun das
+— deshalb fährt kein Test dieses Abschnitts sie.) Der Paritätstest vergleicht
+deshalb rohe Bytes; `mutation_a_non_stamp_byte_still_fails` beweist per Mutation,
+dass **jede** andere Byte-Änderung weiterhin fehlschlägt, damit „byte-identisch"
+eine Aussage und keine Hoffnung ist.
+
+**Grenzen (bewusst nicht abgedeckt, keine Stubs):**
+
+- `lumina spot --regenerate-variant` (generativer Variant-Seed) bleibt ohne
+  MCP-Weg. Slice B schliesst die fünf Subcommands, nicht dieses eine Flag.
+- `lumina generative --generate` nutzt — wie die CLI — den deterministischen
+  **Fixture**-Produzenten aus `lumina-onnx`, nicht ein echtes
+  `.onnx`-Artefakt. Ein echtes Modell ist weiterhin F-078; das Tool meldet nie
+  ein Modell, das es nicht verwendet hat.
+- `lumina_regenerate op="matching"` rendert über `lumina_core::render_frame`
+  (die CPU-Referenz). Die CLI übergibt in einem Build **mit** `gpu` ihre
+  GPU-Route; die beiden stimmen nur ohne diese optionale Capability überein —
+  das ist die dokumentierte GPU/CPU-Parität, deren eigenes Gate
+  (`GPU-PARITY-HW-28`) offen ist. Die Render-Eingabe (`RenderContext` inkl.
+  Masken-Ebenen und Source-Actions) baut in beiden Fällen die geteilte
+  Schicht, nicht der Adapter.
+
+Abnahme: Byte-Identität MCP-gegen-CLI je Kommando in beiden Richtungen (roher
+Byte-Vergleich, Mutationsnachweis), Kollisions- und Abbruch-Tests für
+`relocate` (Zielbild, Ziel-Companion, fehlende Quelle, kein Verzeichnis als
+Elternpfad), Gate-Tests für `generative`/`regenerate` inklusive „nicht
+erfolgreich ohne produzierbares Canvas" und „nicht erfolgreich mit aktiver
+generativer Rolle", ein Test je Write-op-ohne-Wert, ein Registry-Test über
+`list_tool_definitions` **und** `dispatch_tool` **und** `is_known_tool`,
+Schema-Tests (unbekanntes Feld abgewiesen, Pflichtfelder erzwungen,
+`image_id` **nicht** erforderlich) und `cargo test -p lumina-mcp --all-targets`.
 
 ### Metadaten-Schnittstelle (LRPAR-G15-IPTC — umgesetzt, S7 BESTANDEN)
 

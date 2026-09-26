@@ -75,6 +75,66 @@ impl StageReport {
     }
 }
 
+/// The transport-neutral result of one **path-based** command
+/// (`collections`, `smart-collections`, `relocate`, `generative`,
+/// `regenerate`) — MCP-PARITY-B.
+///
+/// The same reasoning as [`StageReport`], with one difference: these commands
+/// are not stage editors, so they have no `copy_id` and their output shapes
+/// differ per command (some print nothing at all). `payload` is therefore
+/// `Option`: `None` means "this command prints no `--json` document on this
+/// transport", and an empty `lines` means "prints nothing". Both transports
+/// render the *same* report, so neither can reformat a state of its own.
+#[derive(Debug, Clone)]
+pub struct BulkReport {
+    /// CLI subcommand name (`collections`, `smart-collections`, `relocate`,
+    /// `generative`, `regenerate`).
+    pub command: &'static str,
+    /// The applied actions, in application order (empty for read-only calls).
+    pub actions: Vec<String>,
+    /// The exact `--json` document the CLI prints, or `None` when the command
+    /// prints no JSON on that path.
+    pub payload: Option<Value>,
+    /// The exact human-readable lines, in print order (empty = prints
+    /// nothing).
+    pub lines: Vec<String>,
+    /// Whether the call changed bytes on disk (a write). A read reports
+    /// `false`.
+    pub wrote: bool,
+}
+
+impl BulkReport {
+    /// Builds a report from its parts.
+    pub fn new(
+        command: &'static str,
+        actions: Vec<String>,
+        payload: Option<Value>,
+        lines: Vec<String>,
+        wrote: bool,
+    ) -> Self {
+        Self {
+            command,
+            actions,
+            payload,
+            lines,
+            wrote,
+        }
+    }
+}
+
+/// What a path-based command returns: the formatted report plus, for a
+/// sidecar write under [`Persist::Deferred`], the validated document.
+#[derive(Debug, Clone)]
+pub struct BulkRun {
+    /// The formatted, transport-neutral report.
+    pub report: BulkReport,
+    /// The sidecar the call resolved.
+    pub sidecar_path: PathBuf,
+    /// The mutated, validated document — `Some` only for a sidecar write under
+    /// [`Persist::Deferred`].
+    pub document: Option<SidecarDocument>,
+}
+
 /// What a stage editor returns: the formatted report plus, for a write, the
 /// validated document and the sidecar path it belongs to.
 #[derive(Debug, Clone)]

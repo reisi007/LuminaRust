@@ -7,13 +7,16 @@
 
 pub mod analyze;
 pub mod batch;
+pub mod collections;
 pub mod copies;
 pub mod dust_removal;
 pub mod edit;
+pub mod generative;
 pub mod geometry;
 pub mod import;
 pub mod inspect;
 pub mod lens_blur;
+pub mod library_common;
 pub mod load;
 pub mod meta_common;
 pub mod meta_export;
@@ -23,8 +26,11 @@ pub mod meta_sync;
 pub mod meta_update;
 pub mod preview;
 pub mod recipe;
+pub mod regenerate;
 pub mod reindex;
+pub mod relocate;
 pub mod save;
+pub mod smart_collections;
 pub mod spot;
 pub mod stage_common;
 pub mod upright;
@@ -78,6 +84,31 @@ pub fn list_tool_definitions() -> Vec<Value> {
             meta_export::DESCRIPTION,
             meta_export::schema(),
         ),
+        // MCP-PARITY-B: the five path-based / artefact commands. Each one is
+        // path-based (one call = one path, no `image_id`), like the F-101-F1
+        // bulk tools, and each has an explicit op vocabulary with a read path
+        // that never writes.
+        tool_def(
+            collections::NAME,
+            collections::DESCRIPTION,
+            collections::schema(),
+        ),
+        tool_def(
+            smart_collections::NAME,
+            smart_collections::DESCRIPTION,
+            smart_collections::schema(),
+        ),
+        tool_def(relocate::NAME, relocate::DESCRIPTION, relocate::schema()),
+        tool_def(
+            generative::NAME,
+            generative::DESCRIPTION,
+            generative::schema(),
+        ),
+        tool_def(
+            regenerate::NAME,
+            regenerate::DESCRIPTION,
+            regenerate::schema(),
+        ),
     ]
 }
 
@@ -113,6 +144,11 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         meta_preset::NAME => meta_preset::run(server, args),
         meta_sync::NAME => meta_sync::run(server, args),
         meta_export::NAME => meta_export::run(server, args),
+        collections::NAME => collections::run(server, args),
+        smart_collections::NAME => smart_collections::run(server, args),
+        relocate::NAME => relocate::run(server, args),
+        generative::NAME => generative::run(server, args),
+        regenerate::NAME => regenerate::run(server, args),
         other => Err(McpError::MethodNotFound(format!("unknown tool: {other}"))),
     }
 }

@@ -247,7 +247,7 @@ pub(crate) fn regenerate_args(input: &Path, modules: Vec<RegenerateModule>) -> R
     RegenerateArgs {
         input: input.to_path_buf(),
         virtual_copy: None,
-        modules,
+        modules: modules.into_iter().map(ModuleArg::from).collect(),
         target_luminance: 0.5,
         json: true,
     }

@@ -7,7 +7,7 @@
 //! `recipe.adjustments` can never be adopted as an auto value.
 
 use super::*;
-use crate::auto_tone_cli::{apply_auto_tone_result, AutoToneSource, PersistedAutoTone};
+use lumina_stages::auto_tone::{apply_auto_tone_result, AutoToneSource, PersistedAutoTone};
 
 /// The real auto values of the fixture at `target_luminance = 0.5` (identical
 /// to the `AUTO_VALUES` golden of `auto_tone_process`, restated here so the
