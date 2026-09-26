@@ -2,7 +2,7 @@ use super::*;
 use crate::tests::support::{mask, source};
 use serde_json::json;
 
-fn layer_with_legacy() -> MaskLayer {
+pub(super) fn layer_with_legacy() -> MaskLayer {
     let mut extras = Extras::new();
     extras.insert("adjustment_exposure".into(), json!(1.25));
     extras.insert("adjustment_shadows".into(), json!(-0.4));
@@ -52,7 +52,7 @@ fn legacy_adjustment_extras_migrate_without_loss_and_roundtrip() {
 }
 
 #[test]
-fn typed_v1_migrates_to_relative_wb_v2_with_neutral_deltas() {
+fn typed_v1_migrates_to_the_current_version_with_neutral_deltas_and_no_curve() {
     let mut typed_layer = layer_with_legacy();
     typed_layer.local_adjustments = None;
     typed_layer.extras.clear();
@@ -72,11 +72,16 @@ fn typed_v1_migrates_to_relative_wb_v2_with_neutral_deltas() {
         .unwrap();
     assert_eq!(local.version, LOCAL_ADJUSTMENTS_VERSION);
     assert_eq!(local.exposure, 0.75);
+    assert_eq!(local.shadows, 0.5);
     assert_eq!(local.temperature_delta_k, 0.0);
     assert_eq!(local.tint_delta, 0.0);
+    // MASK-LOCAL-P1.2a: a v1 payload cannot express a curve, so the
+    // lossless migration is `curves: None` and no new key is written.
+    assert!(local.curves.is_none());
     let json = loaded.to_json().unwrap();
-    assert!(json.contains("\"version\": 2"));
+    assert!(json.contains(&format!("\"version\": {LOCAL_ADJUSTMENTS_VERSION}")));
     assert!(json.contains("temperature_delta_k"));
+    assert!(!json.contains("\"curves\""));
 }
 
 #[test]
@@ -202,7 +207,7 @@ fn typed_legacy_conflict_unknown_key_and_invalid_range_are_loud() {
         .local_adjustments
         .as_mut()
         .unwrap()
-        .version = 3;
+        .version = LOCAL_ADJUSTMENTS_VERSION + 1;
     assert!(version
         .to_json()
         .unwrap_err()

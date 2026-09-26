@@ -14,6 +14,10 @@ use lumina_sidecar::{EditRecipe, VirtualCopy};
 use std::collections::BTreeMap;
 
 mod local_adjustments;
+mod local_color;
+mod local_detail;
+mod local_presence;
+mod local_tone;
 mod local_wb;
 mod mask_evaluation;
 mod source_stage;
@@ -606,10 +610,16 @@ pub(super) fn render_frame_from_base_impl(
         local_adjustments::has_visible_local_adjustments(context.masks.as_ref());
     let mask_input_width = base.width;
     let mask_input_height = base.height;
+    // MASK-LOCAL-P1.2d / F-096: one effective output scale for this whole
+    // render. The global F-095 sharpening stage below and the mask-local detail
+    // kernel in `apply_local_adjustments` are handed **the same value**, which is
+    // the structural proof that the local detail block follows the global render
+    // scale, has no scale option of its own, and never overrides it.
+    let effective_scale = 1.0_f32;
     apply_spot_heals_from_recipe(&mut base, context.recipe)?;
     base.apply_recipe_with_scale_white_balance_and_denoise(
         context.recipe,
-        1.0,
+        effective_scale,
         context.camera_white_balance,
         denoise,
     )?;
@@ -704,6 +714,7 @@ pub(super) fn render_frame_from_base_impl(
         context.masks.as_ref(),
         &mask_layers,
         local_adjustment_mode,
+        effective_scale,
     )?;
 
     Ok(RenderOutput {
@@ -1012,138 +1023,6 @@ mod tests {
         }
     }
 
-    // ---- SourceActions stage ----
-
-    #[test]
-    fn source_action_composites_above_threshold_and_keeps_alpha() {
-        let frame = ImageFrame::new(2, 1, vec![100, 100, 100, 255, 200, 200, 200, 40]).unwrap();
-        let action = SourceActionArtifact {
-            region: MaskPlane::new(2, 1, vec![32768, 32767]).unwrap(),
-            replacement: ImageFrame::new(2, 1, vec![10, 20, 30, 128, 1, 2, 3, 9]).unwrap(),
-        };
-        let recipe = EditRecipe::default();
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[action],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        // Pixel 0: region 32768 >= threshold -> replacement incl. its alpha.
-        assert_eq!(&output.frame.pixels[0..4], &[10, 20, 30, 128]);
-        // Pixel 1: region 32767 < threshold -> source incl. its alpha.
-        assert_eq!(&output.frame.pixels[4..8], &[200, 200, 200, 40]);
-    }
-
-    #[test]
-    fn empty_source_actions_are_byte_identical_to_apply_recipe() {
-        let frame = ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 7]).unwrap();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("exposure".into(), 0.5), ("contrast".into(), -0.2)]),
-            ..Default::default()
-        };
-        let mut expected = frame.clone();
-        expected
-            .apply_recipe_with_white_balance(&recipe, Some([1.0, 1.0, 1.0, 1.0]))
-            .unwrap();
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: Some([1.0, 1.0, 1.0, 1.0]),
-                source_actions: &[],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(output.frame, expected);
-        assert!(output.mask_layers.is_empty());
-        assert!(output.mask_warnings.is_empty());
-    }
-
-    #[test]
-    fn source_actions_run_before_adjustments() {
-        // Pixel value 100. Exposure +1 doubles whatever the source-actions
-        // stage left in the frame. With the action applied BEFORE adjustments
-        // the replaced value 10 becomes 20 (not 10 = action after adjustments,
-        // not 200 = no action at all).
-        let frame = ImageFrame::new(1, 1, vec![100, 100, 100, 255]).unwrap();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("exposure".into(), 1.0)]),
-            ..Default::default()
-        };
-        let action = SourceActionArtifact {
-            region: MaskPlane::new(1, 1, vec![65535]).unwrap(),
-            replacement: ImageFrame::new(1, 1, vec![10, 10, 10, 255]).unwrap(),
-        };
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[action],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(output.frame.pixels, vec![20, 20, 20, 255]);
-
-        // Control: no action -> 100 * 2 = 200.
-        let control = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        assert_eq!(control.frame.pixels, vec![200, 200, 200, 255]);
-    }
-
-    #[test]
-    fn source_action_rejects_mismatched_artifacts() {
-        let frame = base_frame();
-        let recipe = EditRecipe::default();
-        let mismatched_dims = SourceActionArtifact {
-            region: MaskPlane::new(2, 2, vec![0; 4]).unwrap(),
-            replacement: ImageFrame::new(1, 4, vec![0; 16]).unwrap(),
-        };
-        let error = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[mismatched_dims],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(error, CoreError::InvalidSourceAction(_)));
-
-        let wrong_frame_dims = SourceActionArtifact {
-            region: MaskPlane::new(1, 1, vec![0]).unwrap(),
-            replacement: ImageFrame::new(1, 1, vec![0; 4]).unwrap(),
-        };
-        assert!(matches!(
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe: &recipe,
-                    camera_white_balance: None,
-                    source_actions: &[wrong_frame_dims],
-                    lensfun: None,
-                    depth: None,
-                    masks: None,
-                },
-            ),
-            Err(CoreError::InvalidSourceAction(_))
-        ));
-    }
-
     // ---- Masks stage ----
 
     fn mask_context<'a>(
@@ -1205,6 +1084,60 @@ mod tests {
 
     #[path = "local_white_balance_tests.rs"]
     mod local_white_balance;
+
+    #[path = "local_tone_curve_tests.rs"]
+    mod local_tone_curve;
+
+    #[path = "local_tone_curve_contract_tests.rs"]
+    mod local_tone_curve_contract;
+
+    #[path = "local_color_tests.rs"]
+    mod local_color;
+
+    #[path = "local_point_color_grading_tests.rs"]
+    mod local_point_color_grading;
+
+    #[path = "local_color_contract_tests.rs"]
+    mod local_color_contract;
+
+    #[path = "local_presence_tests.rs"]
+    mod local_presence;
+
+    #[path = "local_presence_contract_tests.rs"]
+    mod local_presence_contract;
+
+    #[path = "local_presence_boundary_tests.rs"]
+    mod local_presence_boundary;
+
+    #[path = "local_detail_goldens.rs"]
+    mod local_detail_goldens;
+
+    #[path = "local_detail_tests.rs"]
+    mod local_detail;
+
+    #[path = "local_detail_state_tests.rs"]
+    mod local_detail_state;
+
+    #[path = "local_detail_boundary_tests.rs"]
+    mod local_detail_boundary;
+
+    #[path = "local_detail_reference.rs"]
+    mod local_detail_reference;
+
+    #[path = "local_detail_order_tests.rs"]
+    mod local_detail_order;
+
+    #[path = "local_detail_recipe_tests.rs"]
+    mod local_detail_recipe;
+
+    #[path = "tca_isolation_tests.rs"]
+    mod tca_isolation;
+
+    #[path = "source_action_apply_tests.rs"]
+    mod source_action_apply;
+
+    #[path = "source_action_contract_tests.rs"]
+    mod source_action_contract;
 
     #[test]
     fn invisible_layer_is_skipped_silently() {
@@ -1916,423 +1849,6 @@ mod tests {
         );
     }
 
-    // ---- F-085: source actions × auto-WB / auto-tone / exposure matching ----
-
-    fn action(region: MaskPlane, replacement: ImageFrame) -> SourceActionArtifact {
-        SourceActionArtifact {
-            region,
-            replacement,
-        }
-    }
-
-    #[test]
-    fn source_action_runs_before_white_balance() {
-        // Both pixels start at (100,100,100). The action replaces pixel 0 with
-        // (10,20,30); the WB recipe (wb_temperature 3000 -> warmth -0.63636,
-        // gains [1.22273, 1.0, 0.77727]) is applied afterwards. Order proof:
-        //   - action first + WB:  replaced -> (12,20,23), source -> (122,100,78)
-        //   - action only:        replaced -> (10,20,30) (WB not applied)
-        //   - WB only:            every pixel -> (122,100,78)
-        let frame = ImageFrame::new(2, 1, vec![100, 100, 100, 255, 100, 100, 100, 255]).unwrap();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("wb_temperature".into(), 3000.0)]),
-            ..Default::default()
-        };
-        let actions = [action(
-            MaskPlane::new(2, 1, vec![65535, 0]).unwrap(),
-            ImageFrame::new(2, 1, vec![10, 20, 30, 255, 0, 0, 0, 0]).unwrap(),
-        )];
-        let with_action = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        let wb_only = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        let action_only = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-
-        // Exact values: the replaced pixel receives the WB gain on the
-        // replacement's values, the non-replaced pixel on the source's values.
-        assert_eq!(&with_action.frame.pixels[0..4], &[12, 20, 23, 255]);
-        assert_eq!(&with_action.frame.pixels[4..8], &[122, 100, 78, 255]);
-        // Differential proofs of the order:
-        // WB changed the action output (10,20,30) -> (12,20,23) ...
-        assert_ne!(
-            &with_action.frame.pixels[0..4],
-            &action_only.frame.pixels[0..4]
-        );
-        // ... and the action changed the WB input (100,100,100) -> (10,20,30).
-        assert_ne!(&with_action.frame.pixels[0..4], &wb_only.frame.pixels[0..4]);
-        // The non-replaced pixel is identical to WB-only (same source value).
-        assert_eq!(&with_action.frame.pixels[4..8], &wb_only.frame.pixels[4..8]);
-    }
-
-    #[test]
-    fn source_action_changes_auto_tone_and_measurement_is_post_action() {
-        // 1x4 frame; the action replaces the bright pixel 255 with 20. The
-        // post-action median (80/255 ~= 0.314) differs clearly from the
-        // pre-action median (114/255 ~= 0.447), so suggest_auto_tone must
-        // produce different exposure/contrast.
-        let frame = ImageFrame::new(
-            4,
-            1,
-            vec![
-                255, 255, 255, 255, 128, 128, 128, 255, 100, 100, 100, 255, 60, 60, 60, 255,
-            ],
-        )
-        .unwrap();
-        let actions = [action(
-            MaskPlane::new(4, 1, vec![65535, 0, 0, 0]).unwrap(),
-            ImageFrame::new(
-                4,
-                1,
-                vec![20, 20, 20, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            )
-            .unwrap(),
-        )];
-        let config = AutoToneConfig::default();
-
-        let pre = suggest_auto_tone(&frame, config).unwrap();
-        let post_frame = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap()
-        .frame;
-        let post = suggest_auto_tone(&post_frame, config).unwrap();
-
-        assert_eq!(post.analysis.sample_count, 4);
-        assert!(
-            (post.exposure - pre.exposure).abs() > 0.1,
-            "auto exposure must differ between pre-action ({}) and post-action ({}) frames",
-            pre.exposure,
-            post.exposure
-        );
-        assert!(
-            (post.contrast - pre.contrast).abs() > 0.1,
-            "auto contrast must differ between pre-action ({}) and post-action ({}) frames",
-            pre.contrast,
-            post.contrast
-        );
-
-        // Caller semantics (CLI/GUI): auto-tone measures the post-action
-        // frame, the result is written into the recipe, then the full recipe
-        // is rendered with the same source actions. The median of the result
-        // must hit the documented target (0.5) within tolerance ±0.02.
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([
-                ("exposure".into(), post.exposure),
-                ("contrast".into(), post.contrast),
-            ]),
-            ..Default::default()
-        };
-        let rendered = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        let median = analyze_tone(&rendered.frame).median;
-        assert!(
-            (median - 0.5).abs() <= 0.02,
-            "median {median} not within 0.02 of the 0.5 auto-tone target"
-        );
-        // Applying the recipe to the post-action frame directly is equivalent
-        // to rendering the original with action + recipe.
-        let direct = render_frame(
-            &post_frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(direct.frame, rendered.frame);
-    }
-
-    #[test]
-    fn source_action_changes_matching_delta_and_application_reaches_target() {
-        // Same frame as above: the matching delta measured on the post-action
-        // frame (mean 77/255 ~= 0.302) differs clearly from the delta on the
-        // pre-action frame (mean 135.75/255 ~= 0.532).
-        let frame = ImageFrame::new(
-            4,
-            1,
-            vec![
-                255, 255, 255, 255, 128, 128, 128, 255, 100, 100, 100, 255, 60, 60, 60, 255,
-            ],
-        )
-        .unwrap();
-        let actions = [action(
-            MaskPlane::new(4, 1, vec![65535, 0, 0, 0]).unwrap(),
-            ImageFrame::new(
-                4,
-                1,
-                vec![20, 20, 20, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            )
-            .unwrap(),
-        )];
-        let post_frame = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap()
-        .frame;
-        let delta_post = match_total_exposure(&post_frame, 0.5).unwrap();
-        let delta_pre = match_total_exposure(&frame, 0.5).unwrap();
-        assert!(
-            (delta_post - delta_pre).abs() > 0.2,
-            "matching delta must differ between pre-action ({delta_pre}) and post-action ({delta_post}) frames"
-        );
-
-        // CLI semantics: matching measures the rendered (post-action) frame
-        // and applies the exposure delta to that same frame. The result must
-        // reach the target luminance within tolerance ±0.02.
-        let mut matched = post_frame.clone();
-        matched
-            .apply_recipe_with_white_balance(
-                &EditRecipe {
-                    adjustments: BTreeMap::from([("exposure".into(), delta_post)]),
-                    ..Default::default()
-                },
-                None,
-            )
-            .unwrap();
-        let mean = analyze_tone(&matched).mean;
-        assert!(
-            (mean - 0.5).abs() <= 0.02,
-            "mean {mean} not within 0.02 of the 0.5 matching target"
-        );
-    }
-
-    #[test]
-    fn render_with_source_actions_does_not_mutate_inputs() {
-        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
-        let actions = [action(
-            MaskPlane::new(2, 2, vec![0, 32768, 65535, 32767]).unwrap(),
-            ImageFrame::new(
-                2,
-                2,
-                vec![
-                    10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
-                ],
-            )
-            .unwrap(),
-        )];
-        let frame_before = frame.clone();
-        let region_before = actions[0].region.clone();
-        let replacement_before = actions[0].replacement.clone();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("exposure".into(), 0.5)]),
-            ..Default::default()
-        };
-        render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        // Byte-identical comparisons: neither the input frame nor the artifact
-        // (region/replacement) may be mutated by the render.
-        assert_eq!(frame, frame_before);
-        assert_eq!(actions[0].region, region_before);
-        assert_eq!(actions[0].replacement, replacement_before);
-    }
-
-    #[test]
-    fn source_action_threshold_boundaries_are_exact() {
-        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
-        let actions = [action(
-            MaskPlane::new(2, 2, vec![32768, 32767, 0, 65535]).unwrap(),
-            ImageFrame::new(
-                2,
-                2,
-                vec![10, 20, 30, 128, 1, 2, 3, 9, 4, 5, 6, 7, 8, 9, 10, 11],
-            )
-            .unwrap(),
-        )];
-        let rendered = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        // 32768 (exact threshold) -> replaced incl. replacement alpha;
-        // 32767 -> source; 0 -> source; u16::MAX -> replaced.
-        assert_eq!(&rendered.frame.pixels[0..4], &[10, 20, 30, 128]);
-        assert_eq!(&rendered.frame.pixels[4..8], &[100, 100, 100, 100]);
-        assert_eq!(&rendered.frame.pixels[8..12], &[100, 100, 100, 100]);
-        assert_eq!(&rendered.frame.pixels[12..16], &[8, 9, 10, 11]);
-    }
-
-    #[test]
-    fn zero_source_action_region_is_byte_identical_to_no_action() {
-        let frame = ImageFrame::new(
-            2,
-            2,
-            vec![
-                7, 13, 29, 255, 200, 100, 50, 3, 1, 2, 3, 4, 250, 251, 252, 253,
-            ],
-        )
-        .unwrap();
-        let actions = [action(
-            MaskPlane::new(2, 2, vec![0; 4]).unwrap(),
-            ImageFrame::new(2, 2, vec![9; 16]).unwrap(),
-        )];
-        let with = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        let without = render_frame(&frame, &default_context(&EditRecipe::default(), None)).unwrap();
-        assert_eq!(with.frame, without.frame);
-        assert_eq!(with.frame, frame);
-    }
-
-    #[test]
-    fn full_source_action_region_replaces_every_pixel() {
-        let frame = ImageFrame::new(1, 3, vec![100; 12]).unwrap();
-        let replacement =
-            ImageFrame::new(1, 3, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).unwrap();
-        let actions = [action(
-            MaskPlane::new(1, 3, vec![65535; 3]).unwrap(),
-            replacement.clone(),
-        )];
-        let rendered = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &EditRecipe::default(),
-                camera_white_balance: None,
-                source_actions: &actions,
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(rendered.frame, replacement);
-    }
-
-    #[test]
-    fn render_frame_is_deterministic_with_source_actions_and_masks() {
-        let frame = ImageFrame::new(
-            2,
-            2,
-            vec![
-                90, 91, 92, 255, 40, 41, 42, 128, 200, 201, 202, 7, 30, 31, 32, 255,
-            ],
-        )
-        .unwrap();
-        let actions = [action(
-            MaskPlane::new(2, 2, vec![0, 32768, 65535, 32767]).unwrap(),
-            ImageFrame::new(
-                2,
-                2,
-                vec![
-                    10, 20, 30, 255, 11, 21, 31, 255, 12, 22, 32, 255, 13, 23, 33, 255,
-                ],
-            )
-            .unwrap(),
-        )];
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([
-                ("wb_temperature".into(), 5200.0),
-                ("exposure".into(), 0.25),
-            ]),
-            ..Default::default()
-        };
-        // A valid mask layer so the full order actions -> adjustments -> masks
-        // is exercised twice.
-        let definitions = vec![mask_definition(
-            "subject",
-            MaskStatus::Valid,
-            MaskOperation::Source,
-            vec![],
-        )];
-        let copies = vec![copy_with(
-            "vc",
-            definitions,
-            vec![layer("layer-1", reference("vc", "subject"))],
-        )];
-        let planes = BTreeMap::from([(
-            ("vc".into(), "subject".into()),
-            MaskPlane::new(2, 2, vec![0, 1, 32768, 65535]).unwrap(),
-        )]);
-        let context = RenderContext {
-            recipe: &recipe,
-            camera_white_balance: Some([1.2, 1.0, 0.9, 1.0]),
-            source_actions: &actions,
-            lensfun: None,
-            depth: None,
-            masks: Some(mask_context(&copies, "vc", planes, MaskPolicy::Warn)),
-        };
-        let first = render_frame(&frame, &context).unwrap();
-        let second = render_frame(&frame, &context).unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.frame, second.frame);
-        assert!(first.mask_warnings.is_empty());
-    }
-
     #[test]
     fn history_recipe_snapshot_reproduces_the_original_render() {
         // A recipe snapshot exactly as stored in a HistoryEntry: the final
@@ -2582,160 +2098,6 @@ mod tests {
         assert_eq!(
             render.frame, manual,
             "unknown camera (None corrector) must equal the manual render"
-        );
-    }
-
-    // ---- G-06 Lensfun-Vollausbau: TCA (feature-gated; fixture DB, hermetic) ----
-
-    /// Minimal fixture database XML with ONE lens carrying distortion
-    /// (PTLens) calibration; `with_tca` adds a poly3 TCA calibration line.
-    /// Same distortion in both variants isolates the TCA render effect.
-    #[cfg(feature = "lensfun")]
-    fn write_tca_isolation_fixture(tag: &str, with_tca: bool) -> std::path::PathBuf {
-        let tca = if with_tca {
-            r#"<tca model="poly3" focal="50" vr="1.005" vb="0.995"/>"#
-        } else {
-            "<!-- no TCA calibration -->"
-        };
-        let xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<lensdatabase>
-    <camera>
-        <maker>Lumina TCA Corp</maker>
-        <model>Lumina TCA Body</model>
-        <mount>LuminaTcaMount</mount>
-        <cropfactor>1.5</cropfactor>
-    </camera>
-    <lens>
-        <maker>Lumina TCA Corp</maker>
-        <model>Lumina TCA 50mm f/2.8</model>
-        <mount>LuminaTcaMount</mount>
-        <cropfactor>1.5</cropfactor>
-        <calibration>
-            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
-            {tca}
-        </calibration>
-    </lens>
-</lensdatabase>
-"#
-        );
-        let path =
-            std::env::temp_dir().join(format!("lumina-core-tca-{tag}-{}.xml", std::process::id()));
-        std::fs::write(&path, xml).expect("write tca fixture database");
-        path
-    }
-
-    #[cfg(feature = "lensfun")]
-    fn tca_fixture_corrector(
-        tag: &str,
-        with_tca: bool,
-    ) -> (lumina_lensfun::LensfunDb, lumina_lensfun::Corrector) {
-        use lumina_lensfun::{Corrector, LensfunDb};
-        let path = write_tca_isolation_fixture(tag, with_tca);
-        let db = LensfunDb::load_file(&path).expect("tca fixture database must load");
-        let _ = std::fs::remove_file(&path);
-        let corrector = Corrector::for_camera(
-            &db,
-            "Lumina TCA Corp",
-            "Lumina TCA Body",
-            None,
-            120,
-            80,
-            50.0,
-            2.8,
-            10.0,
-        )
-        .expect("tca fixture corrector must be built");
-        (db, corrector)
-    }
-
-    /// A TCA-capable corrector must shift R/B relative to G in the render:
-    /// with the same distortion, the TCA render differs from the non-TCA
-    /// render at the corners (G-06 Lensfun-Vollausbau, TCA path active).
-    #[cfg(feature = "lensfun")]
-    #[test]
-    fn tca_corrector_render_differs_from_non_tca_render() {
-        let (_tca_db, tca) = tca_fixture_corrector("diff-tca", true);
-        let (_plain_db, plain) = tca_fixture_corrector("diff-plain", false);
-        assert!(tca.has_tca());
-        assert!(!plain.has_tca());
-        let frame = lensfun_gradient_frame(120, 80);
-        let recipe = EditRecipe::default();
-        let render_with = |corrector: &lumina_lensfun::Corrector| {
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe: &recipe,
-                    camera_white_balance: None,
-                    source_actions: &[],
-                    masks: None,
-                    lensfun: Some(LensfunCorrectorRef(corrector)),
-                    depth: None,
-                },
-            )
-            .unwrap()
-            .frame
-        };
-        let tca_frame = render_with(&tca);
-        let plain_frame = render_with(&plain);
-        assert_ne!(
-            tca_frame.pixels, plain_frame.pixels,
-            "TCA render must differ from the same-distortion non-TCA render"
-        );
-        // Deterministic: the same TCA render repeats byte-identically.
-        assert_eq!(tca_frame.pixels, render_with(&tca).pixels);
-    }
-
-    /// No double correction: with a TCA-capable corrector the manual
-    /// `ca_red`/`ca_blue` model is skipped, so setting manual CA changes
-    /// nothing (byte-identical renders); without a corrector the same manual
-    /// CA visibly applies (existing behaviour preserved).
-    #[cfg(feature = "lensfun")]
-    #[test]
-    fn manual_ca_skipped_under_tca_corrector_and_applied_without() {
-        use lumina_sidecar::LensCorrection;
-        let (_tca_db, tca) = tca_fixture_corrector("skip-tca", true);
-        let frame = lensfun_gradient_frame(120, 80);
-        let mut recipe = EditRecipe::default();
-        recipe.lens_correction = Some(LensCorrection {
-            version: 1,
-            profile: None,
-            distortion_k1: None,
-            distortion_k2: None,
-            distortion_k3: None,
-            vignette_c0: None,
-            vignette_c1: None,
-            vignette_c2: None,
-            ca_red: Some(0.02),
-            ca_blue: Some(-0.02),
-        });
-        let plain_recipe = EditRecipe::default();
-        let render_with = |recipe: &EditRecipe, corrector: Option<&lumina_lensfun::Corrector>| {
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe,
-                    camera_white_balance: None,
-                    source_actions: &[],
-                    masks: None,
-                    lensfun: corrector.map(LensfunCorrectorRef),
-                    depth: None,
-                },
-            )
-            .unwrap()
-            .frame
-        };
-        // Under TCA: manual CA is skipped → identical to no-manual-CA.
-        assert_eq!(
-            render_with(&recipe, Some(&tca)).pixels,
-            render_with(&plain_recipe, Some(&tca)).pixels,
-            "manual CA must be skipped when Lensfun TCA is active"
-        );
-        // Without a corrector: manual CA applies → differs from identity.
-        assert_ne!(
-            render_with(&recipe, None).pixels,
-            render_with(&plain_recipe, None).pixels,
-            "manual CA must still apply without a Lensfun corrector"
         );
     }
 
@@ -3296,208 +2658,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generative_spot_mode_is_hard_error_not_silent_skip() {
-        // SPOT-REMOVE-1: a generative spot needs model + artifact. Rendering
-        // it as healed (or as absent) would be a silent fallback.
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.extras.insert(
-            "spot_removals".into(),
-            serde_json::json!([{"id":"g1","version":1,"mode":"generative","prompt":"x"}]),
-        );
-        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
-        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
-    }
-
-    #[test]
-    fn malformed_heuristic_spot_entry_is_hard_error() {
-        // A corrupt heuristic entry (radius 0) must not be silently dropped.
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.extras.insert(
-            "spot_removals".into(),
-            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.5,"center_y":0.5,"radius":0.0,"feather":0.0,"offset_dx":0.0,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
-        );
-        assert!(matches!(
-            render_frame(&frame, &default_context(&recipe, None)),
-            Err(CoreError::InvalidAdjustment { .. })
-        ));
-    }
-
-    #[test]
-    fn expand_without_canvas_is_hard_error() {
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
-            version: 1,
-            canvas: None,
-            artifact: None,
-            keep_generative_content: None,
-            auto_fill_transparent: None,
-            expand_beyond_image: Some(true),
-            seed: None,
-            prompt: None,
-            extras: Default::default(),
-        });
-        assert!(matches!(
-            render_frame(&frame, &default_context(&recipe, None)),
-            Err(CoreError::InvalidAdjustment { .. })
-        ));
-    }
-
-    #[test]
-    fn canvas_without_expand_is_hard_error() {
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
-            version: 1,
-            canvas: Some(lumina_sidecar::GenerativeCanvas {
-                output_width: 40,
-                output_height: 40,
-                source_offset_x: 4,
-                source_offset_y: 4,
-                extras: Default::default(),
-            }),
-            artifact: None,
-            keep_generative_content: None,
-            auto_fill_transparent: None,
-            expand_beyond_image: Some(false),
-            seed: None,
-            prompt: None,
-            extras: Default::default(),
-        });
-        assert!(matches!(
-            render_frame(&frame, &default_context(&recipe, None)),
-            Err(CoreError::InvalidAdjustment { .. })
-        ));
-    }
-
-    #[test]
-    fn unknown_spot_mode_is_hard_error() {
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.extras.insert(
-            "spot_removals".into(),
-            serde_json::json!([{"id":"s9","version":1,"mode":"clone-magic"}]),
-        );
-        assert!(matches!(
-            render_frame(&frame, &default_context(&recipe, None)),
-            Err(CoreError::InvalidAdjustment { .. })
-        ));
-    }
-    #[test]
-    fn typed_generative_spot_is_hard_error_not_silent_skip() {
-        // SPOT-TYPED-FIELD-FIX: a typed generative entry (schema-v2) needs
-        // model + artifact like its legacy extras counterpart — rendering it
-        // as absent would be a silent fallback.
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
-            id: "spot-render-generative".into(),
-            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
-            mode: lumina_sidecar::SpotRemovalMode::Generative,
-            artifact: None,
-        });
-        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
-        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
-    }
-    #[test]
-    fn typed_heuristic_spot_without_geometry_is_hard_error() {
-        // SPOT-CORE-SHADOW-FOLLOWUP: an ISOLATED geometry-free typed
-        // heuristic shadow (no `extras["spot_removals"]` key anywhere) has
-        // no heal geometry to render from — rendering it as absent would be
-        // a silent no-heal, so it fails loudly. Contrast with
-        // `typed_heuristic_mirror_shadow_with_extras_is_tolerated`: on a
-        // healthy loaded recipe the extras view carries the geometry and
-        // the same shadow is skipped.
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
-            id: "spot-render-heuristic".into(),
-            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
-            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
-            artifact: None,
-        });
-        assert!(
-            !recipe.extras.contains_key("spot_removals"),
-            "isolated shadow fixture must carry no extras geometry"
-        );
-        let error = render_frame(&frame, &default_context(&recipe, None)).unwrap_err();
-        assert!(matches!(error, CoreError::InvalidAdjustment { .. }));
-    }
-    #[test]
-    fn typed_heuristic_mirror_shadow_with_extras_is_tolerated() {
-        // SPOT-CORE-SHADOW-FOLLOWUP: a healthy loaded recipe carries the
-        // heal geometry in `extras["spot_removals"]` plus the geometry-free
-        // typed mirror shadow (sidecar c000c6f). The shadow is skipped and
-        // healing comes from extras — no false alarm, visibly healed pixels.
-        let mut pixels = Vec::new();
-        for _y in 0..8 {
-            for x in 0..8 {
-                let v = if x < 4 { 0 } else { 255 };
-                pixels.extend_from_slice(&[v, v, v, 255]);
-            }
-        }
-        let frame = ImageFrame::new(8, 8, pixels).unwrap();
-        let mut recipe = EditRecipe::default();
-        recipe.extras.insert(
-            "spot_removals".into(),
-            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.25,"center_y":0.5,"radius":2.0,"feather":0.5,"offset_dx":0.5,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
-        );
-        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
-            id: "spot-render-mirror".into(),
-            version: lumina_sidecar::SPOT_REMOVAL_VERSION,
-            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
-            artifact: None,
-        });
-        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        assert_ne!(
-            output.frame.pixels, frame.pixels,
-            "mirror-shadow recipe must visibly heal from extras"
-        );
-    }
-    #[test]
-    fn typed_spot_unknown_version_is_hard_error() {
-        // Unknown typed spot versions are rejected, never silently migrated.
-        let frame = checker_8x8();
-        let mut recipe = EditRecipe::default();
-        recipe.spot_removals.push(lumina_sidecar::SpotRemoval {
-            id: "spot-render-unknown".into(),
-            version: 99,
-            mode: lumina_sidecar::SpotRemovalMode::Heuristic,
-            artifact: None,
-        });
-        assert!(matches!(
-            render_frame(&frame, &default_context(&recipe, None)),
-            Err(CoreError::InvalidAdjustment { .. })
-        ));
-    }
-
-    #[test]
-    fn legacy_heuristic_extras_still_heal_when_typed_empty() {
-        // SPOT-TYPED-FIELD-FIX: the tolerant legacy path keeps healing while
-        // no typed entries exist (in-memory GUI recipes pre-roundtrip).
-        // Halves frame (left black, right white): a spot on black cloning
-        // from white must visibly change pixels (a checker with an even
-        // offset would clone identical values and prove nothing).
-        let mut pixels = Vec::new();
-        for _y in 0..8 {
-            for x in 0..8 {
-                let v = if x < 4 { 0 } else { 255 };
-                pixels.extend_from_slice(&[v, v, v, 255]);
-            }
-        }
-        let frame = ImageFrame::new(8, 8, pixels).unwrap();
-        let mut recipe = EditRecipe::default();
-        recipe.extras.insert(
-            "spot_removals".into(),
-            serde_json::json!([{"id":"s1","version":1,"mode":"heuristic","center_x":0.25,"center_y":0.5,"radius":2.0,"feather":0.5,"offset_dx":0.5,"offset_dy":0.0,"opacity":1.0,"status":"valid"}]),
-        );
-        let output = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        assert_ne!(
-            output.frame.pixels, frame.pixels,
-            "legacy heuristic spot must visibly heal"
-        );
-    }
+    #[path = "spot_removal_contract_tests.rs"]
+    mod spot_removal_contract;
 }

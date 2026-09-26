@@ -1,6 +1,6 @@
 use super::*;
 
-fn local_app() -> (tempfile::TempDir, LuminaApp, std::path::PathBuf) {
+pub(super) fn local_app() -> (tempfile::TempDir, LuminaApp, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("local.png");
     save_png(&source);

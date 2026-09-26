@@ -1,12 +1,16 @@
-//! MASK-LOCAL-P0/P1.1 GUI transactions for typed local controls, relative WB,
-//! and the explicit global Reset to As Shot action.
+//! MASK-LOCAL-P0/P1.1/P1.2a/P1.2b GUI transactions for typed local controls,
+//! relative WB, the local tone curve, and the explicit global Reset to As
+//! Shot action.
 
 use super::{GuiError, LuminaApp, MaskLayer, MaskTool, SpotTool, Str};
 
 impl LuminaApp {
-    /// Whether the active copy has a visible, non-neutral P0/P1.1 local layer.
+    /// Whether the active copy has a visible, non-neutral local layer.
     /// Stand-in routes (draft/navigator/neighbor/thumbnail/VRAM present) use
     /// this before deciding whether they may omit the mask-aware CPU render.
+    /// `LocalAdjustments::is_neutral` includes the tone curve *and* the colour
+    /// block, so a curve-only or colour-only layer keeps every such route on
+    /// the CPU reference.
     pub(crate) fn has_visible_local_adjustments(&self) -> bool {
         let Some(document) = self.document.as_ref() else {
             return false;
@@ -37,7 +41,7 @@ impl LuminaApp {
     /// refuse rather than silently render a global-only stand-in.
     pub(crate) fn local_adjustment_route_reason(&self) -> Option<String> {
         self.has_visible_local_adjustments().then(|| {
-            "local mask adjustments (including relative WB) require the full mask-aware CPU render; this stand-in route refused".to_string()
+            "local mask adjustments (relative WB, presence, tone curve, color and detail) require the full mask-aware CPU render; this stand-in route refused".to_string()
         })
     }
 
@@ -96,7 +100,7 @@ impl LuminaApp {
         layer
             .normalize_local_adjustments()
             .map_err(|error| GuiError::Io(error.to_string()))?;
-        let mut adjustments = layer.local_adjustments.unwrap_or_default();
+        let mut adjustments = layer.local_adjustments.take().unwrap_or_default();
         adjustments
             .set_value(key, value)
             .map_err(|_| GuiError::Io(Str::InvalidLocalAdjustment.t().to_string()))?;
@@ -162,7 +166,7 @@ impl LuminaApp {
         layer
             .normalize_local_adjustments()
             .map_err(|error| GuiError::Io(error.to_string()))?;
-        let mut adjustments = layer.local_adjustments.unwrap_or_default();
+        let mut adjustments = layer.local_adjustments.take().unwrap_or_default();
         adjustments
             .set_value("temperature_delta_k", temperature_delta_k)
             .map_err(|_| GuiError::Io(Str::InvalidLocalAdjustment.t().to_string()))?;

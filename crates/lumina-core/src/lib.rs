@@ -7,7 +7,14 @@ use lumina_sidecar::EditRecipe;
 use std::io::Cursor;
 use thiserror::Error;
 pub mod cache;
+// The per-pixel colour stages shared by the global kernel and the mask-local
+// MASK-LOCAL-P1.2b chain (see the module docs for why they are separate from
+// their `u8` wrappers).
+pub(crate) mod color_stages;
 pub mod crop_max_rect;
+mod curve_math;
+pub(crate) mod detail_stages;
+pub(crate) use curve_math::monotone_curve;
 pub mod denoise;
 pub mod generative;
 pub mod histogram;
@@ -21,6 +28,10 @@ pub mod masks;
 pub mod memory;
 pub mod merge_geom;
 pub mod pipeline;
+// MASK-LOCAL-P1.2c: the presence mathematics, literally shared by the global
+// recipe and the mask-local presence kernel. The module is crate-private
+// because the two callers are the only legal users of it.
+pub(crate) mod presence_stages;
 pub mod preview_cache;
 pub mod range_masks;
 pub mod red_eye;
@@ -1064,7 +1075,7 @@ impl ImageFrame {
             },
         );
         if let Some(presence) = &recipe.presence {
-            apply_presence(&mut self.pixels, self.width, self.height, presence);
+            presence_stages::apply_presence(&mut self.pixels, self.width, self.height, presence);
         }
         if let Some(curves) = &recipe.curves {
             for_each_rgba_mut(&mut self.pixels, |pixel| {
@@ -1094,23 +1105,23 @@ impl ImageFrame {
             });
         }
         if let Some(hsl) = &recipe.hsl {
-            apply_hsl(&mut self.pixels, hsl)?;
+            color_stages::apply_hsl(&mut self.pixels, hsl)?;
         }
         // F-090b Point Color follows HSL: targeted selection before the
         // global vibrance/saturation scaling (pipeline order HSL → Point
         // Color → Vibrance/Saturation → Color Grading).
         if let Some(point_color) = &recipe.point_color {
-            apply_point_color(&mut self.pixels, point_color);
+            color_stages::apply_point_color(&mut self.pixels, point_color);
         }
         // F-092 deliberately follows HSL: vibrance is the selective operation,
         // then global saturation scales the resulting HSL saturation.
-        apply_vibrance_and_saturation(
+        color_stages::apply_vibrance_and_saturation(
             &mut self.pixels,
             recipe.adjustments.get("vibrance"),
             recipe.adjustments.get("saturation"),
         );
         if let Some(color_grading) = &recipe.color_grading {
-            apply_color_grading(&mut self.pixels, color_grading);
+            color_stages::apply_color_grading(&mut self.pixels, color_grading);
         }
         // LRPAR-G14-DENOISE-IMPL-20: KI-Denoise (optional, additive) runs
         // immediately before the manual F-096 noise reduction, which stays the
@@ -2527,184 +2538,14 @@ fn validate_curve(name: &str, curve: &[lumina_sidecar::CurvePoint]) -> Result<()
     Ok(())
 }
 
-fn monotone_curve(curve: &[lumina_sidecar::CurvePoint], x: f32) -> f32 {
-    let p = curve;
-    let x = x.clamp(0.0, 1.0);
-    let i = p
-        .windows(2)
-        .position(|w| x <= w[1].input)
-        .unwrap_or(p.len() - 2);
-    let (a, b) = (&p[i], &p[i + 1]);
-    let h = b.input - a.input;
-    let t = ((x - a.input) / h).clamp(0.0, 1.0);
-    let slope = |j: usize| {
-        if j == 0 {
-            (p[1].output - p[0].output) / (p[1].input - p[0].input)
-        } else if j + 1 == p.len() {
-            (p[j].output - p[j - 1].output) / (p[j].input - p[j - 1].input)
-        } else {
-            (p[j + 1].output - p[j - 1].output) / (p[j + 1].input - p[j - 1].input)
-        }
-    };
-    let m0 = slope(i);
-    let m1 = slope(i + 1);
-    let d = (b.output - a.output) / h;
-    let (m0, m1) = if d == 0.0 {
-        (0.0, 0.0)
-    } else {
-        let lo = 0.0f32.min(3.0 * d);
-        let hi = 0.0f32.max(3.0 * d);
-        (m0.clamp(lo, hi), m1.clamp(lo, hi))
-    };
-    let t2 = t * t;
-    let t3 = t2 * t;
-    ((2.0 * t3 - 3.0 * t2 + 1.0) * a.output
-        + (t3 - 2.0 * t2 + t) * h * m0
-        + (-2.0 * t3 + 3.0 * t2) * b.output
-        + (t3 - t2) * h * m1)
-        .clamp(0.0, 1.0)
-}
-
-fn apply_hsl(pixels: &mut [u8], h: &lumina_sidecar::HslAdjustments) -> Result<(), CoreError> {
-    let channels = [
-        h.red, h.orange, h.yellow, h.green, h.cyan, h.blue, h.violet, h.magenta,
-    ];
-    // These are deliberately not an evenly spaced `i * 30` sequence: green
-    // through blue use the conventional Lightroom-like 60 degree sectors,
-    // while violet and magenta remain distinct adjacent controls.
-    const CENTERS: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
-    for_each_rgba_mut(pixels, |px| {
-        let (mut hue, mut sat, mut l) = rgb_to_hsl(
-            px[0] as f32 / 255.0,
-            px[1] as f32 / 255.0,
-            px[2] as f32 / 255.0,
-        );
-        let mut dh = 0.0;
-        let mut ds = 0.0;
-        let mut dl = 0.0;
-        let weights: [f32; 8] = CENTERS.map(|center| {
-            let i = CENTERS.iter().position(|&c| c == center).unwrap();
-            let previous = if i == 0 {
-                360.0 - CENTERS[7]
-            } else {
-                center - CENTERS[i - 1]
-            };
-            let next = if i + 1 == CENTERS.len() {
-                360.0 - center + CENTERS[0]
-            } else {
-                CENTERS[i + 1] - center
-            };
-            // Piecewise-linear cyclic triangle: the weight reaches zero at
-            // each neighbouring centre and is one at this centre.
-            let clockwise = (hue - center).rem_euclid(360.0);
-            let counterclockwise = (center - hue).rem_euclid(360.0);
-            if clockwise <= next {
-                1.0 - clockwise / next
-            } else if counterclockwise <= previous {
-                1.0 - counterclockwise / previous
-            } else {
-                0.0
-            }
-        });
-        let weight_sum: f32 = weights.iter().sum();
-        if weight_sum > f32::EPSILON {
-            for (i, channel) in channels.iter().enumerate() {
-                let w = weights[i] / weight_sum;
-                if let Some(channel) = channel {
-                    dh += channel.hue * 30.0 * w;
-                    ds += channel.saturation * w;
-                    dl += channel.luminance * w;
-                }
-            }
-            hue = (hue + dh).rem_euclid(360.0);
-            sat = (sat + ds).clamp(0.0, 1.0);
-            l = (l + dl).clamp(0.0, 1.0);
-            let rgb = hsl_to_rgb(hue, sat, l);
-            px[0] = (rgb[0] * 255.0).round() as u8;
-            px[1] = (rgb[1] * 255.0).round() as u8;
-            px[2] = (rgb[2] * 255.0).round() as u8;
-        }
-    });
-    Ok(())
-}
-
-/// F-094 deterministic raster heuristic. DoG is `x - box_blur(x, radius)`;
-/// radius is 1..3 for Texture and 8..32 for Clarity. A box kernel is used as
-/// the portable, separable Gaussian approximation (edge pixels replicate).
-fn apply_presence(pixels: &mut [u8], width: u32, height: u32, p: &lumina_sidecar::Presence) {
-    let texture_radius = 1 + (p.texture.abs() * 2.0).round() as usize;
-    let clarity_radius = 8 + (p.clarity.abs() * 24.0).round() as usize;
-    apply_dog(pixels, width, height, texture_radius, p.texture);
-    apply_dog(pixels, width, height, clarity_radius, p.clarity);
-    if p.dehaze == 0.0 {
-        return;
-    }
-    // Dark channel is min(R,G,B) followed by a radius-2 local minimum. A is
-    // the deterministic 95th percentile of that channel, with a floor.
-    let n = width as usize * height as usize;
-    let mut dark = vec![0.0f32; n];
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let mut m: f32 = 1.0;
-            for yy in y.saturating_sub(2)..=(y + 2).min(height as usize - 1) {
-                for xx in x.saturating_sub(2)..=(x + 2).min(width as usize - 1) {
-                    let i = (yy * width as usize + xx) * 4;
-                    m = m.min(pixels[i].min(pixels[i + 1]).min(pixels[i + 2]) as f32 / 255.0);
-                }
-            }
-            dark[y * width as usize + x] = m;
-        }
-    }
-    let mut sorted = dark.clone();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let a = sorted[((sorted.len() as f32 * 0.95) as usize).min(sorted.len().saturating_sub(1))]
-        .max(0.05);
-    for (index, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let base_t = (1.0 - 0.95 * dark[index] / a).clamp(0.05, 1.0);
-        let t = if p.dehaze > 0.0 {
-            1.0 - p.dehaze * (1.0 - base_t)
-        } else {
-            1.0 + (-p.dehaze) * 0.5 * (1.0 - base_t)
-        };
-        for c in &mut px[..3] {
-            let x = *c as f32 / 255.0;
-            *c = (((x - a) / t + a).clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    }
-}
-
-fn apply_dog(pixels: &mut [u8], width: u32, height: u32, radius: usize, amount: f32) {
-    if amount == 0.0 {
-        return;
-    }
-    let source = pixels.to_vec();
-    let w = width as usize;
-    let h = height as usize;
-    for y in 0..h {
-        for x in 0..w {
-            for c in 0..3 {
-                let mut sum = 0.0;
-                for yy in y.saturating_sub(radius)..=(y + radius).min(h - 1) {
-                    for xx in x.saturating_sub(radius)..=(x + radius).min(w - 1) {
-                        sum += source[(yy * w + xx) * 4 + c] as f32;
-                    }
-                }
-                let count = ((y + radius).min(h - 1) - y.saturating_sub(radius) + 1)
-                    * ((x + radius).min(w - 1) - x.saturating_sub(radius) + 1);
-                let i = (y * w + x) * 4 + c;
-                let detail = source[i] as f32 - sum / count as f32;
-                pixels[i] = (source[i] as f32 + amount * detail)
-                    .clamp(0.0, 255.0)
-                    .round() as u8;
-            }
-        }
-    }
-}
-
 /// F-096: Y is filtered with a 5x5 bilateral kernel
 /// `exp(-d²/(2*1.5²))*exp(-(Y-Yn)²/(2*0.12²))`; chroma offsets (R-Y,B-Y)
 /// use the same 5x5 spatial window with sigma 2.0 and no similarity term.
 /// Strength linearly mixes the source and filtered value. Edges replicate.
+///
+/// Every number lives in [`detail_stages`], which the mask-local P1.2d chain
+/// shares verbatim; this wrapper only keeps the global kernel's `u8`
+/// quantization points, so extracting the maths changes **no** global byte.
 fn apply_noise_reduction(
     pixels: &mut [u8],
     width: u32,
@@ -2717,43 +2558,17 @@ fn apply_noise_reduction(
     let w = width as usize;
     let h = height as usize;
     let src = pixels.to_vec();
-    let y_of =
-        |i: usize| 0.2126 * src[i] as f32 + 0.7152 * src[i + 1] as f32 + 0.0722 * src[i + 2] as f32;
+    let plane = detail_stages::Rgba8Plane {
+        pixels: &src,
+        width: w,
+        height: h,
+    };
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) * 4;
-            let base_y = y_of(i);
-            let mut ly = 0.0;
-            let mut cy_r = 0.0;
-            let mut cy_b = 0.0;
-            let mut sum = 0.0;
-            let mut csum = 0.0;
-            for dy in -2i32..=2 {
-                for dx in -2i32..=2 {
-                    let xx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
-                    let yy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
-                    let j = (yy * w + xx) * 4;
-                    let d2 = (dx * dx + dy * dy) as f32;
-                    let spatial = (-d2 / (2.0 * 1.5 * 1.5)).exp();
-                    let lum =
-                        (-((base_y - y_of(j)).powi(2)) / (2.0 * 0.12 * 255.0 * 0.12 * 255.0)).exp();
-                    let weight = spatial * lum;
-                    ly += weight * y_of(j);
-                    sum += weight;
-                    let cw = (-d2 / (2.0 * 2.0 * 2.0)).exp();
-                    csum += cw;
-                    cy_r += cw * (src[j] as f32 - y_of(j));
-                    cy_b += cw * (src[j + 2] as f32 - y_of(j));
-                }
-            }
-            let filtered_y = ly / sum;
-            let yv = base_y * (1.0 - n.luminance) + filtered_y * n.luminance;
-            let cr = (src[i] as f32 - base_y) * (1.0 - n.color) + (cy_r / csum) * n.color;
-            let cb = (src[i + 2] as f32 - base_y) * (1.0 - n.color) + (cy_b / csum) * n.color;
-            let cg = src[i + 1] as f32 - base_y; // preserve green chroma by deriving it from source
-            let out = [yv + cr, yv + cg, yv + cb];
-            for c in 0..3 {
-                pixels[i + c] = out[c].round().clamp(0.0, 255.0) as u8;
+            let out = detail_stages::noise_reduction_write(&plane, x, y, n);
+            for (c, value) in [out.red, out.green, out.blue].into_iter().enumerate() {
+                pixels[i + c] = value.round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -2840,6 +2655,11 @@ fn apply_red_eye(
 /// luminance. `r_fine=0.5*r`, `r_coarse=1.5*r` (both >=.5); final detail is
 /// `detail*d_fine+(1-detail)*d_coarse`. Masking uses
 /// `((1-masking)+masking*clamp(|gx|+|gy| / global_max,0,1))`.
+///
+/// Every number lives in [`detail_stages`], which the mask-local P1.2d chain
+/// shares verbatim — including the global `render_scale` radius formula, which
+/// the local block follows. This wrapper only keeps the global kernel's `u8`
+/// quantization points, so extracting the maths changes **no** global byte.
 fn apply_sharpening(
     pixels: &mut [u8],
     width: u32,
@@ -2856,166 +2676,21 @@ fn apply_sharpening(
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|p| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32)
+        .map(|p| detail_stages::luminance(f32::from(p[0]), f32::from(p[1]), f32::from(p[2])))
         .collect();
-    let blur = |radius: f32| -> Vec<f32> {
-        let sigma = (radius * scale).max(0.5);
-        let r = (sigma * 3.0).ceil() as i32;
-        let mut kernel = Vec::new();
-        for k in -r..=r {
-            kernel.push((-(k * k) as f32 / (2.0 * sigma * sigma)).exp());
-        }
-        let z: f32 = kernel.iter().sum();
-        for v in &mut kernel {
-            *v /= z;
-        }
-        let mut tmp = vec![0.0; w * h];
-        let mut out = vec![0.0; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                for k in -r..=r {
-                    tmp[y * w + x] += kernel[(k + r) as usize]
-                        * lum[y * w + (x as i32 + k).clamp(0, w as i32 - 1) as usize];
-                }
-            }
-        }
-        for y in 0..h {
-            for x in 0..w {
-                for k in -r..=r {
-                    out[y * w + x] += kernel[(k + r) as usize]
-                        * tmp[(y as i32 + k).clamp(0, h as i32 - 1) as usize * w + x];
-                }
-            }
-        }
-        out
-    };
-    let fine = blur((s.radius * 0.5).max(0.5));
-    let coarse = blur((s.radius * 1.5).max(0.5));
-    let mut gradients = vec![0.0; w * h];
-    let mut maxg: f32 = 0.0;
-    for y in 0..h {
-        for x in 0..w {
-            let gx = lum[y * w + (x as i32 + 1).min(w as i32 - 1) as usize]
-                - lum[y * w + x.saturating_sub(1)];
-            let gy = lum[((y as i32 + 1).min(h as i32 - 1) as usize) * w + x]
-                - lum[y.saturating_sub(1) * w + x];
-            gradients[y * w + x] = gx.abs() + gy.abs();
-            maxg = maxg.max(gradients[y * w + x]);
-        }
-    }
+    let (fine_radius, coarse_radius) = detail_stages::sharpen_blur_radii(s);
+    let fine = detail_stages::gaussian_blur(&lum, w, h, fine_radius, scale);
+    let coarse = detail_stages::gaussian_blur(&lum, w, h, coarse_radius, scale);
+    let (gradients, max_gradient) = detail_stages::gradient_plane(&lum, w, h);
     for (idx, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let d = s.detail * (lum[idx] - fine[idx]) + (1.0 - s.detail) * (lum[idx] - coarse[idx]);
-        let edge = if maxg > 0.0 {
-            (gradients[idx] / maxg).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let amount = s.amount * ((1.0 - s.masking) + s.masking * edge);
-        let ny = (lum[idx] + amount * d).clamp(0.0, 255.0);
-        let ratio = if lum[idx] > 1e-6 { ny / lum[idx] } else { 0.0 };
+        let detail = detail_stages::sharpen_detail(lum[idx], fine[idx], coarse[idx], s.detail);
+        let edge = detail_stages::sharpen_edge_factor(gradients[idx], max_gradient);
+        let ratio =
+            detail_stages::sharpen_ratio(lum[idx], detail_stages::sharpen_amount(s, edge) * detail);
         for channel in p.iter_mut().take(3) {
-            *channel = (*channel as f32 * ratio).round().clamp(0.0, 255.0) as u8;
+            *channel = (f32::from(*channel) * ratio).round().clamp(0.0, 255.0) as u8;
         }
     }
-}
-
-fn apply_vibrance_and_saturation(
-    pixels: &mut [u8],
-    vibrance: Option<&f64>,
-    saturation: Option<&f64>,
-) {
-    if vibrance.is_none() && saturation.is_none() {
-        return;
-    }
-    let vibrance = vibrance.copied().unwrap_or(0.0) as f32;
-    let saturation = saturation.copied().unwrap_or(0.0) as f32;
-    for_each_rgba_mut(pixels, |px| {
-        let (hue, mut sat, lightness) = rgb_to_hsl(
-            px[0] as f32 / 255.0,
-            px[1] as f32 / 255.0,
-            px[2] as f32 / 255.0,
-        );
-        if vibrance != 0.0 {
-            // Skin protection is 0 in the soft core [15°,55°], ramps linearly
-            // to 1 in [5°,15°] and [55°,65°], and is 1 outside those ramps.
-            let skin_protection = if !(5.0..=65.0).contains(&hue) {
-                1.0
-            } else if hue < 15.0 {
-                (15.0 - hue) / 10.0
-            } else if hue <= 55.0 {
-                0.0
-            } else {
-                (hue - 55.0) / 10.0
-            };
-            // The low-saturation factor protects already vivid colours. For a
-            // negative value, multiplying by sat also avoids a linear desaturator.
-            let protection = (1.0 - sat) * skin_protection;
-            let direction_weight = if vibrance >= 0.0 { 1.0 - sat } else { sat };
-            sat = (sat + vibrance * protection * direction_weight).clamp(0.0, 1.0);
-        }
-        sat = (sat * (1.0 + saturation)).clamp(0.0, 1.0);
-        let rgb = hsl_to_rgb(hue, sat, lightness);
-        px[0] = (rgb[0] * 255.0).round() as u8;
-        px[1] = (rgb[1] * 255.0).round() as u8;
-        px[2] = (rgb[2] * 255.0).round() as u8;
-    });
-}
-
-fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading) {
-    // Positive balance moves both transition points downward (0.15 max): the
-    // highlight region expands toward shadows, matching Lightroom's direction.
-    // `blending == 0.5` reproduces the pre-refinement edges exactly; higher
-    // blending widens the midtones symmetrically.
-    let shadow_edge = 0.65 - grading.balance * 0.15 + (grading.blending - 0.5) * 0.2;
-    let highlight_edge = 0.35 - grading.balance * 0.15 - (grading.blending - 0.5) * 0.2;
-    let apply_luminance = grading.shadows.luminance != 0.0
-        || grading.midtones.luminance != 0.0
-        || grading.highlights.luminance != 0.0;
-    let smooth = |edge: f32, value: f32| {
-        let t = (value / edge).clamp(0.0, 1.0);
-        1.0 - t * t * (3.0 - 2.0 * t)
-    };
-    for_each_rgba_mut(pixels, |px| {
-        let rgb = [
-            px[0] as f32 / 255.0,
-            px[1] as f32 / 255.0,
-            px[2] as f32 / 255.0,
-        ];
-        let luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
-        let shadow = smooth(shadow_edge, luminance);
-        let highlight = {
-            let t = ((luminance - highlight_edge) / (1.0 - highlight_edge)).clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
-        };
-        let midtone = (1.0 - shadow - highlight).max(0.0);
-        let sum = shadow + midtone + highlight;
-        let weights = [shadow / sum, midtone / sum, highlight / sum];
-        let ranges = [grading.shadows, grading.midtones, grading.highlights];
-        let mut output = rgb;
-        for (weight, range) in weights.into_iter().zip(ranges) {
-            if range.saturation == 0.0 || weight == 0.0 {
-                continue;
-            }
-            // Tint is the fully saturated HSL colour at L=0.5. Mixing is
-            // channel-wise: x' = x + (tint - x) * weight * saturation.
-            let tint = hsl_to_rgb(range.hue_degrees.rem_euclid(360.0), 1.0, 0.5);
-            let amount = weight * range.saturation;
-            for channel in 0..3 {
-                output[channel] += (tint[channel] - output[channel]) * amount;
-            }
-        }
-        if apply_luminance {
-            let lum_shift = weights[0] * grading.shadows.luminance
-                + weights[1] * grading.midtones.luminance
-                + weights[2] * grading.highlights.luminance;
-            let (hue, sat, light) = rgb_to_hsl(output[0], output[1], output[2]);
-            let rgb = hsl_to_rgb(hue, sat, (light + lum_shift).clamp(0.0, 1.0));
-            output = rgb;
-        }
-        for channel in 0..3 {
-            px[channel] = (output[channel].clamp(0.0, 1.0) * 255.0).round() as u8;
-        }
-    });
 }
 
 /// F-090b Point Color: targeted color selection with a free hue center.
@@ -3025,49 +2700,6 @@ fn apply_color_grading(pixels: &mut [u8], grading: &lumina_sidecar::ColorGrading
 /// applies its shifts weighted: hue rotation (`hue_shift * 30°`), additive
 /// saturation and luminance. Entries apply sequentially in list order in
 /// sRGB-codified HSL; all-zero shifts are identity. Outputs clip to `0..=1`.
-fn apply_point_color(pixels: &mut [u8], point_color: &lumina_sidecar::PointColor) {
-    if point_color.entries.is_empty() {
-        return;
-    }
-    for_each_rgba_mut(pixels, |px| {
-        let (mut hue, mut sat, mut light) = rgb_to_hsl(
-            px[0] as f32 / 255.0,
-            px[1] as f32 / 255.0,
-            px[2] as f32 / 255.0,
-        );
-        let mut touched = false;
-        for entry in &point_color.entries {
-            let distance = (hue - entry.hue_center)
-                .rem_euclid(360.0)
-                .min((entry.hue_center - hue).rem_euclid(360.0));
-            let weight = if entry.hue_range <= f32::EPSILON {
-                if distance <= f32::EPSILON {
-                    1.0
-                } else {
-                    0.0
-                }
-            } else if distance >= entry.hue_range {
-                0.0
-            } else {
-                1.0 - distance / entry.hue_range
-            };
-            if weight <= f32::EPSILON {
-                continue;
-            }
-            touched = true;
-            hue = (hue + entry.hue_shift * 30.0 * weight).rem_euclid(360.0);
-            sat = (sat + entry.saturation_shift * weight).clamp(0.0, 1.0);
-            light = (light + entry.luminance_shift * weight).clamp(0.0, 1.0);
-        }
-        if touched {
-            let rgb = hsl_to_rgb(hue, sat, light);
-            px[0] = (rgb[0] * 255.0).round().clamp(0.0, 255.0) as u8;
-            px[1] = (rgb[1] * 255.0).round().clamp(0.0, 255.0) as u8;
-            px[2] = (rgb[2] * 255.0).round().clamp(0.0, 255.0) as u8;
-        }
-    });
-}
-
 /// Smooth Hermite interpolation `t*t*(3-2t)` clamped to `[0,1]` over
 /// `[edge0, edge1]`. Used by the vignette transition.
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -3194,47 +2826,6 @@ fn apply_grain(pixels: &mut [u8], width: u32, height: u32, g: &lumina_sidecar::G
             }
         }
     }
-}
-
-fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let l = (max + min) / 2.0;
-    if max == min {
-        return (0.0, 0.0, l);
-    }
-    let d = max - min;
-    let s = d / (1.0 - (2.0 * l - 1.0).abs());
-    let mut h = if max == r {
-        60.0 * ((g - b) / d).rem_euclid(6.0)
-    } else if max == g {
-        60.0 * ((b - r) / d + 2.0)
-    } else {
-        60.0 * ((r - g) / d + 4.0)
-    };
-    if h < 0.0 {
-        h += 360.0
-    }
-    (h, s, l)
-}
-fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
-    let m = l - c / 2.0;
-    let q = if h < 60.0 {
-        [c, x, 0.0]
-    } else if h < 120.0 {
-        [x, c, 0.0]
-    } else if h < 180.0 {
-        [0.0, c, x]
-    } else if h < 240.0 {
-        [0.0, x, c]
-    } else if h < 300.0 {
-        [x, 0.0, c]
-    } else {
-        [c, 0.0, x]
-    };
-    [q[0] + m, q[1] + m, q[2] + m]
 }
 
 fn dither_rgba8(pixels: &mut [u8], seed: u64) {

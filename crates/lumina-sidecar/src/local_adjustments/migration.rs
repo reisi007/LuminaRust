@@ -64,7 +64,7 @@ pub(crate) fn normalize_legacy_layer_extras(layer: &mut MaskLayer) -> Result<(),
         .cloned()
         .collect();
     if legacy_keys.is_empty() {
-        if let Some(adjustments) = layer.local_adjustments {
+        if let Some(adjustments) = layer.local_adjustments.clone() {
             let normalized = adjustments.normalized_version()?;
             layer.local_adjustments = Some(normalized);
         }
@@ -127,9 +127,10 @@ impl MaskLayer {
     /// can evaluate without mutating the sidecar model.
     pub fn effective_local_adjustments(&self) -> Result<Option<LocalAdjustments>, SidecarError> {
         validate_mask_layer_local_state(self)?;
-        if let Some(adjustments) = self.local_adjustments {
+        if let Some(adjustments) = &self.local_adjustments {
             return Ok(Some(
                 adjustments
+                    .clone()
                     .normalized_version()
                     .map_err(SidecarError::Invalid)?,
             ));

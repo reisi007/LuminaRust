@@ -461,6 +461,523 @@ Layer werden weiterhin in der persistierten Listenreihenfolge ausgewertet.
   deaktiviert; der lokale Renderer darf sie weder aktivieren noch als Stub
   vortäuschen.
 
+## P1.2a SOLL — mask-local Tone Curves (`MASK-LOCAL-P1.2a`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+`global result → local relative WB → local Basic (exposure → contrast → shadows → highlights) → local tone curve → fractional mask blend`;
+der in P1.2b folgende lokale Color-Stage schließt sich danach an. Die lokale
+Kurve steht damit an **exakt derselben** Stelle wie der globale Kurven-Stage —
+nach den Scalar-Basic-Stufen, vor dem Color-Stage. Überlappende Layer werden in
+der **persistierten Listenreihenfolge** ausgewertet; ein Reordering ist eine
+Änderung der Render-Identität, keine äquivalente Umordnung. Das globale WB
+bleibt **absolute-only** mit explizitem **Reset to As Shot** — kein stiller
+Fallback, kein relatives globales Alias, kein Auto-WB. Bis zur echten
+GPU-Parität ist die lokale Kurve **CPU-first**: GPU-/Stand-in-Routen müssen
+sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 3**
+  gehoben. Neu ist ausschließlich `curves` (`Option<Curves>`), reusing der
+  bestehenden `lumina_sidecar::Curves`/`CurveChannels`/`CurvePoint`-Typen und
+  deren bestehenden Punkt-Regeln und Ranges: `version == 1`, 2..=32 Punkte,
+  endlich, Input/Output in `0..=1`, strikt steigender Input und feste
+  Endpunkte `(0,0)`/`(1,1)`. Es gibt keine lokalen HSL-/Point-Color-/
+  Grading-/Presence-/Detail-Felder; diese bleiben deaktiviert und ein
+  entsprechender `--set-local-adjustment`-Key ist ein lauter „unknown local
+  adjustment"-Fehler statt eines stillen No-Op.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar) und v2 (P1.1-WB-Delta)
+  migrieren **verlustfrei** nach v3 mit `curves: None`. Ein v1/v2-Payload, der
+  ein `curves`-Feld enthält, ist ein **lauter** Fehler — kein stiller Drop und
+  kein Smuggling einer späteren Version. Die historischen `adjustment_*`-Extras
+  bleiben auf die vier P0-Keys beschränkt; `adjustment_curves` bleibt „unknown
+  local adjustment". Fehlende Kurvenkanäle, eine Identitätskurve
+  (`[(0,0),(1,1)]`) und ein explizit gespeichertes `curves: None` sind
+  byte-identisch neutral.
+- **Deterministische Reihenfolge und Quantisierung:** Für jede persistierte Maske
+  gilt `global result → local relative WB → local Basic (exposure → contrast →
+  shadows → highlights) → local tone curve → fractional mask blend`; der in
+  P1.2b folgende lokale Color-Stage schließt sich danach an. Die lokale Kurve
+  steht damit an **exakt derselben** Stelle wie der globale Kurven-Stage — nach
+  den Scalar-Basic-Stufen, vor dem Color-Stage. „Exakte Global-Kernel-Reihenfolge"
+  heißt hier wörtlich: derselbe `Curves`-/`CurvePoint`-Typ, derselbe Validator
+  (`lumina_sidecar::validate_curves`), derselbe PCHIP-Evaluator
+  (`lumina_core::curve_math::monotone_curve`) und dieselbe
+  `value * master / luminance`-Komposition mit `luminance > 1e-9`-Guard. Der
+  lokale Layer wertet WB-Gains, die vier Basic-Stufen und die Kurve vollständig
+  in `f64` ab und quantisiert **genau einmal** am Ende auf RGBA8; der globale
+  Kernel rundet dazwischen, weil er auf einem `u8`-Frame arbeitet — die lokale
+  Kurve sieht daher nie einen gerundeten Zwischenwert. Bild-Alpha bleibt
+  unberührt. Alpha-0 lässt alle Bytes unverändert, Alpha-1 übernimmt das
+  vollständige lokale Rezept, partielle Alpha bleiben deterministisch fraktional
+  gemischt.
+- **Zustand, Reset und Persistenz:** Expliziter Reset pro Kanal sowie für alle
+  lokalen Curves; History, Reset und Previous der **aktuellen** virtuellen
+  Kopie übernehmen den vollständigen additiven `MaskStateSnapshot` (inklusive
+  Kurvenblock). Der Kurvenblock gehört in die kanonische
+  `LocalAdjustments::digest` und `mask_layers_digest` — sowohl die
+  Persistenzform als auch die Werte. Ein lokaler Layer darf keine globalen
+  Rezeptfelder verändern.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-Deltas auf andere Bilder. Nicht-neutraler lokaler
+  Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut
+  verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel
+  angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Eine lokale Kurve allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1"-Ausnahme. Sync Settings
+  bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Kurven-Editor (Kanalwahl
+  Master/R/G/B, Punkt setzen/verschieben/löschen, Reset pro Kanal und für alle
+  lokalen Curves) mit **keiner** globalen Rezeptmutation. Die CLI nutzt keine
+  zweite, fast identische Flag-Partei, sondern den bestehenden generischen
+  Kanal: `--set-local-adjustment 'curves.<master|red|green|blue>=I,O;I,O;...'`
+  (dieselbe Punkt-Syntax wie das globale `--curve-points`) und
+  `--reset-local-adjustment curves[.<channel>]`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Master, einzelnen Kanal,
+  Stack (Master plus Kanal), Halbmaske, Überlappungs-Reihenfolge, ungültige
+  Punkte, Null/Identität und Legacy-Dokumente sowie CLI/GUI-Parität. P1.2b
+  Color (HSL/Point Color/Color Grading), Presence, Detail und Optics bleiben
+  deaktiviert.
+
+## P1.2b SOLL — mask-local Color (`MASK-LOCAL-P1.2b`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → fractional mask blend  (P0)
+```
+
+Der lokale Color-Block steht damit an **exakt denselben vier Positionen** wie
+der globale Color-Block im globalen Kernel
+(`HSL → Point Color → Vibrance/Saturation → Color Grading`, siehe
+`lumina-core` `apply_recipe_with_scale_white_balance_and_denoise`). Überlappende
+Layer werden in der **persistierten Listenreihenfolge** ausgewertet; ein
+Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem
+**Reset to As Shot** — kein stiller Fallback, kein relatives globales Alias,
+kein Auto-WB. Bis zur echten GPU-Parität ist der lokale Color-Stage
+**CPU-first**: GPU-/Stand-in-Routen (VRAM-Present, GPU-Parity-Readback,
+Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 4**
+  gehoben. Neu sind ausschließlich `hsl` (`Option<HslAdjustments>`),
+  `point_color` (`Option<PointColor>`), `color_grading` (`Option<ColorGrading>`)
+  sowie die zwei Skalare `vibrance` und `saturation` (je `-1..=1`, `0` =
+  neutral). Es sind **dieselben** `lumina_sidecar::HslAdjustments`/
+  `HslChannel`/`PointColor`/`PointColorEntry`/`ColorGrading`/
+  `ColorGradingRange`-Typen und **dieselben** Validatoren, die das globale
+  Rezept benutzt (`validate_hsl`/`validate_point_color`/
+  `validate_color_grading`); es gibt keine lokalen Kopien, Umbenennungen oder
+  gelockerten Bereiche. `HslAdjustments`/`PointColor`/`ColorGrading` tragen wie
+  global `version == 1`; eine andere Blockversion ist ein lauter Fehler. Es gibt
+  weiterhin **keine** lokalen Presence-, Detail-, AI-Denoise-, Noise-Reduction-,
+  Sharpening- oder Optics-Felder: diese bleiben deaktiviert, und ein
+  entsprechender `--set-local-adjustment`-Key ist ein lauter
+  „unknown local adjustment"-Fehler statt eines stillen No-Op.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta) und
+  v3 (P1.2a-Kurve) migrieren **verlustfrei** nach v4 mit `hsl: None`,
+  `point_color: None`, `color_grading: None`, `vibrance: 0.0` und
+  `saturation: 0.0`. Ein v1/v2/v3-Payload, der eines dieser Felder enthält, ist
+  ein **lauter** Fehler — kein stiller Drop und kein Smuggling einer späteren
+  Version; ein explizites `null` oder ein Nicht-Objekt ebenso. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_hsl`/`adjustment_vibrance` bleiben „unknown local adjustment".
+  `None`, eine neutrale HSL-Kombination, eine leere Point-Color-Liste, eine
+  neutrale Grading-Instanz und `vibrance = saturation = 0` sind byte-identisch
+  neutral (und fallen nach einem Reset vollständig weg).
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, die Kurve und alle vier Color-Stufen
+  vollständig in Fließkomma ab und quantisiert **genau einmal** am Ende auf
+  RGBA8. „Exakte Global-Kernel-Reihenfolge" heißt hier wörtlich: dieselben
+  `HslAdjustments`/`PointColor`/`ColorGrading`-Typen, dieselben Validatoren,
+  dieselben Per-Pixel-Stage-Funktionen (`hsl_stage`, `point_color_stage`,
+  `vibrance_saturation_stage`, `color_grading_stage`) und dieselbe
+  RGB↔HSL-Hilfsfunktion wie der globale Kernel. Die Color-Stufen sind
+  rechnerisch `f32`-Kernfunktionen auf normierten Werten; die float-Kette
+  davor und die Quantisierung danach bleiben `f64`. Bild-Alpha bleibt
+  unberührt. Alpha-0 lässt alle Bytes unverändert, Alpha-1 übernimmt das
+  vollständige lokale Rezept, partielle Alpha bleiben deterministisch fraktional
+  gemischt. Die Kernel-Pfadwahl ist **inhaltsabhängig**: ohne lokalen
+  Color-Block bleiben die P0-, P1.1- und P1.2a-Bytes exakt erhalten, und ohne
+  Kurve sieht der Color-Stage nie einen Kurven-Zwischenwert.
+- **Zustand, Reset und Persistenz:** Expliziter Reset pro HSL-Kanal, pro
+  Point-Color-Eintrag, pro Grading-Range (samt `balance`/`blending`) sowie für
+  den gesamten lokalen Color-Block. History, Reset und Previous der
+  **aktuellen** virtuellen Kopie übernehmen den vollständigen additiven
+  `MaskStateSnapshot` **inklusive des kompletten Color-Blocks**. Der
+  Color-Block gehört in die kanonische `LocalAdjustments::digest` und
+  `mask_layers_digest` und damit in die Render-Identität — sowohl die
+  Persistenzform als auch die Werte. Ein lokaler Layer darf keine globalen
+  Rezeptfelder verändern; die lokale Color-Sektion schreibt nie
+  `EditRecipe::hsl`/`point_color`/`color_grading`/`adjustments["vibrance"|"saturation"]`.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1/P1.2a-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-/P1.2b-Deltas auf andere Bilder. Nicht-neutraler
+  lokaler Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut
+  verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel
+  angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Ein lokaler Color-Block allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1/P1.2a"-Ausnahme. Sync
+  Settings bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Color-Editor (HSL-Kanalwahl mit
+  Hue/Saturation/Luminance, Vibrance/Saturation, Point-Color-Einträge mit
+  Hinzufügen/Entfernen, Grading-Ranges mit `balance`/`blending`, Reset pro
+  Bereich und für den ganzen lokalen Color-Block) mit **keiner** globalen
+  Rezeptmutation. Die CLI nutzt keine zweite, fast identische Flag-Partei,
+  sondern den bestehenden generischen Kanal:
+  `--set-local-adjustment 'hsl.<channel>.<hue|saturation|luminance>=<n>'`,
+  `--set-local-adjustment 'vibrance=<n>'` / `'saturation=<n>'`,
+  `--set-local-adjustment 'point_color.add=<hue_center,hue_range,hue_shift,sat_shift,lum_shift>'`,
+  `--set-local-adjustment 'color_grading.<range>.<field>=<n>'` und
+  `--reset-local-adjustment hsl[.<channel>] | point_color[.<id>] |
+  color_grading[.<range>|balance|blending] | color`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für HSL, Vibrance/Saturation,
+  Point Color, Color Grading, den vollen Stack (WB + Basic + Kurve + Color),
+  Halbmaske, Überlappungs-Reihenfolge, ungültige Werte, Null/Identität,
+  Legacy-Dokumente (v1/v2/v3) sowie CLI/GUI-Parität und die sichtbare
+  Verweigerung der weiterhin deaktivierten Presence/Detail/AI-Denoise/Optics-
+  Stufen. Presence, Detail und Optics bleiben deaktiviert.
+
+## P1.2c SOLL — mask-local Presence (`MASK-LOCAL-P1.2c`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-25, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local Presence         (P1.2c)   ← texture / clarity / dehaze
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → fractional mask blend  (P0)
+```
+
+Presence steht damit an **exakt derselben Position** wie im globalen Kernel
+(Kanal-LUT → Presence → Kurve → Color). Die bereits verifizierte relative
+Reihenfolge von P1.2a/P1.2b (Kurve vor Color) bleibt **unverändert**; es wird
+nur die bislang fehlende Stufe an ihrer globalen Position eingefügt. Überlappende
+Layer werden in der **persistierten Listenreihenfolge** ausgewertet; ein
+Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem
+**Reset to As Shot** — kein stiller Fallback, kein relatives globales Alias,
+kein Auto-WB. Bis zur echten GPU-Parität ist die lokale Presence
+**CPU-first**: GPU-/Stand-in-Routen (VRAM-Present, GPU-Parity-Readback,
+Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 5**
+  gehoben. Neu ist ausschließlich `presence: Option<Presence>`, und zwar mit
+  **wörtlich wiederverwendetem** `lumina_sidecar::Presence` (`version == 1`,
+  `texture`/`clarity`/`dehaze` je endlich in `-1..=1`) und dem **wörtlich
+  wiederverwendeten** globalen Presence-Validator
+  (`validate_presence`, extrahiert nach
+  `crates/lumina-sidecar/src/presence_block.rs` und von globalem und lokalem
+  Rezept geteilt). Es gibt keine lokalen Typkopien, keine gelockerten Bereiche
+  und keinen stillen Fallback. Weiterhin deaktiviert bleiben lokales **Detail**,
+  **Sharpening**, **Noise Reduction**, **AI-Denoise** und **Optics**; ein
+  entsprechender Key ist ein lauter „unknown local adjustment"-Fehler, und der
+  lokale Renderer darf keinen Stub vortäuschen. **Optics bleibt dauerhaft
+  deaktiviert**, weil Linsenkorrektur und Perspektive geometrische Stufen
+  *vor* den Masken sind und nicht als per-Maske-Per-Pixel-Tone-Stufe sinnvoll
+  sind; Noise Reduction/AI-Denoise bleiben bis zum F-078-Modellgate
+  (Gewichts-Lizenz, Provenienz, Hash-Pin) deaktiviert.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta),
+  v3 (P1.2a-Kurve) und v4 (P1.2b-Color) migrieren **verlustfrei** nach v5 mit
+  `presence: None`. Ein v1..v4-Payload, der `presence` enthält (auch ein
+  explizites `null` oder ein Nicht-Objekt), ist ein **lauter** Fehler — kein
+  stiller Drop und kein Smuggling einer späteren Version. Weil die Einführung
+  von v5 die obere Versionsgrenze verschiebt, werden die bestehenden
+  Versions-Gates **versionsrichtig** verankert: der Kurven-Gate an
+  `CURVE_LOCAL_ADJUSTMENTS_VERSION` (3), der Color-Gate an
+  `COLOR_LOCAL_ADJUSTMENTS_VERSION` (4) und der Presence-Gate an
+  `PRESENCE_LOCAL_ADJUSTMENTS_VERSION` (5), jeweils mit `version < …`. Sonst
+  müsste ein v4-Dokument seinen eigenen Color-Block verlieren. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_presence` bleibt „unknown local adjustment". `None` und ein
+  persistierter Null-Block (`texture = clarity = dehaze = 0.0`) sind
+  byte-identisch neutral und fallen nach Reset vollständig weg.
+- **Nachbarschaft und Statistiken bleiben vollbildbasiert, die Maske blendet
+  nur:** Die DoG-Nachbarschaft (Textur-Radius `1 + round(|texture|·2)`, Radius
+  also 1..3; Klarheit-Radius `8 + round(|clarity|·24)`, also 8..32) und die
+  Dark-Channel-95 %-Perzentil-Statistik des Dehaze werden über das **ganze
+  Bild** berechnet, **nicht** auf die Maskenregion beschränkt und **nicht**
+  ROI- oder maskenabhängig skaliert. Die Maske steuert ausschließlich die
+  Blendmenge. Damit gibt es **keine** maskenabhängige Statistik, **keinen**
+  Resize-Fallback und **keine** Naht an der Maskenkante: die Render-Identität
+  hängt nur am persistierten Presence-Wert und am Masken-Plane, nicht an der
+  Bildgeometrie. Konkret heißt das: der Presence-Stage rechnet über die
+  komplette lokale Ebene, und der anschließende P0-Blend mischt das Ergebnis
+  fraktional ein — ein Pixel außerhalb der Maske sieht nie einen
+  maskenverkleinerten Nachbarschafts- oder Statistikwert, sondern exakt die
+  vom globalen Ergebnis vorgegebenen Bytes.
+- **Geteilte Mathematik, ehrlich benannte Quantisierungs-Divergenz:** Die
+  Presence-Mathematik (Box-Mittel/Detail, Dark-Channel, Perzentil,
+  Dehaze-Formel) wurde nach `crates/lumina-core/src/presence_stages.rs`
+  extrahiert und wird vom globalen und vom lokalen Kernel **wörtlich geteilt**.
+  Beide rufen dieselben Funktionen `texture_radius`/`clarity_radius`/
+  `box_bounds`/`box_count`/`box_mean`/`box_detail`/`dog_value`/`dog_channel`/
+  `dark_channel_pixel`/`dark_channel`/`airlight`/`dehaze_transmission`/
+  `dehaze_value` auf. Was sich unterscheidet, ist nur die **Ebene**, über die
+  die Nachbarschaft liest: der globale Kernel liest einen RGBA8-Snapshot
+  (`Rgba8Plane`), der lokale die un-quantisierte `f32`-Kette (`FloatPlane`) —
+  beide in `0..=255`, und ein `u8`-Sample konvertiert in das exakt darstellbare
+  `f32` desselben Werts, ist die `f32`-Arithmetik also bitweise dieselbe
+  Operation. Der globale Kernel quantisiert dabei — wie bisher — intern nach
+  jeder Teilstufe auf `u8` (nach jedem DoG-Durchgang und nach dem Dehaze), der
+  lokale Pfad **genau einmal** am Ende des Layers. Diese Divergenz ist
+  **bewusst, dokumentiert und getestet**; es gibt und darf **keinen** Test
+  geben, der Byte-Gleichheit des lokalen Presence-Pfads mit dem globalen
+  Presence-Stage behauptet, weil sie per Konstruktion falsch ist. Die
+  Presence-Nachbarschaft rechnet wie der globale Stage in `f32` — das ist die
+  geteilte numerische Domäne, **keine** zusätzliche Quantisierungsgrenze; die
+  *eine* Grenze bleibt die abschließende RGBA8-Rundung des lokalen Layers.
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, Presence, die Kurve und alle vier
+  Color-Stufen vollständig in Fließkomma ab und quantisiert **genau einmal** am
+  Ende auf RGBA8. Bild-Alpha bleibt unberührt. Alpha-0 lässt alle Bytes
+  unverändert, Alpha-1 übernimmt das vollständige lokale Rezept, partielle
+  Alpha bleiben deterministisch fraktional gemischt. Die Kernel-Pfadwahl ist
+  **inhaltsabhängig**: **ohne** lokalen Presence-Block (abwesend **oder** ein
+  persistierter Null-Block) bleiben die P0-, P1.1-, P1.2a- und P1.2b-Bytes exakt
+  erhalten, und ein P1.2b-Layer mit Curve+Color nimmt **ohne** Presence weiterhin
+  den bestehenden f64-Kernelpfad.
+- **Zustand, Reset und Persistenz:** Expliziter Reset für den gesamten
+  Presence-Block (Texture, Klarheit und Dehaze gemeinsam). History, Reset und
+  Previous der **aktuellen** virtuellen Kopie übernehmen den vollständigen
+  additiven `MaskStateSnapshot` **inklusive des kompletten Presence-Blocks**.
+  Der Block gehört in die kanonische `LocalAdjustments::digest` und
+  `mask_layers_digest` und damit in die Render-Identität. Ein lokaler Layer darf
+  keine globalen Rezeptfelder verändern; die lokale Presence-Sektion schreibt
+  nie `EditRecipe::presence`.
+- **Cross-image Previous bleibt recipe-only (P0/P1.1/P1.2a/P1.2b-Vertrag):** Der
+  dateibasierte CLI-Befehl `previous` überträgt **keine** lokalen Masken-Layer
+  und keine P0-/P1.1-/P1.2a-/P1.2b-/P1.2c-Deltas auf andere Bilder.
+  Nicht-neutraler lokaler Maskenzustand — auf der Quell-Kopie oder auf dem Ziel
+  — wird laut verweigert: die Quelle bricht den gesamten Lauf ab (Exit 1, kein
+  Ziel angefasst), ein betroffenes Ziel schlägt isoliert fehl (Exit 3,
+  Ziel-Bytes unverändert). **Ein lokaler Presence-Block allein ist bereits ein
+  Verweigerungsgrund**; es gibt keine „nur P0/P1.1/P1.2a/P1.2b"-Ausnahme. Sync
+  Settings bleibt recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Presence-Editor (Texture, Klarheit,
+  Dehaze und Reset gesamt) mit **keiner** globalen `EditRecipe::presence`-
+  Mutation. Die CLI nutzt keine zweite, fast identische Flag-Partei, sondern den
+  bestehenden generischen Kanal:
+  `--set-local-adjustment 'presence.texture=<n>'` /
+  `'presence.clarity=<n>'` / `'presence.dehaze=<n>'` und
+  `--reset-local-adjustment presence`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Texture, Klarheit, Dehaze,
+  den vollen Stack (WB + Basic + Presence + Kurve + Color), Halbmaske,
+  Überlappungs-Reihenfolge, Null-Block-Byte-Identität, ungültige Werte
+  (Blockversion, Bereich, nicht-endlich), Legacy-v1..v4-Dokumente, die sichtbare
+  Verweigerung der weiterhin deaktivierten Detail/Sharpening/Noise-Reduction-/
+  AI-Denoise-/Optics-Stufen sowie CLI/GUI-Parität und History/Previous/Reset.
+  Die globalen Presence-Goldens müssen **unverändert** grün bleiben. Detail,
+  Sharpening, Noise Reduction, AI-Denoise und Optics bleiben deaktiviert.
+
+## P1.2d SOLL — mask-local Detail (`MASK-LOCAL-P1.2d`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-26, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local Presence         (P1.2c)   ← texture / clarity / dehaze
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → local Noise Reduction  (P1.2d)   ← luminance / color
+  → local Sharpening       (P1.2d)   ← amount / radius / detail / masking
+  → fractional mask blend  (P0)
+```
+
+Die Detail-Stufe steht damit an **exakt denselben beiden Positionen** wie im
+globalen Kernel: dort wie hier läuft **Noise Reduction vor Sharpening**, und
+beide liegen nach dem Color-Block (`… Color Grading → Noise Reduction →
+Sharpening → …`). Die bereits verifizierte relative Reihenfolge von
+P1.2a/P1.2b/P1.2c (Presence → Kurve → Color) bleibt **unverändert**; es werden
+nur die zwei bislang fehlenden Stufen an ihrer globalen Position angehängt.
+Überlappende Layer werden in der **persistierten Listenreihenfolge** ausgewertet;
+ein Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem **Reset to As
+Shot** — kein stiller Fallback, kein relatives globales Alias, kein Auto-WB. Bis
+zur echten GPU-Parität ist das lokale Detail **CPU-first**: GPU-/Stand-in-Routen
+(VRAM-Present, GPU-Parity-Readback, Navigator/Neighbor/Thumbnail/Draft) müssen
+sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 6**
+  gehoben. Neu ist ausschließlich `detail: Option<Detail>` mit genau den beiden
+  globalen Teil-Blöcken `sharpening: Option<Sharpening>` (`version == 1`,
+  `amount` in `0.0..=3.0`, `radius` in `0.1..=10.0`, `detail` in `0.0..=1.0`,
+  `masking` in `0.0..=1.0`) und `noise_reduction: Option<NoiseReduction>`
+  (`version == 1`, `luminance`/`color` je in `0.0..=1.0`) — **wörtlich
+  wiederverwendete** globale Typen, mit **wörtlich wiederverwendeten**
+  globalen Validatoren (extrahiert nach
+  `crates/lumina-sidecar/src/detail_block.rs` und von globalem und lokalem Rezept
+  geteilt: `validate_sharpening`/`validate_noise_reduction` sowie die
+  Feldlisten und Neutralitätsprüfungen). Es gibt **keine** lokalen Typkopien,
+  **keine** gelockerten und **keine** verkleinerten Bereiche und keinen stillen
+  Fallback. Deaktiviert bleiben lokales **AI-Denoise** (F-078-Modellgate offen)
+  und lokales **Optics** — beide **dauerhaft**: Optics, weil Linsenkorrektur und
+  Perspektive geometrische Stufen *vor* den Masken sind und nicht als
+  per-Maske-Per-Pixel-Tone-Stufe sinnvoll sind; AI-Denoise, weil das Modell-Gate
+  (Gewichts-Lizenz, Provenienz, Hash-Pin) offen ist. Für beide gilt: **kein**
+  Schemafeld, **kein** CLI-Key, **kein** Renderer-Stub, sondern ein lauter
+  „unknown local adjustment"-Fehler.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta),
+  v3 (P1.2a-Kurve), v4 (P1.2b-Color) und v5 (P1.2c-Presence) migrieren
+  **verlustfrei** nach v6 mit `detail: None`. Ein v1..v5-Payload, der `detail`
+  enthält (auch ein explizites `null` oder ein Nicht-Objekt), ist ein **lauter**
+  Fehler — kein stiller Drop und kein Smuggling einer späteren Version. Weil die
+  Einführung von v6 die obere Versionsgrenze verschiebt, bleiben die bestehenden
+  Versions-Gates **versionsrichtig** verankert: der Kurven-Gate an
+  `CURVE_LOCAL_ADJUSTMENTS_VERSION` (3), der Color-Gate an
+  `COLOR_LOCAL_ADJUSTMENTS_VERSION` (4), der Presence-Gate an
+  `PRESENCE_LOCAL_ADJUSTMENTS_VERSION` (5) und der neue Detail-Gate an
+  `DETAIL_LOCAL_ADJUSTMENTS_VERSION` (6), jeweils mit `version < …`. Sonst müsste
+  ein v5-Dokument seinen eigenen Presence-Block verlieren. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_detail`, `adjustment_sharpening` und `adjustment_noise_reduction`
+  bleiben „unknown local adjustment".
+- **Nachbarschaft bleibt vollbildbasiert, die Maske blendet nur:** Der
+  5x5-Bilateral-Kernel der Rauschunterdrückung, das 3x3-Gradientenfenster und
+  die beiden separablen Gauß-Durchgänge des Sharpenings, der
+  Detail-Mixing-Pfad (`detail·d_fine + (1−detail)·d_coarse`) und die
+  Flat-Area-Maskierung (`((1−masking) + masking·clamp(|gx|+|gy|/max,0,1))`)
+  rechnen über das **ganze Bild**. Es gibt **keine** maskenabhängige Statistik,
+  **keinen** ROI-Resize-Fallback und **keine** Kantennaht. Die lokale
+  Detail-Funktion nimmt in ihrer Signatur **weder Maske noch ROI** entgegen —
+  nur das Blendgewicht. Ein Pixel außerhalb der Maske sieht damit nie einen
+  maskenverkleinerten Nachbarschaftswert, sondern exakt die vom globalen
+  Ergebnis vorgegebenen Bytes; die Render-Identität hängt nur am persistierten
+  Detail-Wert, am globalen `render_scale` und am Masken-Plane, nicht an der
+  Bildgeometrie.
+- **Geteilte Mathematik, ehrlich benannte Quantisierungs-Divergenz:** Die
+  Detail-Mathematik (Bilateral-Gewichte und -Mittelung, Chroma-Offsets,
+  Gauß-Kernel, Luminanz-Gradienten und `global_max`, Detail-Mixing,
+  Flat-Area-Faktor, Radius-Formel) wurde nach
+  `crates/lumina-core/src/detail_stages.rs` extrahiert und wird vom globalen und
+  vom lokalen Kernel **wörtlich geteilt**. Der globale Kernel behält dabei seine
+  bisherigen `u8`-Quantisierungspunkte (ein `round()`/Clamp je Sub-Stufe: nach
+  NR, nach dem Scharfen, und der Lese-Zugriff auf den `u8`-Snapshot), der lokale
+  Pfad quantisiert **genau einmal** am Ende des Layers. Damit ändert sich
+  **kein** globaler Byte: die bestehenden globalen Sharpening-/Noise-Reduction-
+  Goldens bleiben **unverändert** grün. Diese Quantisierungs-Divergenz ist
+  **bewusst und dokumentiert**; es gibt und darf **keinen** Test geben, der
+  Byte-Gleichheit des lokalen Detail-Pfads mit dem globalen Detail-Stage
+  behauptet, weil sie per Konstruktion falsch ist. Die Detail-Nachbarschaft
+  rechnet wie der globale Stage in `f32` (`0..=255`) — das ist die geteilte
+  numerische Domäne, **keine** zusätzliche Quantisierungsgrenze; die *eine*
+  Grenze bleibt die abschließende RGBA8-Rundung des lokalen Layers.
+- **Render-Scale bleibt global (F-096-Vertrag):** Die globale
+  `Sharpening`-Stufe skaliert ihren Radius über den globalen `render_scale`
+  (`sigma = max(radius · scale, 0.5)`, Fein-/Grob-Radius `max(0.5·r, 0.5)` bzw.
+  `max(1.5·r, 0.5)`; `sharpening_render_scale_changes_render_only` und
+  `sharpening_identity_direction_and_scale` pinnen das). Der lokale Detail-Block
+  folgt **demselben** globalen `render_scale`, damit die lokale und die globale
+  Stufe dieselbe effektive Radius-Skala sehen. Der lokale Block bekommt **keine**
+  eigene Scale-Option und darf den globalen `render_scale` **nicht** überschreiben;
+  es gibt kein zusätzliches persistiertes Feld dafür. Die Render-Identität
+  ändert sich mit dem globalen `render_scale` genau wie beim globalen Sharpening,
+  der Decode-Digest nicht.
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, Presence, die Kurve, alle vier Color-Stufen,
+  Noise Reduction und Sharpening vollständig in Fließkomma ab und quantisiert
+  **genau einmal** am Ende auf RGBA8. Die **Reihenfolge innerhalb eines Layers ist
+  dabei beobachtbar, nicht kosmetisch**: Farbe ändert die Nachbar-Luminanz, und
+  Nachbar-Luminanz ist die Eingangsgröße der bilateralen Ähnlichkeitsgewichte, des
+  separierbaren Gauss und des Frame-weiten Gradientenmaximums. Die beiden
+  Nachbarschafts-Stufen laufen deshalb über die **ganze** un-quantisierte
+  Farb-Ebene. `crates/lumina-core/src/render/tests/local_detail_reference.rs`
+  transponiert beide Ketten **unabhängig** aus den dokumentierten Formeln (WB +
+  Basic, Kurvenkomposition, F-096-Bilateral, F-095-Gauss, Detail-Mix, Flat-Area),
+  `local_detail_order_tests.rs` validiert **jede** Transkription einzeln gegen den
+  echten Kernel (Farb-Hälfte gegen einen reinen Farb-Layer, Detail-Hälfte gegen
+  einen reinen Detail-Layer) und pinnt dann in **einem** Layer mit Farb- *und*
+  Detail-Block: das Ergebnis ist die dokumentierte Kette und unterscheidet sich
+  von der vertauschten Kette deutlich — der Test schlägt also fehl, wenn die
+  Reihenfolge kippt. Die Color-Stufen rechnen in ihrer geteilten `0..=1`-Domäne,
+  die Nachbarschafts-Stufen in `0..=255`; die Umrechnung dazwischen ist eine reine
+  Domänen-Umrechnung (mal/teil 255 in `f32`) und **keine** weitere
+  Quantisierungsgrenze. Bild-Alpha bleibt unberührt. Alpha-0 lässt
+  alle Bytes unverändert, Alpha-1 übernimmt das vollständige lokale Rezept,
+  partielle Alpha bleiben deterministisch fraktional gemischt. Die
+  Kernel-Pfadwahl ist **inhaltsabhängig**: **ohne** lokalen Detail-Block
+  (abwesend **oder** beide Teil-Blöcke neutral) bleiben die P0-, P1.1-, P1.2a-,
+  P1.2b- und P1.2c-Bytes exakt erhalten, und ein P1.2b-/P1.2c-Layer nimmt **ohne**
+  Detail weiterhin den bestehenden f64-Kernelpfad. Die Neutralität eines
+  gespeicherten Sharpening-Blocks ist dabei **genau eine** Frage — `amount == 0`,
+  also der eigene Early-Return des globalen F-095-Stages. Daraus folgt beides:
+  Ein `masking = 0` ist **kein** stiller No-op (Masking ist nur der
+  Flat-Area-Multiplikator `((1−masking) + masking·edge)`; bei `masking = 0` ist der
+  Faktor für **jedes** Pixel `1`, also die stärkste Einstellung — der ganze Frame
+  inklusive Fläche wird geschärft), und der Radius kann einen Block **nie** neutral
+  machen: der globale Kernel begrenzt `sigma` nach unten auf `0.5`, und selbst
+  dort hat der erste Nachbartap die Gewichtung `exp(−1/(2·0.5²)) = exp(−2) ≈
+  0.135 ≠ 0`, erreicht also das separierbare Kernel-Fenster die Nachbarn — jeder
+  Radius im legalen `0.1..=10.0` schärft also etwas. Ein persistierter Block, der
+  nur `radius`/`detail`/`masking` setzt und `amount = 0` lässt, ist damit exakt die
+  F-095-Identität und ändert kein Byte.
+- **Zustand, Reset und Persistenz:** Expliziter Reset **pro Teil-Block**
+  (`sharpening`, `noise_reduction`) und **für den gesamten Detail-Block**
+  (`detail`). History, Reset und Previous der **aktuellen** virtuellen Kopie
+  übernehmen den vollständigen additiven `MaskStateSnapshot` **inklusive des
+  kompletten Detail-Blocks**. Der Block gehört in die kanonische
+  `LocalAdjustments::digest` und `mask_layers_digest` und damit in die
+  Render-Identität. Ein lokaler Layer darf keine globalen Rezeptfelder
+  verändern; die lokale Detail-Sektion schreibt nie
+  `EditRecipe::sharpening`/`noise_reduction`.
+- **Cross-image Previous bleibt recipe-only
+  (P0/P1.1/P1.2a/P1.2b/P1.2c-Vertrag):** Der dateibasierte CLI-Befehl
+  `previous` überträgt **keine** lokalen Masken-Layer und keine P0-/P1.1-/
+  P1.2a-/P1.2b-/P1.2c-/P1.2d-Deltas auf andere Bilder. Nicht-neutraler lokaler
+  Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut verweigert:
+  die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel angefasst), ein
+  betroffenes Ziel schlägt isoliert fehl (Exit 3, Ziel-Bytes unverändert).
+  **Ein lokaler Detail-Block allein ist bereits ein Verweigerungsgrund**; es
+  gibt keine „nur P0/P1.1/P1.2a/P1.2b/P1.2c"-Ausnahme. Sync Settings bleibt
+  recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Detail-Editor (Sharpening
+  amount/radius/detail/masking, Noise Reduction luminance/color, Reset pro
+  Bereich und gesamt) mit **keiner** globalen
+  `EditRecipe::sharpening`/`noise_reduction`-Mutation. Die CLI nutzt keine
+  zweite, fast identische Flag-Partei, sondern den bestehenden generischen
+  Kanal: `--set-local-adjustment 'sharpening.<field>=<n>'` /
+  `'noise_reduction.<field>=<n>'` und
+  `--reset-local-adjustment sharpening | noise_reduction | detail`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Sharpening (amount, radius,
+  detail, masking), Noise Reduction (luminance, color), die Reihenfolge
+  NR-vor-Sharpen, den vollen Stack (WB + Basic + Presence + Kurve + Color + NR +
+  Sharpen), Halbmaske, Überlappungs-Reihenfolge, Null-Block-Byte-Identität,
+  ungültige Werte (Blockversion, Bereich **inklusive der Radiusgrenzen 0.1 und
+  10.0**, nicht-endlich), Legacy-v1..v5-Dokumente, die sichtbare Verweigerung
+  von AI-Denoise und Optics, CLI/GUI-Parität und History/Previous/Reset. Die
+  **globalen** Sharpening-/Noise-Reduction-Goldens müssen **unverändert** grün
+  bleiben. AI-Denoise und Optics bleiben deaktiviert.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

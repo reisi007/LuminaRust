@@ -70,13 +70,57 @@ pub use history::{
     MAX_HISTORY_CHANGE_VALUE_CHARS,
 };
 
-// MASK-LOCAL-P0/P1.1: typed local mask recipes and the loud legacy migration.
+// Tone-curve channel accessors plus the one shared point-rule validator,
+// reused by the global recipe and the typed mask-local recipe (P1.2a).
+mod curves;
+pub use curves::{
+    curve_points_are_identity, identity_curve_points, validate_curves, CURVE_CHANNELS,
+};
+
+// The one set of range validators for the per-pixel color blocks, reused by
+// the global recipe and the typed mask-local recipe (P1.2b).
+mod color_blocks;
+pub use color_blocks::{
+    color_grading_is_neutral, color_grading_is_unset, color_grading_range_mut,
+    color_grading_ranges, hsl_band, hsl_band_mut, hsl_band_slot_mut, hsl_is_neutral,
+    point_color_is_neutral, validate_color_grading, validate_hsl, validate_point_color, HSL_BANDS,
+    MAX_POINT_COLOR_ENTRIES,
+};
+
+// The one validator for the `Presence` block, reused by the global recipe and
+// the typed mask-local recipe (P1.2c).
+mod presence_block;
+pub use presence_block::{presence_is_neutral, validate_presence, PRESENCE_FIELDS};
+
+// The one validator for the two global detail blocks (`Sharpening` and
+// `NoiseReduction`), reused by the global recipe and the typed mask-local
+// recipe (P1.2d).
+mod detail_block;
+pub use detail_block::{
+    detail_amount_is_valid, noise_reduction_field_range, noise_reduction_is_neutral,
+    sharpening_field_range, sharpening_is_neutral, sharpening_radius_range,
+    validate_noise_reduction, validate_sharpening, DETAIL_BLOCK_VERSION, NOISE_REDUCTION_FIELDS,
+    SHARPENING_FIELDS,
+};
+
+// The two global detail blocks and the mask-local detail container (P1.2d), all
+// validated by the one shared detail validator set.
+mod detail;
+pub use detail::{Detail, NoiseReduction, Sharpening};
+
+// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b/P1.2c/P1.2d: typed local mask recipes and the
+// loud legacy migration.
 mod local_adjustments;
+pub use local_adjustments::mask_state::MAX_MASK_STATE_LAYERS;
 pub use local_adjustments::{
-    mask_layers_digest, validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe,
-    MaskStateSnapshot, LEGACY_LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENTS_VERSION,
-    LOCAL_ADJUSTMENT_RANGES, LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
-    MAX_MASK_STATE_LAYERS,
+    local_point_color_entry, mask_layers_digest, neutral_local_detail, neutral_local_presence,
+    validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe, MaskStateSnapshot,
+    COLOR_LOCAL_ADJUSTMENTS_VERSION, CURVE_LOCAL_ADJUSTMENTS_VERSION,
+    DETAIL_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES,
+    LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
+    LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
+    PRESENCE_LOCAL_ADJUSTMENTS_VERSION, RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
 };
 
 // LRPAR-G12-FACE-20 / FACE-20-S1: source-level face-detection schema
@@ -1613,7 +1657,7 @@ impl ColorGradingRange {
 }
 
 fn default_color_grading_blending() -> f32 {
-    0.5
+    color_blocks::default_color_grading_blending()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1698,22 +1742,6 @@ pub struct Presence {
     pub clarity: f32,
     #[serde(default)]
     pub dehaze: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct NoiseReduction {
-    pub version: u8,
-    pub luminance: f32,
-    pub color: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Sharpening {
-    pub version: u8,
-    pub amount: f32,
-    pub radius: f32,
-    pub detail: f32,
-    pub masking: f32,
 }
 
 /// LRPAR-G14-REDEYE-15 (Release 1.5): a single persisted red-eye correction
@@ -4516,121 +4544,26 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         }
     }
     if let Some(c) = &a.curves {
-        if c.version != 1 {
-            return invalid("unsupported curves version");
-        }
-        validate_curve(&c.master)?;
-        for curve in [&c.channels.red, &c.channels.green, &c.channels.blue]
-            .into_iter()
-            .flatten()
-        {
-            validate_curve(curve)?;
-        }
+        validate_curves(c)?;
     }
     if let Some(h) = &a.hsl {
-        if h.version != 1 {
-            return invalid("unsupported hsl version");
-        }
-        for (name, c) in [
-            ("red", h.red),
-            ("orange", h.orange),
-            ("yellow", h.yellow),
-            ("green", h.green),
-            ("cyan", h.cyan),
-            ("blue", h.blue),
-            ("violet", h.violet),
-            ("magenta", h.magenta),
-        ] {
-            let Some(c) = c else { continue };
-            for (field, v) in [
-                ("hue", c.hue),
-                ("saturation", c.saturation),
-                ("luminance", c.luminance),
-            ] {
-                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                    return invalid(format!("invalid hsl {name}.{field}"));
-                }
-            }
-        }
+        validate_hsl(h)?;
     }
     if let Some(c) = &a.color_grading {
-        if c.version != 1 {
-            return invalid("unsupported color_grading version");
-        }
-        if !c.balance.is_finite() || !(-1.0..=1.0).contains(&c.balance) {
-            return invalid("invalid color_grading balance");
-        }
-        if !c.blending.is_finite() || !(0.0..=1.0).contains(&c.blending) {
-            return invalid("invalid color_grading blending");
-        }
-        for (name, range) in [
-            ("shadows", c.shadows),
-            ("midtones", c.midtones),
-            ("highlights", c.highlights),
-        ] {
-            if !range.hue_degrees.is_finite() || !(0.0..=360.0).contains(&range.hue_degrees) {
-                return invalid(format!("invalid color_grading {name}.hue_degrees"));
-            }
-            if !range.saturation.is_finite() || !(0.0..=1.0).contains(&range.saturation) {
-                return invalid(format!("invalid color_grading {name}.saturation"));
-            }
-            if !range.luminance.is_finite() || !(-1.0..=1.0).contains(&range.luminance) {
-                return invalid(format!("invalid color_grading {name}.luminance"));
-            }
-        }
+        validate_color_grading(c)?;
     }
     if let Some(p) = &a.point_color {
-        if p.version != 1 {
-            return invalid("unsupported point_color version");
-        }
-        if p.entries.len() > 8 {
-            return invalid("too many point_color entries (max 8)");
-        }
-        let mut seen = std::collections::HashSet::new();
-        for entry in &p.entries {
-            if entry.id.is_empty() || !seen.insert(entry.id.clone()) {
-                return invalid("invalid point_color entry id (empty or duplicate)");
-            }
-            if !entry.hue_center.is_finite() || !(0.0..=360.0).contains(&entry.hue_center) {
-                return invalid(format!("invalid point_color {} hue_center", entry.id));
-            }
-            if !entry.hue_range.is_finite() || !(0.0..=180.0).contains(&entry.hue_range) {
-                return invalid(format!("invalid point_color {} hue_range", entry.id));
-            }
-            for (field, v) in [
-                ("hue_shift", entry.hue_shift),
-                ("saturation_shift", entry.saturation_shift),
-                ("luminance_shift", entry.luminance_shift),
-            ] {
-                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                    return invalid(format!("invalid point_color {} {field}", entry.id));
-                }
-            }
-        }
+        validate_point_color(p)?;
     }
     if let Some(p) = &a.presence {
-        if p.version != 1 {
-            return invalid("unsupported presence version");
-        }
-        for (name, v) in [
-            ("texture", p.texture),
-            ("clarity", p.clarity),
-            ("dehaze", p.dehaze),
-        ] {
-            if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
-                return invalid(format!("invalid presence {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2c block uses, so a local
+        // presence can never accept a value the global recipe rejects.
+        validate_presence(p)?;
     }
     if let Some(n) = &a.noise_reduction {
-        if n.version != 1 {
-            return invalid("unsupported noise_reduction version");
-        }
-        for (name, v) in [("luminance", n.luminance), ("color", n.color)] {
-            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
-                return invalid(format!("invalid noise_reduction {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2d block uses, so a local
+        // noise reduction can never accept a value the global recipe rejects.
+        validate_noise_reduction(n)?;
     }
     // LRPAR-G14-DENOISE-20: the optional AI-denoise stage validates its own
     // contract (version, model identity, digest, strengths, artifact reference).
@@ -4638,19 +4571,9 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_denoise_ai(d)?;
     }
     if let Some(s) = &a.sharpening {
-        if s.version != 1 {
-            return invalid("unsupported sharpening version");
-        }
-        for (name, v, lo, hi) in [
-            ("amount", s.amount, 0.0, 3.0),
-            ("radius", s.radius, 0.1, 10.0),
-            ("detail", s.detail, 0.0, 1.0),
-            ("masking", s.masking, 0.0, 1.0),
-        ] {
-            if !v.is_finite() || !(lo..=hi).contains(&v) {
-                return invalid(format!("invalid sharpening {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2d block uses, so a local
+        // sharpening can never accept a value the global recipe rejects.
+        validate_sharpening(s)?;
     }
     // LRPAR-G14-REDEYE-15: out-of-range or non-finite values are rejected
     // loudly, never clipped; regions are identified by stable unique ids.
@@ -4951,30 +4874,6 @@ fn validate_spot_g04_extras(recipe: &EditRecipe) -> Result<(), SidecarError> {
                 "extras `{SPOT_DISTRACTION_KEY}` must be an object of bools"
             ))
         })?;
-    }
-    Ok(())
-}
-
-fn validate_curve(c: &[CurvePoint]) -> Result<(), SidecarError> {
-    if !(2..=32).contains(&c.len()) {
-        return invalid("curve must contain 2..=32 points");
-    }
-    let mut previous = -1.0;
-    for p in c {
-        if !p.input.is_finite()
-            || !p.output.is_finite()
-            || !(0.0..=1.0).contains(&p.input)
-            || !(0.0..=1.0).contains(&p.output)
-            || p.input <= previous
-        {
-            return invalid("curve points must be finite, bounded and strictly increasing");
-        }
-        previous = p.input;
-    }
-    let first = c.first().unwrap();
-    let last = c.last().unwrap();
-    if first.input != 0.0 || first.output != 0.0 || last.input != 1.0 || last.output != 1.0 {
-        return invalid("curve must have (0,0) and (1,1) endpoints");
     }
     Ok(())
 }
