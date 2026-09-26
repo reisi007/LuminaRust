@@ -43,9 +43,13 @@
 //!   candidate is removed from the competition *before* the comparison (and
 //!   compared as `-1`, the value it would have had if it did not exist) and the
 //!   removal is reported through [`SkipReason::NoXmlFiles`].
-//! - **All three timestamps `-1` keeps the system database.** In that state
-//!   upstream's tie-break picks `system_updates_dirname`, which does not exist,
-//!   and loads nothing at all. The resolved system database is kept instead.
+//! - **All three timestamps `-1` keeps the system database.** `-1` has three
+//!   distinct causes (see [`crate::db_timestamp`]); for the *resolved* directory
+//!   the only reachable one is a **blank** `timestamp.txt` (a **missing** one
+//!   scores `0`, and `resolve_with` already proved the schema directory holds
+//!   XML, so it is not empty). Upstream's tie-break then picks
+//!   `system_updates_dirname`, which does not exist, and loads nothing at all;
+//!   the resolved system database is kept instead.
 //! - **The system-update layer needs a real `timestamp.txt`.** See
 //!   [`SYSTEM_UPDATES_DIR`].
 //! - **An operator override is never displaced.** See
@@ -53,8 +57,9 @@
 //! - **The user-data location follows glib's real rules.** See
 //!   [`user_db_dir_from`].
 
-use crate::db_path::{Probe, Source, SYSTEM_UPDATES_DIR, USER_DB_SUBDIR};
+use crate::db_path::{Probe, Source, SYSTEM_UPDATES_DIR};
 use crate::db_timestamp::DatabaseTimestamp;
+pub use crate::db_user_dir::{user_db_dir, user_db_dir_from};
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -98,9 +103,9 @@ pub struct Layer {
 
 /// Why a layer that was considered is **not** part of the plan.
 ///
-/// Nothing is dropped without one of these: an update directory that exists but
-/// is empty or unreadable is a real defect and is reported, never skipped in
-/// silence.
+/// A considered layer is either **in** the plan, or recorded here. A directory
+/// that exists but is empty, unreadable or undated is a real defect and is
+/// reported, never skipped in silence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     /// The directory does not exist.
@@ -110,6 +115,16 @@ pub enum SkipReason {
     /// but deliberately **not** pushed into the diagnostics stream, because it
     /// would be pure noise on every lookup.
     Absent,
+    /// The layer held XML and was eligible, but lost the newest-wins comparison
+    /// to the layer named by [`crate::db_path::Resolved::primary`].
+    ///
+    /// This variant exists so the plan really is complete (NIEDRIG-1): without
+    /// it, the losers of the competition vanished with no record, which is how
+    /// MITTEL-1 — an update package that upstream would have taken and this code
+    /// silently ignored — stayed invisible. It is **not** actionable: losing is
+    /// the algorithm working, not a defect, so it is recorded and inspectable
+    /// but not reported.
+    LostTheCompetition,
     /// The directory exists and holds no `*.xml` file, so it may not win.
     NoXmlFiles,
     /// The directory exists but could not be read (permissions, I/O error).
@@ -124,26 +139,42 @@ pub enum SkipReason {
 }
 
 impl SkipReason {
+    /// A stable, machine-checkable label, like [`crate::db_path::MissReason`].
+    ///
+    /// It is part of [`fmt::Display`] so a diagnostic line carries both the
+    /// stable label and the operator-readable wording — a sink can match on the
+    /// label and a human can read the rest.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "Absent",
+            Self::LostTheCompetition => "LostTheCompetition",
+            Self::NoXmlFiles => "NoXmlFiles",
+            Self::Unreadable => "Unreadable",
+            Self::NoTimestampFile => "NoTimestampFile",
+            Self::NoUserDataDir => "NoUserDataDir",
+        }
+    }
+
     /// Whether this is worth pushing into the [`Diagnostics`](crate::system_load::Diagnostics)
     /// stream, as opposed to only being recorded in the plan.
     pub const fn is_actionable(self) -> bool {
-        !matches!(self, Self::Absent)
+        !matches!(self, Self::Absent | Self::LostTheCompetition)
     }
 }
 
 impl fmt::Display for SkipReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Absent => f.write_str("Verzeichnis nicht vorhanden"),
-            Self::NoXmlFiles => f.write_str("Update-Paket ohne XML-Datei, nicht wertungsfähig"),
-            Self::Unreadable => f.write_str("Verzeichnis nicht lesbar"),
-            Self::NoTimestampFile => {
-                f.write_str("System-Update-Paket ohne verwertbares timestamp.txt")
+        let text = match self {
+            Self::Absent => "Verzeichnis nicht vorhanden",
+            Self::LostTheCompetition => {
+                "Ebenen-wertung: von einer neueren Ebene überholt (algorithmisch, kein Defekt)"
             }
-            Self::NoUserDataDir => {
-                f.write_str("weder XDG_DATA_HOME noch HOME gesetzt, keine Benutzer-Ebene")
-            }
-        }
+            Self::NoXmlFiles => "Update-Paket ohne XML-Datei, nicht wertungsfähig",
+            Self::Unreadable => "Verzeichnis nicht lesbar",
+            Self::NoTimestampFile => "System-Update-Paket ohne verwertbares timestamp.txt",
+            Self::NoUserDataDir => "weder XDG_DATA_HOME noch HOME gesetzt, keine Benutzer-Ebene",
+        };
+        write!(f, "{text} [{}]", self.as_str())
     }
 }
 
@@ -319,16 +350,21 @@ fn finish(
     } else {
         select_primary(&candidates, dir, probe)
     };
-    // `select_primary` can name a candidate that is not present. That only
-    // happens when *every* timestamp is `-1` — the system database has no
-    // `timestamp.txt` and no update package exists at all — and upstream would
-    // then call `LoadDirectory` on a directory that does not exist and load
-    // nothing from any of the three `version_1` directories, i.e. silently lose
-    // the whole system database. Keeping the resolved system database, which
-    // resolution already proved holds XML, is the only outcome that preserves
-    // the profiles; the divergence is documented in the module docs and pinned by
-    // `an_undated_system_database_with_no_update_package_still_loads` in
-    // `src/tests/db_layers.rs`.
+    // `select_primary` can name a candidate that is not present. That happens
+    // when *every* compared timestamp is `-1` and the named one was filtered out
+    // or does not exist. For the resolved system database the only reachable
+    // cause of `-1` is a **blank** `timestamp.txt` (a *missing* one scores `0`,
+    // and `resolve_with` already proved the schema directory holds XML, so it
+    // is not empty) — see `crate::db_timestamp`.
+    //
+    // Upstream would then call `LoadDirectory` on `system_updates_dirname`,
+    // which does not exist, and load nothing from any of the three `version_1`
+    // directories: a silent, total loss of the system database. Keeping the
+    // resolved system database, which resolution already proved holds XML, is
+    // the only outcome that preserves the profiles. Pinned through the *real*
+    // filesystem probe by
+    // `tests::fs_probe::a_blank_timestamp_txt_in_the_system_directory_still_loads_it`
+    // (hermetic twin: `tests::db_layers::all_minus_one_timestamps_keep_the_system_database`).
     let chosen_index = candidates
         .iter()
         .position(|c| c.origin == primary)
@@ -344,6 +380,22 @@ fn finish(
                 .expect("the resolved system database always competes")
         });
     let chosen = candidates.swap_remove(chosen_index);
+    // The losers of the competition are recorded, so the plan accounts for every
+    // layer it considered (NIEDRIG-1). `swap_remove` is order-independent, so
+    // sort the remainder for a deterministic plan.
+    for loser in &candidates {
+        skipped.push(SkippedLayer {
+            dir: Some(loser.dir.clone()),
+            origin: loser.origin,
+            reason: SkipReason::LostTheCompetition,
+        });
+    }
+    skipped.sort_by(|a, b| {
+        a.origin
+            .as_str()
+            .cmp(b.origin.as_str())
+            .then_with(|| a.dir.cmp(&b.dir))
+    });
     let mut layers = vec![Layer {
         dir: chosen.dir,
         files: chosen.files,
@@ -432,49 +484,4 @@ fn select_primary(candidates: &[Candidate], system_dir: &Path, probe: &impl Prob
     } else {
         LayerOrigin::SystemUpdates
     }
-}
-
-/// glib's `g_get_user_data_dir()` / upstream's `HomeDataDir`.
-///
-/// Reproduced from glib 2.88.3 `glib/gutils.c` (`g_build_user_data_dir` and
-/// `g_build_home_dir`), which is the glib lensfun links against:
-///
-/// - `XDG_DATA_HOME`, when **set and non-empty**, wins — used **as-is**,
-///   including a *relative* value. glib performs no absoluteness check here
-///   (that check only exists on Windows, for `HOME`).
-/// - otherwise `$HOME/.local/share`. glib uses a *set* `HOME` as-is too: an
-///   empty `HOME` yields `/.local/share`, and a relative one yields
-///   `<rel>/.local/share`. Only an **unset** `HOME` makes glib continue.
-/// - `/lensfun` is appended in both cases.
-///
-/// # Documented deviation: no passwd fallback
-///
-/// With `HOME` unset, glib reads the passwd database and finally falls back to
-/// `/` with a `g_warning`. This crate has no dependencies and no portable way
-/// to read the passwd database (macOS resolves home directories through Open
-/// Directory, not `/etc/passwd`), so [`user_db_dir_from`] returns `None`
-/// instead of guessing. That is **not** silent: both the user database and the
-/// user-update package are then recorded in [`Plan::skipped`] with
-/// [`SkipReason::NoUserDataDir`], which is actionable and is pushed into the
-/// diagnostics stream. The consequence — an operator with no `HOME` loses the
-/// user layer — is stated in `feature/platform/capability-matrix.md`.
-pub fn user_db_dir_from(xdg: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
-    if let Some(value) = xdg.filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(value).join(USER_DB_SUBDIR));
-    }
-    let home = home?;
-    Some(
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join(USER_DB_SUBDIR),
-    )
-}
-
-/// The process-environment entry point for [`user_db_dir_from`].
-pub fn user_db_dir() -> Option<PathBuf> {
-    user_db_dir_from(
-        std::env::var_os("XDG_DATA_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
 }

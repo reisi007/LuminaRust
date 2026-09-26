@@ -24,6 +24,10 @@ use std::path::{Path, PathBuf};
 pub enum Timestamp {
     /// Directory absent or empty ⇒ upstream returns `-1`.
     Absent,
+    /// `timestamp.txt` present but blank/whitespace-only ⇒ upstream returns
+    /// `-1` too, for a completely different reason (the C++11 sentry fails on
+    /// EOF while skipping whitespace, so `num_get` never runs). Measured.
+    Blank,
     /// Directory present and non-empty, `timestamp.txt` missing/unreadable ⇒ `0`.
     NoFile,
     /// `timestamp.txt` holds this many seconds.
@@ -34,6 +38,7 @@ impl From<Timestamp> for DatabaseTimestamp {
     fn from(value: Timestamp) -> Self {
         match value {
             Timestamp::Absent => DatabaseTimestamp::DirectoryAbsent,
+            Timestamp::Blank => DatabaseTimestamp::BlankTimestampFile,
             Timestamp::NoFile => DatabaseTimestamp::NoTimestampFile,
             Timestamp::At(seconds) => DatabaseTimestamp::At(seconds),
         }
@@ -72,6 +77,13 @@ impl FakeProbe {
     /// backwards.
     pub fn undated(mut self, dir: &str) -> Self {
         self.times.insert(PathBuf::from(dir), Timestamp::NoFile);
+        self
+    }
+
+    /// `dir` exists, is non-empty, and its `timestamp.txt` is blank or
+    /// whitespace-only — upstream scores **that** `-1`, not `0` (measured).
+    pub fn blank(mut self, dir: &str) -> Self {
+        self.times.insert(PathBuf::from(dir), Timestamp::Blank);
         self
     }
 }

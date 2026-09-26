@@ -28,9 +28,37 @@
 use super::{Corrector, LensfunDb, LENS, MAKE, MODEL};
 use crate::db_layers::user_db_dir;
 use crate::db_path::{self, FsProbe, LayerOrigin};
-use crate::system_load::SilentDiagnostics;
+use crate::system_load::{Diagnostics, SilentDiagnostics};
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::PathBuf;
+
+/// Records what the production entry point reports, so a real-machine test can
+/// assert on the events as well as on the loaded handle.
+#[derive(Debug, Default)]
+struct EventLog(Vec<String>);
+
+impl Diagnostics for EventLog {
+    fn resolved(&mut self, resolved: &db_path::Resolved) {
+        self.0.push(format!(
+            "resolved[{}|{}]",
+            resolved.primary.as_str(),
+            resolved.file_count()
+        ));
+    }
+    fn file_rejected(&mut self, _dir: &std::path::Path, file: &std::path::Path) {
+        self.0.push(format!("rejected[{}]", file.display()));
+    }
+    fn layer_skipped(&mut self, skipped: &crate::db_layers::SkippedLayer) {
+        self.0.push(format!("skipped[{skipped}]"));
+    }
+    fn pin_displaced(&mut self, resolved: &db_path::Resolved) {
+        self.0
+            .push(format!("pin_displaced[{}]", resolved.primary.as_str()));
+    }
+    fn failed(&mut self, err: &db_path::SystemDbError) {
+        self.0.push(format!("failed[{err}]"));
+    }
+}
 
 /// The installed system database, or a **loud, named** failure.
 pub(super) fn system_db() -> LensfunDb {
@@ -45,6 +73,49 @@ pub(super) fn system_db() -> LensfunDb {
 /// remediation) is what the test output must show.
 fn resolve_db() -> db_path::Resolved {
     db_path::resolve().unwrap_or_else(|err| panic!("{err}"))
+}
+
+/// **The production entry point, on the real machine, with a caller sink.**
+///
+/// The hermetic suites drive `report_with` with injected values because steering
+/// the real process environment is undefined behaviour next to a concurrent
+/// `getenv` (see the module docs). That leaves exactly one production statement
+/// no hermetic test can reach: `resolve_system_with` feeding
+/// `EnvValues::from_process()` into that function. This test closes it from the
+/// other side — it calls the real entry point, so the wiring, the real reader and
+/// the real `FsProbe` all execute, and it asserts that the caller-supplied sink
+/// receives the success event for a database that a real profile lookup then
+/// proves usable.
+///
+/// Without it, a production change that stopped routing through `report_with`
+/// (or dropped the sink) would only be caught by the fact that some other test
+/// still compiles.
+#[test]
+fn the_production_entry_point_loads_and_reports_the_real_database() {
+    let mut log = EventLog::default();
+    let db = LensfunDb::resolve_system_with(&mut log)
+        .unwrap_or_else(|err| panic!("the production entry point must load: {err}; {log:?}"));
+    let events = log.0;
+    assert_eq!(
+        events.len(),
+        1,
+        "a clean machine reports exactly one outcome event, and it is `resolved`: {events:?}"
+    );
+    assert!(events[0].starts_with("resolved["), "{events:?}");
+    assert!(
+        events[0].contains(db_path::LayerOrigin::SystemSchema.as_str())
+            || events[0].contains(db_path::LayerOrigin::SystemUpdates.as_str())
+            || events[0].contains(db_path::LayerOrigin::UserUpdates.as_str()),
+        "the event must name the layer that was loaded: {events:?}"
+    );
+    // The handle is genuinely usable, not merely returned.
+    assert!(
+        Corrector::for_camera(&db, MAKE, MODEL, Some(LENS), 1000, 750, 18.0, 5.6, 10.0).is_some(),
+        "a real profile must be reachable through the production path"
+    );
+    // And the same call through `resolve()` (the `stderr` default) works, so the
+    // two documented entry points cannot drift apart.
+    let _ = system_db();
 }
 
 /// The resolution must report *where* it loaded from and that the location
@@ -214,18 +285,53 @@ fn the_user_layer_decision_is_explicit_and_consistent_with_the_filesystem() {
     }
 }
 
-/// `LUMINA_LENSFUN_DB` must be **absolute**: a Finder-launched macOS app has
-/// cwd `/`, so a relative value would silently select a different database.
-/// Verified without mutating the environment.
+/// **NIEDRIG-5: the real-machine half of the override contract.**
+///
+/// The test that used to live here asserted that the constant `DB_DIR_ENV`
+/// starts with `"LUMINA_"` and that a hard-coded literal is relative — it never
+/// called `resolve_with`, so no production change could make it fail. That is the
+/// "test that checks a constant against itself" the test policy forbids.
+///
+/// The hermetic counterpart (`tests::db_path::a_relative_override_is_rejected`)
+/// already pins the reason. What only a machine with a **real** database can
+/// show is the part that matters operationally: a relative override is a hard,
+/// named error *even though a perfectly good database is right there*. Silently
+/// ignoring it would hand the operator a different database than they named — the
+/// exact failure class LENSFUN-DB-33 exists to prevent.
 #[test]
-fn the_documented_override_must_be_absolute() {
+fn a_relative_override_is_a_hard_error_despite_a_working_database() {
+    let baseline = resolve_db();
     assert!(
-        db_path::DB_DIR_ENV.starts_with("LUMINA_"),
-        "the override variable name is part of the documented contract"
+        !baseline.layers.is_empty(),
+        "this test needs a resolvable real database to mean anything"
     );
-    let relative = OsStr::new("some/relative/lensfun");
+
+    let err = db_path::resolve_with(
+        Some(OsStr::new("some/relative/lensfun")),
+        None,
+        None,
+        None,
+        &FsProbe,
+    )
+    .expect_err("a relative override must not silently defer to the working database");
+    assert_eq!(
+        err,
+        db_path::SystemDbError::OverrideUnusable {
+            dir: PathBuf::from("some/relative/lensfun"),
+            reason: db_path::MissReason::NotADirectory,
+        },
+        "the error must name the override and the reason"
+    );
+    let text = err.to_string();
+    assert!(text.contains("OverrideUnusable"), "{text}");
     assert!(
-        !Path::new(relative).is_absolute(),
-        "the fixture must actually be relative for this test to mean anything"
+        text.contains("some/relative/lensfun"),
+        "the operator must see which value was rejected: {text}"
     );
+
+    // And the baseline is untouched: the rejected override changed nothing about
+    // what an unset override resolves to.
+    let without_override = resolve_db();
+    assert_eq!(without_override.dir, baseline.dir);
+    assert_eq!(without_override.file_count(), baseline.file_count());
 }

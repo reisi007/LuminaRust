@@ -95,15 +95,28 @@ pub(super) const FIXTURE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 const JUNK_XML: &str = "this is definitely not <xml> at all\n";
 
 /// A throwaway directory tree, removed on drop.
-pub(super) struct TempTree(PathBuf);
+pub(super) struct TempTree(pub(super) PathBuf);
 
 impl TempTree {
     pub(super) fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "lumina-lensfun-diag-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        // The leaf is literally `lensfun` on purpose. `lensfun_dir_in_datadir`
+        // appends `lensfun` only when the name differs, and glib's user-data
+        // rule appends it too, so this one tree is simultaneously:
+        //   - a valid *datadir*       -> system schema `<root>/version_1`,
+        //   - a valid *system dir*    -> override schema `<root>/version_1`,
+        //   - a user-data base        -> user DB `<root>/lensfun`, updates
+        //                                `<root>/lensfun/updates/version_1`.
+        // Before this, `fixture_env`'s compiled-datadir candidate pointed at
+        // `<root>/lensfun/version_1` while `write()` filled `<root>/version_1`,
+        // so the production-seam tests silently resolved the machine's real
+        // database (`PlatformDefault`) instead of their own fixture.
+        let root = std::env::temp_dir()
+            .join(format!(
+                "lumina-lensfun-diag-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ))
+            .join("lensfun");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(db_path::SCHEMA_SUBDIR)).expect("create temp tree");
         Self(root)
@@ -121,6 +134,11 @@ impl TempTree {
 impl Drop for TempTree {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        // The `lensfun` leaf sits under a per-process/thread base directory of
+        // its own; remove that base as well (best effort — it is empty now).
+        if let Some(base) = self.0.parent() {
+            let _ = std::fs::remove_dir(base);
+        }
     }
 }
 

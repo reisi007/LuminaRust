@@ -9,12 +9,24 @@
 //! "newer database" quantity upstream compares is in [`crate::db_timestamp`];
 //! the named failures are in [`crate::db_error`].
 //!
-//! Everything here is pure apart from [`resolve`], the single
-//! process-environment entry point. [`resolve_with`] takes the environment
-//! values and the directory probe as parameters, so the precedence rules are
-//! testable hermetically without mutating global state.
+//! Everything here is pure apart from [`EnvValues::from_process`] and
+//! [`resolve`], the two places that touch the real process environment.
+//! [`resolve_with`] takes the environment values and the directory probe as
+//! parameters, so the precedence rules are testable hermetically without
+//! mutating global state.
+//!
+//! # The environment is read in exactly one place
+//!
+//! [`EnvValues::read`] is the *only* place that names an environment variable,
+//! and production reaches it through [`EnvValues::from_process`] (which passes
+//! `std::env::var_os`). Tests call the same function with a reader of their own,
+//! so the mapping "which variable feeds which resolution input" is covered by a
+//! test instead of being asserted by reading the source — a renamed or swapped
+//! variable is a production change that turns
+//! `tests::production_seam::environment::
+//! the_resolution_reads_exactly_three_named_environment_values` red.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 pub use crate::db_error::{MissReason, ProbeMiss, SystemDbError};
@@ -37,6 +49,24 @@ pub const DB_DIR_ENV: &str = "LUMINA_LENSFUN_DB";
 /// `cargo:rustc-env` value emitted by `build.rs` from
 /// `pkg-config --variable=datadir lensfun`.
 pub const COMPILED_DATADIR_ENV: &str = "LUMINA_LENSFUN_COMPILED_DATADIR";
+
+/// The build-time datadir `build.rs` baked in, or `None` when the build could
+/// not determine one.
+///
+/// A `const`, not an `option_env!` at the use site: the *name* of the variable
+/// is then a single, checkable constant instead of a string literal repeated at
+/// every read, and a test can assert that the baked-in value is the one
+/// `build.rs` promises.
+pub const COMPILED_DATADIR: Option<&str> = option_env!("LUMINA_LENSFUN_COMPILED_DATADIR");
+
+/// glib's user-data base (`g_get_user_data_dir()`), which wins unchecked when it
+/// is set and non-empty — including a relative value. See
+/// [`crate::db_layers::user_db_dir_from`].
+pub const XDG_DATA_HOME_ENV: &str = "XDG_DATA_HOME";
+
+/// glib's fallback for the user-data base, used only when
+/// [`XDG_DATA_HOME_ENV`] is **not** set (`g_build_home_dir`).
+pub const HOME_ENV: &str = "HOME";
 
 /// The schema-version subdirectory the *system* database uses.
 pub const SCHEMA_SUBDIR: &str = "version_1";
@@ -189,6 +219,11 @@ pub struct FsProbe;
 /// `Ok(None)` = the directory does not exist; `Ok(Some(vec![]))` = it exists but
 /// holds no XML; `Err` = it exists and could not be used, with a reason that
 /// says so (never a bare "absent" for a directory that is really there).
+///
+/// Only **regular** files are listed: a directory named `*.xml` cannot hold
+/// profiles, so admitting it would let a candidate without a real database win
+/// and then hard-fail (`AllFilesRejected`) instead of the documented
+/// `NoXmlFiles` skip — at the cost of no `file_rejected` event for it.
 pub fn xml_files_in(dir: &Path) -> Result<Option<Vec<PathBuf>>, MissReason> {
     if !dir.exists() {
         return Ok(None);
@@ -226,18 +261,69 @@ impl Probe for FsProbe {
     }
 }
 
+/// The four inputs the resolution consumes — three process variables and the one
+/// build-time constant — captured at one point in time. A struct rather than
+/// four loose parameters because the *production* path must be the one the tests
+/// drive: [`crate::system_load::report_with`] takes this, and
+/// [`LensfunDb::resolve_system_with`](crate::system_load::LensfunDb::resolve_system_with)
+/// builds it from the real process environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnvValues {
+    /// `LUMINA_LENSFUN_DB` — the operator override ([`DB_DIR_ENV`]).
+    pub override_dir: Option<OsString>,
+    /// The build-time datadir from [`COMPILED_DATADIR`], i.e. source 2 of the
+    /// resolution order. **Not** readable at runtime and therefore **not** part
+    /// of [`Self::read`]: a compile-time constant, which no environment can
+    /// change and no test may pretend otherwise. Its own field — rather than a
+    /// constant read inside [`Self::resolve`] — only so the hermetic suites can
+    /// point the *system database* at a temp tree.
+    pub compiled: Option<OsString>,
+    /// `XDG_DATA_HOME` — glib's user-data base.
+    pub xdg_data_home: Option<OsString>,
+    /// `HOME` — glib's fallback for the user-data base.
+    pub home: Option<OsString>,
+}
+
+impl EnvValues {
+    /// Read the three process variables with `read`; [`Self::compiled`] stays
+    /// `None` (only production fills it). This is the one and only place that
+    /// names an environment variable. `read` is a parameter so the mapping is
+    /// testable without `std::env::set_var`, which is undefined behaviour next
+    /// to a concurrent `getenv` in any other thread — a test-local lock cannot
+    /// make that safe.
+    pub fn read(read: impl Fn(&str) -> Option<OsString>) -> Self {
+        Self {
+            override_dir: read(DB_DIR_ENV),
+            compiled: None,
+            xdg_data_home: read(XDG_DATA_HOME_ENV),
+            home: read(HOME_ENV),
+        }
+    }
+
+    /// The real process environment plus the build-time datadir. This is what
+    /// production calls, so there is no second reader to fall out of sync.
+    pub fn from_process() -> Self {
+        Self {
+            compiled: COMPILED_DATADIR.map(OsString::from),
+            ..Self::read(|name| std::env::var_os(name))
+        }
+    }
+
+    /// The resolution these values produce, with the directory probe injected.
+    pub fn resolve(&self, probe: &impl Probe) -> Result<Resolved, SystemDbError> {
+        resolve_with(
+            self.override_dir.as_deref(),
+            self.compiled.as_deref(),
+            self.xdg_data_home.as_deref(),
+            self.home.as_deref(),
+            probe,
+        )
+    }
+}
+
 /// The process-environment entry point: the real, loud resolution.
 pub fn resolve() -> Result<Resolved, SystemDbError> {
-    let env = std::env::var_os(DB_DIR_ENV);
-    let xdg = std::env::var_os("XDG_DATA_HOME");
-    let home = std::env::var_os("HOME");
-    resolve_with(
-        env.as_deref(),
-        option_env!("LUMINA_LENSFUN_COMPILED_DATADIR").map(OsStr::new),
-        xdg.as_deref(),
-        home.as_deref(),
-        &FsProbe,
-    )
+    EnvValues::from_process().resolve(&FsProbe)
 }
 
 /// The resolution algorithm, with the environment and the probe injected.

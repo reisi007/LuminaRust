@@ -7,8 +7,12 @@
 //! right" are two different failure modes:
 //!
 //! - `timestamp.txt` semantics on disk: a non-empty `version_1` without the
-//!   file scores `0`, a missing directory and an **empty** directory both score
-//!   `-1` (review finding F1-BRUTK);
+//!   file scores `0`, while a missing directory, an **empty** directory and a
+//!   **blank** `timestamp.txt` all score `-1` (findings F1-BRUTK / MITTEL-1);
+//! - the **whole algorithm** driven through the real probe with a real
+//!   `timestamp.txt` on disk — the seam where F1-BRUTK lived and where the
+//!   MITTEL-1 divergence hid, because quantity and algorithm were never tested
+//!   together against a real file (finding NIEDRIG-3);
 //! - every `MissReason` has a distinct message **and** a distinct label;
 //! - `MissReason::Unreadable` is reachable (review finding MITTEL-4) — a
 //!   mode-`000` directory, with an honest root detection instead of a silent
@@ -16,6 +20,10 @@
 
 use crate::db_path::*;
 use crate::db_timestamp::DatabaseTimestamp;
+use std::path::PathBuf;
+
+/// The other axis of the same probe: the *kind* of file `timestamp.txt` is.
+mod timestamp_kinds;
 
 #[test]
 fn fs_probe_reports_sorted_xml_files_and_real_timestamps() {
@@ -187,4 +195,99 @@ fn an_unreadable_directory_is_reported_as_unreadable_not_absent() {
 fn running_as_root() -> bool {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata("/").is_ok_and(|meta| meta.uid() == 0)
+}
+
+/// A throwaway database tree with a real `version_1/` and a real
+/// `timestamp.txt`, removed on drop.
+struct Tree(PathBuf);
+
+impl Tree {
+    fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lumina-lensfun-fsalg-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(SCHEMA_SUBDIR)).expect("create tree");
+        std::fs::write(root.join(SCHEMA_SUBDIR).join("a.xml"), "<lensdatabase/>")
+            .expect("write xml fixture");
+        Self(root)
+    }
+
+    fn dir(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    /// Write a real `timestamp.txt` with the given bytes — the same fixtures the
+    /// differential harness fed to the real `_lf_read_database_timestamp`.
+    fn stamp(&self, bytes: &[u8]) {
+        std::fs::write(
+            self.0
+                .join(SCHEMA_SUBDIR)
+                .join(crate::db_timestamp::TIMESTAMP_FILE),
+            bytes,
+        )
+        .expect("write timestamp.txt");
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// **NIEDRIG-3: the algorithm, through the real `FsProbe`, against a real
+/// `timestamp.txt`.**
+///
+/// Every hermetic test injects a fake probe, and the only other real
+/// `timestamp.txt` test asserted the *quantity* in isolation. Nothing ever
+/// combined the two on disk — which is exactly where F1-BRUTK lived (a wrong
+/// quantity that a right algorithm still got wrong) and where the MITTEL-1
+/// divergence hid (a blank file scoring `0` instead of `-1`, which changed which
+/// directory a *real* machine would load).
+#[test]
+fn the_algorithm_on_a_real_blank_timestamp_keeps_the_system_database() {
+    let tree = Tree::new("blank");
+    tree.stamp(b"   \n"); // a real, blank timestamp.txt
+
+    // The quantity, on a real file, through the real probe.
+    assert_eq!(
+        FsProbe.database_timestamp(&tree.dir().join(SCHEMA_SUBDIR)),
+        DatabaseTimestamp::BlankTimestampFile,
+        "a real blank timestamp.txt must score -1 (measured upstream)"
+    );
+
+    // …and the algorithm consuming it, on the same tree.
+    let resolved = resolve_with(Some(tree.dir().as_os_str()), None, None, None, &FsProbe)
+        .expect("the tree must resolve");
+    let system = &resolved.layers[0];
+    assert_eq!(
+        system.origin,
+        LayerOrigin::SystemSchema,
+        "the system directory must still be the one loaded: {system:?}"
+    );
+    assert_eq!(system.files.len(), 1, "its XML must be in the load plan");
+    assert!(resolved.pin_honored());
+    assert_eq!(resolved.primary, LayerOrigin::SystemSchema);
+}
+
+/// The same tree, but with a real dated `timestamp.txt`: still the system
+/// directory, now because it genuinely out-dates the (absent) update packages
+/// rather than via the all-`-1` fallback. Together with the test above this
+/// pins both branches on real files.
+#[test]
+fn the_algorithm_on_a_real_dated_timestamp_keeps_the_system_database() {
+    let tree = Tree::new("dated");
+    tree.stamp(b"1645386247\n");
+    assert_eq!(
+        FsProbe.database_timestamp(&tree.dir().join(SCHEMA_SUBDIR)),
+        DatabaseTimestamp::At(1_645_386_247)
+    );
+    let resolved = resolve_with(Some(tree.dir().as_os_str()), None, None, None, &FsProbe)
+        .expect("the tree must resolve");
+    assert_eq!(resolved.primary, LayerOrigin::SystemSchema);
+    assert_eq!(resolved.layers[0].files.len(), 1);
+    assert!(resolved.pin_honored());
 }

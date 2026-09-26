@@ -23,6 +23,10 @@ use std::sync::{Arc, Mutex};
 
 use super::diagnostics::{resolve_tree, TempTree, FIXTURE_XML};
 
+/// The shared fixture XML, re-exported for the production-seam tests.
+/// The shared fixture XML, re-exported for the production-seam tests.
+pub(super) const FIXTURE_XML_FOR_SEAM: &str = FIXTURE_XML;
+
 /// Records events, as in `diagnostics.rs`.
 #[derive(Debug, Clone, Default)]
 struct Recorder {
@@ -118,6 +122,7 @@ fn a_displaced_pin_and_an_unusable_layer_are_both_reported() {
 fn every_skip_reason_is_recorded_and_the_actionable_ones_reach_the_sink() {
     let reasons = [
         SkipReason::Absent,
+        SkipReason::LostTheCompetition,
         SkipReason::NoXmlFiles,
         SkipReason::Unreadable,
         SkipReason::NoTimestampFile,
@@ -130,8 +135,10 @@ fn every_skip_reason_is_recorded_and_the_actionable_ones_reach_the_sink() {
             origin: LayerOrigin::UserUpdates,
             reason,
         };
-        // Recorded: a complete plan is inspectable without any sink.
-        assert!(!skipped.to_string().is_empty());
+        // Recorded: a complete plan is inspectable without any sink, and the
+        // line carries the stable label so a sink can match on it.
+        let text = skipped.to_string();
+        assert!(text.contains(reason.as_str()), "missing label in {text:?}");
         if reason.is_actionable() {
             actionable.push(reason);
         }
@@ -144,7 +151,8 @@ fn every_skip_reason_is_recorded_and_the_actionable_ones_reach_the_sink() {
             SkipReason::NoTimestampFile,
             SkipReason::NoUserDataDir
         ],
-        "only an absent directory may be silent — it is the normal case"
+        "only `Absent` and `LostTheCompetition` may be silent: the first is \
+         the normal case, the second is the algorithm working"
     );
     // Each actionable reason has its own wording, so a permission error is never
     // mistaken for an empty package.
@@ -184,3 +192,21 @@ fn the_success_path_is_reported_and_names_both_directories() {
     // panic and must stay consistent with the contract above.
     crate::system_load::StderrDiagnostics.resolved(&resolved);
 }
+
+// ---------------------------------------------------------------------------
+// The production emission path lives in `tests/production_seam/`.
+//
+// The two lines that make this crate "loud" — `pin_displaced` and the
+// `layer_skipped` loop — have **no** coverage here, because everything below
+// calls the test's own `Recorder` instead of running the production code. What
+// these tests pin is the *event contract* (which reason is actionable, what each
+// message says), the *plan* (which layer wins) and the *loading*
+// (`load_layers`) — not the order in which the sink is called. That order is
+// asserted in `production_seam`, on `system_load::report_with`, which is the
+// single implementation `LensfunDb::resolve_system_with` itself calls.
+//
+// Why not the real entry point: it reads the real process environment, and
+// `std::env::set_var` is UB next to a concurrent `getenv` in any other thread,
+// which no test-local lock can fix. The environment values are therefore
+// injected — through `db_path::EnvValues::read`, the same reader production uses.
+// ---------------------------------------------------------------------------

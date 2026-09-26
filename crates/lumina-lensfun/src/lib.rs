@@ -59,17 +59,17 @@
 //!
 //! # Where the profile database comes from (LENSFUN-DB-33)
 //!
-//! lensfun 0.3.4 offers no runtime override, so [`LensfunDb::resolve_system`]
-//! resolves the location itself and loads the XML files explicitly. The **user**
-//! database is merged on top the way `lfDatabase::Load()` does, a missing one is a
-//! named [`SystemDbError`] rather than a silent no-op, and every event goes
-//! through a caller-supplied [`Diagnostics`] sink — this crate has no logger.
-//! Which directory supplies the system database follows upstream's
-//! `lfDatabase::Load()` competition over three `version_1` directories, where
-//! "newer" is the **content of `timestamp.txt`**, never a file mtime
-//! ([`db_timestamp`]). The winning layer is [`db_path::Resolved::primary`] — not
-//! necessarily [`db_path::Resolved::dir`], and the gap is always reported. See
-//! [`db_path`], [`db_layers`], [`db_error`], [`system_load`].
+//! lensfun 0.3.4 has no runtime override, so [`LensfunDb::resolve_system`]
+//! resolves the location and loads the XML files itself. A missing database is a
+//! named [`SystemDbError`], never a silent no-op, and every event goes through a
+//! caller-supplied [`Diagnostics`] sink — this crate has no logger.
+//!
+//! The system layer is upstream's `lfDatabase::Load()` competition over three
+//! `version_1` directories, where "newer" is the **content of
+//! `timestamp.txt`**, never a file mtime ([`db_timestamp`]). The winner is
+//! [`db_path::Resolved::primary`], which is not necessarily
+//! [`db_path::Resolved::dir`] — and the gap is always reported. Details and the
+//! documented deviations: [`db_path`], [`db_layers`], [`db_error`], [`db_sinks`].
 //!
 #![cfg_attr(not(feature = "native"), allow(dead_code))]
 
@@ -80,16 +80,16 @@ pub use system_load::LensfunDb;
 #[cfg(feature = "native")]
 pub use ffi::Corrector;
 
-/// Named, loud failures of the database lookup (LENSFUN-DB-33). Deliberately
-/// no `Option`-shaped escape hatch; see [`db_error`].
+/// Named, loud failures of the lookup (LENSFUN-DB-33); see [`db_error`].
 #[cfg(feature = "native")]
 pub use db_error::{MissReason, ProbeMiss, SystemDbError};
 
-/// Caller-supplied sink for database-load events (LENSFUN-DB-33): this crate
-/// has no logger, so the caller routes these and decides the level. See
-/// [`system_load::ReportOnce`] for the "report once" helper.
+/// Sink for database-load events: the caller routes these and picks the level
+/// (this crate has no logger); see [`db_sinks::ReportOnce`].
 #[cfg(feature = "native")]
-pub use system_load::{report_once, Diagnostics};
+pub use db_sinks::report_once;
+#[cfg(feature = "native")]
+pub use system_load::{report_with, Diagnostics};
 
 /// Row-batch FFI wrappers of [`Corrector`] (R2-LENS-01); see the module docs.
 #[cfg(feature = "native")]
@@ -103,7 +103,11 @@ pub mod db_layers;
 #[cfg(feature = "native")]
 pub mod db_path;
 #[cfg(feature = "native")]
+pub mod db_sinks;
+#[cfg(feature = "native")]
 pub mod db_timestamp;
+#[cfg(feature = "native")]
+pub mod db_user_dir;
 #[cfg(feature = "native")]
 pub mod system_load;
 
@@ -345,25 +349,21 @@ mod ffi {
     /// retains the `lfLens` pointer inside the modifier. Verified against the
     /// v0.3.4 sources (`libs/lensfun/modifier.cpp`, tag `v0.3.4`):
     ///
-    /// 1. `lfModifier::lfModifier(lens, crop, width, height)` reads only
-    ///    *scalars* (`lens->CropFactor`, `lens->AspectRatio`,
-    ///    `lens->CenterX/CenterY`) into its own members
-    ///    (`NormScale`, `NormUnScale`, `NormalizedInMillimeters`,
-    ///    `CenterX/CenterY`); the pointer itself is not stored.
-    /// 2. `lfModifier::Initialize(...)` interpolates the calibration for the
-    ///    requested focal/aperture/distance into **stack-local** structs
-    ///    (`lfLensCalibVignetting lcv; lfLensCalibDistortion lcd;`) and hands
-    ///    them to `AddColorCallbackVignetting` / `AddCoordCallbackDistortion`.
-    /// 3. Both funnel through `lfModifier::AddCallback`, which deep-copies the
-    ///    payload into modifier-owned memory:
-    ///    `d->data = g_malloc(data_size); memcpy(d->data, data, data_size);`.
-    ///    All registration sites pass non-zero `data_size`.
-    /// 4. `lfModifier::~lfModifier` frees only those callback arrays.
+    /// 1. `lfModifier::lfModifier(lens, crop, w, h)` reads only *scalars*
+    ///    (`CropFactor`, `AspectRatio`, `CenterX/CenterY`); the pointer is not
+    ///    stored.
+    /// 2. `lfModifier::Initialize(...)` interpolates the calibration into
+    ///    **stack-local** `lfLensCalibVignetting`/`lfLensCalibDistortion` and
+    ///    hands them to `AddColorCallbackVignetting`/`AddCoordCallbackDistortion`.
+    /// 3. Both funnel through `AddCallback`, which deep-copies the payload:
+    ///    `d->data = g_malloc(size); memcpy(d->data, data, size);` — and every
+    ///    registration site passes non-zero `size`.
+    /// 4. `~lfModifier` frees only those callback arrays.
     ///
     /// Consequently no pointer into database memory survives
-    /// `lf_modifier_initialize`, and dropping the [`LensfunDb`] while a
-    /// `Corrector` is alive cannot dangle. This invariant is pinned by the
-    /// `corrector_remains_usable_after_database_is_dropped` test.
+    /// `lf_modifier_initialize`, so dropping the [`LensfunDb`] while a
+    /// `Corrector` is alive cannot dangle — pinned by
+    /// `corrector_remains_usable_after_database_is_dropped`.
     pub struct Corrector {
         pub(crate) modifier: *mut lfModifier,
         pub(crate) width: u32,
@@ -390,16 +390,13 @@ mod ffi {
 
     impl Corrector {
         /// Build a corrector for the given camera/lens, or `None` if no
-        /// matching profile is found or the correction would be the identity
-        /// (in which case the manual LuminaRust model is preferred — graceful
-        /// fallback).
+        /// profile matches or the correction is the identity (the manual
+        /// LuminaRust model then applies — graceful fallback).
         ///
-        /// **Strict matching (GUI-ROUTING-N6):** no fabricated camera/lens profile.
-        ///
-        /// A corrector may be *vignetting-only* (`has_distortion() == false`,
-        /// `has_vignetting() == true`) when the profile has no distortion
-        /// calibration for these parameters. Such a corrector must only be
-        /// used for colour correction; its `geometry` is the identity mapping.
+        /// **Strict matching (GUI-ROUTING-N6):** no fabricated camera/lens
+        /// profile. A corrector may be *vignetting-only* when the profile has
+        /// no distortion calibration for these parameters; it must then be used
+        /// for colour correction only, its `geometry` being the identity.
         #[allow(clippy::too_many_arguments)]
         pub fn for_camera(
             db: &LensfunDb,
@@ -509,12 +506,10 @@ mod ffi {
         }
 
         /// Map a destination pixel `(x, y)` (in `[0, width-1] × [0, height-1]`)
-        /// to the source pixel to sample (the Lensfun correction mapping).
-        ///
-        /// If the modifier has no distortion callback (vignetting-only
-        /// profile, [`Self::has_distortion`] `== false`), lensfun reports
-        /// false and does not write `res`; the coordinates are then passed
-        /// through **unchanged** instead of collapsing onto `(0, 0)`
+        /// to the source pixel to sample. Without a distortion callback
+        /// (vignetting-only profile, [`Self::has_distortion`] `== false`)
+        /// lensfun reports false and leaves `res` untouched, so the coordinates
+        /// pass through unchanged instead of collapsing onto `(0, 0)`
         /// (review REVIEW-LENSFUN-VIGN-1).
         pub fn geometry(&self, x: f64, y: f64) -> (f64, f64) {
             unsafe {
@@ -601,9 +596,9 @@ mod ffi {
             }
         }
 
-        /// Apply the Lensfun vignetting correction to a single pixel's RGB.
-        /// `x`/`y` are the destination pixel coordinates used for the radial
-        /// position. Returns the corrected RGB (same scale as the input).
+        /// Apply the Lensfun vignetting correction to one pixel's RGB; `x`/`y`
+        /// are its destination coordinates (the radial position). Returns the
+        /// corrected RGB at the input's scale.
         pub fn color_gain(&self, r: f32, g: f32, b: f32, x: f64, y: f64) -> (f32, f32, f32) {
             unsafe {
                 let mut px = [r, g, b];
@@ -709,14 +704,19 @@ mod tests {
     use super::LensfunDb;
 
     // LENSFUN-DB-33: hermetic load-plan / resolution-order / diagnostics /
-    // plan-event tests, plus the real-filesystem and real-database suites.
+    // production-seam tests, plus the real-filesystem and real-database suites.
+    // `probe_fixture` is the shared in-memory Probe; `strict_match` is
+    // GUI-ROUTING-N6 (see src/tests/strict_match.rs).
     mod db_layers;
     mod db_path;
+    mod db_timestamp_parsing;
     mod diagnostics;
     mod fs_probe;
+    mod override_pin;
     mod plan_events;
-    mod probe_fixture; // shared in-memory Probe for the LENSFUN-DB-33 tests
-    mod strict_match; // GUI-ROUTING-N6: strict matching; see src/tests/strict_match.rs
+    mod probe_fixture;
+    mod production_seam;
+    mod strict_match;
     mod system_db;
 
     // These tests exercise the real system database. They only compile/run with

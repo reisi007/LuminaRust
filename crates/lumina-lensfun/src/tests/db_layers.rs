@@ -21,8 +21,9 @@
 use super::probe_fixture::FakeProbe;
 use crate::db_layers::{user_db_dir_from, SkipReason};
 use crate::db_path::*;
+use crate::db_timestamp::DatabaseTimestamp;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 /// The real value shipped in the Homebrew lensfun 0.3.4 `version_1`.
 const SYSTEM_STAMP: i64 = 1_645_386_247;
 
@@ -34,7 +35,7 @@ fn linux_probe() -> FakeProbe {
 const UPDATES: &str = "/var/lib/lensfun-updates/version_1";
 
 /// The one system layer of a resolved plan.
-fn system_layer(resolved: &Resolved) -> &Layer {
+pub(super) fn system_layer(resolved: &Resolved) -> &Layer {
     assert_eq!(
         resolved.layers[0].origin, resolved.primary,
         "layers[0] must be the primary layer (one source of truth)"
@@ -203,23 +204,53 @@ fn a_stale_update_package_without_a_timestamp_never_displaces_the_system_databas
     );
     assert_eq!(system.files.len(), 56, "all 56 system files must survive");
     assert!(resolved.user_layer().is_some());
-    // A dateless update package *did* take part in the contest (it holds XML) —
-    // it simply lost, which is exactly what `primary`/`pin_honored` report. The
-    // point of the assertion above is that it did not win.
-    assert!(resolved
+    // The dateless update package *did* take part in the contest (it holds XML)
+    // and simply lost. It is now **recorded** (NIEDRIG-1) instead of vanishing:
+    // before that, an update package that upstream would have taken and this
+    // code ignored left no trace at all, which is how the MITTEL-1 divergence
+    // stayed invisible. The assertions above are about it not *winning*.
+    let loser = resolved
         .skipped
         .iter()
-        .all(|s| s.origin != LayerOrigin::UserUpdates));
+        .find(|s| s.origin == LayerOrigin::UserUpdates)
+        .expect("the losing update package must be recorded");
+    assert_eq!(loser.reason, SkipReason::LostTheCompetition);
+    assert!(
+        !loser.reason.is_actionable(),
+        "losing the comparison is the algorithm working, not a defect"
+    );
+    // Completeness (NIEDRIG-1): a considered layer is either loaded or recorded
+    // exactly once — never both, never twice.
+    let mut accounted: Vec<LayerOrigin> = resolved.layers.iter().map(|l| l.origin).collect();
+    accounted.extend(resolved.skipped.iter().map(|s| s.origin));
+    let unique = accounted
+        .iter()
+        .map(|o| o.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    assert_eq!(
+        accounted.len(),
+        unique,
+        "a layer must not be both loaded and recorded, or recorded twice: {accounted:?}"
+    );
 }
 
-/// The all-`-1` case: the system database has no `timestamp.txt` and no update
-/// package exists. Upstream's tie-break would pick the non-existent
-/// `system_updates_dirname` and load **nothing**; the resolved system database is
-/// kept instead, so the profiles survive.
+/// **The all-`-1` case** — and the previous version of this test did *not*
+/// reach it. A **missing** `timestamp.txt` scores `0`, not `-1` (measured; see
+/// `fs_probe_reports_sorted_xml_files_and_real_timestamps`), so an "undated"
+/// fixture takes the ordinary `M > S` branch and the fallback is never
+/// exercised. The only reachable cause of `-1` for the resolved directory is a
+/// **blank** `timestamp.txt`, so that is what is stamped here
+/// (`Timestamp::Blank`) and asserted explicitly.
 #[test]
-fn an_undated_system_database_with_no_update_package_still_loads() {
+fn all_minus_one_timestamps_keep_the_system_database() {
     let probe = FakeProbe::new(&[("/usr/share/lensfun/version_1", 56)])
-        .undated("/usr/share/lensfun/version_1");
+        .blank("/usr/share/lensfun/version_1");
+    assert_eq!(
+        probe.database_timestamp(Path::new("/usr/share/lensfun/version_1")),
+        DatabaseTimestamp::BlankTimestampFile,
+        "the fixture must really score -1, or this test proves nothing"
+    );
     let resolved =
         resolve_with(None, None, None, Some(OsStr::new("/home/u")), &probe).expect("resolve");
     let system = system_layer(&resolved);
@@ -227,7 +258,25 @@ fn an_undated_system_database_with_no_update_package_still_loads() {
     assert_eq!(
         system.files.len(),
         56,
-        "an undated system database must still be loaded in full"
+        "a blank-timestamped system database must still be loaded in full"
+    );
+    assert!(resolved.pin_honored());
+}
+
+/// Contrast, so the distinction cannot rot: a **missing** `timestamp.txt` scores
+/// `0` and therefore takes the ordinary `M > S` branch. Same visible outcome
+/// here, different reason — and the reason is what the `-1` fallback keys on.
+#[test]
+fn a_missing_timestamp_txt_scores_zero_and_is_not_the_all_minus_one_case() {
+    let probe = FakeProbe::new(&[("/usr/share/lensfun/version_1", 56)])
+        .undated("/usr/share/lensfun/version_1");
+    assert_eq!(
+        probe.database_timestamp(Path::new("/usr/share/lensfun/version_1")),
+        DatabaseTimestamp::NoTimestampFile
+    );
+    assert_ne!(
+        DatabaseTimestamp::NoTimestampFile.as_secs(),
+        DatabaseTimestamp::BlankTimestampFile.as_secs()
     );
 }
 
@@ -403,91 +452,4 @@ fn an_update_package_without_xml_cannot_win() {
         .find(|s| s.origin == LayerOrigin::SystemUpdates)
         .expect("recorded");
     assert_eq!(skip.reason, SkipReason::NoXmlFiles);
-}
-
-// ---------------------------------------------------------------------------
-// The operator pin (F1-2)
-// ---------------------------------------------------------------------------
-
-/// **F1-2: an operator override is never displaced.** The measured defect was
-/// `LUMINA_LENSFUN_DB=/custom` (3 files) with a newer `updates/version_1`
-/// winning, so the loaded set silently was *not* the pinned directory. Upstream
-/// has no override concept at all, so this is a documented divergence in favour
-/// of the SOLL rule that explicit operator intent is never replaced.
-#[test]
-fn an_operator_override_is_never_displaced_by_an_update_package() {
-    let probe = FakeProbe::new(&[
-        ("/custom/lensfun/version_1", 3),
-        ("/var/lib/lensfun-updates/version_1", 3),
-        ("/home/u/.local/share/lensfun/updates/version_1", 7),
-    ])
-    // Every candidate claims a far newer date than the pinned directory.
-    .dated("/custom/lensfun/version_1", 1)
-    .dated("/var/lib/lensfun-updates/version_1", 1_700_000_000)
-    .dated(
-        "/home/u/.local/share/lensfun/updates/version_1",
-        1_800_000_000,
-    );
-    let resolved = resolve_with(
-        Some(OsStr::new("/custom/lensfun")),
-        None,
-        None,
-        Some(OsStr::new("/home/u")),
-        &probe,
-    )
-    .expect("resolve");
-    assert_eq!(resolved.source, Source::EnvOverride);
-    assert!(
-        resolved.pin_honored(),
-        "the pinned directory must be the one that is loaded"
-    );
-    let system = system_layer(&resolved);
-    assert_eq!(system.origin, LayerOrigin::SystemSchema, "{system:?}");
-    assert_eq!(system.dir, PathBuf::from("/custom/lensfun"));
-    assert_eq!(
-        system.files.len(),
-        3,
-        "exactly the pinned files, nothing else"
-    );
-}
-
-/// Without an override, a compiled/platform source *is* displaced by upstream's
-/// competition — but the divergence is visible through `primary` /
-/// `pin_honored` instead of being silent.
-#[test]
-fn a_non_override_source_may_be_displaced_but_is_never_silent() {
-    let probe = FakeProbe::new(&[("/usr/share/lensfun/version_1", 56), (UPDATES, 3)])
-        .dated("/usr/share/lensfun/version_1", SYSTEM_STAMP)
-        .dated(UPDATES, 1_700_000_000);
-    let resolved = resolve_with(None, None, None, None, &probe).expect("resolve");
-    assert_eq!(resolved.source, Source::PlatformDefault);
-    assert!(!resolved.pin_honored());
-    assert_ne!(
-        system_layer(&resolved).dir,
-        resolved.dir,
-        "layers[0] must name what is loaded, not what was resolved"
-    );
-}
-
-/// The override does not suppress the user database: upstream always merges it,
-/// and dropping it would be a silent capability loss for an operator who only
-/// wanted to pin the *system* database.
-#[test]
-fn the_override_does_not_suppress_the_user_database() {
-    let probe = FakeProbe::new(&[
-        ("/custom/lensfun/version_1", 3),
-        ("/home/u/.local/share/lensfun", 1),
-    ])
-    .dated("/custom/lensfun/version_1", SYSTEM_STAMP);
-    let resolved = resolve_with(
-        Some(OsStr::new("/custom/lensfun")),
-        None,
-        None,
-        Some(OsStr::new("/home/u")),
-        &probe,
-    )
-    .expect("resolve");
-    assert_eq!(resolved.dir, PathBuf::from("/custom/lensfun"));
-    assert!(resolved.user_layer().is_some(), "user layer must be merged");
-    assert_eq!(resolved.file_count(), 4);
 }
