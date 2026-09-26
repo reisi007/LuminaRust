@@ -1420,6 +1420,194 @@ ist von der Quantisierung nicht betroffen (exakt).
 >   reinen Pass mit 2,76 ms). Budgets in `perf/baseline.json` wurden NICHT
 >   angepasst (Gate schlägt nur bei Verlangsamung an).
 
+### Ein Schreibpfad, Vorrangordnung und Wiederverwendung (AUTO-TONE-CLI-6)
+
+**Die sechs Regler und ihre Domänen** (unverändert normativ, hier nur als
+Namen der Schreibstellen festgeschrieben): `exposure` `[-10, 10]`,
+`contrast`/`whites`/`blacks`/`highlights`/`shadows` je `[-1, 1]`. Die sechs
+Schlüssel werden im CLI als `AUTO_TONE_ADJUSTMENT_KEYS` geführt, und genau
+dieser Sechserschritt ist der Vertrag: **es gibt keine Teilmenge.** Der frühere
+Zweier-Zustand (`exposure`/`contrast` ohne die vier End-/Balance-Spiegel) ist
+kein gültiger persistierter Zustand.
+
+**Genau ein Schreibpfad.** Im CLI schreibt **ausschließlich**
+`apply_auto_tone_result` (`crates/lumina-cli/src/auto_tone_cli.rs`) die sechs
+Adjustments, die sechs `auto_features`-Spiegel (`auto_exposure`,
+`auto_contrast`, `auto_whites`, `auto_blacks`, `auto_highlights`,
+`auto_shadows`) und den `analysis_fingerprint` — als **eine** Funktion, die
+diese dreizehn Felder gemeinsam setzt. Beide Aufrufer gehen durch dieselbe
+Funktion: `process_selected` (mit `--auto-tone`) und
+`lumina regenerate --module auto-tone`. Die GUI hält ihren eigenen, inhaltlich
+identischen Vertrag in `LuminaApp::auto_tone` (dieselben sechs Regler,
+dieselben sechs Spiegel, derselbe Fingerprint-Algorithmus
+`tone-rgba8-rec709`, Version `1`); sie wird von diesem Slice **nicht**
+angefasst. Ein zweiter, schlankerer Kopierpfad im CLI existiert nicht mehr,
+und die CLI-Tests pinnen das strukturell ab: ein Quellscan über
+`crates/lumina-cli/src` (ohne die Tests) muss jede der sechs Spiegel-Zuweisungen,
+die Fingerprint-Zuweisung und die sechs Adjustment-Schreibvorgänge genau einmal
+finden, und alle Fundstellen müssen in `auto_tone_cli.rs` liegen.
+
+**Wiederverwenden ist alles-oder-nichts.** `apply_auto_tone_result` liest
+persistierte Werte **ausschließlich aus den Spiegeln** und nur dann, wenn
+**beides** gilt:
+
+1. der persistierte `analysis_fingerprint.input_fingerprint` ist identisch mit
+   `tone_fingerprint(frame, config)`, **und**
+2. **alle sechs** Spiegel sind vorhanden (`Some`).
+
+Fehlt **irgendeiner** der sechs Spiegel oder passt der Fingerprint nicht, wird
+**alle sechs** neu berechnet (`suggest_auto_tone`) und der komplette Zustand
+geschrieben. Ein gemischter Zustand (zwei gespiegelte, vier fehlende Regler)
+kann deshalb weder entstehen noch persistiert werden: es gibt keinen Codepfad,
+der eine Teilmenge zurückschreibt, und weil der Schreibpfad die sechs Spiegel
+immer als Sechsergruppe setzt, kann die Persistenz keinen unvollständigen
+Satz erzeugen. Weil der Wiederverwenzungszweig nur Spiegel liest, kann ein
+**Benutzerwert nie zum Auto-Wert werden** — `recipe.adjustments` ist dort
+keine Quelle.
+
+**Vorrangordnung (Raster-MVP).** Für jedes der sechs Regler gilt
+**Auto-Tone → Preset → explizite CLI-Angabe**, danach erst das Exposure
+Matching:
+
+- Ein Preset, das einen der sechs Regler **explizit setzt**, gewinnt gegen den
+  Auto-Wert. Wo das Preset **schweigt**, gilt der Auto-Wert: der Preset-Block
+  ersetzt das Rezept als Ganzes, danach wird der Auto-Wert für jeden Regler
+  wiederhergestellt, den das Preset nicht gesetzt hat.
+- Explizite CLI-Angaben gewinnen **zuletzt** und gelten für **alle sechs**:
+  `process` kennt `--exposure`, `--contrast`, `--whites`, `--blacks`,
+  `--highlights`, `--shadows`. „Auto darf man nicht übersteuern" gibt es
+  nicht; die explizite Angabe ist genau dann wirksam, wenn sie gesetzt ist.
+- `--target-luminance` gilt weiterhin **für Auto-Tone und Matching**
+  gleichermaßen.
+
+**Spiegel = Auto-Wert, `adjustments` = effektiver Wert.** Nach Preset
+und/oder expliziter CLI-Angabe trägt `recipe.adjustments` den **effektiven**
+Wert, während `recipe.auto_features.auto_*` weiterhin den **Auto**-Wert
+dokumentiert. Genau diese Trennung macht den Sechsersatz nachvollziehbar und
+ist die Grundlage dafür, dass eine spätere Regeneration den Benutzerwert nicht
+als Auto-Wert adoptiert (siehe Freshness).
+
+**Freshness ist präsenzbasiert, nicht wertbasiert (normativ).** Das
+Freshness-Prädikat der Regeneration (`auto_tone_is_fresh`) verlangt
+**Anwesenheit plus Fingerprint**, ausdrücklich **nicht** den Vergleich der
+Reglerwerte:
+
+1. `enable_auto_tone` ist gesetzt,
+2. alle **sechs** `auto_features`-Spiegel sind vorhanden,
+3. alle **sechs** Adjustments sind **vorhanden**,
+4. der `analysis_fingerprint` gehört zum aktuellen Frame **und** zum aktuellen
+   `--target-luminance`.
+
+**Warum Anwesenheit und nicht Wertgleichheit:** die Spiegel dokumentieren den
+**Auto**-Wert, `recipe.adjustments` trägt den **effektiven** Wert (siehe
+„Spiegel = Auto-Wert"). Ein wertbasiertes Prädikat würde damit **jede**
+Benutzerüberschreibung als stale einstufen, und der nächste `regenerate`-Lauf
+würde sie stillschweigend zerstören — der Wertvergleich und die Trennung
+Auto-/Effektivwert widersprechen sich direkt. Deshalb gilt: ein **bloser
+Wertwechsel** durch Preset oder explizite CLI-Angabe **erhält** die Freshness.
+„Absichtlich verändert" bedeutet im Freshness-Vertrag folglich genau drei
+Dinge: ein **entfernter** Regler, ein **entfernter** Spiegel oder ein **nicht
+passender** Fingerprint (geänderte Quelle oder geänderter Zielwert) →
+`regenerated`. Ein von `process --auto-tone` geschriebenes Rezept ist **frisch**;
+`lumina regenerate --module auto-tone` ohne `--force` meldet entsprechend
+`action: "skipped"`, `reason: "fresh"` und fasst das Sidecar nicht an. Der Beleg
+geht in beide Richtungen: ein `exposure`-Wert von `3.0` bleibt fresh, und der
+Benutzerwert überlebt den kollektiven `regenerate` (kein stiller Verlust).
+
+**Matching-Reihenfolge.** `--match-total-exposure` addiert weiterhin auf dem
+**effektiven** `exposure`-Wert (nach Auto, Preset und expliziter CLI-Angabe),
+klemmt auf `[-10, 10]` und verändert **keine** der übrigen fünf Regler. Es
+misst weiterhin das gerenderte Ergebnis (F-041) und wird weiterhin für den
+finalen Pixel-Pass in `recipe.adjustments` zurückgefaltet.
+
+**Ohne `--auto-tone` ist nichts neu.** `render`, `export` und `batch` rufen
+`process_selected` mit `auto_tone: false`. Sie schreiben **kein**
+`auto_features`-Feld (die Spiegel bleiben `None`), `enable_auto_tone` bleibt
+`false`, und ihre Ausgabebytes sind unverändert. Ein stilles Nachschreiben von
+`analysis_fingerprint` ohne Auto-Tone gibt es nicht.
+
+### Die JSON-Round-Trip-Grenze der `f64`-Felder (normativ, AUTO-TONE-CLI-6 Klausel 9)
+
+**Der Workspace baut `serde_json` (1.0.151) ohne das Feature `float_roundtrip`.**
+Das Feature steuert nur den **Parser**; der Serialisierer (ryu) schreibt
+unabhängig davon immer die **kürzeste, exakt zurücklesbare** Dezimaldarstellung.
+Die Textzeile im Sidecar ist daher **immer korrekt** — der **Parser** verliert
+aber das letzte Bit: er findet nicht in allen Fällen diejenige `f64`, die der
+Text darstellt. Der Verlust passiert also beim **Laden**, nicht beim Schreiben,
+und die Datei auf der Platte sieht unverdächtig aus. Genau diese Asymmetrie ist
+in `auto_tone_float.rs` getrennt gepinnt (emittierter Text exakt, Parser genau
+1 ULP daneben), damit die Diagnose nicht auf den falschen Verdächtigen zeigt.
+
+**Gemessen (2026-09-26, `serde_json` 1.0.151 ohne `float_roundtrip`, gegen den
+Wert-domänen-Bereich der sechs Regler `[-10, 10]`):**
+
+| Messung | Ergebnis |
+|---|---|
+| 200.000 `f64` auf einem linearen Raster (Schrittweite 1e-4) in `[-10, 10]` | **14.900 (7,45 %)** überleben den Round-Trip nicht |
+| 200.000 `f64` aus einem deterministischen 64-Bit-LCG in `[-10, 10]` | 15.804 (7,90 %) — die Quote ist stichprobenabhängig, 7,45 % ist der rasterbegünstigte Wert |
+| **240 echte Auto-Tone-Werte** aus 40 deterministischen Fixtures (je 6 Regler) | **44 (18,33 %)** verlustbehaftet |
+| maximale Abweichung in **allen** Messungen | **exakt 1 ULP** |
+
+Die echten Auto-Tone-Werte sind also rund **2,5-mal** so häufig betroffen wie ein
+gleichverteilter Zug, weil sie fast immer nahe an einem binären Bruch landen
+(z. B. `k/1024` plus einem winzigen Rest). Zwei verifizierte Einzelfälle:
+`-0.20253906249999998` wird als `-0.2025390625` zurückgelesen,
+`0.013476562499999997` als `0.013476562499999995` (je 1 ULP).
+
+**Konsequenz für den Wiederverwenzungszweig:** weil dieser die persistierten
+Werte **aus dem geladenen Sidecar** übernimmt, sind die wiederverwendeten Werte
+für diese 18 % der Fälle **nicht bitidentisch** mit dem, was der Algorithmus
+berechnet hat. Genau das ist der dokumentierte, gemessene Zustand — und er ist
+**kein Fehler des Wiederverwenzungspfads**: die Freshness (präsenzbasiert) und
+der Sechsersatz bleiben vollständig, nur der letzte Dezimalbit kann abweichen.
+
+**Der Verlauf konvergiert und akkumuliert nicht** (gemessen, 40 Fixtures × 3
+Läufe über denselben Sidecar):
+
+| Übergang | gedriftete Reglerwerte | maximale Abweichung |
+|---|---|---|
+| Lauf 1 → Lauf 2 (Wiederverwenzung) | 44 von 240 | 1 ULP |
+| Lauf 2 → Lauf 3 | **0 von 240** | 0 |
+
+Der Drift ist also **einmalig**: Lauf 1 schreibt den exakten Text, Lauf 2 liest
+ihn (1 ULP daneben) und schreibt die kürzeste Darstellung *dieses* Wertes, und
+ab Lauf 2 ist der persistierte Text bereits ein Fixpunkt des Parsers. Die
+Freshness ist ab Lauf 1 erfüllt, `regenerate` überschreibt also nichts.
+
+**Ausgabe-Bytes.** Über dieselben 40 Fixtures war das gerenderte PNG in
+**40 von 40** Fällen zwischen Lauf 1 und Lauf 2 bytegleich und ebenso zwischen
+Lauf 2 und Lauf 3. Das ist eine **Beobachtung an 40 Fixtures, kein Beweis**:
+ein 1-ULP-Unterschied im Exposure kann die u8-Ausgabe prinzipiell verschieben.
+Die Auto-Tone-Goldens in `crates/lumina-cli/src/tests/` sind deshalb bewusst auf
+ein Fixture gelegt, dessen sechs Werte den Round-Trip **exakt** überstehen —
+nicht, um die Grenze zu verstecken, sondern damit der Byte-Golden eine
+unabhängige Größe bleibt. Der reale Fall ist separat gepinnt
+(`auto_tone_float.rs`: Verlust bei genau 1 ULP, Konvergenz nach einem Lauf,
+Byte-Stabilität über viele Fixtures).
+
+**Warum das hier nicht behoben wird.** `float_roundtrip` zu aktivieren würde
+jedes **bestehende** persistierte Sidecar-Byte verändern — alle Rezept-Digests,
+`mask_layers_digest`, Render-Identitäten und Goldens wären neu zu prüfen, und
+jede bereits geschriebene Datei würde beim nächsten Laden andere `f64`-Werte
+liefern. Das ist weit außerhalb dieses Slices und eine **eigene, offene
+Entscheidung** (Task `JSON-FLOAT-ROUNDTRIP`, Release 1.5: aktivieren vs.
+bewusst lassen, mit Migrations-/Golden-Plan). Der Vertrag, den dieser Slice
+stattdessen festschreibt, ist die **gemessene Grenze selbst**: sie ist benannt,
+quantifiziert und getestet, statt weggerechnet.
+
+**Gemessene Nebenwirkung auf Byte-Ebene.** Weil Lauf 2 den kürzeren Text des
+1-ULP-versetzten Wertes schreibt, **ändern sich die Sidecar-Bytes** zwischen
+Lauf 1 und Lauf 2 für die 27 der 40 Familienmitglieder mit Drift (44 von 240
+Reglerliteralen). Jeder über die serialisierten Bytes gebildete Digest
+(blake3, z. B. `LocalAdjustments::digest`, `mask_layers_digest`) ist damit
+ebenfalls betroffen, sobald nach einem Laden neu serialisiert wird. **Nicht
+gemessen** wurde in diesem Slice ein tatsächlicher Digest-Wechsel an einer
+Maske: die Auto-Tone-Fixtures tragen keine Maske, und AUTO-TONE-CLI-6 fasst
+`lumina-sidecar` nicht an. Der Punkt ist hier nur als **gemessene
+Byte-Änderung** festgehalten, weil er die Entscheidung von
+`JSON-FLOAT-ROUNDTRIP` gewichtet — deren Abnahme verlangt ohnehin „einen
+Beweis, dass kein Rezept-Digest sich unbeabsichtigt ändert".
+
 ## Exposure Matching
 
 `Match Total Exposure` misst nach dem Auto-Schritt die definierte gewichtete

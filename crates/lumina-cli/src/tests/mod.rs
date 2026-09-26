@@ -5,6 +5,11 @@ use lumina_core::export_image;
 pub(crate) use support::*;
 
 mod args_batch;
+mod auto_tone_float;
+mod auto_tone_freshness;
+mod auto_tone_process;
+mod auto_tone_reuse;
+mod auto_tone_writer;
 mod color;
 mod develop;
 mod exit_codes;

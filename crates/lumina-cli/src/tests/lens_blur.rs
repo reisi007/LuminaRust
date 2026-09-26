@@ -224,6 +224,8 @@ fn lens_blur_missing_depth_artifact_fails_render_loudly() {
             preset: None,
             exposure: None,
             contrast: None,
+            whites: None,
+            blacks: None,
             highlights: None,
             shadows: None,
             auto_tone: false,

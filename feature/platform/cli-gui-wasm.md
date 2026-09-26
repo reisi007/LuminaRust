@@ -49,7 +49,8 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 Der erste vertikale Raster-MVP stellt zusätzlich die direkt ausführbaren
 Befehle `process` und `inspect` bereit. `process` verarbeitet aktuell PNG,
 JPEG und WebP, liest optional ein `Preset`, lässt `--exposure`, `--contrast`,
-`--highlights` und `--shadows` die Presetwerte überschreiben. Der Export wird
+`--whites`, `--blacks`, `--highlights` und `--shadows` die Presetwerte
+überschreiben. Der Export wird
 zunaechst in eine Staging-Temp-Datei geschrieben, dann das Sidecar committet;
 erst danach wird der Export atomar an seinen Zielpfad umbenannt. Scheitert das
 Sidecar-Schreiben, wird die Staging-Datei verworfen — Exit 1 OHNE erzeugten
@@ -58,6 +59,31 @@ JSON-Status und die virtuellen Kopien ohne GUI. `inspect` zeigt auch Auto-Tone-
 und Matching-Status. `process` akzeptiert `--auto-tone`,
 `--match-total-exposure` und `--target-luminance 0..=1`; die Reihenfolge ist
 Auto-Tone, Preset, CLI-Overrides, Masken später, Matching am finalen Rasterbild.
+
+**Auto-Tone im CLI (AUTO-TONE-CLI-6, Release 1.0):** `process --auto-tone`
+schreibt den **vollen Sechsersatz** — die sechs Regler `exposure`,
+`contrast`, `whites`, `blacks`, `highlights`, `shadows`, die sechs
+`auto_features`-Spiegel `auto_exposure` … `auto_shadows` und den
+`analysis_fingerprint` — über **denselben** Schreibpfad wie `lumina regenerate
+--module auto-tone` (`apply_auto_tone_result` in
+`crates/lumina-cli/src/auto_tone_cli.rs`); es gibt keinen zweiten, schlankeren
+Kopierpfad. Ein damit geschriebenes Rezept ist danach **frisch**, `regenerate
+--module auto-tone` ohne `--force` meldet entsprechend `skipped`/`fresh`.
+Persistierte Auto-Werte werden nur dann wiederverwendet, wenn der Fingerprint
+passt **und alle sechs** Spiegel vorhanden sind; fehlt einer, werden alle sechs
+neu berechnet — ein gemischter 2-von-6-Zustand kann nicht entstehen und wird
+nicht persistiert. Wo ein `--preset` einen der sechs Regler nicht setzt, gilt
+der Auto-Wert; wo es ihn setzt, gewinnt das Preset. Die expliziten Flags
+`--exposure/--contrast/--whites/--blacks/--highlights/--shadows` gewinnen
+zuletzt, für **alle sechs**: `recipe.adjustments` trägt danach den effektiven
+Wert, während `auto_features.auto_*` weiterhin den Auto-Wert dokumentiert.
+`--match-total-exposure` addiert weiterhin auf dem effektiven `exposure`-Wert
+(Klammer `[-10, 10]`) und fasst die übrigen fünf Regler nicht an. `render`,
+`export` und `batch` rufen `process_selected` mit `auto_tone: false`: kein
+`auto_features`-Feld wird geschrieben, `enable_auto_tone` bleibt `false`, die
+Ausgabebytes sind unverändert. Die CLI-Exit-Tabelle ist unverändert; die
+normative Fassung steht in `feature/architecture/pipeline.md` § Auto-Tone
+(Abschnitt „Ein Schreibpfad, Vorrangordnung und Wiederverwendung").
 
 RAW ist ein verbindlicher MVP-Bestandteil. Der native LibRaw-Adapter unterstützt
 CR2, CR3, NEF, ARW, DNG, ORF, RAF, RW2, CRW, PEF, SRW, 3FR, IIQ, RWL, MOS,
@@ -1499,11 +1525,15 @@ laut benannte Abwägung und keine stille Optimierung:
   Wert frisch aussieht) und lässt alle anderen Größen unangetastet. Die
   Aktion ist idempotent und schreibt nur bei tatsächlicher Änderung atomar.
   Die Auto-Tone-Frischeprüfung verlangt den **vollen** AUTO-TONE-2-Vertrag
-  (sechs Adjustments + sechs Spiegel + Fingerprint). **Offen (bewusst nicht in
-  diesem Slice):** `process --auto-tone` persistiert weiterhin nur
-  `exposure`/`contrast` (`process`-Artefakt); `regenerate` erkennt diesen
-  unvollständigen Stand deshalb als stale und regeneriert ihn. Eine
-  Vereinheitlichung von `process` ist ein eigener Folgeentscheid.
+  (sechs Adjustments + sechs Spiegel + Fingerprint). **Erledigt seit
+  AUTO-TONE-CLI-6 (2026-09-26):** `process --auto-tone` persistiert denselben
+  vollen Vertrag über denselben Schreibpfad (`apply_auto_tone_result` in
+  `crates/lumina-cli/src/auto_tone_cli.rs`), sodass ein `process --auto-tone`-
+  Rezept nicht mehr als stale gilt. Wiederverwenden erfolgt nur bei passendem
+  Fingerprint **und** vollständigem Sechsersatz, sonst werden alle sechs neu
+  berechnet; ein gemischter 2-von-6-Zustand wird nicht persistiert. Details
+  und Vorrangordnung: § CLI oben und `feature/architecture/pipeline.md`
+  § Auto-Tone.
 - **GUI:** Die Modulaktionen sind die vorhandenen Buttons `Auto`
   (Grundtonung, `auto_tone`), `Match Exposure` (Footer, `match_total_exposure`)
   und `Recalculation` je Maske. Die fehlende **Sammelaktion** ist der Button

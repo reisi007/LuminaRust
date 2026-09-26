@@ -1,4 +1,6 @@
 use super::*;
+use crate::auto_tone_cli::auto_tone_input_fingerprint;
+use lumina_sidecar::AnalysisFingerprint;
 
 /// Explicit `--module auto-tone` writes the full six-slider contract and
 /// leaves the mask artifacts and the matching value untouched.
@@ -114,6 +116,8 @@ fn explicit_mask_refresh_render_has_no_implicit_warning() {
             preset: None,
             exposure: None,
             contrast: None,
+            whites: None,
+            blacks: None,
             highlights: None,
             shadows: None,
             auto_tone: false,
@@ -154,6 +158,8 @@ fn mask_update_masks_render_has_no_implicit_warning() {
             preset: None,
             exposure: None,
             contrast: None,
+            whites: None,
+            blacks: None,
             highlights: None,
             shadows: None,
             auto_tone: false,
@@ -246,11 +252,7 @@ fn regenerate_collective_completes_two_slider_auto_tone_artifact() {
     write_sidecar_with_valid_layer(&input, &bytes, &frame);
     let sidecar_path = sidecar_path_for(&input);
     let mut document = load_sidecar(&sidecar_path).unwrap();
-    let config = AutoToneConfig {
-        target_luminance: 0.5,
-        ..Default::default()
-    };
-    let input_fingerprint = tone_fingerprint(&frame, config);
+    let input_fingerprint = auto_tone_input_fingerprint(&frame, 0.5);
     {
         let auto = &mut document.virtual_copies[0].recipe.auto_features;
         auto.enable_auto_tone = true;

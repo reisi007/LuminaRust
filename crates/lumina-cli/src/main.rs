@@ -5,13 +5,12 @@ use lumina_core::{
     export_image_with_generative, generative_variant_seed, has_transparent_pixels,
     match_total_exposure_masked, render_frame, render_frame_with_denoise,
     render_frame_with_generative, resolve_denoise_status, resolve_mask_planes,
-    set_denoise_producer_provenance, suggest_auto_tone, tone_fingerprint, upright_analysis,
-    upright_input_fingerprint, AutoToneConfig, DenoiseIdentity, DenoisePolicy,
-    DenoiseRgbArtifact as CoreDenoiseRgbArtifact, DenoiseStageInput, DenoiseStageStatus,
-    DetectedRedEye, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
-    GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame,
-    MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact, RED_EYE_DETECT_ID_PREFIX,
+    set_denoise_producer_provenance, upright_analysis, upright_input_fingerprint, DenoiseIdentity,
+    DenoisePolicy, DenoiseRgbArtifact as CoreDenoiseRgbArtifact, DenoiseStageInput,
+    DenoiseStageStatus, DetectedRedEye, ExportOptions, GenerativeCacheKey,
+    GenerativeCanvasArtifact, GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole,
+    ImageFileFormat, ImageFrame, MaskContext, MaskInference, MaskLoadContext, MaskPlane,
+    MaskPolicy, RenderContext, RenderOutput, SourceActionArtifact, RED_EYE_DETECT_ID_PREFIX,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -70,22 +69,21 @@ use lumina_sidecar::{
     now_rfc3339_utc, render_meta_preset, resolve_meta_preset_path, save_denoise_rgb,
     save_generative_canvas, save_sidecar, save_sidecar_if_unchanged, scan_meta_presets_dir,
     sidecar_path_for, spot_removal_entries, validate_metadata_field_value,
-    validate_smart_collection_def, AiSelect, AiSelectKind, AnalysisFingerprint, ArtifactStatus,
-    AspectPreset, BatchOp, BokehShape, CollectionMembership, ColorGrading, ColorGradingRange,
-    CoordinateSystem, Crop, CurveChannels, CurvePoint, Curves, DecodeFingerprint, DenoiseAi,
-    DenoiseArtifactKind, DenoiseArtifactRef, DenoiseModelIdentity,
-    DenoiseRgbArtifact as SidecarDenoiseRgbArtifact, DepthArtifactRef, EditRecipe, ExportRecord,
-    FaceAnalysis, FaceArtifactStatus, FocusRect, GenerativeArtifactRef, GenerativeArtifactStatus,
-    GenerativeCanvas, GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit,
-    Geometry, GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur,
-    LensCorrection, MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference,
-    MaskStatus, MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective,
-    PointColor, PointColorEntry, Preprocessing, Preset, PromptTransform, RecordSpec,
-    RedEyeCorrection, RedEyeRegion, Resolution, SidecarDocument, SmartCollectionDef,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity,
-    Upright, DENOISE_AI_VERSION, MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS,
-    MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS,
-    SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
+    validate_smart_collection_def, AiSelect, AiSelectKind, ArtifactStatus, AspectPreset, BatchOp,
+    BokehShape, CollectionMembership, ColorGrading, ColorGradingRange, CoordinateSystem, Crop,
+    CurveChannels, CurvePoint, Curves, DecodeFingerprint, DenoiseAi, DenoiseArtifactKind,
+    DenoiseArtifactRef, DenoiseModelIdentity, DenoiseRgbArtifact as SidecarDenoiseRgbArtifact,
+    DepthArtifactRef, EditRecipe, ExportRecord, FaceAnalysis, FaceArtifactStatus, FocusRect,
+    GenerativeArtifactRef, GenerativeArtifactStatus, GenerativeCanvas,
+    GenerativeCanvasArtifact as SidecarGenerativeCanvas, GenerativeEdit, Geometry,
+    GeometryFingerprint, HistoryEntry, HslAdjustments, HslChannel, LensBlur, LensCorrection,
+    MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
+    MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Perspective, PointColor,
+    PointColorEntry, Preprocessing, PromptTransform, RecordSpec, RedEyeCorrection, RedEyeRegion,
+    Resolution, SidecarDocument, SmartCollectionDef, SourceActionArtifactRef, SourceActionKind,
+    SourceActionSpec, SourceFingerprint, SourceIdentity, Upright, DENOISE_AI_VERSION,
+    MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES, METADATA_FIELD_IDS,
+    RED_EYE_MAX_REGIONS, SMART_COLLECTION_VERSION, SOURCE_ACTION_VERSION,
 };
 #[cfg(feature = "onnx-rt")]
 use lumina_sidecar::{save_face_embeddings, FaceEmbeddingArtifact as SidecarFaceEmbeddingArtifact};
@@ -111,6 +109,17 @@ use thiserror::Error;
 // LRPAR-G09-CULL-IMPL-25: live-source persistence guard extracted from the
 // oversized CLI entrypoint (file-size ratchet; orchestration remains in main).
 mod cull_cli;
+// AUTO-TONE-CLI-6: the single Auto-Tone write path shared by
+// `process --auto-tone` and `regenerate --module auto-tone` (six sliders +
+// six `auto_features` mirrors + analysis fingerprint), the preset/explicit-CLI
+// slider layering and the `regenerate` freshness predicate. Extracted from
+// `process_selected` for the file-size ratchet; the normative contract is
+// `feature/architecture/pipeline.md` § Auto-Tone.
+mod auto_tone_cli;
+use auto_tone_cli::{
+    apply_auto_tone_result, apply_explicit_slider_values, apply_preset_layer,
+    auto_tone_input_fingerprint, auto_tone_is_fresh, PersistedAutoTone,
+};
 // MASK-LOCAL-P0/P1.2a: typed local-adjustment flag parsing and mutation.
 mod mask_local;
 mod mask_local_color;
@@ -1573,6 +1582,14 @@ struct ProcessArgs {
     exposure: Option<f64>,
     #[arg(long)]
     contrast: Option<f64>,
+    /// AUTO-TONE-CLI-6: explicit value for the `whites` slider. Explicit CLI
+    /// values win last, for all six auto sliders; the `auto_features` mirror
+    /// keeps the auto value while `adjustments` carries the effective one.
+    #[arg(long)]
+    whites: Option<f64>,
+    /// AUTO-TONE-CLI-6: explicit value for the `blacks` slider (see `--whites`).
+    #[arg(long)]
+    blacks: Option<f64>,
     #[arg(long)]
     highlights: Option<f64>,
     #[arg(long)]
@@ -1996,6 +2013,8 @@ fn render(args: FileArgs) -> Result<(), CliError> {
             preset: None,
             exposure: None,
             contrast: None,
+            whites: None,
+            blacks: None,
             highlights: None,
             shadows: None,
             auto_tone: false,
@@ -2048,6 +2067,8 @@ fn export(args: ExportArgs) -> Result<(), CliError> {
             preset: None,
             exposure: None,
             contrast: None,
+            whites: None,
+            blacks: None,
             highlights: None,
             shadows: None,
             auto_tone: false,
@@ -2175,60 +2196,6 @@ fn mask_needs_regeneration(
         None => true,
         Some(artifact) => artifact_status(root, artifact) != ArtifactStatus::Available,
     }
-}
-
-/// The six AUTO-TONE-2 sliders (adjustment keys) written by Auto-Tone. Shared
-/// by the writer ([`apply_auto_tone_result`]) and the freshness predicate of
-/// `regenerate`, so a value written by either path is recognized as complete.
-const AUTO_TONE_ADJUSTMENT_KEYS: [&str; 6] = [
-    "exposure",
-    "contrast",
-    "whites",
-    "blacks",
-    "highlights",
-    "shadows",
-];
-
-/// Writes the full AUTO-TONE-2 result into `recipe`: six sliders plus the six
-/// `auto_features` mirrors and the analysis fingerprint. Single source of
-/// truth for `lumina regenerate --module auto-tone` (the GUI writes the same
-/// six-slider contract in `LuminaApp::auto_tone`).
-fn apply_auto_tone_result(
-    recipe: &mut EditRecipe,
-    frame: &ImageFrame,
-    target_luminance: f64,
-) -> Result<(), CliError> {
-    let config = AutoToneConfig {
-        target_luminance,
-        ..Default::default()
-    };
-    let input_fingerprint = tone_fingerprint(frame, config);
-    let result = suggest_auto_tone(frame, config)?;
-    for (key, value) in [
-        (AUTO_TONE_ADJUSTMENT_KEYS[0], result.exposure),
-        (AUTO_TONE_ADJUSTMENT_KEYS[1], result.contrast),
-        (AUTO_TONE_ADJUSTMENT_KEYS[2], result.whites),
-        (AUTO_TONE_ADJUSTMENT_KEYS[3], result.blacks),
-        (AUTO_TONE_ADJUSTMENT_KEYS[4], result.highlights),
-        (AUTO_TONE_ADJUSTMENT_KEYS[5], result.shadows),
-    ] {
-        recipe.adjustments.insert(key.into(), value);
-    }
-    recipe.auto_features.enable_auto_tone = true;
-    recipe.auto_features.target_luminance = target_luminance;
-    recipe.auto_features.auto_exposure = Some(result.exposure);
-    recipe.auto_features.auto_contrast = Some(result.contrast);
-    recipe.auto_features.auto_whites = Some(result.whites);
-    recipe.auto_features.auto_blacks = Some(result.blacks);
-    recipe.auto_features.auto_highlights = Some(result.highlights);
-    recipe.auto_features.auto_shadows = Some(result.shadows);
-    recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
-        algorithm: "tone-rgba8-rec709".into(),
-        version: "1".into(),
-        input_fingerprint,
-        extras: BTreeMap::new(),
-    });
-    Ok(())
 }
 
 /// GUI-GEN-GRANULAR-10: explicit per-module regeneration of the 1.0 derivable
@@ -2373,31 +2340,16 @@ fn regenerate(args: RegenerateArgs) -> Result<(), CliError> {
     // ---- Module `auto-tone` ----
     if wants(RegenerateModule::AutoTone) {
         let current = &document.virtual_copies[copy_index].recipe.auto_features;
-        let config = AutoToneConfig {
-            target_luminance: args.target_luminance,
-            ..Default::default()
-        };
-        let fingerprint = tone_fingerprint(&frame, config);
         // Fresh = enabled AND the *full* AUTO-TONE-2 contract is persisted:
         // all six sliders, all six `auto_features` mirrors and the analysis
-        // fingerprint. A recipe that only carries the historic
-        // `process --auto-tone` two-slider subset (exposure/contrast without
-        // the end/balance mirrors) is therefore stale and regenerated by the
-        // collective default.
-        let adjustments = &document.virtual_copies[copy_index].recipe.adjustments;
-        let fresh = current.enable_auto_tone
-            && current.auto_exposure.is_some()
-            && current.auto_contrast.is_some()
-            && current.auto_whites.is_some()
-            && current.auto_blacks.is_some()
-            && current.auto_highlights.is_some()
-            && current.auto_shadows.is_some()
-            && AUTO_TONE_ADJUSTMENT_KEYS
-                .iter()
-                .all(|key| adjustments.contains_key(*key))
-            && current.analysis_fingerprint.as_ref().is_some_and(|f| {
-                f.algorithm == "tone-rgba8-rec709" && f.input_fingerprint == fingerprint
-            });
+        // fingerprint. AUTO-TONE-CLI-6: the predicate is the shared
+        // `auto_tone_is_fresh`, which `process --auto-tone` satisfies as well —
+        // a recipe written by `process` is therefore fresh and is NOT
+        // overwritten here. An incomplete contract (the historic two-slider
+        // `exposure`/`contrast` subset, a missing mirror or slider, or a
+        // non-matching fingerprint) is stale and regenerated.
+        let fingerprint = auto_tone_input_fingerprint(&frame, args.target_luminance);
+        let fresh = auto_tone_is_fresh(&document.virtual_copies[copy_index].recipe, &fingerprint);
         if fresh && !forced(RegenerateModule::AutoTone) {
             report.push(serde_json::json!({
                 "module": RegenerateModule::AutoTone.as_str(),
@@ -2414,7 +2366,15 @@ fn regenerate(args: RegenerateArgs) -> Result<(), CliError> {
             }));
         } else {
             let mut recipe = document.virtual_copies[copy_index].recipe.clone();
-            apply_auto_tone_result(&mut recipe, &frame, args.target_luminance)?;
+            // Always recompute: an explicit regeneration must derive the values
+            // from the frame again, never reproduce a persisted one.
+            apply_auto_tone_result(
+                &mut recipe,
+                &frame,
+                args.target_luminance,
+                PersistedAutoTone::AlwaysRecompute,
+                None,
+            )?;
             document.virtual_copies[copy_index].recipe = recipe;
             changed = true;
             report.push(serde_json::json!({
@@ -7991,6 +7951,8 @@ fn batch_one(
                     preset: None,
                     exposure: None,
                     contrast: None,
+                    whites: None,
+                    blacks: None,
                     highlights: None,
                     shadows: None,
                     auto_tone: false,
@@ -9394,63 +9356,24 @@ fn process_selected(
     recipe.options.remove("update_masks");
     recipe.options.remove("force_render");
     let auto_requested = args.auto_tone;
+    // MVP rule (SOLL § Auto-Tone): auto values first, preset second, explicit
+    // CLI values last, matching only after the render. All three layers go
+    // through the shared Auto-Tone writer in `auto_tone_cli` — the layering is
+    // the contract, and the six sliders are written as one group.
+    let mut preset_sliders = BTreeMap::new();
+    if let Some(path) = args.preset.as_ref() {
+        preset_sliders = apply_preset_layer(&mut recipe, path, auto_requested)?;
+    }
     if auto_requested {
-        recipe.auto_features.enable_auto_tone = true;
-        recipe.auto_features.target_luminance = args.target_luminance;
-        let config = AutoToneConfig {
-            target_luminance: args.target_luminance,
-            ..Default::default()
-        };
-        let fingerprint = tone_fingerprint(&frame, config);
-        let persisted = recipe
-            .auto_features
-            .analysis_fingerprint
-            .as_ref()
-            .filter(|f| f.input_fingerprint == fingerprint);
-        let (exposure, contrast, _reused) = if let (Some(exposure), Some(contrast)) = (
-            persisted.and(recipe.auto_features.auto_exposure),
-            persisted.and(recipe.auto_features.auto_contrast),
-        ) {
-            (exposure, contrast, true)
-        } else {
-            let result = suggest_auto_tone(&frame, config)?;
-            recipe.auto_features.auto_exposure = Some(result.exposure);
-            recipe.auto_features.auto_contrast = Some(result.contrast);
-            recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
-                algorithm: "tone-rgba8-rec709".into(),
-                version: "1".into(),
-                input_fingerprint: fingerprint,
-                extras: BTreeMap::new(),
-            });
-            (result.exposure, result.contrast, false)
-        };
-        recipe.adjustments.insert("exposure".into(), exposure);
-        recipe.adjustments.insert("contrast".into(), contrast);
+        apply_auto_tone_result(
+            &mut recipe,
+            &frame,
+            args.target_luminance,
+            PersistedAutoTone::ReuseIfComplete,
+            Some(&preset_sliders),
+        )?;
     }
-    if let Some(path) = args.preset {
-        let json = fs::read_to_string(&path).map_err(|error| io_error(&path, error))?;
-        let preset: Preset =
-            serde_json::from_str(&json).map_err(|error| CliError::Preset(error.to_string()))?;
-        // MVP rule: auto values are computed first, preset values replace them,
-        // and explicit CLI values win last. Preserve auto metadata in the recipe.
-        let auto_features = recipe.auto_features.clone();
-        recipe = preset.recipe;
-        if auto_requested {
-            recipe.auto_features = auto_features;
-        }
-    }
-    if let Some(value) = args.exposure {
-        recipe.adjustments.insert("exposure".into(), value);
-    }
-    if let Some(value) = args.contrast {
-        recipe.adjustments.insert("contrast".into(), value);
-    }
-    if let Some(value) = args.highlights {
-        recipe.adjustments.insert("highlights".into(), value);
-    }
-    if let Some(value) = args.shadows {
-        recipe.adjustments.insert("shadows".into(), value);
-    }
+    apply_explicit_slider_values(&mut recipe, &args);
     // --- F-048 / F-051: intelligent mask-loading decision layer ---
     // Load every persisted source-mask plane from the optional `.lumina.zdata`
     // bundle (regardless of status); the decision layer in lumina-core
