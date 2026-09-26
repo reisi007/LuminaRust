@@ -539,6 +539,16 @@ Die Goldens hängen an genau diesen Eingaben. Der Fingerabdruck pinnt die
 committeten Dateien per SHA-256 (`fixtures.digest`), die zur Laufzeit erzeugten
 Satzungen sind deterministisch und werden im Folgenden festgeschrieben.
 
+> **Design-Lücke (benannt 2026-09-26, Verifikationsbefund):** Der Pre-Commit-Hook
+> bewacht nur `crates/lumina-gui/tests/snapshots/*.png`, aber `fixtures.digest`
+> deckt den gesamten Baum `crates/lumina-gui/tests/fixtures/` ab — inklusive
+> `.gitignore`. Eine Kommentar-Änderung in einer Datei unter `tests/fixtures/`
+> driftet den Pin **stillschweigend**; nur `golden_ref.sh check` bemerkt es
+> danach. Praktischer Nachweis: Commit `df0282b` änderte nur einen Kommentar in
+> `tests/fixtures/.gitignore` (L3-Fix) und brach damit `check`. Die Lücke ist
+> benannt, nicht behoben — eine Guard-Erweiterung (Hook bewacht auch
+> `tests/fixtures/`) wäre die Lösung, gehört aber in eine eigene Aufgabe.
+
 ### 6.1 Inventar
 
 Die **exakte, maschinenprüfbare** Liste ist der Wert `fixtures.digest` in
