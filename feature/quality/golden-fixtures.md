@@ -343,8 +343,22 @@ alle gegen die **committeten** Dateien, nicht gegen eine Kopie:
 | A3 | die im Text genannten Zahlen (66 / 14 / 52) stimmen mit der Tabelle | keine Zahl, die man nicht nachzählen kann |
 | A4 | der Dateibestand ist identisch mit dem committeten Bestand (`git ls-files`) | „committed" ist keine Behauptung |
 | B1 | keine Zeile mit Klasse `R-F` | Regel 5 und Regel 8 |
-| B2 | jede `R`-Zeile erfüllt P1 **und** P2 gegen die PNG-Datei | Regel 7 |
+| B2 | jede `R`-Zeile **außer** der in `GFC_KNOWN_RED` genannten erfüllt P1 **und** P2 gegen die PNG-Datei | Regel 7 |
+| B2a | jede `GFC_KNOWN_RED`-Zeile ist **weiterhin** rot (P1 oder P2 verletzt) | der Eintrag ist keine Ausnahme, sondern ein offener Befund |
+| B2b | keine `GFC_KNOWN_RED`-Zeile ist **stale** (defekt behoben, Eintrag aber noch da) | der Eintrag verschwindet automatisch, sobald `GOLDEN-BASELINE-32` landet |
+| B2c | jede `GFC_KNOWN_RED`-Zeile nennt eine `R`-Zeile des Inventars | ein Tippfehler darf nicht zur stillen Ausnahme werden |
 | B3 | jedes Ledger-Zitat ist eine Inventarzeile der Klasse `R` | Regel 9, Verifikationsbefund H3 |
+
+**`GFC_KNOWN_RED`** (in `scripts/golden_ref_test.sh`, direkt über der B2-Schleife)
+ist die **einzige** maschinenlesbare Liste der sechs bekannten roten Goldens:
+`library_compare`, `library_loupe`, `library_rated_badges`,
+`library_subfolder_badges`, `library_survey`, `library_stack_membership`.
+Sie ist **keine Ausnahme**, sondern ein **benannter, selbstprüfender Befund**:
+B2a verlangt, dass die genannten Goldens weiterhin rot sind; B2b macht den
+Eintrag selbst überflüssig, sobald das Golden grün wird; B2c verhindert, dass
+ein Tippfehler eine Zeile still ausnimmt. Die Suite parst nur
+`golden-fixtures.md` — `golden-references.md` ist kein Gate-Eingabe und kann
+nicht in die Liste driften.
 
 ## 5. Bekannte Grenzen (Stand Inventar-Version 2)
 
@@ -433,20 +447,22 @@ ersetzt es nicht.
 ### 5.7 Geprüfter Messweg (keine Umgebungsannahme, DoD §10)
 
 Die Pixelmessung ruft ein **externes Werkzeug** auf. Deshalb ist sie in
-`scripts/golden_ref_test.sh` dreifach abgesichert:
+`scripts/golden_ref_test.sh` vierfach abgesichert:
 
-1. **Vorbedingung:** ist `magick`/`convert` + `identify` nicht auf `PATH`, meldet
+1. **Vorbedingung:** die Tabelle listet mindestens eine Klasse-`R`-Zeile. Ohne
+   sie liefe die Pixel-Schleife über eine leere Menge und wäre **vakuös grün**.
+2. **Vorbedingung:** ist `magick`/`convert` + `identify` nicht auf `PATH`, meldet
    der Gate **rot** mit Installationshinweis. Er wird **nie** still übersprungen
    — ein stiller Skip wäre genau der „Test, der nicht scheitern kann“, den
    DoD §10 verbietet.
-2. **Vorbedingung:** das Werkzeug muss die committete Probe
-   `scripts/fixtures/png_pixel_probe.png` **korrekt** messen. Erwartet sind
-   **Literale**, von Hand aus der im README genannten Pixelliste gezählt:
-   **4** verschiedene Farben und **3/8 = 0.375** Rotanteil. Ein Werkzeug, das
-   etwas anderes liefert (falsche Syntax, falsche Farbtiefe, kaputtes Decode),
-   fällt an dieser Vorbedingung durch, statt still falsche Zahlen in P1/P2 zu
-   speisen.
-3. **Gegenprobe:** unter einem `PATH` **ohne** ImageMagick muss der
+3. **Vorbedingung:** das Werkzeug muss die committete Probe
+   `scripts/fixtures/png_pixel_probe.png` **korrekt** messen — **zweimal**, als
+   Farbzahl **und** als Rotanteil. Erwartet sind **Literale**, von Hand aus der
+   im README genannten Pixelliste gezählt: **4** verschiedene Farben und
+   **3/8 = 0.375** Rotanteil. Ein Werkzeug, das etwas anderes liefert (falsche
+   Syntax, falsche Farbtiefe, kaputtes Decode), fällt an dieser Vorbedingung
+   durch, statt still falsche Zahlen in P1/P2 zu speisen.
+4. **Gegenprobe:** unter einem `PATH` **ohne** ImageMagick muss der
    Verfügbarkeits-Test **negativ** antworten, während die Tabellenprüfungen A1–A4
    weiterhin **grün** bleiben (sie brauchen nur `git`/`sed`/`awk`).
 

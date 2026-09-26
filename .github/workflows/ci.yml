@@ -335,6 +335,34 @@ jobs:
       - name: Validate workflow syntax
         uses: raven-actions/actionlint@v2
 
+      # B2 of scripts/golden_ref_test.sh measures the committed goldens with
+      # ImageMagick and asserts the tool as a PRECONDITION instead of assuming
+      # it (golden-fixtures.md §5.7). Without the tool the suite is RED by
+      # design, never a silent skip - a skipped check is a check that cannot
+      # fail (DoD §10). A stock `ubuntu-latest` image ships no ImageMagick at
+      # all, which is exactly what made this job red on cfad92 (run
+      # 36260409553: 230 passed / 17 failed = the 3 tool preconditions plus all
+      # 14 class-R B2 rows, none of which failed on its own subject).
+      #
+      # Version: the suite accepts BOTH major versions - ImageMagick 7 via
+      # `magick`, ImageMagick 6 via `convert`, both with `identify`. The
+      # runner's own apt set is expected to provide IM6 (noble's `imagemagick`
+      # depends on `imagemagick-6.q16`, so `convert`/`identify` and no `magick`),
+      # and that expectation is printed into the log below rather than trusted:
+      # a comment that asserted a version nobody measured would be an
+      # unverified claim (DoD §9), and `ubuntu-latest` moves. No version pin is
+      # added on purpose - a pin only breaks when the runner's package set
+      # moves, and correctness does not depend on the major version: the suite
+      # resolves either tool and then validates it against a committed probe
+      # with literal expected values (4 distinct colours, 0.375 red), so a
+      # wrong or broken build fails there with numbers instead of silently
+      # feeding P1/P2.
+      - name: Install ImageMagick (pixel gate of the golden suite)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          (magick -version || convert -version) | head -n 1
+
       # GOLDEN-REF-30 guard suite. Deliberately in `docs` and NOT in the Rust
       # container job: the guard is POSIX shell only, needs no GPU, no cargo and
       # no macOS, and must be verifiable on a plain runner. It asserts the exit
@@ -342,7 +370,8 @@ jobs:
       # re-pin gate in .githooks/pre-commit. Runs entirely in a temp sandbox
       # outside the checkout - it never writes the committed lock, never stages
       # into the real index, and needs no network. Takes ~1-2 min because each
-      # check/record re-derives the full fingerprint.
+      # check/record re-derives the full fingerprint. Needs ImageMagick on PATH
+      # (installed above) because of its B2 pixel check.
       - name: Test golden-reference guard (shell suite)
         run: sh scripts/golden_ref_test.sh
 
