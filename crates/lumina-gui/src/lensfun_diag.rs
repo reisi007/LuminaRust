@@ -143,6 +143,19 @@ impl Diagnostics for LogDiagnostics {
 ///
 /// The sink is handed to `f` rather than returned: a `MutexGuard` cannot
 /// outlive its guard, so a `&'static mut` return type would be a lie.
+///
+/// # What a caller counts, and where
+///
+/// This helper owns **where** the sink lives, never **what** a call did. A
+/// caller that must record "this really happened" — the G-06 cache counts the
+/// database loads it performed in `super::lensfun_auto::LOOKUP_ATTEMPTS` — has
+/// to do that counting *inside* `f`, next to the action it counts.
+///
+/// Doing it out here would be actively wrong: an add after `f` returns also
+/// counts an `f` that returned early **without doing the work**, and an early
+/// return is exactly what a "have we already asked?" memo looks like. Writing
+/// that memo into [`LogDiagnostics`]'s own `seen` set is the natural place for
+/// it, and it would then be reported as a lookup that never happened.
 pub(crate) fn with_diagnostics<R>(f: impl FnOnce(&mut LogDiagnostics) -> R) -> R {
     static SINK: OnceLock<Mutex<LogDiagnostics>> = OnceLock::new();
     let mut guard = SINK

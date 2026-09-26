@@ -9,13 +9,28 @@
 //!
 //! # The contract this cache keeps
 //!
-//! * A rebuild that finds **no profile** caches **nothing**, so every render
-//!   retries the lookup instead of pinning a stale miss across a DB install.
-//!   The dedup lives in the *sink*, never in this cache.
+//! * A rebuild whose **database load** misses caches **nothing**: every rebuild
+//!   re-runs the system lookup ([`LOOKUP_ATTEMPTS`]), so a Lensfun database
+//!   installed while the session runs is picked up on the next rebuild instead
+//!   of being pinned as a stale miss. The de-duplication lives in the *sink*
+//!   ([`super::lensfun_diag`]), never in this cache.
 //! * The lookup is **strict**: no loose profile matching, never a guessed
 //!   correction — same contract as the CLI's `build_lensfun_corrector`.
 //! * The corrector is the only identity that matters, so a profile that resolves
 //!   to identity is a cache entry like any other.
+//!
+//! # What is **not** pinned: the corrector miss
+//!
+//! The clause above is about the *database load*, and the tests only prove that
+//! much. Whether a `for_camera` miss — a camera whose profile is simply not in
+//! the database *yet* — is searched again on every rebuild is **not** pinned: a
+//! memo placed *between* the load and `for_camera` would leave this cache
+//! correct, would keep the attempt counter moving (the load did happen) and
+//! would add no log record (the skipped re-lookup could only repeat an
+//! already de-duplicated one). Nothing at the call site memoises the profile
+//! lookup, so the code has no such memo — but that placement is an **untested
+//! gap**, not a guarantee. `tests::lensfun_diagnostics` states the same limit
+//! from the test side.
 
 use super::lensfun_diag::with_diagnostics;
 use super::*;
@@ -30,10 +45,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// de-duplicating sink makes both look identical in the log — "no second
 /// record" cannot tell a retried lookup from an abandoned one.
 ///
-/// So the lookups are counted where they happen, **after** the load returns.
-/// A sink that gated the call, or an "already tried" memo placed in front of
-/// the load, both freeze the counter; a counter read before the call would let
-/// the second of those through.
+/// So the lookups are counted **where they happen**: inside the same closure
+/// as the load, immediately after `load_system_with` returns (see
+/// [`LuminaApp::ensure_lensfun_cache`]). Every path that skips the load also
+/// skips the add — a memo in front of the call, and equally a memo *inside* the
+/// closure, which is where an "have we already asked?" check would naturally be
+/// written (the sink's own `seen` set). A counter read *before* the load, or an
+/// add *after* the closure returned, would instead count a load that never
+/// happened and hide exactly that regression.
+///
+/// What the counter does **not** cover: the corrector lookup behind the load. It
+/// counts *database loads*, not profile searches — see the module doc's
+/// "What is not pinned".
 ///
 /// The reader is currently test-only (hence the `cfg`), so the counter's only
 /// production cost is one relaxed atomic add per rebuild. It is kept in
@@ -132,23 +155,29 @@ impl LuminaApp {
             return;
         }
         // Rebuild: a new source (or new dimensions) needs a new modifier.
-        // A rebuild that finds no profile caches NOTHING, so every render
-        // retries the lookup instead of pinning a stale miss across a DB
-        // install — the lookup itself is strict (never a guessed
-        // correction, same contract as the CLI `build_lensfun_corrector`).
-        // LENSFUN-CALLER-37: the lookup goes through the app's own sink, so
-        // the outcome is a real log record at a real level. The *result* is
-        // still not cached — only the reporting is de-duplicated.
+        // A rebuild whose database load misses caches NOTHING, so every render
+        // retries the load instead of pinning a stale miss across a DB install
+        // — the lookup itself is strict (never a guessed correction, same
+        // contract as the CLI `build_lensfun_corrector`). LENSFUN-CALLER-37: the
+        // load goes through the app's own sink, so the outcome is a real log
+        // record at a real level. The *result* is still not cached — only the
+        // reporting is de-duplicated.
         //
-        // The attempt is counted **after** the load returns, so the counter
-        // means "lookups actually performed" and not merely "reached this
-        // line". That placement is load-bearing: a "already tried" memo between
-        // the counter and the load — the obvious way to accidentally turn
-        // reporting state into a result cache — would leave the counter frozen
-        // and turn the retry assertion red. Counting before the call would let
-        // exactly that regression through.
-        let db = with_diagnostics(lumina_lensfun::LensfunDb::load_system_with);
-        LOOKUP_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        // The attempt is counted **inside this closure**, by the same code path
+        // that performs the load and immediately after it returns, so the
+        // counter means "lookups actually performed" and not merely "reached
+        // this line". That placement is load-bearing: any "already tried" memo
+        // that returns before `load_system_with` — in front of the call, or
+        // inside the closure (the sink's own `seen` set is the natural home for
+        // one) — freezes the counter and turns the retry assertion red. The
+        // obvious ways to get this wrong both pass: an add *after* the closure
+        // (where the counter used to sit) counts a load that was skipped, and
+        // an add *before* the load counts a lookup that never happened.
+        let db = with_diagnostics(|sink| {
+            let db = lumina_lensfun::LensfunDb::load_system_with(sink);
+            LOOKUP_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+            db
+        });
         let Some(db) = db else {
             return;
         };
