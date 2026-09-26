@@ -11,7 +11,8 @@ fn spot_list_keeps_null_and_missing_generative_entries_visible() {
             "artifact":{"id":"record-1","relative_path":"missing.lumina.zdata","format":"lumina-zdata",
             "checksum":"blake3:abc","width":1,"height":1,"channels":"rgba8","data_version":"1"}}),
     ];
-    let displayed = spot_ops::display_spot_entries(&entries, Path::new("."));
+    // MCP-PARITY-A: the spot mutation ops moved to the shared `lumina-stages`.
+    let displayed = lumina_stages::spot_ops::display_spot_entries(&entries, Path::new("."));
     assert_eq!(
         displayed.len(),
         2,

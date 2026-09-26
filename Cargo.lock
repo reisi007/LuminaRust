@@ -2146,6 +2146,7 @@ dependencies = [
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
+ "lumina-stages",
  "rayon",
  "serde",
  "serde_json",
@@ -2258,6 +2259,7 @@ dependencies = [
  "lumina-iptc",
  "lumina-raw",
  "lumina-sidecar",
+ "lumina-stages",
  "serde",
  "serde_json",
  "tempfile",
@@ -2313,6 +2315,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "zstd",
+]
+
+[[package]]
+name = "lumina-stages"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "log",
+ "lumina-core",
+ "lumina-raw",
+ "lumina-sidecar",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

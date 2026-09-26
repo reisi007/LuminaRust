@@ -19,8 +19,21 @@ fn mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools() {
     let tools = listing["result"]["tools"].as_array().unwrap();
     // Drift guard pinned to the SOLL (feature/platform/mcp-server.md):
     // 7 editing tools + lumina_analyze + 4 F-101-F1 CLI-coverage tools
-    // + 5 LRPAR-G15-IPTC-S7 metadata tools.
-    assert_eq!(tools.len(), 17, "tool set drifted; update SOLL + tests");
+    // + 5 LRPAR-G15-IPTC-S7 metadata tools
+    // + 4 MCP-PARITY-A stage-editor tools (spot, lens-blur, geometry, upright).
+    assert_eq!(tools.len(), 21, "tool set drifted; update SOLL + tests");
+    // The four stage editors must be visible, not just counted.
+    for name in [
+        "lumina_spot",
+        "lumina_lens_blur",
+        "lumina_geometry",
+        "lumina_upright",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "tools/list is missing {name}"
+        );
+    }
 }
 
 // ---- F-082-FOLLOWUP: onnx-rt wiring semantics ----
