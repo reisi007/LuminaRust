@@ -388,11 +388,19 @@ versteckt.
    Beim Schreiben ist zu beachten: der Produktionstest darf **nicht** wieder so
    gestellt werden, dass er den Fehlerzweig behauptet.
 3. **Der Lookup-Zähler belegt einen echten zweiten Lookup.** `LOOKUP_ATTEMPTS`
-   wird **nach** `load_system_with` hochgezaehlt, zaehlt also durchgefuehrte
-   Lookups und nicht bloss erreichten Code. Damit ist die Regression
-   "Deduplizierungszustand wird zum Ergebnis-Cache" (Senke gate't den Aufruf)
-   **und** ein "bereits versucht"-Memo vor dem Laden rot. Verifiziert: beide
-   Mutationen lassen `lensfun_diagnostics` rot laufen.
+   wird **im `with_diagnostics`-Closure, unmittelbar nach `load_system_with`**
+   hochgezaehlt, zaehlt also durchgefuehrte Lookups und nicht bloss erreichten
+   Code. Rot laufen damit **vier** Mutationen: ein Memo vor dem Laden
+   (ungeschluesselt und auf den Cache-Key geschluesselt) und ein Memo **im**
+   Closure (ungeschluesselt und geschluesselt) — die Senke gate't den Aufruf
+   ebenso wie ein "bereits versucht"-Memo davor. Verifiziert.
+   **Bleibende Grenze, ausdruecklich benannt:** ein Memo, das den FFI-Aufruf
+   ueberspringt, den Zaehler aber **weiterlaufen** laesst, bleibt gruen — der
+   Zaehler liegt in derselben Crate wie das Memo. Das waere eine plausible
+   "FFI-Lauf vermeiden"-Optimierung, und sie wuerde genau die hier verhinderte
+   Regression wieder einfuehren. Nur ein Zaehlen innerhalb `lumina-lensfun`,
+   also unterhalb des Memos, schliesst sie; das ist bewusst offen gelassen und
+   nicht als geloest dargestellt.
 
 <details><summary>Historie: der frühere, inzwischen überholte Stand</summary>
 

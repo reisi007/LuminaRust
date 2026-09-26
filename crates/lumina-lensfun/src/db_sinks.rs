@@ -40,12 +40,20 @@ impl Diagnostics for SilentDiagnostics {
 ///
 /// # Why it is nonetheless not optional
 ///
-/// [`LensfunDb::load_system`] — the entry point `lumina-gui` and `lumina-cli`
-/// still use — constructs a fresh instance of this per call, so there is no
-/// de-duplication state to carry. Without the `stderr` line the success path
-/// would be completely silent, and a database failure would be a silent,
-/// byte-identical no-op. Two remaining limits are stated in
-/// `feature/platform/capability-matrix.md` and are **not** solvable from inside
+/// [`LensfunDb::load_system`] constructs a fresh instance of this per call, so
+/// there is no de-duplication state to carry. Without the `stderr` line the
+/// success path would be completely silent, and a database failure would be a
+/// silent, byte-identical no-op.
+///
+/// **Status 2026-09-26 (`LENSFUN-CALLER-37`):** this is no longer a *live* limit
+/// for the product. `lumina-gui` (`src/lensfun_auto.rs`) and `lumina-cli`
+/// (`src/lensfun_cli.rs`) both call `load_system_with` with a long-lived,
+/// de-duplicating sink, so **zero product call sites of `load_system()` remain**
+/// outside its own definition. What is left of the two original limits is
+/// recorded in `feature/platform/capability-matrix.md` §"Pflicht des Aufrufers
+/// von `load_system()`": the CLI still writes unlevelled text to `stderr`
+/// (correct for a terminal program, but not a log record). The limits are
+/// **not** solvable from inside
 /// this crate:
 ///
 /// - a Dock/Finder-launched macOS app has no `stderr` at all;
@@ -194,8 +202,11 @@ impl Diagnostics for ReportOnce {
     }
 
     fn failed(&mut self, err: &SystemDbError) {
-        // Key on the error *kind*, not its full text, so a stable, resolvable
-        // system database does not permanently suppress a later real failure.
+        // Key on the error's **full text** (its kind plus every probed
+        // location), not on its kind alone, so a resolvable database does not
+        // permanently suppress a *later, different* real failure. Cost: two
+        // failures differing only in a probed path are reported twice — the
+        // deliberate trade, since the alternative hides a genuine change.
         if self.first_time(format!("failed:{err}")) {
             StderrDiagnostics.failed(err);
         }

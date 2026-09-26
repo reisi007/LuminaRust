@@ -213,7 +213,14 @@ impl LensfunDb {
     /// What it cannot do is route into the host's logger, de-duplicate, or be
     /// seen at all by a Dock/Finder-launched app — those are the caller's
     /// obligations. Migrate callers to [`Self::load_system_with`] with a
-    /// long-lived [`report_once`] sink. Open obligation, recorded in
+    /// long-lived [`report_once`] sink.
+    ///
+    /// **Closed 2026-09-26 (`LENSFUN-CALLER-37`):** both product callers were
+    /// migrated — `lumina-gui` with its own `LogDiagnostics` on the app's `log`
+    /// facade, `lumina-cli` with a process-lifetime `ReportOnce`. This function
+    /// now has **no** caller at all inside the workspace — neither product code
+    /// nor a single test — and survives only as a public convenience for
+    /// external users. Recorded in
     /// `feature/platform/capability-matrix.md`.
     pub fn load_system() -> Option<LensfunDb> {
         Self::load_system_with(&mut StderrDiagnostics)

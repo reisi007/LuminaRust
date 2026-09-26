@@ -115,12 +115,18 @@ ihre Aussage stützt. Das ist nötig, weil eine Render-Invariante auf einem
 
 ## 4. Inventar (Version 1)
 
-62 committete Golden-Dateien. Die in `Agents.todo.md` genannte Zahl „56" ist die
-Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon erzeugen 46 ein
-Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden. Die restlichen 16
-Goldens gehören zu den anderen kittest-Binaries und zum Lib-Test.
+**66** committete Golden-Dateien (gezählt mit
+`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
+`golden_ref.sh check` als `goldens.count`). Die in `Agents.todo.md` genannte Zahl
+„56" ist die Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon
+erzeugen 46 ein Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden.
+Die restlichen **20** Goldens gehören zu den anderen kittest-Binaries und zum
+Lib-Test (46 + 20 = 66).
 
-**Bilanz: 14 Render-Invarianten, 48 Chrome-/Layout-Invarianten.**
+**Bilanz: 14 Render-Invarianten (Klasse R), 52 Chrome-/Layout-Invarianten
+(Klasse C)** — 66 Zeilen, ausgezählt aus der Tabelle dieses Abschnitts.
+(Zahlenkorrektur 2026-09-26: die Fassung vor der Zeilen-Ergänzung nannte 62 /
+16 / 48 und war nach der Ergänzung um genau die vier neuen Goldens zu niedrig.)
 
 ### 4.1 `kittest_snapshots` (46 Goldens, Binary `tests/kittest_snapshots.rs`)
 
@@ -173,7 +179,7 @@ Goldens gehören zu den anderen kittest-Binaries und zum Lib-Test.
 | 45 | `navigator_viewport.png` | C | S2 | Navigator-Viewport-Rechteck |
 | 46 | `toast_info.png` | C | S2 | Toast-Overlay |
 
-### 4.2 Weitere kittest-Binaries (15 Goldens)
+### 4.2 Weitere kittest-Binaries (20 Goldens)
 
 | # | Golden | Klasse | Fixture | Nachweis-Scope | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -193,6 +199,21 @@ Goldens gehören zu den anderen kittest-Binaries und zum Lib-Test.
 | 60 | `parity_paths_detail_gpu.png` | **R** | S2-Szenario | Detail-Stufe, GPU | `kittest_parity` |
 | 61 | `parity_paths_lensfun_corrector_cpu.png` | **R** | S2-Szenario | Lensfun-Korrektur, CPU | `kittest_parity` |
 | 62 | `parity_paths_lensfun_corrector_gpu.png` | **R** | S2-Szenario | Lensfun-Korrektur, GPU | `kittest_parity` |
+| 63 | `mask_local_tone_curve.png` | C | S2 | Mask-Local-Kurvenblock: Kanalreihe, Graph, Reset | `kittest_mask_local` |
+| 64 | `mask_local_color.png` | C | S2 | Mask-Local-Color: HSL-Bänder, Vibrance-Paar, Grading | `kittest_mask_local` |
+| 65 | `mask_local_presence.png` | C | S2 | Mask-Local-Presence: Texture/Clarity/Dehaze | `kittest_mask_local` |
+| 66 | `mask_local_detail.png` | C | S2 | Mask-Local-Detail: Sharpening, Noise Reduction, Resets | `kittest_mask_local` |
+
+**Zeilen 63–66 ergänzt 2026-09-26** (Verifikationsbefund `GUI-INT-MASKLOCAL-38`/M3).
+Die vier Mask-Local-Goldens waren seit `2e9827f` committet, aber in dieser
+Tabelle nie geführt — bei genau der Aufgabe, deren Abnahmekriterium (c) „die
+Goldens sind als R1/S1/S2 klassifiziert" verlangt. Ihre Klassifikation stand
+bisher nur in Doc-Kommentaren der Testdateien („Class C / S2"), die
+`golden_ref.sh` nicht liest. **Sichtbarkeitsangaben je Golden** (welche Zeilen
+über dem Fold liegen) stehen in `feature/product/ai-masks.md` §6.3 und im
+Doc-Kommentar von `tests/kittest_mask_local.rs`; beide sind aus den
+committeten PNGs gelesen, nicht geschätzt. `golden_ref.sh check` vergleicht
+Digests, nicht diese Tabelle — eine fehlende Zeile fällt dort nicht auf.
 
 ### 4.3 Testseitig erzwungene Wächter
 

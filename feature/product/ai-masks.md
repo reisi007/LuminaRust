@@ -1163,8 +1163,12 @@ Je mask-local Editor gilt verbindlich **beides**:
    (`selected_mask_local_*` / `has_mask_local_*` / `recipe()`). Ein reiner
    „das Widget wurde gepaint"-Test ist **kein** Interaktionsnachweis und deckt
    Abschnitt 2 nicht ab.
-   **Reihenfolge-Regel (F-4):** auf **jedes** Gest folgt erst `settle_persisted`
-   und **dann** die Datei-Assertion, und erst danach das nächste Gest. Grund ist
+   **Reihenfolge-Regel (F-4):** auf **jedes Wertgest** (Drag, Feldklick) folgt
+   erst `settle_persisted` und **dann** die Datei-Assertion, und erst danach das
+   nächste Gest. Bewusst auf Wertgesten eingeschränkt: `mask_local_color_controls.rs`
+   hat zwei aufeinanderfolgende `Add color`-Klicks ohne Settle dazwischen, weil
+   beide je einen **eigenen** Listenanhang erzeugen, sich also nicht gegenseitig
+   überschreiben können. Grund ist
    in 6.1 gemessen: die 150-ms-Uhr des entprellten Saves wird von jedem Edit neu
    gestartet, eine Datei-Assertion am Testende könnte also von einem *späteren*
    Gest erfüllt werden, ohne dass das geprüfte Gest etwas gespeichert hat.
@@ -1292,8 +1296,10 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   Commit des ersten hinaus. **Kein Wert geht dabei verloren** — der Save trägt
   den kompletten Layer-Zustand —, aber „die Datei enthält meinen Edit *jetzt*"
   gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
-  **jedes** Gest ein `settle_persisted` **und** eine Datei-Assertion, bevor das
-  nächste Gest kommt (F-4). Ein erster Entwurf von
+  **jedes Wertgest** ein `settle_persisted` **und** eine Datei-Assertion, bevor
+  das nächste Gest kommt (F-4). Die eine benannte Ausnahme — zwei `Add
+  color`-Klicks ohne Settle — steht in `tests/mask_local_color_controls.rs` und
+  ist im Doc-Kommentar derselben Datei begründet. Ein erster Entwurf von
   `mask_local_color_controls.rs` hatte genau diesen Defekt (kein Settle
   zwischen zwei Drags), und der Trace zeigte, dass der erste Commit sein
   Debounce-Fenster nie bekam.
@@ -1331,18 +1337,18 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 11 | **Saturation** (Vibrance-Paar) | ja — `mask_local_color_controls` (negativ gezogen) | dito | — |
 | 12 | Point Color **Remove** | ja — `mask_local_color_controls` (2 Einträge, der **zweite** Button) | `remove_mask_local_point_color(id)` | — |
 | 13 | Point Color `Add color` | ja — `mask_local_editors`, `mask_local_reload` | `add_mask_local_point_color` | — |
-| 14 | Reset Point-Color-Block | **nein** (Button nicht geklickt) | `remove_mask_local_point_color("")` | nur Mechanik: dieselbe Wirkung wie der geklickte Gesamtblock-Reset, der den Block mitlöscht |
+| 14 | Reset Point-Color-Block | **nein** (Button nicht geklickt) | `remove_mask_local_point_color("")` | nur Mechanik: derselbe Effekt wie der geklickte Gesamtblock-Reset auf diesen Block — `remove_mask_local_point_color("")` verzweigt auf `recipe.reset_local_point_color()` (`mask_local_color.rs:206-212`), und `reset_local_color()` ruft dieselbe Funktion (`color_grading.rs:291`). Dass dieser Pfad **persistiert** funktioniert, ist belegt: `mask_local_editors.rs:215-232` fuellt die Liste und weist `Some(1)` auf der Platte nach, `:277-278` klickt den Gesamtblock-Reset, `:302` weist `persisted.point_color.is_none()` nach. (Korrektur 2026-09-26: eine Zwischenfassung dieses Satzes behauptete, die Liste sei **zuvor** geleert und `:302` sei vakuos. Beides falsch — `:197-203` ist die globale-HSL-Assertion, und `:302` ist der einzige persistierte Zeuge. Die Zwischenfassung wurde durch Messung widerlegt und ist hiermit zurueckgenommen.) |
 | 15 | Grading-Bereichswahl (3) | ja — `mask_local_editors` (midtones), `mask_local_color_controls` (midtones, highlights) | `selectable_label` | — |
 | 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
 | 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
 | 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (Hue/Saturation/Luminance sind **drei** ausgeschriebene `Slider`-Blöcke mit **derselben** Aufrufform `set_mask_local_grading_field(<range>, "<feld>", wert)`; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
-| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Der **Annahmepfad** ist getestet (`src/tests/mask_local_color.rs:102-105` setzt, `:114-115` liest zurück, `:136-139` belegt das Überleben eines Bereichs-Resets); **ungedeckt** ist der *Ablehnungspfad* — `invalid_local_color_edits_are_refused_without_mutating` kennt keinen Fall `("balance"/"blending", "value", außerhalb des Bereichs)` und kein unbekanntes Target. |
+| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Der Annahmepfad ist getestet (`src/tests/mask_local_color.rs:102-105` setzt, `:114-115` liest zurück, `:136-139` belegt das Überleben eines Bereichs-Resets) und der Ablehnungspfad **ebenfalls**, auf Crate-Ebene: `lumina-sidecar/src/tests/local_adjustments_color.rs::local_color_uses_the_existing_global_ranges` verweigert genau `("balance","value",1.2)` und `("blending","value",1.2)` **und** das unbekannte Target `("whites","hue",30.0)` und belegt `local.color_grading == before`. Die Zeile heißt `nein`, weil der **Klick** fehlt — nicht, weil die Semantik ungetestet wäre. (Korrektur 2026-09-26: eine frühere Fassung behauptete hier, der Ablehnungspfad sei ungedeckt, und dass der genannte Test kein unbekanntes Target kenne. Beides ist falsch; dieser Absatz war zweimal falsch.) |
 | 20 | Grading **Blending** | **nein** | `set_mask_local_grading_field("blending", "value", …)` | dito wie Zeile 19 |
 | 21 | Reset pro Bereich | ja — `mask_local_color_controls` (Bereichs-Scope mit Zeuge) | `reset_mask_local_grading(range)` | — |
 | 22 | `all local color reset` | ja — `mask_local_editors` | `reset_mask_local_color` | — |
 | **P1.2c Presence** |||||
 | 23 | Texture | **nein** | `set_mask_local_presence` | nur Mechanik (drei Regler in **einer** `for`-Schleife über `PRESENCE_FIELDS`; angeklickt ist davon **nur** Dehaze, Zeile 25) |
-| 24 | Clarity | **nein** | dito | nur Mechanik (drittes Element derselben Schleife wie Zeile 25) |
+| 24 | Clarity | **nein** | dito | nur Mechanik (`PRESENCE_FIELDS = ["texture", "clarity", "dehaze"]`, `mask_local_presence.rs:29`: Clarity ist das **zweite** Element, Dehaze/Zeile 25 das dritte) |
 | 25 | Dehaze | ja — `mask_local_editors` | dito | — |
 | 26 | `all local presence reset` | ja — `mask_local_editors` | `reset_mask_local_presence` | — |
 | **P1.2d Detail** |||||
@@ -1368,9 +1374,19 @@ stehen hinter einem Button, dessen Wirkung ein geklickter Button belegt. Wer
 das nicht gelten lässt, braucht 13 weitere Drag-/Click-Tests über dieselben
 Schleifen — das wäre der von der Testabdeckungs-Politik verlangte
 unnötige Test, solange kein Mutationsversuch eine Abweichung sichtbar macht.
-Der eine Mutationstest pro Schleife (siehe 6.1) deckt genau diese
-Gemeinsamkeit auf: er wird rot, sobald der gemeinsame Helper nicht mehr
-schreibt.
+Für die **Color**-Schleife deckt das der Mutationstest in 6.1 auf (`local_color_slider`
+schreibt nicht mehr → rot). Für die **Presence**- und **Detail**-Schleifen
+(Zeilen 23/24, 28/29/30, 32) gibt es **keinen** Schleifen-Mutationstest; eine
+Vertauschung der Feldindizes in ihnen wäre also nicht nachweisbar. Die
+`nein`-Einstufung selbst bleibt richtig — sie sagt nichts über Klicks —, aber
+der diese Absatz stützende Satz gilt **nur** für Zeile 18 und ihre Geschwister.
+(Zeilen 18/16/17 sind die *Color*-Schleife und **sind** durch den Mutationstest
+gedeckt. Zeilen 6/8 sind die HSL-Bänder und stehen unter derselben Mutation: der
+Saturation-Klick in `mask_local_editors.rs` macht eine Vertauschung der
+`HSL_FIELDS`-Indizes sichtbar, weil `mask_local_color.rs` dieselbe Form hat —
+Label aus Index, Feld aus Array. Korrektur 2026-09-26 nach
+Verifikationsbefund N3; Zeilengruppierung berichtigt nach F-10, wo eine
+Zwischenfassung die Zeilen 6/8 faelschlich Presence/Detail zurechnete.)
 
 #### 6.3 Ausdrückliche Grenze der Prüfbarkeit (zusätzlich zu §5)
 

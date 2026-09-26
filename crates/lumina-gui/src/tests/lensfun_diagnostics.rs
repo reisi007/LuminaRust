@@ -3,8 +3,9 @@
 //!
 //! 1. an unresolvable database is reported **once per process**, not once per
 //!    render;
-//! 2. the *lookup* still runs on every rebuild (a miss caches nothing), so a
-//!    database installed later is picked up;
+//! 2. the *database load* runs again on every rebuild — including a rebuild
+//!    with an **unchanged** key after a miss — so a database installed later is
+//!    picked up instead of being pinned as a stale miss;
 //! 3. every event reaches the log at a **defined level**, not as bare text.
 //!
 //! # Coverage, and what is machine-dependent
@@ -16,9 +17,26 @@
 //! Clause 2 needs the *production* call site, and there the branch that runs
 //! depends on the host: a machine with a system Lensfun database takes the
 //! `resolved`/`debug` path, one without takes `failed`/`error`. The production
-//! test therefore asserts the branch-independent facts (the lookup was entered
+//! test therefore asserts the branch-independent facts (the load was entered
 //! again, the cache stayed empty, no duplicate record) and says so. It does
 //! **not** pretend to cover the DB-miss branch; that is covered above.
+//!
+//! # What clause 2 does **not** pin
+//!
+//! The attempt counter counts **database loads**, not profile searches. A memo
+//! between the load and `for_camera` — the natural place to memoise "this
+//! camera has no profile (yet)" — would leave this cache correct, would keep the
+//! counter moving and would add no log record, so no assertion here could see
+//! it. The production call site has no such memo, but that placement is an
+//! untested gap rather than a guarantee; `lensfun_auto`'s module doc states the
+//! same limit from the code side.
+//!
+//! What the counter *does* pin is the load: the add sits **inside** the closure
+//! that performs it, so a memo that returns before `load_system_with` freezes
+//! the counter. That placement is load-bearing, not incidental: with the add
+//! *after* the closure, an "already asked" memo written into the sink's own
+//! `seen` set runs this whole test green. The measured per-mutation evidence is
+//! on the production test below.
 //!
 //! # How the log is observed
 //!
@@ -205,8 +223,9 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 }
 
 /// **Clause 2 + the call site:** the production lookup routes through the
-/// app's log facade — never through `stderr` — and a miss caches nothing,
-/// so the next rebuild retries instead of pinning a stale miss.
+/// app's log facade — never through `stderr` — and a miss on the *database
+/// load* caches nothing, so the next rebuild retries instead of pinning a stale
+/// miss across a database install.
 ///
 /// # Why the attempt counter, and not just "no new record"
 ///
@@ -218,6 +237,33 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 /// the production call site counts its attempts
 /// ([`lensfun_auto::lensfun_lookup_attempts`]) and this test watches the
 /// counter, not the log.
+///
+/// # Non-vacuity: the four memos this test actually kills
+///
+/// The counter is bumped *inside* the same closure as the load, which kills
+/// every memo that skips the load **and** the counting with it. Each of the
+/// following was applied to the production call site, run, and observed to fail
+/// here; each was then reverted:
+///
+/// | memo | first red assertion |
+/// |---|---|
+/// | inside the closure, **unkeyed** (the sink's own `seen` set) | "a second rebuild with a changed key …" |
+/// | inside the closure, **keyed on the cache key** | "an unchanged key after a miss …" |
+/// | in front of `with_diagnostics`, **keyed on the cache key** | "an unchanged key after a miss …" |
+/// | in front of `with_diagnostics`, **unkeyed** | "a second rebuild with a changed key …" |
+///
+/// The third rebuild earns its keep: a memo *keyed on the cache key* cannot fire
+/// on the first two calls (they change the key), so only the repeat of the same
+/// key catches it. An unkeyed memo needs no such help — it fails one call
+/// earlier.
+///
+/// The first row is also the one the previous production layout let through:
+/// with the add *after* the closure, the unkeyed in-closure memo runs this test
+/// **green** (measured, same machine, same commit's test file). That is the
+/// regression the current layout closes.
+///
+/// What stays green, and is therefore an untested gap rather than a covered
+/// claim: a memo between the load and `for_camera` (see the module doc).
 #[test]
 fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     clear_captured_logs();
@@ -266,13 +312,14 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // `!fresh` early-out cannot swallow the call.
     app.ensure_lensfun_cache(65, 49);
     let after_second = records_at(Level::Error).len() + records_at(Level::Debug).len();
-    // The *decisive* clause: the second rebuild really ran the lookup again.
+    // The *decisive* clause: the second rebuild really ran the load again.
     // Asserting only "no new record" cannot tell a retried lookup from an
     // abandoned one — both leave the record count unchanged — so a
     // de-duplicating sink that accidentally **gated** the call, or an "already
     // tried" memo in front of the load, would satisfy such a test while pinning
     // a stale miss for the rest of the session. The counter, which the
-    // production call site increments *after* the load returns, separates them.
+    // production call site increments *inside* the load's closure and right
+    // after the load returns, separates them.
     //
     // `>` rather than `== +1`. As of this writing no other test both sets
     // `loaded_lens_identity` and drives a render, so an exact `+1` would be
@@ -301,8 +348,10 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // see it. Repeating a key is exactly the real-world shape — the user keeps
     // previewing the same photo at the same size — and it is the shape that
     // decides whether a database installed *later* is ever noticed. Because the
-    // miss left `lensfun_cache` empty, `fresh` is still true here, so the lookup
-    // must run again.
+    // miss left `lensfun_cache` empty, `fresh` is still true here, so the load
+    // must run again. A memo inside the closure that is keyed on the cache key
+    // fails here for the same reason; the unkeyed variant needs no such help and
+    // already fails one call earlier.
     let after_second_attempts = lensfun_lookup_attempts();
     app.ensure_lensfun_cache(65, 49);
     assert!(

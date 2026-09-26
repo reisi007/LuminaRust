@@ -150,15 +150,105 @@ fn render_with_corrector_changes_pixels() {
 /// The de-duplication logic itself is `lumina-lensfun`'s (`ReportOnce`) and is
 /// tested there. What is specific to the CLI — and what this pins — is the
 /// persistence across calls.
+///
+/// # Why this asserts on the sink's *state*, not on its address
+///
+/// The obvious proof — "both calls got the same `*const _`" — is **vacuous in a
+/// debug build**, which is how `cargo test` runs: a fresh `ReportOnce` created
+/// and dropped inside every call is re-materialised in the same stack slot, so
+/// the address is identical for a per-call sink and a process-lifetime one.
+/// Measured *in this crate*, with `with_diagnostics` temporarily constructing a
+/// fresh `ReportOnce` per call (i.e. exactly the regression below): the
+/// address-comparison assertion still **passed**. An address therefore cannot
+/// fail if the sink stops being process-lifetime, which is precisely what this
+/// test exists to catch.
+///
+/// Instead it reads the sink's own de-duplication state: `ReportOnce` derives
+/// `Debug` and its only field is the `Mutex<BTreeSet<String>>` of keys it has
+/// already reported, so `format!("{sink:?}")` shows which events this instance
+/// has seen. A **fresh** sink can only ever show the events of its own call, so
+/// "the second call's sink still knows the first call's event" is unsatisfiable
+/// for a per-call sink and true for a process-lifetime one. No timing, no
+/// pointer, no sleep.
+///
+/// The events are synthetic (`SystemDbError::NotFound` over a made-up probe
+/// directory) and keyed on a unique path per test, so they never collide with a
+/// real lookup's keys and never depend on whether the host has a Lensfun
+/// database. Only the *marker substrings* are asserted, never the `Debug`
+/// punctuation around them, so a cosmetic change to `ReportOnce`'s derived
+/// formatting does not break this test — a genuinely unreachable sink state
+/// does.
 #[test]
 fn the_diagnostics_sink_persists_across_calls_so_a_batch_reports_once() {
-    let first = crate::lensfun_cli::with_diagnostics(|sink| sink as *const _);
-    let second = crate::lensfun_cli::with_diagnostics(|sink| sink as *const _);
+    use lumina_lensfun::db_path::{MissReason, ProbeMiss, Source, SystemDbError};
+    use lumina_lensfun::system_load::Diagnostics;
+
+    // Two distinct failures, so a second report proves the sink kept its state
+    // while a repeat proves the de-duplication still works on it.
+    let failure = |name: &str| SystemDbError::NotFound {
+        misses: vec![ProbeMiss {
+            dir: std::path::PathBuf::from(format!("/nonexistent/cli-sink-{name}")),
+            source: Source::PlatformDefault,
+            reason: MissReason::Absent,
+        }],
+    };
+    let alpha = failure("alpha");
+    let beta = failure("beta");
+    // The marker is part of the error text, which is part of the sink's key.
+    const ALPHA_MARKER: &str = "/nonexistent/cli-sink-alpha";
+    const BETA_MARKER: &str = "/nonexistent/cli-sink-beta";
+
+    // First call: report a failure and read the sink's state back.
+    let after_alpha = crate::lensfun_cli::with_diagnostics(|sink| {
+        sink.failed(&alpha);
+        format!("{sink:?}")
+    });
+    assert!(
+        after_alpha.contains(ALPHA_MARKER),
+        "the failure must have reached the sink, otherwise the assertions below \
+         prove nothing: {after_alpha}"
+    );
+    assert!(
+        !after_alpha.contains(BETA_MARKER),
+        "the sink must not know a failure nobody reported yet: {after_alpha}"
+    );
+
+    // **The decisive call:** a *different* failure, through a *separate*
+    // `with_diagnostics` call. Its sink must still remember the first call's
+    // failure — which is only possible if both calls received the same
+    // instance. A per-call sink starts empty and cannot satisfy this.
+    let after_beta = crate::lensfun_cli::with_diagnostics(|sink| {
+        sink.failed(&beta);
+        format!("{sink:?}")
+    });
+    assert!(
+        after_beta.contains(ALPHA_MARKER),
+        "the second call must see the failure the first call already reported: \
+         the sink is not process-lifetime, so a per-image lookup re-prints the \
+         failure and a batch spams one block per file"
+    );
+    assert!(
+        after_beta.contains(BETA_MARKER),
+        "the second call's own failure must be recorded as well: {after_beta}"
+    );
+
+    // A third image reporting the *same* failure as the first adds no key: the
+    // de-duplication the process-lifetime sink exists for actually works.
+    let after_repeat = crate::lensfun_cli::with_diagnostics(|sink| {
+        sink.failed(&alpha);
+        format!("{sink:?}")
+    });
     assert_eq!(
-        first, second,
-        "every call must receive the same process-lifetime sink, otherwise a \
-         per-image lookup re-prints the failure and the batch spams one block \
-         per file"
+        after_repeat.matches(ALPHA_MARKER).count(),
+        1,
+        "a repeated identical failure must occupy exactly one key, so the batch \
+         reports it once: {after_repeat}"
+    );
+    assert_eq!(
+        after_repeat.matches(BETA_MARKER).count(),
+        1,
+        "the first call's keys must survive the third call untouched: \
+         {after_repeat}"
     );
 }
 
