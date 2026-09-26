@@ -16,8 +16,14 @@
 //!   → local Point Color              (P1.2b, `local_color`)
 //!   → local Vibrance / Saturation    (P1.2b, `local_color`)
 //!   → local Color Grading            (P1.2b, `local_color`)
+//!   → local Noise Reduction          (P1.2d, `local_detail`, optional)
+//!   → local Sharpening               (P1.2d, `local_detail`, optional)
 //!   → fractional mask blend          (P0, `local_adjustments`)
 //! ```
+//!
+//! The two `local_detail` rows are optional and absent in a P1.2c-only layer;
+//! they are listed because `presence_plane` below also builds the prefix the
+//! P1.2d kernel continues from.
 //!
 //! That is **exactly** the global kernel position (channel LUT → presence →
 //! curve → color), and it does not move the already-verified P1.2a/P1.2b
@@ -105,7 +111,11 @@ pub(super) fn apply_mask_local_wb_basic_presence_tone_color(
 /// [`crate::presence_stages`]). The chain is widened back to `f64` for the tone
 /// curve and the colour stages, and the single `u8` rounding still happens only
 /// at the very end of the layer.
-fn presence_plane(pixels: &[u8], recipe: &MaskLocalRecipe) -> Vec<[f32; 3]> {
+///
+/// The MASK-LOCAL-P1.2d detail kernel reuses this exact builder so a layer that
+/// carries both blocks sees the *same* un-quantized WB/Basic/presence values
+/// before its detail stages, instead of a second copy of the arithmetic.
+pub(super) fn presence_plane(pixels: &[u8], recipe: &MaskLocalRecipe) -> Vec<[f32; 3]> {
     let gains = recipe.relative_white_balance_gains();
     pixels
         .as_chunks::<4>()
@@ -130,7 +140,12 @@ fn presence_plane(pixels: &[u8], recipe: &MaskLocalRecipe) -> Vec<[f32; 3]> {
 /// calls literally the same functions as the global kernel. The three
 /// neighbourhoods/statistics are full-frame; the caller has not passed and does
 /// not have access to a mask.
-fn apply_local_presence(plane: &mut [[f32; 3]], width: usize, height: usize, p: &Presence) {
+pub(super) fn apply_local_presence(
+    plane: &mut [[f32; 3]],
+    width: usize,
+    height: usize,
+    p: &Presence,
+) {
     // Each DoG pass reads a snapshot of the plane, exactly like the global
     // kernel's `pixels.to_vec()`, so a pixel's neighbours always carry the
     // pre-pass value.

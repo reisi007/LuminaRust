@@ -92,16 +92,33 @@ pub use color_blocks::{
 mod presence_block;
 pub use presence_block::{presence_is_neutral, validate_presence, PRESENCE_FIELDS};
 
-// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b/P1.2c: typed local mask recipes and the loud
-// legacy migration.
+// The one validator for the two global detail blocks (`Sharpening` and
+// `NoiseReduction`), reused by the global recipe and the typed mask-local
+// recipe (P1.2d).
+mod detail_block;
+pub use detail_block::{
+    detail_amount_is_valid, noise_reduction_field_range, noise_reduction_is_neutral,
+    sharpening_field_range, sharpening_is_neutral, sharpening_radius_range,
+    validate_noise_reduction, validate_sharpening, DETAIL_BLOCK_VERSION, NOISE_REDUCTION_FIELDS,
+    SHARPENING_FIELDS,
+};
+
+// The two global detail blocks and the mask-local detail container (P1.2d), all
+// validated by the one shared detail validator set.
+mod detail;
+pub use detail::{Detail, NoiseReduction, Sharpening};
+
+// MASK-LOCAL-P0/P1.1/P1.2a/P1.2b/P1.2c/P1.2d: typed local mask recipes and the
+// loud legacy migration.
 mod local_adjustments;
 pub use local_adjustments::mask_state::MAX_MASK_STATE_LAYERS;
 pub use local_adjustments::{
-    local_point_color_entry, mask_layers_digest, neutral_local_presence,
+    local_point_color_entry, mask_layers_digest, neutral_local_detail, neutral_local_presence,
     validate_mask_layer_local_state, LocalAdjustments, MaskLocalRecipe, MaskStateSnapshot,
     COLOR_LOCAL_ADJUSTMENTS_VERSION, CURVE_LOCAL_ADJUSTMENTS_VERSION,
-    LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
-    LOCAL_ADJUSTMENT_RANGES, LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
+    DETAIL_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION, LOCAL_ADJUSTMENT_RANGES,
+    LOCAL_GRADING_RANGES, LOCAL_HSL_FIELDS, LOCAL_POINT_COLOR_FIELDS,
     LOCAL_WB_TEMPERATURE_DELTA_RANGE, LOCAL_WB_TINT_DELTA_RANGE,
     PRESENCE_LOCAL_ADJUSTMENTS_VERSION, RELATIVE_WB_LOCAL_ADJUSTMENTS_VERSION,
 };
@@ -1725,22 +1742,6 @@ pub struct Presence {
     pub clarity: f32,
     #[serde(default)]
     pub dehaze: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct NoiseReduction {
-    pub version: u8,
-    pub luminance: f32,
-    pub color: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Sharpening {
-    pub version: u8,
-    pub amount: f32,
-    pub radius: f32,
-    pub detail: f32,
-    pub masking: f32,
 }
 
 /// LRPAR-G14-REDEYE-15 (Release 1.5): a single persisted red-eye correction
@@ -4560,14 +4561,9 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_presence(p)?;
     }
     if let Some(n) = &a.noise_reduction {
-        if n.version != 1 {
-            return invalid("unsupported noise_reduction version");
-        }
-        for (name, v) in [("luminance", n.luminance), ("color", n.color)] {
-            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
-                return invalid(format!("invalid noise_reduction {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2d block uses, so a local
+        // noise reduction can never accept a value the global recipe rejects.
+        validate_noise_reduction(n)?;
     }
     // LRPAR-G14-DENOISE-20: the optional AI-denoise stage validates its own
     // contract (version, model identity, digest, strengths, artifact reference).
@@ -4575,19 +4571,9 @@ fn validate_adjustments(a: &EditRecipe) -> Result<(), SidecarError> {
         validate_denoise_ai(d)?;
     }
     if let Some(s) = &a.sharpening {
-        if s.version != 1 {
-            return invalid("unsupported sharpening version");
-        }
-        for (name, v, lo, hi) in [
-            ("amount", s.amount, 0.0, 3.0),
-            ("radius", s.radius, 0.1, 10.0),
-            ("detail", s.detail, 0.0, 1.0),
-            ("masking", s.masking, 0.0, 1.0),
-        ] {
-            if !v.is_finite() || !(lo..=hi).contains(&v) {
-                return invalid(format!("invalid sharpening {name}"));
-            }
-        }
+        // The very same validator the mask-local P1.2d block uses, so a local
+        // sharpening can never accept a value the global recipe rejects.
+        validate_sharpening(s)?;
     }
     // LRPAR-G14-REDEYE-15: out-of-range or non-finite values are rejected
     // loudly, never clipped; regions are identified by stable unique ids.

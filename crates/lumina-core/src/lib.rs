@@ -13,6 +13,7 @@ pub mod cache;
 pub(crate) mod color_stages;
 pub mod crop_max_rect;
 mod curve_math;
+pub(crate) mod detail_stages;
 pub(crate) use curve_math::monotone_curve;
 pub mod denoise;
 pub mod generative;
@@ -2541,6 +2542,10 @@ fn validate_curve(name: &str, curve: &[lumina_sidecar::CurvePoint]) -> Result<()
 /// `exp(-d²/(2*1.5²))*exp(-(Y-Yn)²/(2*0.12²))`; chroma offsets (R-Y,B-Y)
 /// use the same 5x5 spatial window with sigma 2.0 and no similarity term.
 /// Strength linearly mixes the source and filtered value. Edges replicate.
+///
+/// Every number lives in [`detail_stages`], which the mask-local P1.2d chain
+/// shares verbatim; this wrapper only keeps the global kernel's `u8`
+/// quantization points, so extracting the maths changes **no** global byte.
 fn apply_noise_reduction(
     pixels: &mut [u8],
     width: u32,
@@ -2553,43 +2558,17 @@ fn apply_noise_reduction(
     let w = width as usize;
     let h = height as usize;
     let src = pixels.to_vec();
-    let y_of =
-        |i: usize| 0.2126 * src[i] as f32 + 0.7152 * src[i + 1] as f32 + 0.0722 * src[i + 2] as f32;
+    let plane = detail_stages::Rgba8Plane {
+        pixels: &src,
+        width: w,
+        height: h,
+    };
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) * 4;
-            let base_y = y_of(i);
-            let mut ly = 0.0;
-            let mut cy_r = 0.0;
-            let mut cy_b = 0.0;
-            let mut sum = 0.0;
-            let mut csum = 0.0;
-            for dy in -2i32..=2 {
-                for dx in -2i32..=2 {
-                    let xx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
-                    let yy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
-                    let j = (yy * w + xx) * 4;
-                    let d2 = (dx * dx + dy * dy) as f32;
-                    let spatial = (-d2 / (2.0 * 1.5 * 1.5)).exp();
-                    let lum =
-                        (-((base_y - y_of(j)).powi(2)) / (2.0 * 0.12 * 255.0 * 0.12 * 255.0)).exp();
-                    let weight = spatial * lum;
-                    ly += weight * y_of(j);
-                    sum += weight;
-                    let cw = (-d2 / (2.0 * 2.0 * 2.0)).exp();
-                    csum += cw;
-                    cy_r += cw * (src[j] as f32 - y_of(j));
-                    cy_b += cw * (src[j + 2] as f32 - y_of(j));
-                }
-            }
-            let filtered_y = ly / sum;
-            let yv = base_y * (1.0 - n.luminance) + filtered_y * n.luminance;
-            let cr = (src[i] as f32 - base_y) * (1.0 - n.color) + (cy_r / csum) * n.color;
-            let cb = (src[i + 2] as f32 - base_y) * (1.0 - n.color) + (cy_b / csum) * n.color;
-            let cg = src[i + 1] as f32 - base_y; // preserve green chroma by deriving it from source
-            let out = [yv + cr, yv + cg, yv + cb];
-            for c in 0..3 {
-                pixels[i + c] = out[c].round().clamp(0.0, 255.0) as u8;
+            let out = detail_stages::noise_reduction_write(&plane, x, y, n);
+            for (c, value) in [out.red, out.green, out.blue].into_iter().enumerate() {
+                pixels[i + c] = value.round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -2676,6 +2655,11 @@ fn apply_red_eye(
 /// luminance. `r_fine=0.5*r`, `r_coarse=1.5*r` (both >=.5); final detail is
 /// `detail*d_fine+(1-detail)*d_coarse`. Masking uses
 /// `((1-masking)+masking*clamp(|gx|+|gy| / global_max,0,1))`.
+///
+/// Every number lives in [`detail_stages`], which the mask-local P1.2d chain
+/// shares verbatim — including the global `render_scale` radius formula, which
+/// the local block follows. This wrapper only keeps the global kernel's `u8`
+/// quantization points, so extracting the maths changes **no** global byte.
 fn apply_sharpening(
     pixels: &mut [u8],
     width: u32,
@@ -2692,65 +2676,19 @@ fn apply_sharpening(
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|p| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32)
+        .map(|p| detail_stages::luminance(f32::from(p[0]), f32::from(p[1]), f32::from(p[2])))
         .collect();
-    let blur = |radius: f32| -> Vec<f32> {
-        let sigma = (radius * scale).max(0.5);
-        let r = (sigma * 3.0).ceil() as i32;
-        let mut kernel = Vec::new();
-        for k in -r..=r {
-            kernel.push((-(k * k) as f32 / (2.0 * sigma * sigma)).exp());
-        }
-        let z: f32 = kernel.iter().sum();
-        for v in &mut kernel {
-            *v /= z;
-        }
-        let mut tmp = vec![0.0; w * h];
-        let mut out = vec![0.0; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                for k in -r..=r {
-                    tmp[y * w + x] += kernel[(k + r) as usize]
-                        * lum[y * w + (x as i32 + k).clamp(0, w as i32 - 1) as usize];
-                }
-            }
-        }
-        for y in 0..h {
-            for x in 0..w {
-                for k in -r..=r {
-                    out[y * w + x] += kernel[(k + r) as usize]
-                        * tmp[(y as i32 + k).clamp(0, h as i32 - 1) as usize * w + x];
-                }
-            }
-        }
-        out
-    };
-    let fine = blur((s.radius * 0.5).max(0.5));
-    let coarse = blur((s.radius * 1.5).max(0.5));
-    let mut gradients = vec![0.0; w * h];
-    let mut maxg: f32 = 0.0;
-    for y in 0..h {
-        for x in 0..w {
-            let gx = lum[y * w + (x as i32 + 1).min(w as i32 - 1) as usize]
-                - lum[y * w + x.saturating_sub(1)];
-            let gy = lum[((y as i32 + 1).min(h as i32 - 1) as usize) * w + x]
-                - lum[y.saturating_sub(1) * w + x];
-            gradients[y * w + x] = gx.abs() + gy.abs();
-            maxg = maxg.max(gradients[y * w + x]);
-        }
-    }
+    let (fine_radius, coarse_radius) = detail_stages::sharpen_blur_radii(s);
+    let fine = detail_stages::gaussian_blur(&lum, w, h, fine_radius, scale);
+    let coarse = detail_stages::gaussian_blur(&lum, w, h, coarse_radius, scale);
+    let (gradients, max_gradient) = detail_stages::gradient_plane(&lum, w, h);
     for (idx, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let d = s.detail * (lum[idx] - fine[idx]) + (1.0 - s.detail) * (lum[idx] - coarse[idx]);
-        let edge = if maxg > 0.0 {
-            (gradients[idx] / maxg).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let amount = s.amount * ((1.0 - s.masking) + s.masking * edge);
-        let ny = (lum[idx] + amount * d).clamp(0.0, 255.0);
-        let ratio = if lum[idx] > 1e-6 { ny / lum[idx] } else { 0.0 };
+        let detail = detail_stages::sharpen_detail(lum[idx], fine[idx], coarse[idx], s.detail);
+        let edge = detail_stages::sharpen_edge_factor(gradients[idx], max_gradient);
+        let ratio =
+            detail_stages::sharpen_ratio(lum[idx], detail_stages::sharpen_amount(s, edge) * detail);
         for channel in p.iter_mut().take(3) {
-            *channel = (*channel as f32 * ratio).round().clamp(0.0, 255.0) as u8;
+            *channel = (f32::from(*channel) * ratio).round().clamp(0.0, 255.0) as u8;
         }
     }
 }

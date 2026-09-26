@@ -331,6 +331,12 @@ impl LuminaApp {
                 // `EditRecipe::presence`.
                 ui.separator();
                 self.draw_mask_local_presence(ui);
+                // MASK-LOCAL-P1.2d: the mask-local detail block. Same
+                // transaction, save and CPU-first routing as every other local
+                // adjustment, and it never touches the global
+                // `EditRecipe::sharpening`/`noise_reduction`.
+                ui.separator();
+                self.draw_mask_local_detail(ui);
             }
         });
         if section_response.header_response.clicked() {

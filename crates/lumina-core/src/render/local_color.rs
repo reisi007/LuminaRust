@@ -15,6 +15,8 @@
 //!   → local Point Color              (P1.2b, this module)
 //!   → local Vibrance / Saturation    (P1.2b, this module)
 //!   → local Color Grading            (P1.2b, this module)
+//!   → local Noise Reduction          (P1.2d, `local_detail`, optional)
+//!   → local Sharpening               (P1.2d, `local_detail`, optional)
 //!   → fractional mask blend          (P0, `local_adjustments`)
 //! ```
 //!
@@ -22,7 +24,10 @@
 //! (`HSL → Point Color → Vibrance/Saturation → Color Grading`) evaluated at
 //! exactly the global colour position (after the global tone curve, before the
 //! global colour stage's neighbours) — see
-//! `ImageFrame::apply_recipe_with_scale_white_balance_and_denoise`.
+//! `ImageFrame::apply_recipe_with_scale_white_balance_and_denoise`. The two
+//! optional trailing stages are the local detail block, which is why this module
+//! exposes [`local_tone_and_color_normalized`]: the P1.2d kernel has to run the
+//! neighbourhood stages on the *un-quantized* colour result.
 //!
 //! The whole chain is evaluated in `f64` and quantized exactly once, at the
 //! end. The global kernel rounds between its stages because it operates on a
@@ -69,6 +74,31 @@ pub(super) fn apply_mask_local_wb_basic_tone_color(pixels: &mut [u8], recipe: &M
 /// curve without a second copy of the colour stages, and why a layer with no
 /// presence block keeps its exact P1.2b bytes.
 pub(super) fn local_tone_and_color_stages(scaled: [f64; 3], recipe: &MaskLocalRecipe) -> [u8; 3] {
+    let rgb = local_tone_and_color_normalized(scaled, recipe);
+    [
+        round_local_channel(f64::from(rgb[0]) * 255.0),
+        round_local_channel(f64::from(rgb[1]) * 255.0),
+        round_local_channel(f64::from(rgb[2]) * 255.0),
+    ]
+}
+
+/// The chain tail **without** the RGBA8 rounding: the local tone curve and the
+/// four local colour stages in the global colour order, returned as the
+/// un-quantized normalized `(0..=1)` triple.
+///
+/// This is the shared body of all three local colour tails.
+/// [`local_tone_and_color_stages`] is exactly this plus the layer's one and only
+/// RGBA8 quantization; the MASK-LOCAL-P1.2d detail kernel calls this per pixel
+/// over the **whole** plane instead, because its noise-reduction and sharpening
+/// stages have to run on the *un-quantized colour result* — the whole per-layer
+/// order is `… → colour → noise reduction → sharpening`, mirroring
+/// `apply_recipe`. The arithmetic, its order and its `f64`/`f32` conversions are
+/// the same in all callers, which is what keeps a P1.2a/P1.2b/P1.2c layer's bytes
+/// exact.
+pub(super) fn local_tone_and_color_normalized(
+    scaled: [f64; 3],
+    recipe: &MaskLocalRecipe,
+) -> [f32; 3] {
     let curves = recipe.curves.as_ref().filter(|_| recipe.has_local_curves());
     let hsl = recipe.hsl.as_ref().filter(|_| recipe.has_local_hsl());
     let point_color = recipe
@@ -109,9 +139,5 @@ pub(super) fn local_tone_and_color_stages(scaled: [f64; 3], recipe: &MaskLocalRe
     if let Some(grading) = grading {
         rgb = color_grading_stage(rgb, grading);
     }
-    [
-        round_local_channel(f64::from(rgb[0]) * 255.0),
-        round_local_channel(f64::from(rgb[1]) * 255.0),
-        round_local_channel(f64::from(rgb[2]) * 255.0),
-    ]
+    rgb
 }

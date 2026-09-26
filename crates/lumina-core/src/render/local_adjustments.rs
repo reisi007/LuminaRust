@@ -104,11 +104,17 @@ fn unsupported_local_geometry(context: &RenderContext<'_>) -> Option<String> {
 /// Apply the local recipes in persisted order to a private working frame. A
 /// failed layer therefore cannot leave an earlier overlapping layer partially
 /// composited into the returned frame.
+///
+/// `effective_scale` is the **global** render scale — the very value the global
+/// F-095 sharpening stage was given earlier in this same render. It is threaded
+/// through unchanged so the mask-local P1.2d detail block follows the same
+/// effective radius scaling; the local block never overrides it.
 pub(super) fn apply_local_adjustments(
     frame: &mut ImageFrame,
     masks: Option<&MaskContext<'_>>,
     evaluated: &[MaskLayerResult],
     enabled: bool,
+    effective_scale: f32,
 ) -> Result<(), CoreError> {
     if !enabled {
         return Ok(());
@@ -150,7 +156,7 @@ pub(super) fn apply_local_adjustments(
         // delta is present the kernel keeps float gains through the whole
         // local pass and quantizes once; neutral recipes retain the exact P0
         // byte path above.
-        adjusted.apply_mask_local_recipe(&adjustments)?;
+        adjusted.apply_mask_local_recipe_with_scale(&adjustments, effective_scale)?;
         blend_local_layer(&mut working, &adjusted, &result.plane);
     }
     *frame = working;

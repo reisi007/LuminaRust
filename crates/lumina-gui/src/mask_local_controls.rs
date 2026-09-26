@@ -41,7 +41,7 @@ impl LuminaApp {
     /// refuse rather than silently render a global-only stand-in.
     pub(crate) fn local_adjustment_route_reason(&self) -> Option<String> {
         self.has_visible_local_adjustments().then(|| {
-            "local mask adjustments (relative WB, presence, tone curve and color) require the full mask-aware CPU render; this stand-in route refused".to_string()
+            "local mask adjustments (relative WB, presence, tone curve, color and detail) require the full mask-aware CPU render; this stand-in route refused".to_string()
         })
     }
 

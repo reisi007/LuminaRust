@@ -2,7 +2,8 @@
 
 use super::{
     LocalAdjustments, COLOR_LOCAL_ADJUSTMENTS_VERSION, CURVE_LOCAL_ADJUSTMENTS_VERSION,
-    LEGACY_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
+    DETAIL_LOCAL_ADJUSTMENTS_VERSION, LEGACY_LOCAL_ADJUSTMENTS_VERSION,
+    LEGACY_LOCAL_ADJUSTMENTS_VERSIONS, LOCAL_ADJUSTMENTS_VERSION,
     PRESENCE_LOCAL_ADJUSTMENTS_VERSION,
 };
 use crate::Curves;
@@ -100,6 +101,12 @@ struct LocalAdjustmentsWire {
     /// instead of a silently dropped or silently coerced block.
     #[serde(default)]
     presence: WireBlock,
+    /// The MASK-LOCAL-P1.2d detail block, kept raw for the same reason as every
+    /// other versioned block: a v1..v5 payload that writes `detail` — an
+    /// explicit `null`, a number, a string or a partial object included — is a
+    /// loud error instead of a silently dropped detail edit.
+    #[serde(default)]
+    detail: WireBlock,
 }
 
 impl<'de> Deserialize<'de> for LocalAdjustments {
@@ -168,6 +175,14 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
                 wire.version
             )));
         }
+        // And the same rule for the P1.2d detail block, anchored at the version
+        // that introduced it so a v5 document keeps its own presence block.
+        if wire.version < DETAIL_LOCAL_ADJUSTMENTS_VERSION && wire.detail.0.is_some() {
+            return Err(serde::de::Error::custom(format!(
+                "local_adjustments version {} cannot contain a local detail block",
+                wire.version
+            )));
+        }
         let temperature_delta_k =
             parse_wire_number(wire.temperature_delta_k.0, "temperature_delta_k")?;
         let tint_delta = parse_wire_number(wire.tint_delta.0, "tint_delta")?;
@@ -179,6 +194,7 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
         let vibrance = parse_wire_number(wire.vibrance.0, "vibrance")?;
         let saturation = parse_wire_number(wire.saturation.0, "saturation")?;
         let presence = parse_wire_block(wire.presence.0, "presence", "local presence")?;
+        let detail = parse_wire_block(wire.detail.0, "detail", "local detail")?;
         let value = Self {
             version: LOCAL_ADJUSTMENTS_VERSION,
             exposure: wire.exposure,
@@ -194,6 +210,7 @@ impl<'de> Deserialize<'de> for LocalAdjustments {
             vibrance,
             saturation,
             presence,
+            detail,
         };
         value
             .validate()

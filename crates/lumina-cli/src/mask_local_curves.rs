@@ -21,19 +21,26 @@
 //! namespaces (`hsl.`, `point_color.`, `color_grading.`, plus the `vibrance` /
 //! `saturation` scalars and the `color` reset); see `mask_local_color`.
 //! MASK-LOCAL-P1.2c extends it once more with the `presence.` key namespace
-//! and the `presence` reset; see the [`presence`] child module. The local
-//! detail, sharpening, noise-reduction, AI-denoise and optics controls stay
-//! deliberately unimplemented: they have no key here, so a request for one is
-//! the generic "unknown local adjustment" error rather than a silent no-op.
+//! and the `presence` reset; see the [`presence`] child module.
+//! MASK-LOCAL-P1.2d extends it once more with the `sharpening.` and
+//! `noise_reduction.` key namespaces and the `sharpening` / `noise_reduction` /
+//! `detail` resets; see the [`detail`] child module. The local AI-denoise and
+//! optics controls stay deliberately unimplemented: they have no key here, so a
+//! request for one is the generic "unknown local adjustment" error rather than
+//! a silent no-op.
 //!
-//! The presence namespace is declared as a *child* of this module rather than as
-//! a fourth sibling in `main.rs`, so the oversized CLI entrypoint stays exactly
-//! at its 11398-line ratchet baseline: adding a key namespace to the existing
-//! generic channel must not cost the entrypoint a single line.
+//! The presence and detail namespaces are declared as *children* of this module
+//! rather than as further siblings in `main.rs`, so the oversized CLI entrypoint
+//! stays exactly at its 11398-line ratchet baseline: adding a key namespace to
+//! the existing generic channel must not cost the entrypoint a single line.
 
 use super::mask_local_color::{self, LocalColorResetSpec, LocalColorSetSpec};
 use super::CliError;
 use lumina_sidecar::{CurvePoints, LocalAdjustments};
+
+#[path = "mask_local_detail.rs"]
+mod detail;
+use detail::{LocalDetailResetSpec, LocalDetailSetSpec};
 
 #[path = "mask_local_presence.rs"]
 mod presence;
@@ -51,6 +58,7 @@ pub(crate) enum LocalSetSpec {
     },
     Color(LocalColorSetSpec),
     Presence(LocalPresenceSetSpec),
+    Detail(LocalDetailSetSpec),
 }
 
 /// One parsed `--reset-local-adjustment` request.
@@ -60,6 +68,7 @@ pub(crate) enum LocalResetSpec {
     All,
     Color(LocalColorResetSpec),
     Presence,
+    Detail(LocalDetailResetSpec),
 }
 
 /// The key prefix that routes a local-adjustment spec to the tone curve.
@@ -84,11 +93,15 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
             "invalid --set-local-adjustment `{spec}`; expected KEY=VALUE"
         ))
     })?;
-    // The presence and colour namespaces are checked before the curve namespace
-    // so a `presence.`/`hsl.`/`point_color.`/`color_grading.` key never reaches
-    // the scalar parser, and vice versa.
+    // The presence, colour and detail namespaces are checked before the curve
+    // namespace so a `presence.`/`hsl.`/`point_color.`/`color_grading.`/
+    // `sharpening.`/`noise_reduction.` key never reaches the scalar parser, and
+    // vice versa.
     if let Some(presence) = presence::parse_presence_set_spec(spec)? {
         return Ok(LocalSetSpec::Presence(presence));
+    }
+    if let Some(local_detail) = detail::parse_detail_set_spec(spec)? {
+        return Ok(LocalSetSpec::Detail(local_detail));
     }
     if let Some(color) = mask_local_color::parse_color_set_spec(spec)? {
         return Ok(LocalSetSpec::Color(color));
@@ -128,6 +141,9 @@ pub(crate) fn parse_local_reset_spec(key: &str) -> Result<LocalResetSpec, CliErr
     if presence::parse_presence_reset_key(key)?.is_some() {
         return Ok(LocalResetSpec::Presence);
     }
+    if let Some(local_detail) = detail::parse_detail_reset_key(key)? {
+        return Ok(LocalResetSpec::Detail(local_detail));
+    }
     if let Some(color) = mask_local_color::parse_color_reset_spec(key)? {
         return Ok(LocalResetSpec::Color(color));
     }
@@ -150,6 +166,7 @@ pub(crate) fn action_label(spec: &LocalSetSpec) -> String {
         }
         LocalSetSpec::Color(color) => mask_local_color::set_label(color),
         LocalSetSpec::Presence(presence) => presence::set_label(presence),
+        LocalSetSpec::Detail(local_detail) => detail::set_label(local_detail),
     }
 }
 
@@ -161,6 +178,7 @@ pub(crate) fn reset_label(spec: &LocalResetSpec) -> String {
         LocalResetSpec::All => "local-reset:curves".into(),
         LocalResetSpec::Color(color) => mask_local_color::reset_label(color),
         LocalResetSpec::Presence => presence::reset_label(),
+        LocalResetSpec::Detail(local_detail) => detail::reset_label(local_detail),
     }
 }
 
@@ -184,7 +202,19 @@ pub(crate) fn apply_set_spec(
         LocalSetSpec::Presence(presence) => adjustments
             .set_local_presence_field(&presence.field, presence.value)
             .map_err(CliError::Message),
+        LocalSetSpec::Detail(local_detail) => if local_detail.block == detail_block_name() {
+            adjustments.set_local_sharpening_field(&local_detail.field, local_detail.value)
+        } else {
+            adjustments.set_local_noise_reduction_field(&local_detail.field, local_detail.value)
+        }
+        .map_err(CliError::Message),
     }
+}
+
+/// The canonical name of the sharpening sub-block, so the apply path and the
+/// parser cannot disagree about which setter a `sharpening.*` key reaches.
+fn detail_block_name() -> &'static str {
+    "sharpening"
 }
 
 /// Apply one parsed reset to a staged (not yet persisted) local recipe.
@@ -206,5 +236,14 @@ pub(crate) fn apply_reset_spec(
             adjustments.reset_local_presence();
             Ok(())
         }
+        LocalResetSpec::Detail(local_detail) => match local_detail {
+            detail::LocalDetailResetSpec::Block(block) => adjustments
+                .reset_local_detail_field(block)
+                .map_err(CliError::Message),
+            detail::LocalDetailResetSpec::All => {
+                adjustments.reset_local_detail();
+                Ok(())
+            }
+        },
     }
 }

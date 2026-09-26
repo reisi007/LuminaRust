@@ -792,6 +792,192 @@ Navigator/Neighbor/Thumbnail/Draft) müssen sichtbar CPU-routen oder verweigern.
   Die globalen Presence-Goldens müssen **unverändert** grün bleiben. Detail,
   Sharpening, Noise Reduction, AI-Denoise und Optics bleiben deaktiviert.
 
+## P1.2d SOLL — mask-local Detail (`MASK-LOCAL-P1.2d`)
+
+**Festgeschriebene Semantik (User-Entscheidung 2026-09-26, verbindlich):**
+Lokale Layer werden **sequenziell auf dem global adjustierten Ergebnis**
+ausgewertet, nie parallel und nie auf dem Dekoder-Frame. Je persistierter
+Maske gilt exakt
+
+```text
+global result
+  → local relative WB      (P1.1)
+  → local Basic            (P0, exposure → contrast → shadows → highlights)
+  → local Presence         (P1.2c)   ← texture / clarity / dehaze
+  → local tone curve       (P1.2a)
+  → local HSL              (P1.2b)
+  → local Point Color      (P1.2b)
+  → local Vibrance/Saturation (P1.2b)
+  → local Color Grading    (P1.2b)
+  → local Noise Reduction  (P1.2d)   ← luminance / color
+  → local Sharpening       (P1.2d)   ← amount / radius / detail / masking
+  → fractional mask blend  (P0)
+```
+
+Die Detail-Stufe steht damit an **exakt denselben beiden Positionen** wie im
+globalen Kernel: dort wie hier läuft **Noise Reduction vor Sharpening**, und
+beide liegen nach dem Color-Block (`… Color Grading → Noise Reduction →
+Sharpening → …`). Die bereits verifizierte relative Reihenfolge von
+P1.2a/P1.2b/P1.2c (Presence → Kurve → Color) bleibt **unverändert**; es werden
+nur die zwei bislang fehlenden Stufen an ihrer globalen Position angehängt.
+Überlappende Layer werden in der **persistierten Listenreihenfolge** ausgewertet;
+ein Reordering ist eine Änderung der Render-Identität, keine äquivalente
+Umordnung. Das globale WB bleibt **absolute-only** mit explizitem **Reset to As
+Shot** — kein stiller Fallback, kein relatives globales Alias, kein Auto-WB. Bis
+zur echten GPU-Parität ist das lokale Detail **CPU-first**: GPU-/Stand-in-Routen
+(VRAM-Present, GPU-Parity-Readback, Navigator/Neighbor/Thumbnail/Draft) müssen
+sichtbar CPU-routen oder verweigern.
+
+- **Typed Schema und Version:** `local_adjustments` wird auf **Version 6**
+  gehoben. Neu ist ausschließlich `detail: Option<Detail>` mit genau den beiden
+  globalen Teil-Blöcken `sharpening: Option<Sharpening>` (`version == 1`,
+  `amount` in `0.0..=3.0`, `radius` in `0.1..=10.0`, `detail` in `0.0..=1.0`,
+  `masking` in `0.0..=1.0`) und `noise_reduction: Option<NoiseReduction>`
+  (`version == 1`, `luminance`/`color` je in `0.0..=1.0`) — **wörtlich
+  wiederverwendete** globale Typen, mit **wörtlich wiederverwendeten**
+  globalen Validatoren (extrahiert nach
+  `crates/lumina-sidecar/src/detail_block.rs` und von globalem und lokalem Rezept
+  geteilt: `validate_sharpening`/`validate_noise_reduction` sowie die
+  Feldlisten und Neutralitätsprüfungen). Es gibt **keine** lokalen Typkopien,
+  **keine** gelockerten und **keine** verkleinerten Bereiche und keinen stillen
+  Fallback. Deaktiviert bleiben lokales **AI-Denoise** (F-078-Modellgate offen)
+  und lokales **Optics** — beide **dauerhaft**: Optics, weil Linsenkorrektur und
+  Perspektive geometrische Stufen *vor* den Masken sind und nicht als
+  per-Maske-Per-Pixel-Tone-Stufe sinnvoll sind; AI-Denoise, weil das Modell-Gate
+  (Gewichts-Lizenz, Provenienz, Hash-Pin) offen ist. Für beide gilt: **kein**
+  Schemafeld, **kein** CLI-Key, **kein** Renderer-Stub, sondern ein lauter
+  „unknown local adjustment"-Fehler.
+- **Migration ohne stillen Verlust:** v1 (nur P0-Scalar), v2 (P1.1-WB-Delta),
+  v3 (P1.2a-Kurve), v4 (P1.2b-Color) und v5 (P1.2c-Presence) migrieren
+  **verlustfrei** nach v6 mit `detail: None`. Ein v1..v5-Payload, der `detail`
+  enthält (auch ein explizites `null` oder ein Nicht-Objekt), ist ein **lauter**
+  Fehler — kein stiller Drop und kein Smuggling einer späteren Version. Weil die
+  Einführung von v6 die obere Versionsgrenze verschiebt, bleiben die bestehenden
+  Versions-Gates **versionsrichtig** verankert: der Kurven-Gate an
+  `CURVE_LOCAL_ADJUSTMENTS_VERSION` (3), der Color-Gate an
+  `COLOR_LOCAL_ADJUSTMENTS_VERSION` (4), der Presence-Gate an
+  `PRESENCE_LOCAL_ADJUSTMENTS_VERSION` (5) und der neue Detail-Gate an
+  `DETAIL_LOCAL_ADJUSTMENTS_VERSION` (6), jeweils mit `version < …`. Sonst müsste
+  ein v5-Dokument seinen eigenen Presence-Block verlieren. Die historischen
+  `adjustment_*`-Extras bleiben auf die vier P0-Keys beschränkt;
+  `adjustment_detail`, `adjustment_sharpening` und `adjustment_noise_reduction`
+  bleiben „unknown local adjustment".
+- **Nachbarschaft bleibt vollbildbasiert, die Maske blendet nur:** Der
+  5x5-Bilateral-Kernel der Rauschunterdrückung, das 3x3-Gradientenfenster und
+  die beiden separablen Gauß-Durchgänge des Sharpenings, der
+  Detail-Mixing-Pfad (`detail·d_fine + (1−detail)·d_coarse`) und die
+  Flat-Area-Maskierung (`((1−masking) + masking·clamp(|gx|+|gy|/max,0,1))`)
+  rechnen über das **ganze Bild**. Es gibt **keine** maskenabhängige Statistik,
+  **keinen** ROI-Resize-Fallback und **keine** Kantennaht. Die lokale
+  Detail-Funktion nimmt in ihrer Signatur **weder Maske noch ROI** entgegen —
+  nur das Blendgewicht. Ein Pixel außerhalb der Maske sieht damit nie einen
+  maskenverkleinerten Nachbarschaftswert, sondern exakt die vom globalen
+  Ergebnis vorgegebenen Bytes; die Render-Identität hängt nur am persistierten
+  Detail-Wert, am globalen `render_scale` und am Masken-Plane, nicht an der
+  Bildgeometrie.
+- **Geteilte Mathematik, ehrlich benannte Quantisierungs-Divergenz:** Die
+  Detail-Mathematik (Bilateral-Gewichte und -Mittelung, Chroma-Offsets,
+  Gauß-Kernel, Luminanz-Gradienten und `global_max`, Detail-Mixing,
+  Flat-Area-Faktor, Radius-Formel) wurde nach
+  `crates/lumina-core/src/detail_stages.rs` extrahiert und wird vom globalen und
+  vom lokalen Kernel **wörtlich geteilt**. Der globale Kernel behält dabei seine
+  bisherigen `u8`-Quantisierungspunkte (ein `round()`/Clamp je Sub-Stufe: nach
+  NR, nach dem Scharfen, und der Lese-Zugriff auf den `u8`-Snapshot), der lokale
+  Pfad quantisiert **genau einmal** am Ende des Layers. Damit ändert sich
+  **kein** globaler Byte: die bestehenden globalen Sharpening-/Noise-Reduction-
+  Goldens bleiben **unverändert** grün. Diese Quantisierungs-Divergenz ist
+  **bewusst und dokumentiert**; es gibt und darf **keinen** Test geben, der
+  Byte-Gleichheit des lokalen Detail-Pfads mit dem globalen Detail-Stage
+  behauptet, weil sie per Konstruktion falsch ist. Die Detail-Nachbarschaft
+  rechnet wie der globale Stage in `f32` (`0..=255`) — das ist die geteilte
+  numerische Domäne, **keine** zusätzliche Quantisierungsgrenze; die *eine*
+  Grenze bleibt die abschließende RGBA8-Rundung des lokalen Layers.
+- **Render-Scale bleibt global (F-096-Vertrag):** Die globale
+  `Sharpening`-Stufe skaliert ihren Radius über den globalen `render_scale`
+  (`sigma = max(radius · scale, 0.5)`, Fein-/Grob-Radius `max(0.5·r, 0.5)` bzw.
+  `max(1.5·r, 0.5)`; `sharpening_render_scale_changes_render_only` und
+  `sharpening_identity_direction_and_scale` pinnen das). Der lokale Detail-Block
+  folgt **demselben** globalen `render_scale`, damit die lokale und die globale
+  Stufe dieselbe effektive Radius-Skala sehen. Der lokale Block bekommt **keine**
+  eigene Scale-Option und darf den globalen `render_scale` **nicht** überschreiben;
+  es gibt kein zusätzliches persistiertes Feld dafür. Die Render-Identität
+  ändert sich mit dem globalen `render_scale` genau wie beim globalen Sharpening,
+  der Decode-Digest nicht.
+- **Deterministische Reihenfolge und Quantisierung:** Der lokale Layer wertet
+  WB-Gains, die vier Basic-Stufen, Presence, die Kurve, alle vier Color-Stufen,
+  Noise Reduction und Sharpening vollständig in Fließkomma ab und quantisiert
+  **genau einmal** am Ende auf RGBA8. Die **Reihenfolge innerhalb eines Layers ist
+  dabei beobachtbar, nicht kosmetisch**: Farbe ändert die Nachbar-Luminanz, und
+  Nachbar-Luminanz ist die Eingangsgröße der bilateralen Ähnlichkeitsgewichte, des
+  separierbaren Gauss und des Frame-weiten Gradientenmaximums. Die beiden
+  Nachbarschafts-Stufen laufen deshalb über die **ganze** un-quantisierte
+  Farb-Ebene. `crates/lumina-core/src/render/tests/local_detail_reference.rs`
+  transponiert beide Ketten **unabhängig** aus den dokumentierten Formeln (WB +
+  Basic, Kurvenkomposition, F-096-Bilateral, F-095-Gauss, Detail-Mix, Flat-Area),
+  `local_detail_order_tests.rs` validiert **jede** Transkription einzeln gegen den
+  echten Kernel (Farb-Hälfte gegen einen reinen Farb-Layer, Detail-Hälfte gegen
+  einen reinen Detail-Layer) und pinnt dann in **einem** Layer mit Farb- *und*
+  Detail-Block: das Ergebnis ist die dokumentierte Kette und unterscheidet sich
+  von der vertauschten Kette deutlich — der Test schlägt also fehl, wenn die
+  Reihenfolge kippt. Die Color-Stufen rechnen in ihrer geteilten `0..=1`-Domäne,
+  die Nachbarschafts-Stufen in `0..=255`; die Umrechnung dazwischen ist eine reine
+  Domänen-Umrechnung (mal/teil 255 in `f32`) und **keine** weitere
+  Quantisierungsgrenze. Bild-Alpha bleibt unberührt. Alpha-0 lässt
+  alle Bytes unverändert, Alpha-1 übernimmt das vollständige lokale Rezept,
+  partielle Alpha bleiben deterministisch fraktional gemischt. Die
+  Kernel-Pfadwahl ist **inhaltsabhängig**: **ohne** lokalen Detail-Block
+  (abwesend **oder** beide Teil-Blöcke neutral) bleiben die P0-, P1.1-, P1.2a-,
+  P1.2b- und P1.2c-Bytes exakt erhalten, und ein P1.2b-/P1.2c-Layer nimmt **ohne**
+  Detail weiterhin den bestehenden f64-Kernelpfad. Die Neutralität eines
+  gespeicherten Sharpening-Blocks ist dabei **genau eine** Frage — `amount == 0`,
+  also der eigene Early-Return des globalen F-095-Stages. Daraus folgt beides:
+  Ein `masking = 0` ist **kein** stiller No-op (Masking ist nur der
+  Flat-Area-Multiplikator `((1−masking) + masking·edge)`; bei `masking = 0` ist der
+  Faktor für **jedes** Pixel `1`, also die stärkste Einstellung — der ganze Frame
+  inklusive Fläche wird geschärft), und der Radius kann einen Block **nie** neutral
+  machen: der globale Kernel begrenzt `sigma` nach unten auf `0.5`, und selbst
+  dort hat der erste Nachbartap die Gewichtung `exp(−1/(2·0.5²)) = exp(−2) ≈
+  0.135 ≠ 0`, erreicht also das separierbare Kernel-Fenster die Nachbarn — jeder
+  Radius im legalen `0.1..=10.0` schärft also etwas. Ein persistierter Block, der
+  nur `radius`/`detail`/`masking` setzt und `amount = 0` lässt, ist damit exakt die
+  F-095-Identität und ändert kein Byte.
+- **Zustand, Reset und Persistenz:** Expliziter Reset **pro Teil-Block**
+  (`sharpening`, `noise_reduction`) und **für den gesamten Detail-Block**
+  (`detail`). History, Reset und Previous der **aktuellen** virtuellen Kopie
+  übernehmen den vollständigen additiven `MaskStateSnapshot` **inklusive des
+  kompletten Detail-Blocks**. Der Block gehört in die kanonische
+  `LocalAdjustments::digest` und `mask_layers_digest` und damit in die
+  Render-Identität. Ein lokaler Layer darf keine globalen Rezeptfelder
+  verändern; die lokale Detail-Sektion schreibt nie
+  `EditRecipe::sharpening`/`noise_reduction`.
+- **Cross-image Previous bleibt recipe-only
+  (P0/P1.1/P1.2a/P1.2b/P1.2c-Vertrag):** Der dateibasierte CLI-Befehl
+  `previous` überträgt **keine** lokalen Masken-Layer und keine P0-/P1.1-/
+  P1.2a-/P1.2b-/P1.2c-/P1.2d-Deltas auf andere Bilder. Nicht-neutraler lokaler
+  Maskenzustand — auf der Quell-Kopie oder auf dem Ziel — wird laut verweigert:
+  die Quelle bricht den gesamten Lauf ab (Exit 1, kein Ziel angefasst), ein
+  betroffenes Ziel schlägt isoliert fehl (Exit 3, Ziel-Bytes unverändert).
+  **Ein lokaler Detail-Block allein ist bereits ein Verweigerungsgrund**; es
+  gibt keine „nur P0/P1.1/P1.2a/P1.2b/P1.2c"-Ausnahme. Sync Settings bleibt
+  recipe-only.
+- **GUI/CLI:** Die GUI erhält einen lokalen Detail-Editor (Sharpening
+  amount/radius/detail/masking, Noise Reduction luminance/color, Reset pro
+  Bereich und gesamt) mit **keiner** globalen
+  `EditRecipe::sharpening`/`noise_reduction`-Mutation. Die CLI nutzt keine
+  zweite, fast identische Flag-Partei, sondern den bestehenden generischen
+  Kanal: `--set-local-adjustment 'sharpening.<field>=<n>'` /
+  `'noise_reduction.<field>=<n>'` und
+  `--reset-local-adjustment sharpening | noise_reduction | detail`.
+- **Abnahme:** Exakte CPU-Goldens ohne Toleranz für Sharpening (amount, radius,
+  detail, masking), Noise Reduction (luminance, color), die Reihenfolge
+  NR-vor-Sharpen, den vollen Stack (WB + Basic + Presence + Kurve + Color + NR +
+  Sharpen), Halbmaske, Überlappungs-Reihenfolge, Null-Block-Byte-Identität,
+  ungültige Werte (Blockversion, Bereich **inklusive der Radiusgrenzen 0.1 und
+  10.0**, nicht-endlich), Legacy-v1..v5-Dokumente, die sichtbare Verweigerung
+  von AI-Denoise und Optics, CLI/GUI-Parität und History/Previous/Reset. Die
+  **globalen** Sharpening-/Noise-Reduction-Goldens müssen **unverändert** grün
+  bleiben. AI-Denoise und Optics bleiben deaktiviert.
+
 ## G-03 Maskierungs-Parität (LRPAR-G03-MASK, Release 1.0, SOLL)
 
 Lightroom-Vorbild (`.goal/Goal.md` G-03, ~30 %): Masken-Neu (Subject/Sky/

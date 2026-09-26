@@ -39,7 +39,7 @@ fn local_presence_round_trips_through_the_sidecar_file_and_resets() {
     // the *global* `Presence` block, version 1.
     let local = stored_local(&input);
     assert_eq!(local.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
-    assert_eq!(local.version, 5);
+    assert_eq!(local.version, 6);
     let presence = local.presence.as_ref().expect("presence block");
     assert_eq!(presence.version, 1);
     assert_eq!(presence.texture, 0.5);
@@ -257,7 +257,7 @@ fn local_presence_survives_history_and_reload_verbatim() {
     // the texture amount and not the dehaze amount.
     let second = copy.history[1].mask_state().unwrap().unwrap();
     let restored = second.layers[0].local_adjustments.as_ref().unwrap();
-    assert_eq!(restored.version, 5);
+    assert_eq!(restored.version, 6);
     assert_eq!(restored.presence.as_ref().unwrap().texture, 0.5);
     assert_eq!(restored.presence.as_ref().unwrap().dehaze, 0.0);
     assert!(copy.history[1].changes().unwrap()[0]

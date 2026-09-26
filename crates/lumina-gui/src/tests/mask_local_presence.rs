@@ -67,7 +67,10 @@ fn a_local_presence_edit_changes_the_render_identity_and_never_the_global_recipe
         .unwrap()
         .expect("typed local recipe");
     assert!(close_f32(persisted.presence.as_ref().unwrap().texture, 0.5));
-    assert_eq!(persisted.version, 5);
+    // MASK-LOCAL-P1.2d raised the current version to 6; the presence gate stays
+    // anchored at 5, so this document still owns its own presence block.
+    assert_eq!(persisted.version, lumina_sidecar::LOCAL_ADJUSTMENTS_VERSION);
+    assert_eq!(persisted.version, 6);
     let entry = app.document.as_ref().unwrap().virtual_copies[0]
         .history
         .last()

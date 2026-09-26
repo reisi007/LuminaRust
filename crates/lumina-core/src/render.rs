@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 mod local_adjustments;
 mod local_color;
+mod local_detail;
 mod local_presence;
 mod local_tone;
 mod local_wb;
@@ -609,10 +610,16 @@ pub(super) fn render_frame_from_base_impl(
         local_adjustments::has_visible_local_adjustments(context.masks.as_ref());
     let mask_input_width = base.width;
     let mask_input_height = base.height;
+    // MASK-LOCAL-P1.2d / F-096: one effective output scale for this whole
+    // render. The global F-095 sharpening stage below and the mask-local detail
+    // kernel in `apply_local_adjustments` are handed **the same value**, which is
+    // the structural proof that the local detail block follows the global render
+    // scale, has no scale option of its own, and never overrides it.
+    let effective_scale = 1.0_f32;
     apply_spot_heals_from_recipe(&mut base, context.recipe)?;
     base.apply_recipe_with_scale_white_balance_and_denoise(
         context.recipe,
-        1.0,
+        effective_scale,
         context.camera_white_balance,
         denoise,
     )?;
@@ -707,6 +714,7 @@ pub(super) fn render_frame_from_base_impl(
         context.masks.as_ref(),
         &mask_layers,
         local_adjustment_mode,
+        effective_scale,
     )?;
 
     Ok(RenderOutput {
@@ -1015,138 +1023,6 @@ mod tests {
         }
     }
 
-    // ---- SourceActions stage ----
-
-    #[test]
-    fn source_action_composites_above_threshold_and_keeps_alpha() {
-        let frame = ImageFrame::new(2, 1, vec![100, 100, 100, 255, 200, 200, 200, 40]).unwrap();
-        let action = SourceActionArtifact {
-            region: MaskPlane::new(2, 1, vec![32768, 32767]).unwrap(),
-            replacement: ImageFrame::new(2, 1, vec![10, 20, 30, 128, 1, 2, 3, 9]).unwrap(),
-        };
-        let recipe = EditRecipe::default();
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[action],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        // Pixel 0: region 32768 >= threshold -> replacement incl. its alpha.
-        assert_eq!(&output.frame.pixels[0..4], &[10, 20, 30, 128]);
-        // Pixel 1: region 32767 < threshold -> source incl. its alpha.
-        assert_eq!(&output.frame.pixels[4..8], &[200, 200, 200, 40]);
-    }
-
-    #[test]
-    fn empty_source_actions_are_byte_identical_to_apply_recipe() {
-        let frame = ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 7]).unwrap();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("exposure".into(), 0.5), ("contrast".into(), -0.2)]),
-            ..Default::default()
-        };
-        let mut expected = frame.clone();
-        expected
-            .apply_recipe_with_white_balance(&recipe, Some([1.0, 1.0, 1.0, 1.0]))
-            .unwrap();
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: Some([1.0, 1.0, 1.0, 1.0]),
-                source_actions: &[],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(output.frame, expected);
-        assert!(output.mask_layers.is_empty());
-        assert!(output.mask_warnings.is_empty());
-    }
-
-    #[test]
-    fn source_actions_run_before_adjustments() {
-        // Pixel value 100. Exposure +1 doubles whatever the source-actions
-        // stage left in the frame. With the action applied BEFORE adjustments
-        // the replaced value 10 becomes 20 (not 10 = action after adjustments,
-        // not 200 = no action at all).
-        let frame = ImageFrame::new(1, 1, vec![100, 100, 100, 255]).unwrap();
-        let recipe = EditRecipe {
-            adjustments: BTreeMap::from([("exposure".into(), 1.0)]),
-            ..Default::default()
-        };
-        let action = SourceActionArtifact {
-            region: MaskPlane::new(1, 1, vec![65535]).unwrap(),
-            replacement: ImageFrame::new(1, 1, vec![10, 10, 10, 255]).unwrap(),
-        };
-        let output = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[action],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(output.frame.pixels, vec![20, 20, 20, 255]);
-
-        // Control: no action -> 100 * 2 = 200.
-        let control = render_frame(&frame, &default_context(&recipe, None)).unwrap();
-        assert_eq!(control.frame.pixels, vec![200, 200, 200, 255]);
-    }
-
-    #[test]
-    fn source_action_rejects_mismatched_artifacts() {
-        let frame = base_frame();
-        let recipe = EditRecipe::default();
-        let mismatched_dims = SourceActionArtifact {
-            region: MaskPlane::new(2, 2, vec![0; 4]).unwrap(),
-            replacement: ImageFrame::new(1, 4, vec![0; 16]).unwrap(),
-        };
-        let error = render_frame(
-            &frame,
-            &RenderContext {
-                recipe: &recipe,
-                camera_white_balance: None,
-                source_actions: &[mismatched_dims],
-                lensfun: None,
-                depth: None,
-                masks: None,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(error, CoreError::InvalidSourceAction(_)));
-
-        let wrong_frame_dims = SourceActionArtifact {
-            region: MaskPlane::new(1, 1, vec![0]).unwrap(),
-            replacement: ImageFrame::new(1, 1, vec![0; 4]).unwrap(),
-        };
-        assert!(matches!(
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe: &recipe,
-                    camera_white_balance: None,
-                    source_actions: &[wrong_frame_dims],
-                    lensfun: None,
-                    depth: None,
-                    masks: None,
-                },
-            ),
-            Err(CoreError::InvalidSourceAction(_))
-        ));
-    }
-
     // ---- Masks stage ----
 
     fn mask_context<'a>(
@@ -1232,6 +1108,33 @@ mod tests {
 
     #[path = "local_presence_boundary_tests.rs"]
     mod local_presence_boundary;
+
+    #[path = "local_detail_goldens.rs"]
+    mod local_detail_goldens;
+
+    #[path = "local_detail_tests.rs"]
+    mod local_detail;
+
+    #[path = "local_detail_state_tests.rs"]
+    mod local_detail_state;
+
+    #[path = "local_detail_boundary_tests.rs"]
+    mod local_detail_boundary;
+
+    #[path = "local_detail_reference.rs"]
+    mod local_detail_reference;
+
+    #[path = "local_detail_order_tests.rs"]
+    mod local_detail_order;
+
+    #[path = "local_detail_recipe_tests.rs"]
+    mod local_detail_recipe;
+
+    #[path = "tca_isolation_tests.rs"]
+    mod tca_isolation;
+
+    #[path = "source_action_apply_tests.rs"]
+    mod source_action_apply;
 
     #[path = "source_action_contract_tests.rs"]
     mod source_action_contract;
@@ -2189,160 +2092,6 @@ mod tests {
         assert_eq!(
             render.frame, manual,
             "unknown camera (None corrector) must equal the manual render"
-        );
-    }
-
-    // ---- G-06 Lensfun-Vollausbau: TCA (feature-gated; fixture DB, hermetic) ----
-
-    /// Minimal fixture database XML with ONE lens carrying distortion
-    /// (PTLens) calibration; `with_tca` adds a poly3 TCA calibration line.
-    /// Same distortion in both variants isolates the TCA render effect.
-    #[cfg(feature = "lensfun")]
-    fn write_tca_isolation_fixture(tag: &str, with_tca: bool) -> std::path::PathBuf {
-        let tca = if with_tca {
-            r#"<tca model="poly3" focal="50" vr="1.005" vb="0.995"/>"#
-        } else {
-            "<!-- no TCA calibration -->"
-        };
-        let xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<lensdatabase>
-    <camera>
-        <maker>Lumina TCA Corp</maker>
-        <model>Lumina TCA Body</model>
-        <mount>LuminaTcaMount</mount>
-        <cropfactor>1.5</cropfactor>
-    </camera>
-    <lens>
-        <maker>Lumina TCA Corp</maker>
-        <model>Lumina TCA 50mm f/2.8</model>
-        <mount>LuminaTcaMount</mount>
-        <cropfactor>1.5</cropfactor>
-        <calibration>
-            <distortion model="ptlens" focal="50" a="0.08" b="-0.10" c="0.02"/>
-            {tca}
-        </calibration>
-    </lens>
-</lensdatabase>
-"#
-        );
-        let path =
-            std::env::temp_dir().join(format!("lumina-core-tca-{tag}-{}.xml", std::process::id()));
-        std::fs::write(&path, xml).expect("write tca fixture database");
-        path
-    }
-
-    #[cfg(feature = "lensfun")]
-    fn tca_fixture_corrector(
-        tag: &str,
-        with_tca: bool,
-    ) -> (lumina_lensfun::LensfunDb, lumina_lensfun::Corrector) {
-        use lumina_lensfun::{Corrector, LensfunDb};
-        let path = write_tca_isolation_fixture(tag, with_tca);
-        let db = LensfunDb::load_file(&path).expect("tca fixture database must load");
-        let _ = std::fs::remove_file(&path);
-        let corrector = Corrector::for_camera(
-            &db,
-            "Lumina TCA Corp",
-            "Lumina TCA Body",
-            None,
-            120,
-            80,
-            50.0,
-            2.8,
-            10.0,
-        )
-        .expect("tca fixture corrector must be built");
-        (db, corrector)
-    }
-
-    /// A TCA-capable corrector must shift R/B relative to G in the render:
-    /// with the same distortion, the TCA render differs from the non-TCA
-    /// render at the corners (G-06 Lensfun-Vollausbau, TCA path active).
-    #[cfg(feature = "lensfun")]
-    #[test]
-    fn tca_corrector_render_differs_from_non_tca_render() {
-        let (_tca_db, tca) = tca_fixture_corrector("diff-tca", true);
-        let (_plain_db, plain) = tca_fixture_corrector("diff-plain", false);
-        assert!(tca.has_tca());
-        assert!(!plain.has_tca());
-        let frame = lensfun_gradient_frame(120, 80);
-        let recipe = EditRecipe::default();
-        let render_with = |corrector: &lumina_lensfun::Corrector| {
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe: &recipe,
-                    camera_white_balance: None,
-                    source_actions: &[],
-                    masks: None,
-                    lensfun: Some(LensfunCorrectorRef(corrector)),
-                    depth: None,
-                },
-            )
-            .unwrap()
-            .frame
-        };
-        let tca_frame = render_with(&tca);
-        let plain_frame = render_with(&plain);
-        assert_ne!(
-            tca_frame.pixels, plain_frame.pixels,
-            "TCA render must differ from the same-distortion non-TCA render"
-        );
-        // Deterministic: the same TCA render repeats byte-identically.
-        assert_eq!(tca_frame.pixels, render_with(&tca).pixels);
-    }
-
-    /// No double correction: with a TCA-capable corrector the manual
-    /// `ca_red`/`ca_blue` model is skipped, so setting manual CA changes
-    /// nothing (byte-identical renders); without a corrector the same manual
-    /// CA visibly applies (existing behaviour preserved).
-    #[cfg(feature = "lensfun")]
-    #[test]
-    fn manual_ca_skipped_under_tca_corrector_and_applied_without() {
-        use lumina_sidecar::LensCorrection;
-        let (_tca_db, tca) = tca_fixture_corrector("skip-tca", true);
-        let frame = lensfun_gradient_frame(120, 80);
-        let mut recipe = EditRecipe::default();
-        recipe.lens_correction = Some(LensCorrection {
-            version: 1,
-            profile: None,
-            distortion_k1: None,
-            distortion_k2: None,
-            distortion_k3: None,
-            vignette_c0: None,
-            vignette_c1: None,
-            vignette_c2: None,
-            ca_red: Some(0.02),
-            ca_blue: Some(-0.02),
-        });
-        let plain_recipe = EditRecipe::default();
-        let render_with = |recipe: &EditRecipe, corrector: Option<&lumina_lensfun::Corrector>| {
-            render_frame(
-                &frame,
-                &RenderContext {
-                    recipe,
-                    camera_white_balance: None,
-                    source_actions: &[],
-                    masks: None,
-                    lensfun: corrector.map(LensfunCorrectorRef),
-                    depth: None,
-                },
-            )
-            .unwrap()
-            .frame
-        };
-        // Under TCA: manual CA is skipped → identical to no-manual-CA.
-        assert_eq!(
-            render_with(&recipe, Some(&tca)).pixels,
-            render_with(&plain_recipe, Some(&tca)).pixels,
-            "manual CA must be skipped when Lensfun TCA is active"
-        );
-        // Without a corrector: manual CA applies → differs from identity.
-        assert_ne!(
-            render_with(&recipe, None).pixels,
-            render_with(&plain_recipe, None).pixels,
-            "manual CA must still apply without a Lensfun corrector"
         );
     }
 

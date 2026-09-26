@@ -18,6 +18,8 @@ mod local_adjustments;
 mod local_adjustments_color;
 mod local_adjustments_color_digest;
 mod local_adjustments_curves;
+mod local_adjustments_detail;
+mod local_adjustments_detail_state;
 mod local_adjustments_presence;
 mod local_adjustments_presence_state;
 mod locks;

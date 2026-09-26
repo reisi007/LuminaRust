@@ -18,14 +18,22 @@ impl ImageFrame {
     ///
     /// The local white balance is a relative delta, not a second absolute
     /// global WB recipe, and the local tone curve (MASK-LOCAL-P1.2a), the
-    /// local colour block (MASK-LOCAL-P1.2b) and the local presence block
-    /// (MASK-LOCAL-P1.2c) are separate blocks that run after the local Basic
-    /// controls — mirroring the global kernel, where presence follows the
-    /// scalar stage, the curve follows presence, and the colour stages follow
-    /// the curve.
+    /// local colour block (MASK-LOCAL-P1.2b), the local presence block
+    /// (MASK-LOCAL-P1.2c) and the local detail block (MASK-LOCAL-P1.2d) are
+    /// separate blocks that run after the local Basic controls — mirroring the
+    /// global kernel, where presence follows the scalar stage, the curve follows
+    /// presence, the colour stages follow the curve, and the two detail stages
+    /// (noise reduction, then sharpening) follow the colour block.
+    ///
+    /// That order is not a comment but an observable byte property: the detail
+    /// stages are neighbourhoods over the *colour* result, so swapping the
+    /// within-layer order changes the output.
+    /// `local_detail_order_tests.rs` pins it in one layer that carries both a
+    /// colour block and a detail block, against two independently transcribed
+    /// chains.
     ///
     /// The kernel path is selected by *what the layer actually contains*, so
-    /// every previously pinned P0/P1.1/P1.2a/P1.2b byte is preserved:
+    /// every previously pinned P0/P1.1/P1.2a/P1.2b/P1.2c byte is preserved:
     ///
     /// * no relative delta and no local curve → the established P0
     ///   `apply_recipe` delegation (global fused LUT, byte-identical),
@@ -39,16 +47,49 @@ impl ImageFrame {
     ///   Color Grading, one quantization),
     /// * any local presence block → the P1.2c float chain
     ///   (WB → Basic → presence → tone curve → … → Color Grading, one
-    ///   quantization), with or without a colour block.
+    ///   quantization), with or without a colour block,
+    /// * any non-neutral local detail block → the P1.2d float chain
+    ///   (WB → Basic → presence → tone curve → … → Color Grading → Noise
+    ///   Reduction → Sharpening, one quantization), with or without a presence
+    ///   or colour block. The two detail stages run **last**, over the
+    ///   un-quantized whole-frame colour plane — see
+    ///   [`super::local_detail`].
     ///
     /// A layer whose presence block is absent **or** persisted all-zero reads
-    /// as "no presence" and keeps the P1.2b path exactly.
+    /// as "no presence" and keeps the P1.2b path exactly. A layer whose detail
+    /// block is absent **or** whose two sub-blocks are both neutral keeps the
+    /// P1.2c path exactly.
     ///
     /// Alpha is never touched.
     pub fn apply_mask_local_recipe(
         &mut self,
         recipe: &lumina_sidecar::MaskLocalRecipe,
     ) -> Result<(), CoreError> {
+        self.apply_mask_local_recipe_with_scale(recipe, 1.0)
+    }
+
+    /// MASK-LOCAL-P1.2d: [`Self::apply_mask_local_recipe`] with the **global**
+    /// effective output scale.
+    ///
+    /// The scale is the very value the global F-095 sharpening stage is given, so
+    /// the local and the global detail stage see the same effective radius
+    /// scaling. The local detail block has no scale option of its own and never
+    /// overrides the global one — the renderer passes exactly one value to both.
+    /// An invalid scale is refused with the same error the global entry point
+    /// uses, before any pixel is touched.
+    pub fn apply_mask_local_recipe_with_scale(
+        &mut self,
+        recipe: &lumina_sidecar::MaskLocalRecipe,
+        effective_scale: f32,
+    ) -> Result<(), CoreError> {
+        if !effective_scale.is_finite() || effective_scale <= 0.0 {
+            return Err(CoreError::InvalidAdjustment {
+                name: "effective_scale".into(),
+                value: effective_scale as f64,
+                minimum: f32::MIN_POSITIVE as f64,
+                maximum: f32::MAX as f64,
+            });
+        }
         recipe
             .validate()
             .map_err(|error| CoreError::InvalidLocalAdjustment {
@@ -58,8 +99,19 @@ impl ImageFrame {
         let has_curves = recipe.has_local_curves();
         let has_color = recipe.has_local_color();
         let has_presence = recipe.has_local_presence();
-        if !has_wb_delta && !has_curves && !has_color && !has_presence {
+        let has_detail = recipe.has_local_detail();
+        if !has_wb_delta && !has_curves && !has_color && !has_presence && !has_detail {
             return self.apply_recipe(&recipe.as_recipe());
+        }
+        if has_detail {
+            super::local_detail::apply_mask_local_wb_basic_tone_color_detail(
+                &mut self.pixels,
+                self.width,
+                self.height,
+                recipe,
+                effective_scale,
+            );
+            return Ok(());
         }
         if has_presence {
             super::local_presence::apply_mask_local_wb_basic_presence_tone_color(

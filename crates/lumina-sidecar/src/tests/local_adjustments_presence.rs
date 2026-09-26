@@ -63,7 +63,10 @@ fn local_presence_round_trips_through_the_sidecar_file() {
     let loaded = SidecarDocument::from_json(&json).unwrap();
     let stored = stored_local(&loaded);
     assert_eq!(stored.version, LOCAL_ADJUSTMENTS_VERSION);
-    assert_eq!(stored.version, PRESENCE_LOCAL_ADJUSTMENTS_VERSION);
+    // MASK-LOCAL-P1.2d raised the current version to 6; the presence gate stays
+    // anchored at 5, so this document still owns its own presence block.
+    assert_eq!(PRESENCE_LOCAL_ADJUSTMENTS_VERSION, 5);
+    assert_eq!(DETAIL_LOCAL_ADJUSTMENTS_VERSION, 6);
     // The persisted amounts are `f32`, so the `f64` accessor returns the exact
     // `f32` values widened back — the same contract every other local block has.
     let (texture, clarity, dehaze) = stored.local_presence();
@@ -78,7 +81,8 @@ fn local_presence_round_trips_through_the_sidecar_file() {
     assert_eq!(stored.presence_summary(), "texture+clarity+dehaze");
     let line = stored.to_string();
     assert!(line.contains("presence=texture+clarity+dehaze"), "{line}");
-    assert!(line.starts_with("v5 "), "{line}");
+    assert!(line.contains("detail=none"), "{line}");
+    assert!(line.starts_with("v6 "), "{line}");
 }
 
 /// v1, v2, v3 and v4 migrate forward losslessly to v5 with `presence: None`,
@@ -350,9 +354,15 @@ fn neutral_absent_and_neutral_presence_blocks_read_the_same_and_reset_clears() {
     );
 }
 
-/// The still-disabled local stages stay refused. Local presence is the *only*
-/// new local block: Detail, Sharpening, Noise Reduction, AI-Denoise and Optics
+/// The still-disabled local stages stay refused. Local presence (P1.2c) and
+/// local detail (P1.2d) are the only new local blocks: AI-Denoise and Optics
 /// must have neither a field, nor a key, nor a renderer stub.
+///
+/// MASK-LOCAL-P1.2d turned `detail` into a typed block, so it is removed from the
+/// forbidden list below — and, to keep the test from getting *weaker*, the
+/// replacements are stronger assertions: the default recipe must not serialize
+/// the block, and the scalar setter must not exist for the sub-block operations
+/// while the typed setters do.
 #[test]
 fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
     // `adjustment_presence` is not a legacy key: the flattened `adjustment_*`
@@ -384,12 +394,12 @@ fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
     let json = serde_json::to_value(LocalAdjustments::default()).unwrap();
     let keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
     for disabled in [
-        "detail",
-        "sharpening",
-        "noise_reduction",
         "denoise_ai",
         "optics",
         "lens_correction",
+        "luminance",
+        "color",
+        "radius",
     ] {
         assert!(
             !keys.iter().any(|key| key == disabled),
@@ -398,9 +408,25 @@ fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
         let mut recipe = LocalAdjustments::default();
         assert!(recipe.set_value(disabled, 0.1).is_err());
     }
+    // MASK-LOCAL-P1.2d: `detail` is a typed block now, so the default recipe must
+    // *not* serialize it, and the sub-block operations must not be reachable
+    // through the scalar setter — they go through the typed setters only.
+    assert!(!keys.iter().any(|key| key == "detail"), "{keys:?}");
+    let mut detail_recipe = LocalAdjustments::default();
+    for scalar in [
+        "sharpening",
+        "noise_reduction",
+        "sharpening.amount",
+        "noise_reduction.luminance",
+    ] {
+        assert!(detail_recipe.set_value(scalar, 0.1).is_err(), "{scalar}");
+    }
+    assert!(detail_recipe
+        .set_local_sharpening_field("amount", 0.1)
+        .is_ok());
     // The wire decoder refuses a disabled field outright, so no surface can
     // smuggle one in.
-    for disabled in ["detail", "sharpening", "noise_reduction", "optics"] {
+    for disabled in ["optics", "denoise_ai", "lens_correction"] {
         let mut value: Value =
             serde_json::from_str(&document_with_layer(presence_layer()).to_json().unwrap())
                 .unwrap();
