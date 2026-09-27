@@ -1101,7 +1101,15 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
     **nicht** in das Rezept.
   * **Reset** existiert zweimal: pro Kanal und für alle lokalen Curves. Beide
     sind vollständige Editor-Transaktionen (History + Save), keine
-    Anzeige-Aktion.
+    Anzeige-Aktion. **Anker für das Save-Glied:** der Reset-Pfad von
+    `mutate_selected_local_curve` (`mask_local_curves.rs:97`) und
+    `reset_mask_local_curves` armieren beide `mark_recipe_dirty`;
+    `tests/mask_local_editors_wiring.rs::the_mask_local_curve_gesture_reaches_the_sidecar_file`
+    liest die **konkreten** Kurvenpunkte aus der Sidecar-Datei und belegt, dass der
+    Block-Reset sie wieder **herausnimmt**. Mutation M7 (genau diese
+    `mark_recipe_dirty` auskommentiert) macht den Test rot — vorher war diese
+    Zeile nur **über den Umweg** plausibel (die beiden Reset-Pfade armieren
+    dasselbe `mark_recipe_dirty`), nicht gemessen.
 - **Regler und Buttons (P1.2b/c/d)** — HSL-Bandwahl, Grading-Range-Wahl,
   Vibrance/Saturation, Point-Color-Hinzufügen/Entfernen, Presence
   (Texture/Klarheit/Dehaze), Sharpening (Amount/Radius/Detail/Masking),
@@ -1143,7 +1151,8 @@ Je mask-local Editor gilt verbindlich **beides**:
    „ist anklickbar" (Eingabevertrag) sind verschiedene Ansprüche und liegen
    deshalb in verschiedenen Zielen: `tests/mask_local_editors_wiring.rs`
    (Paint-Provenienz plus der Graph-Vertrag UXG-16, dessen Wert eine Punktliste
-   und kein Skalar ist, plus die Id-Unabhängigkeit beider Graphen) und
+   und kein Skalar ist, plus dessen **Datei-Readback**, plus die
+   Id-Unabhängigkeit beider Graphen) und
    `tests/mask_local_editors.rs` (Presence/Color/Detail, deren Wert ein Skalar
    ist). Ein Miswire bricht das eine Ziel, ein nicht anklickbares Widget das
    andere. Zwei weitere Ziele kamen in der Verifikationsrunde dazu:
@@ -1287,7 +1296,7 @@ benannte Lücke** zu führen, nicht zu beschönigen.
 
 ### 6. Erreichter Stand, Vollständigkeits-Klassifikation und Grenzen
 
-#### 6.1 Verifikationsstand (Stand 2026-09-26, nach F-1…F-8)
+#### 6.1 Verifikationsstand (Stand 2026-09-27, nach F-1…F-8 und `MASK-LOCAL-CURVE-PERSIST-44`)
 
 - **Verdrahtung war kein offener Punkt.** `draw_mask_local_tone_curve` ist
   bereits aufgerufen (`develop_masking.rs`, Commit `1c490b7`); es fehlten
@@ -1304,6 +1313,7 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | Test | Mutation | Ergebnis |
   |---|---|---|
   | `the_local_and_global_curve_graphs_do_not_share_interaction_state` | der globale Graph benutzt `local_tone_curve_graph_id` | **rot** (der globale Gest landet nirgends) |
+  | `the_mask_local_curve_gesture_reaches_the_sidecar_file` | `mark_recipe_dirty` in `mutate_selected_local_curve` auskommentiert (`mask_local_curves.rs:97`) | **rot** (`the clicked curve must be in the persisted bytes, not only in memory`; `left: None`) — **nur** dieser Test; `mask_local_editors` 3 ok, `mask_local_reload` 1 ok, `slider_sidecar_save` 4 ok bleiben grün |
   | `the_remaining_mask_local_color_controls_…` | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
   | dieselbe | Per-Band-Reset räumt den **ganzen** HSL-Block | **rot** (`must NOT clear the other bands`) |
   | dieselbe | `Remove` ignoriert seine Eintrags-id | **rot** (`Remove must delete exactly one entry`) |
@@ -1346,7 +1356,14 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   ist im Doc-Kommentar derselben Datei begründet. Ein erster Entwurf von
   `mask_local_color_controls.rs` hatte genau diesen Defekt (kein Settle
   zwischen zwei Drags), und der Trace zeigte, dass der erste Commit sein
-  Debounce-Fenster nie bekam.
+  Debounce-Fenster nie bekam. **Korrektur 2026-09-27
+  (`MASK-LOCAL-CURVE-PERSIST-44`):** der Satz „in allen Interaktionszielen"
+  war bis dahin **falsch** — die **Kurve** hatte keine Datei-Assertion, sondern
+  nur `curves.is_none()` *nach* dem Reset, und die ist auch dann wahr, wenn die
+  Kurve nie persistiert wird. Gemessen (M7): mit auskommentiertem
+  `mark_recipe_dirty` in `mutate_selected_local_curve` blieben alle vier
+  Interaktionsziele grün. Der Satz gilt erst ab
+  `the_mask_local_curve_gesture_reaches_the_sidecar_file`.
 - **Der `DRAG_STEPS`-Workaround ist entfernt.** Er war als „notwendig"
   dokumentiert; **gemessen** ist das falsch — alle Interaktionstests bestehen
   unverändert mit 0, 1, 2 **und** 3 Zwischenpositionen. Notwendig ist die
@@ -1368,9 +1385,9 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 |---|---|---|---|---|
 | **P1.2a Tone Curve** |||||
 | 1 | Kanalwahl M/R/G/B | ja — `mask_local_editors_wiring` (Klick auf „Red") | `selectable_label` + `info!` | — |
-| 2 | Graph: Setzen/Verschieben/Löschen | ja — `mask_local_editors_wiring` | `curve_graph_gesture` | — |
-| 3 | Reset pro Kanal | ja — `mask_local_editors_wiring` | `reset_mask_local_curve_channel` | — |
-| 4 | `all local curves reset` | ja — `mask_local_editors_wiring` | `reset_mask_local_curves` | — |
+| 2 | Graph: Setzen/Verschieben/Löschen | ja — Gesten: `mask_local_editors_wiring`; **Datei**: `mask_local_editors_wiring::the_mask_local_curve_gesture_reaches_the_sidecar_file` (Klick auf den Graphen → `settle_persisted` → die **konkreten** `CurvePoint`s aus der Sidecar-Datei, `assert_eq!` gegen den erwarteten `Curves`-Block) | `curve_graph_gesture` | — |
+| 3 | Reset pro Kanal | ja — `mask_local_editors_wiring` (Klick, Kanal-Scope mit `master` als Zeuge) | `reset_mask_local_curve_channel` | — (Dateibild: **derselbe** Produktionspfad wie Zeile 2 — `reset_mask_local_curve_channel` ruft `mutate_selected_local_curve`, und M7 entfernt genau dessen `mark_recipe_dirty`; ein zweiter Klick→Datei-Test wäre derselbe Nachweis derselben Zeile) |
+| 4 | `all local curves reset` | ja — `mask_local_editors_wiring` (Klick) **+ Datei**: `the_mask_local_curve_gesture_reaches_the_sidecar_file` (Kurve **ist** in der Datei, Reset-Klick, `settle_persisted`, Kurve ist **wieder weg**) | `reset_mask_local_curves` | — |
 | **P1.2b Color** |||||
 | 5 | HSL-Bandwahl (8 Bänder) | ja — `mask_local_editors` (cyan), `mask_local_color_controls` (cyan, yellow) | `selectable_label` | — |
 | 6 | HSL **Hue** | ja — `mask_local_hsl_bands` (`the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band`, +0.8 gezogen, Band-Scope mit `yellow`-Zeuge) | Schleife `HSL_FIELDS` → `local_color_slider` → `set_mask_local_hsl_band` | — |

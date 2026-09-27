@@ -13,15 +13,19 @@
 //!   `draw_*` path, reached through the real `LuminaApp::draw_masking` chain,
 //!   and the labels used to address them belong to the mask-local editors
 //!   rather than to the global Develop sections; plus the tone-curve surface
-//!   itself (UXG-16 gestures, the two reset levels) and the proof that the
-//!   mask-local graph shares no interaction state with the global one;
+//!   itself (UXG-16 gestures, the two reset levels) with its **click → save →
+//!   file** leg, and the proof that the mask-local graph shares no interaction
+//!   state with the global one;
 //! * `mask_local_editors.rs` — the scalar-valued editors are **clickable** and
 //!   write through to the persisted sidecar.
 //!
-//! The split is a real module boundary (paint provenance and graph contract vs.
-//! input contract for scalars), not a size hack: it also keeps the two failure
-//! modes apart, because a mis-wired `draw_` call breaks this file while a
-//! non-clickable widget breaks its sibling.
+//! The split is a real module boundary (paint provenance, graph contract and
+//! the curve's persisted byte image vs. input contract for scalars), not a
+//! size hack: it also keeps the two failure modes apart, because a mis-wired
+//! `draw_` call breaks this file while a non-clickable widget breaks its
+//! sibling. The one claim that is *not* split is the curve's save leg: its
+//! value is a whole point set, so it is read back from the sidecar here rather
+//! than deferred to the scalar-only sibling.
 //!
 //! The harness, the frame clock and the label lookups are shared with
 //! `mask_local_editors_support` / `mask_local_label_support`; the graph
@@ -36,6 +40,31 @@ use mask_local_label_support::*;
 
 /// `SECTION_MASKING` — the section that hosts all four mask-local editors.
 const SECTION_MASKING: usize = lumina_gui::SECTION_MASKING;
+
+/// The mask layer's stored local recipe **as the sidecar file has it**, `None`
+/// when the file carries none.
+///
+/// The shared [`persisted_local_recipe`] is the loud readback the scalar
+/// editors use, and a positive proof needs exactly the opposite here: a curve
+/// that was never persisted shows up as a layer *without* a local recipe, so
+/// the loud variant would panic on the very state under test and hide which
+/// claim failed. It lives in this target rather than in the shared support
+/// module because only this target needs it (an unused helper in the other
+/// target would be dead code at the `-D warnings` gate).
+fn persisted_local_recipe_if_present(
+    dir: &tempfile::TempDir,
+) -> Option<lumina_sidecar::LocalAdjustments> {
+    let sidecar = lumina_sidecar::sidecar_path_for(&mask_local_editors_support::smoke_png(dir));
+    let document = lumina_sidecar::load_sidecar(&sidecar).unwrap_or_else(|error| {
+        panic!(
+            "the debounced save must have written {}: {error}",
+            sidecar.display()
+        )
+    });
+    document.virtual_copies[0].mask_layers[0]
+        .effective_local_adjustments()
+        .expect("typed local recipe")
+}
 
 /// The Masking panel really contains the four mask-local editors, and the
 /// labels used to address them belong to the **local** editors, not to the
@@ -201,12 +230,13 @@ fn the_masking_panel_paints_each_mask_local_editor_from_its_own_draw_path() {
     assert_eq!(harness.state().recipe(), &global_before);
 
     // …and the reset reaches the sidecar too, so a reopened project does not
-    // resurrect the curve.
+    // resurrect the curve. The **file** proof of that is positive (the curve is
+    // in the file, then gone again), so it lives in
+    // `the_mask_local_curve_gesture_reaches_the_sidecar_file` — a lone
+    // `curves.is_none()` here would also be satisfied by a curve that is never
+    // persisted at all. The settle stays: the panel layout has to be final
+    // before the section switch below reads the painted rects.
     settle_persisted(&mut harness);
-    assert!(
-        persisted_local_recipe(&dir).curves.is_none(),
-        "the block reset must also reach the sidecar"
-    );
 
     // With the global Tone Curve section opened as well, the caption appears
     // twice — the local and the global graph are two separate widgets.
@@ -312,5 +342,79 @@ fn the_local_and_global_curve_graphs_do_not_share_interaction_state() {
             .master,
         global_after,
         "a drag on the LOCAL graph must not touch the global curve"
+    );
+}
+
+/// The mask-local curve's **click → debounced save → sidecar file** leg: the
+/// concrete point set the graph gesture produced is the one the file carries,
+/// and the block reset takes it out of the file again.
+///
+/// The sibling scalar editors prove their write-through with a positive
+/// readback (`mask_local_editors.rs`); the curve had none, and the assertion it
+/// did have — `persisted_local_recipe(&dir).curves.is_none()` after the reset —
+/// cannot distinguish "the reset persisted" from "the curve was never persisted
+/// at all". Measured (M7, see `feature/product/ai-masks.md` §6.1): commenting
+/// out the `mark_recipe_dirty` inside `mutate_selected_local_curve` left every
+/// integration target green, because nothing ever read the curve back off the
+/// disk.
+///
+/// Comparing the file against `selected_mask_local_curve` is not a
+/// self-referential expectation (DoD §10): the getter answers from the live
+/// layer, the assertion from the serialized bytes, and the live value is
+/// separately pinned against the literal 0.5/0.8 the gesture dropped.
+#[test]
+fn the_mask_local_curve_gesture_reaches_the_sidecar_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = open_masking_panel(&dir);
+    let global_before = harness.state().recipe().clone();
+
+    // Set + move on the drawn master curve. The move off the diagonal matters:
+    // a bare insert would leave the channel identity and therefore a
+    // pixel-neutral curve, which is exactly the state a "nothing was saved"
+    // bug also produces.
+    let graph = curve_graph_rect(&harness);
+    edit_curve_point(&mut harness, graph, 0.5, 0.5, 0.5, 0.8);
+    let master = harness.state().selected_mask_local_curve("master").unwrap();
+    assert_eq!(
+        master.len(),
+        3,
+        "the set+drag gesture must insert exactly one interior point: {master:?}"
+    );
+    assert!(
+        close(f64::from(master[1].input), 0.5) && close(f64::from(master[1].output), 0.8),
+        "the interior point must sit where the drag dropped it: {master:?}"
+    );
+    assert_eq!(harness.state().recipe(), &global_before);
+
+    // The file, on its own and **before** any further gesture (F-4): a later
+    // click could otherwise flush a stranded commit and satisfy this.
+    settle_persisted(&mut harness);
+    let expected = lumina_sidecar::Curves {
+        version: 1,
+        master: master.clone(),
+        // Only the master channel was edited, so the RGB slots must stay unset.
+        channels: lumina_sidecar::CurveChannels::default(),
+    };
+    let persisted = persisted_local_recipe_if_present(&dir);
+    assert_eq!(
+        persisted.as_ref().and_then(|recipe| recipe.curves.as_ref()),
+        Some(&expected),
+        "the clicked curve must be in the persisted bytes, not only in memory"
+    );
+
+    // The block reset must take it out of the file again, so a reopened project
+    // does not resurrect the curve. The click chain of the drag above has to
+    // expire first — two clicks inside the double-click window are one double
+    // click, and egui's button then reports no `clicked()` at all.
+    break_click_chain(&mut harness);
+    let target = only_rect(&harness, "all local curves reset");
+    click(&mut harness, target);
+    assert!(!harness.state().has_mask_local_curves().unwrap());
+    assert_eq!(harness.state().recipe(), &global_before);
+    settle_persisted(&mut harness);
+    let persisted = persisted_local_recipe(&dir);
+    assert_eq!(
+        persisted.curves, None,
+        "the block reset must remove the curve from the sidecar, not only from memory"
     );
 }
