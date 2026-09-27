@@ -1832,6 +1832,36 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`
   → registrierte egui-User-Textur). Der CPU-Fallback (ColorImage-Upload)
   bleibt vollständig erhalten; die kittest-Goldens bleiben unverändert grün.
+- **Mask-Overlay-Gate (normativ, `GPU-PARITY-MASKGATE-1`, 2026-09-27):** Das
+  Gate `gpu_present_if_ready` → `gpu_mask_overlay_is_selected` beantwortet
+  eine **Pixel**-Frage und keine Dokumentfrage: *muss der CPU-Painter eine
+  Matte zeichnen, die der VRAM-Composite nicht enthalten kann?* Daraus folgt
+  die Trennung zweier bisher vermischter Zustände:
+  1. **Keine Maske ausgewählt** → es gibt keine Matte, die der CPU-Painter
+     zeigen müsste; der readback-freie VRAM-Pfad ist pixelgleich zum
+     CPU-Upload und **muss** zulässig sein. Das ist der ausgelieferte
+     Default-Develop-Zustand (Masking-Sektion zu, keine Maske).
+  2. **Maske ausgewählt, ein Overlay-Gate zu** (Sektion zu, Modus nicht
+     `SelectedFull`, Show aus, Auge zu) → der CPU-Painter muss die Matte
+     zeichnen, der VRAM-Composite darf sie nicht ersetzen → CPU-Present
+     bleibt Pflicht. `R5-MASKVIS-25` gilt unverändert.
+  Eine laufende **Gradient-/Radial**-Geste ohne Maske bleibt bei CPU: sie hat
+  keine VRAM-Repräsentation. Eine laufende **Brush**-Geste bleibt auf dem
+  GPU-Pfad (inkrementeller Upload).
+  **Gemessener Anlass (2026-09-27):** `a4eb230` (2026-09-24) führte das Gate
+  ein und nahm dem readback-freien VRAM-Pfad im Default-Zustand die
+  Erreichbarkeit; `cpu_gpu_path_parity_matrix` (eingeführt `80f80f3`) und
+  `lensfun_corrector_cell_presents_gpu_without_badge` (eingeführt `c992525`)
+  waren vor diesem Commit grün und sind seither Rückschritte. Beide schlagen
+  an `present.rs:199` fehl, nicht an einem der sieben übrigen Zweige
+  (`RUST_LOG=warn` erzeugt keine Zeile, womit die beiden loggenden Zweige
+  ausgeschlossen sind). Der Fehler ist **zuständig, nicht zeitabhängig**:
+  Frames 1–3 nach dem Prime liefern alle `None`, und sobald der Zustand es
+  zulässt, präsentiert der **erste** Frame.
+  **Abnahme:** beide Tests grün; ein Test belegt, dass (2) weiterhin auf CPU
+  routet (sonst wäre das Gate abgeschaltet statt korrigiert); die
+  `develop_*`-Goldens werden durch diese Änderung **nicht** neu geschrieben —
+  `GOLDEN-BASELINE-32` bleibt der einzige Ort, der Goldens anfasst.
 - **VRAM-Pool:** dimensionsschlüsseltes LRU (Entry-Limit + Bytebudget,
   env-konfigurierbar) ersetzt den Single-Slot.
 - **Kein `lumina-core`-API-Bruch:** Core blieb vollständig unverändert; alle
