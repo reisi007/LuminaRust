@@ -448,6 +448,13 @@ Fehlerkette eine Denk- und nicht eine Sorgfaltfrage war.
   Build-Agent, der eine Zahl, Matrixgröße oder Abweichungsmenge angibt, hat sie
   gegen die Quelle zu prüfen — nachgewiesen durch Nachrechnen oder eine
   unabhängige Gegenmessung, nicht durch Behauptung.
+- **Vor dem Vergleich zweier Mengen wird die Definition beider geprüft**
+  (User-Regel 2026-09-27). Ein Mengenvergleich ohne geklärte Definition ist kein
+  Messergebnis, sondern ein Kategoriefehler — die häufigste Ursache einer
+  widerlegten Zahl. Für jede Menge ist vorab zu belegen: was ihre Elemente sind
+  (Klasse, Semantik, Quelle der Klassifikation), wer sie erzeugt und was sie
+  **nicht** enthält. Details und das Fehlmuster aus `GOLDEN-ALLOWLIST-48` stehen
+  in [`DoD.md`](DoD.md) §9.
 - **Git-Hygiene (User-Regel 2026-09-26):** Vor jedem Pull/Fetch/Merge/Rebase
   wird die lokale Arbeit committet — auch wenn sie noch nicht verifiziert ist;
   der Verifikationsstand steht dann im Commit-Text. Ein Merge in einen

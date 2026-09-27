@@ -120,6 +120,18 @@ beantwortet sind:
   gemessen**, bevor ein Task daraus entsteht. Wird er widerlegt, wird er
   **gestrichen**, nicht verfeinert. Ein Phantom-Task bindet Arbeitszeit auf
   etwas, das es nicht gibt, und ist schlimmer als gar keiner.
+- **Vor dem Vergleich zweier Mengen wird die Definition beider Mengen geprüft**
+  (User-Regel 2026-09-27, aus dem Phantom-Task `GOLDEN-ALLOWLIST-48`). Ein
+  Mengenvergleich ohne geklärte Definition ist kein Messergebnis, sondern ein
+  Kategoriefehler, und er ist die häufigste Ursache einer widerlegten Zahl. Vor
+  dem Vergleich ist für **jede** Menge aus der SOLL zu belegen: **was** ihre
+  Elemente sind (Klasse, Semantik, Quelle der Klassifikation), **wer** sie
+  erzeugt, und **was** sie **nicht** enthält. Konkretes Fehlmuster: eine Liste
+  von „Elementen ohne Render-Nachweis" (durch Pixelmessung definiert, auf
+  Klasse R beschränkt) wurde mit „aktuell fehlgeschlagenen Tests" (Ergebnis
+  eines Laufs über **alle** Klassen) verglichen — das Ergebnis war in beiden
+  Richtungen falsch, obwohl beide Mengen für sich korrekt waren. Die Prüfung
+  kostet einen Blick in die Definition und spart eine öffentliche Rücknahme.
 - Ein Task wird nicht durch die Summe seiner Einzelfixings geschlossen,
   sondern durch ein Urteil über ihn als Ganzes.
 
