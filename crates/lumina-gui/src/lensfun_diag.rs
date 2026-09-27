@@ -19,14 +19,35 @@
 //! [`LogDiagnostics`]; the one call site is
 //! [`LuminaApp::ensure_lensfun_cache`](super::LuminaApp::ensure_lensfun_cache)
 //! in [`super::lensfun_auto`].
+//!
+//! # The one value this sink produces *for* the load
+//!
+//! Everything else a caller observes here is produced **by the caller** or
+//! **de-duplicated away**: a caller-side counter can be advanced without the work
+//! happening, and a repeated outcome adds no record. The two *outcome* events are
+//! the exception — [`Diagnostics::resolved`] and [`Diagnostics::failed`] are the
+//! only callbacks `lumina_lensfun` makes once per completed load, and the load
+//! makes them itself, after the resolution ran and (on the success branch) after
+//! at least one profile file went through `lf_db_load_file`. The sink counts them
+//! ([`note_load_outcome`], read by [`lensfun_load_outcomes`]), which is what lets
+//! a test tell a performed load apart from an attempt that stopped in front of
+//! it — the difference a caller-side counter cannot see.
 
 use log::{debug, error, warn};
 use lumina_lensfun::db_layers::SkippedLayer;
 use lumina_lensfun::db_path::{Resolved, SystemDbError};
 use lumina_lensfun::system_load::Diagnostics;
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+
+thread_local! {
+    /// How many database loads reported **their outcome** to the sink on this
+    /// thread. Read through [`lensfun_load_outcomes`], which documents why the
+    /// count is per thread and what it does and does not bind.
+    static LOAD_OUTCOMES: Cell<u64> = const { Cell::new(0) };
+}
 
 /// The GUI's Lensfun diagnostics sink: real log levels, de-duplicated per
 /// process.
@@ -60,6 +81,7 @@ impl LogDiagnostics {
 
 impl Diagnostics for LogDiagnostics {
     fn resolved(&mut self, resolved: &Resolved) {
+        note_load_outcome();
         let layers: Vec<String> = resolved
             .layers
             .iter()
@@ -128,6 +150,7 @@ impl Diagnostics for LogDiagnostics {
     }
 
     fn failed(&mut self, err: &SystemDbError) {
+        note_load_outcome();
         // Key on the error *text* (its kind plus every probed location), not on
         // "something failed once", so a later real failure is never suppressed.
         if self.first_time(format!("failed:{err}")) {
@@ -137,6 +160,82 @@ impl Diagnostics for LogDiagnostics {
             );
         }
     }
+}
+
+/// Count one **load outcome** reported to the sink on this thread.
+///
+/// Called from exactly the two outcome methods and from nowhere else. The
+/// deviation events must not be counted: `layer_skipped`/`pin_displaced` are
+/// emitted **before** the load and `file_rejected` **after** it but still before
+/// the outcome, so all three can fire (or not) without a load having produced an
+/// outcome — exactly the distinction a caller-side attempt counter loses.
+///
+/// The increment is deliberately the **first** statement of each method: the
+/// de-duplication below may suppress the record, and it must not suppress the
+/// fact.
+fn note_load_outcome() {
+    LOAD_OUTCOMES.with(|loads| loads.set(loads.get() + 1));
+}
+
+/// How many database loads this thread's sink has reported the **outcome** of
+/// (see [`LOAD_OUTCOMES`], written by [`note_load_outcome`]).
+///
+/// # What this binds that the attempts counter cannot
+///
+/// `super::lensfun_auto::LOOKUP_ATTEMPTS` is incremented by the **caller**,
+/// immediately beside `load_system_with`, so it proves "the call site was
+/// reached" and nothing more. Measured 2026-09-27: a memo that loads once and
+/// then returns before `load_system_with` while the `fetch_add` keeps advancing
+/// left the whole `lumina-gui` lib suite (903 tests) green.
+///
+/// This count is produced by the **load** instead.
+/// `lumina_lensfun::system_load::report_with` makes exactly one of
+/// [`Diagnostics::resolved`] / [`Diagnostics::failed`] per `load_system_with`,
+/// and reaches the success branch only after at least one profile file was
+/// accepted by `lf_db_load_file`. "One more outcome on this thread" is therefore
+/// a fact about the load, and every memo in `lumina-gui` — in
+/// `ensure_lensfun_cache` or in [`with_diagnostics`] — skips both methods and
+/// freezes it.
+///
+/// # Why per thread
+///
+/// The load runs synchronously on the calling thread and the sink is invoked on
+/// that same thread, so a thread-local attributes an outcome to the attempt that
+/// caused it. A process-wide counter could not do that: `lumina-gui` runs its
+/// tests in parallel, so another test's load could advance a shared counter and
+/// make a frozen one look alive. Same reason
+/// `lumina_lensfun::system_load::load_layers_holds_the_lock` is thread-local.
+///
+/// # What it still does not cover
+///
+/// Two memos *below* the sink — inside `lumina_lensfun::system_load::report_with`
+/// — stay invisible here, and both were measured rather than assumed:
+///
+/// * one that **replays the outcome without loading** (calls `resolved` from a
+///   cache and returns) keeps the count rising without a single FFI load. The
+///   count cannot distinguish it, because from the sink's side the event looks
+///   identical;
+/// * one that memoises **between the load and `for_camera`** never reaches the
+///   outcome stage for later lookups at all, so it needs no replay.
+///
+/// A memo below the sink that merely *skips* the outcome emission **is** caught:
+/// the count stops rising and the binding goes red. That was the first draft of
+/// this paragraph and it had it backwards.
+///
+/// `lumina-lensfun` is outside this file's reach, so both limits are named
+/// rather than papered over.
+///
+/// Only the `failed` branch is pinned **machine-independently**, by
+/// `a_reported_miss_advances_the_load_count_and_a_deviation_does_not`; the
+/// `resolved` increment is exercised by the production test, which on a host
+/// *with* a database takes the `resolved` branch and on a host without one the
+/// `failed` branch. Removing the `resolved` increment keeps the
+/// machine-independent test green — the binding still holds on each host through
+/// whichever branch that host runs, but "both branches, everywhere" would be
+/// the wrong claim.
+#[cfg(test)]
+pub(crate) fn lensfun_load_outcomes() -> u64 {
+    LOAD_OUTCOMES.with(Cell::get)
 }
 
 /// Run `f` with the process-lifetime Lensfun diagnostics sink.
@@ -156,6 +255,10 @@ impl Diagnostics for LogDiagnostics {
 /// return is exactly what a "have we already asked?" memo looks like. Writing
 /// that memo into [`LogDiagnostics`]'s own `seen` set is the natural place for
 /// it, and it would then be reported as a lookup that never happened.
+///
+/// A count that has to survive such a memo cannot be taken by the caller at all;
+/// it has to come from **below** the call, from code the load itself runs. That
+/// is [`lensfun_load_outcomes`], fed by the sink's own outcome methods.
 pub(crate) fn with_diagnostics<R>(f: impl FnOnce(&mut LogDiagnostics) -> R) -> R {
     static SINK: OnceLock<Mutex<LogDiagnostics>> = OnceLock::new();
     let mut guard = SINK

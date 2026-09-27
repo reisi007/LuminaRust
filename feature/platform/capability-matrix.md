@@ -357,6 +357,21 @@ prozessweiten `ReportOnce`-Sink über `with_diagnostics(|sink| …)`.
 leer, damit eine später installierte Datenbank noch aufgefaellt wird; nur das
 *Melden* ist dedupliziert.
 
+**Pflicht des Aufrufers, wenn er einen *durchgeführten* Load belegen muss
+(ergänzt 2026-09-27).** Ein Zähler, den der Aufrufer **neben** `load_system_with`
+hochzählt, belegt, dass die Aufrufstelle erreicht wurde — nicht, dass der
+FFI-Aufruf lief. Das ist gemessen, nicht behauptet: ein Memo davor, das den
+Zähler weiterlaufen lässt, blieb mit der gesamten `lumina-gui`-lib-Suite grün.
+Wer die Eigenschaft "ein Miss cacht nichts" *beweisen* will, braucht daher
+**zwei** Belege: den aufruferseitigen Zähler (Verdrahtung) **und** eine Größe, die
+der Load selbst erzeugt. Im GUI-Pfad ist das `lensfun_load_outcomes` in
+`src/lensfun_diag.rs`: es zählt die beiden Ergebnisereignisse der Senke
+(`resolved`/`failed`), die `report_with` genau einmal pro `load_system_with`
+emittiert und im Erfolgszweig erst nach einem erfolgreichen `lf_db_load_file`.
+Ein Aufrufer, der diese Bindung braucht, zählt folglich **nicht** neben seinem
+Aufruf, sondern in seiner Senke — die einzige Stelle unterhalb des eigenen Memos,
+die der Load wirklich erreicht.
+
 **Auflösungsentscheidung zum Level (2026-09-26, `Agents.md` § *SOLL zuerst*).**
 Die Aufgabenstellung verlangte wörtlich eine `warn!` für den Miss. Das ist hier
 **nicht** umgesetzt und wird hiermit bewusst abweichend festgelegt: eine nicht
@@ -369,7 +384,8 @@ Level ist an einem echten Log-Datensatz **und** an Testanker
 Abweichung von der ursprünglichen Formulierung wird hier getragen, nicht
 versteckt.
 
-**Verbleibende, bewusst nicht behobene Grenzen:**
+**Verbleibende, bewusst nicht behobene Grenzen** (Punkt 3 ist seit 2026-09-27 für
+`lumina-gui` geschlossen; was dort offen bleibt, steht in Punkt 3 selbst):
 
 1. `lumina-cli` meldet über `StderrDiagnostics`, also **unlevellierte**
    Textlabels nach `stderr`. Das ist für ein Terminalprogramm korrekt und
@@ -387,20 +403,64 @@ versteckt.
    once_per_session`, `every_lensfun_event_is_logged_at_its_documented_level`).
    Beim Schreiben ist zu beachten: der Produktionstest darf **nicht** wieder so
    gestellt werden, dass er den Fehlerzweig behauptet.
-3. **Der Lookup-Zähler belegt einen echten zweiten Lookup.** `LOOKUP_ATTEMPTS`
-   wird **im `with_diagnostics`-Closure, unmittelbar nach `load_system_with`**
-   hochgezaehlt, zaehlt also durchgefuehrte Lookups und nicht bloss erreichten
-   Code. Rot laufen damit **vier** Mutationen: ein Memo vor dem Laden
-   (ungeschluesselt und auf den Cache-Key geschluesselt) und ein Memo **im**
-   Closure (ungeschluesselt und geschluesselt) — die Senke gate't den Aufruf
-   ebenso wie ein "bereits versucht"-Memo davor. Verifiziert.
-   **Bleibende Grenze, ausdruecklich benannt:** ein Memo, das den FFI-Aufruf
-   ueberspringt, den Zaehler aber **weiterlaufen** laesst, bleibt gruen — der
-   Zaehler liegt in derselben Crate wie das Memo. Das waere eine plausible
-   "FFI-Lauf vermeiden"-Optimierung, und sie wuerde genau die hier verhinderte
-   Regression wieder einfuehren. Nur ein Zaehlen innerhalb `lumina-lensfun`,
-   also unterhalb des Memos, schliesst sie; das ist bewusst offen gelassen und
-   nicht als geloest dargestellt.
+3. **Der Lookup-Zähler belegt einen echten zweiten Lookup — allein allerdings
+   nicht (Stand 2026-09-27).** `LOOKUP_ATTEMPTS` wird **im
+   `with_diagnostics`-Closure, unmittelbar nach `load_system_with`**
+   hochgezaehlt. Er zaehlt damit erreichten Code, nicht zwingend einen
+   ausgefuehrten FFI-Aufruf. Mit ihm allein laufen **vier** Mutationen rot: ein
+   Memo vor dem Laden (ungeschluesselt und auf den Cache-Key geschluesselt) und
+   ein Memo **im** Closure (ungeschluesselt und geschluesselt) — die Senke gate't
+   den Aufruf ebenso wie ein "bereits versucht"-Memo davor. Verifiziert (die
+   erste dieser vier am 2026-09-27 gegengeprueft: weiterhin rot an der
+   Aufrufzaehler-Assertion).
+   **Fuenfte Mutation, die mit diesem Zaehler allein gruen blieb — gemessen, nicht
+   behauptet:** ein Memo, das einmal laedt und danach vor `load_system_with`
+   zurueckkehrt, waehrend der `fetch_add` weiterlaeuft. `cargo test -p lumina-gui
+   --lib lensfun_diagnostics` blieb **gruen (3/3 zu Messzeit)**, die komplette
+   lib-Suite ebenfalls (**903 passed**). Der Zaehler liegt in derselben Crate wie
+   das Memo; genau die hier verhinderte Regression war damit unsichtbar. Die
+   Belegaussage
+   "zaehlt durchgefuehrte Lookups" ist damit an dieser Stelle zurueckgenommen
+   (DoD §9), und der fruehere Satz "Nur ein Zaehlen innerhalb `lumina-lensfun`
+   schliesst sie" ist ueberholt.
+   **Geschlossen ist das jetzt unterhalb jedes Memos in `lumina-gui`**, in Code,
+   den der Load selbst ausfuehrt: `lensfun_diag::lensfun_load_outcomes` zaehlt die
+   beiden *Ergebnisereignisse* der Senke (`resolved`/`failed`), die
+   `lumina_lensfun::system_load::report_with` **genau einmal pro**
+   `load_system_with` emittiert — im Erfolgszweig erst, nachdem mindestens eine
+   Profildatei von `lf_db_load_file` angenommen wurde. Jedes Memo in
+   `ensure_lensfun_cache` **und** in `with_diagnostics` ueberspringt beide und
+   friert den Zaehler ein; dieselbe Mutation laesst
+   `tests::lensfun_diagnostics::the_production_lookup_…` rot laufen
+   (`left: 1, right: 2`). Beide Ergebniszweige sind maschinenunabhaengig
+   verankert (`a_reported_miss_advances_the_load_count_and_a_deviation_does_not`),
+   damit die Bindung nicht davon abhaengt, ob der Host eine Datenbank hat.
+   `lensfun_load_outcomes` ist **thread-lokal**, weil der
+   Load synchron auf dem aufrufenden Thread laeuft und die Suite parallel laeuft —
+   ein prozessweiter Zaehler koennte einen eingefrorenen Zaehler durch den Load
+   eines anderen Tests verdecken. `LOOKUP_ATTEMPTS` bleibt als Beleg dafuer
+   erhalten, dass die Aufrufstelle ueberhaupt verdrahtet ist; geprueft werden die
+   **beiden** Zahlen je Rebuild.
+   **Bleibende, ausdruecklich benannte Grenzen — alle drei gemessen, nicht
+   angenommen:** ein Memo **unterhalb** der Senke in
+   `lumina_lensfun::system_load::report_with`, das das Ergebnisereignis
+   **nachspielt, ohne zu laden** (aus einem Cache `resolved` aufrufen und
+   zurueckkehren), laesst den Zaehler weiter steigen, obwohl kein einziger
+   FFI-Load stattfand — von der Senke aus ist das Ereignis nicht unterscheidbar.
+   Ebenso ungepinnt bleibt ein Memo **zwischen** Load und `for_camera`
+   (Moduldoku `lensfun_auto`, "What is not pinned"): es erreicht die
+   Ergebnisstufe bei spaeteren Lookups gar nicht und braucht kein Nachspielen.
+   Ein Memo, das nur die Ereignisemission **ueberspringt**, wird dagegen
+   **gefasst** — der Zaehler steigt nicht mehr und die Bindung wird rot; das war
+   die erste Fassung dieses Absatzes und sie hatte es verkehrt herum. Alle drei
+   sind benannt und **nicht** als geloest dargestellt.
+   **Praezisierung der Abdeckung:** maschinenunabhaengig verankert ist nur der
+   `failed`-Zweig (`a_reported_miss_advances_the_load_count_and_a_deviation_
+   does_not`). Das Entfernen des `resolved`-Inkrements laesst diesen Test gruen;
+   der `resolved`-Zweig wird vom hostabhaengigen Produktionstest ausgeuebt, je
+   nachdem, ob die Maschine eine Systemdatenbank hat. Die Bindung haelt auf
+   jedem Host ueber den Zweig, den dieser Host durchlaeuft — "beide Zweige
+   ueberall" waere die falsche Behauptung.
 
 <details><summary>Historie: der frühere, inzwischen überholte Stand</summary>
 

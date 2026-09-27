@@ -31,12 +31,24 @@
 //! untested gap rather than a guarantee; `lensfun_auto`'s module doc states the
 //! same limit from the code side.
 //!
-//! What the counter *does* pin is the load: the add sits **inside** the closure
-//! that performs it, so a memo that returns before `load_system_with` freezes
-//! the counter. That placement is load-bearing, not incidental: with the add
+//! What the counter alone does **not** pin is the load itself: the add sits
+//! *beside* `load_system_with`, so a memo that returns before the FFI call while
+//! the counter keeps advancing satisfies it. Measured 2026-09-27, not assumed:
+//! that mutation left the whole `lumina-gui` lib suite green (903 passed; the
+//! filtered module was 3/3 at the time of that measurement). So no rebuild here
+//! is judged by the counter alone — every one
+//! asserts the **pair**: the call-site counter *and*
+//! [`lensfun_diag::lensfun_load_outcomes`], the count the load itself produces.
+//! The second half cannot be faked by a caller-side memo; the first keeps the
+//! counter wired to the call site at all.
+//!
+//! With that pair, the add's placement is load-bearing as well: with the add
 //! *after* the closure, an "already asked" memo written into the sink's own
-//! `seen` set runs this whole test green. The measured per-mutation evidence is
-//! on the production test below.
+//! `seen` set runs this whole test green, because it freezes the outcome count
+//! too. The measured per-mutation evidence is on the production test below. The
+//! two outcome branches are pinned apart from each other by
+//! `a_reported_miss_advances_the_load_count_and_a_deviation_does_not`, so the
+//! binding does not depend on whether the host has a database.
 //!
 //! # How the log is observed
 //!
@@ -55,7 +67,7 @@
 
 use super::*;
 use crate::lensfun_auto::lensfun_lookup_attempts;
-use crate::lensfun_diag::LogDiagnostics;
+use crate::lensfun_diag::{lensfun_load_outcomes, LogDiagnostics};
 use crate::tests::support::{captured_logs, clear_captured_logs};
 use crate::LensIdentity;
 // The trait and the payload types come from the crate under test, not through
@@ -132,6 +144,50 @@ fn not_found(name: &str) -> SystemDbError {
             reason: MissReason::Absent,
         }],
     }
+}
+
+/// **Clause 2, machine-independent half:** the *miss* outcome feeds the load
+/// count, and only the outcome events do.
+///
+/// The production test reaches `resolved` on a host **with** a system database
+/// and `failed` on one **without**, so on any single machine just one outcome
+/// branch runs — and the miss branch is the one this cache contract is about.
+/// Deleting the increment from `failed` is therefore invisible to the production
+/// test here, so that half is pinned where no database is involved.
+#[test]
+fn a_reported_miss_advances_the_load_count_and_a_deviation_does_not() {
+    let mut sink = LogDiagnostics::new();
+    let before = lensfun_load_outcomes();
+    sink.failed(&not_found("outcome-count"));
+    assert_eq!(
+        lensfun_load_outcomes(),
+        before + 1,
+        "a load whose outcome is a miss must advance the count exactly like a \
+         resolved one: on a host without a system database it is the only \
+         branch the count ever takes"
+    );
+    // The same miss again: de-duplicated away in the log, still a performed load.
+    sink.failed(&not_found("outcome-count"));
+    assert_eq!(
+        lensfun_load_outcomes(),
+        before + 2,
+        "de-duplicating the record must not de-duplicate the load: a second miss \
+         is a second load, and the whole contract is about the second one"
+    );
+    // A deviation is reported *around* a load, not as its outcome: counting it
+    // would make the count stop meaning "a load finished".
+    let dir = std::path::PathBuf::from("/nonexistent/lensfun-outcome-count");
+    sink.layer_skipped(&SkippedLayer {
+        dir: Some(dir),
+        origin: LayerOrigin::UserData,
+        reason: SkipReason::Unreadable,
+    });
+    assert_eq!(
+        lensfun_load_outcomes(),
+        before + 2,
+        "a skipped layer is not an outcome, or the production test's exact +1 \
+         per rebuild would stop being exact"
+    );
 }
 
 /// **Clause 1 + 3:** 100 identical failures produce exactly one `error`
@@ -236,14 +292,21 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 /// session, which is the precise regression this clause exists to prevent. So
 /// the production call site counts its attempts
 /// ([`lensfun_auto::lensfun_lookup_attempts`]) and this test watches the
-/// counter, not the log.
+/// counter, not the log — and, because that counter is written by the *caller*
+/// and could not be shown to witness the load, the count the load itself
+/// produces ([`lensfun_diag::lensfun_load_outcomes`]) as well. Both, per rebuild.
 ///
-/// # Non-vacuity: the four memos this test actually kills
+/// # Non-vacuity: the memos this test actually kills
 ///
-/// The counter is bumped *inside* the same closure as the load, which kills
-/// every memo that skips the load **and** the counting with it. Each of the
-/// following was applied to the production call site, run, and observed to fail
-/// here; each was then reverted:
+/// Every rebuild is judged by two numbers, not one: the **call-site** counter
+/// ([`lensfun_lookup_attempts`], incremented beside the call) and the **load's own**
+/// outcome count ([`lensfun_load_outcomes`], incremented by the sink methods that
+/// `lumina_lensfun::system_load::report_with` calls once per load). The memos
+/// below were applied to the production call site, run, and observed to fail
+/// here; each was then reverted. The first four carry the earlier commit's
+/// measurement — row 1 was spot-checked again on 2026-09-27 and still goes red
+/// at the counter assertion named in the table; the fifth was measured for this
+/// binding (2026-09-27):
 ///
 /// | memo | first red assertion |
 /// |---|---|
@@ -251,6 +314,7 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 /// | inside the closure, **keyed on the cache key** | "an unchanged key after a miss …" |
 /// | in front of `with_diagnostics`, **keyed on the cache key** | "an unchanged key after a miss …" |
 /// | in front of `with_diagnostics`, **unkeyed** | "a second rebuild with a changed key …" |
+/// | **skips the FFI call, attempt counter keeps advancing** | "the second rebuild has to produce a **load outcome** …" |
 ///
 /// The third rebuild earns its keep: a memo *keyed on the cache key* cannot fire
 /// on the first two calls (they change the key), so only the repeat of the same
@@ -262,8 +326,17 @@ fn every_lensfun_event_is_logged_at_its_documented_level() {
 /// **green** (measured, same machine, same commit's test file). That is the
 /// regression the current layout closes.
 ///
+/// The **last** row is the one a second observable had to be added for, and it is
+/// the only one of the five no single counter can see: by construction the
+/// counter keeps advancing. With the counter as the only witness it left the
+/// whole lib suite green (903 passed) — the same regression the rows above
+/// close, reopened. The load's own outcome
+/// count is what makes it visible; `lensfun_auto`'s `LOOKUP_ATTEMPTS` doc
+/// records that measurement where the claim used to stand.
+///
 /// What stays green, and is therefore an untested gap rather than a covered
-/// claim: a memo between the load and `for_camera` (see the module doc).
+/// claim: a memo between the load and `for_camera` (see the module doc), and a
+/// memo *below* the sink, inside `lumina_lensfun::system_load::report_with`.
 #[test]
 fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     clear_captured_logs();
@@ -286,6 +359,7 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // second assertion below is still red (`0 > 0` is false), which a mutation
     // confirmed.
     let before_any_lookup = lensfun_lookup_attempts();
+    let outcomes_before_first = lensfun_load_outcomes();
     app.ensure_lensfun_cache(64, 48);
     let after_first = records_at(Level::Error).len() + records_at(Level::Debug).len();
     // Which branch this takes depends on the **machine**: a host with a system
@@ -307,9 +381,24 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
         "the first rebuild must have entered the lookup, otherwise the \
          assertion below would be vacuous"
     );
+    // The second half of the pair. `lensfun_load_outcomes` is written by the
+    // **sink**, from the two callbacks `report_with` makes exactly once per
+    // completed load, so it cannot be moved by anything the caller does. One
+    // rebuild → exactly one outcome: not "at least one", because a second
+    // outcome would mean the sink was driven by something that is not this
+    // rebuild. It is per thread, so a parallel test's real load cannot stand in
+    // for this one.
+    assert_eq!(
+        lensfun_load_outcomes(),
+        outcomes_before_first + 1,
+        "the first rebuild must have loaded the database, not merely reached the \
+         call site: the sink reports one outcome per load, and this one is what \
+         makes the assertions below non-vacuous"
+    );
 
     // Second rebuild with **different dimensions**, so the key changes and the
     // `!fresh` early-out cannot swallow the call.
+    let outcomes_before_second = lensfun_load_outcomes();
     app.ensure_lensfun_cache(65, 49);
     let after_second = records_at(Level::Error).len() + records_at(Level::Debug).len();
     // The *decisive* clause: the second rebuild really ran the load again.
@@ -319,7 +408,9 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // tried" memo in front of the load, would satisfy such a test while pinning
     // a stale miss for the rest of the session. The counter, which the
     // production call site increments *inside* the load's closure and right
-    // after the load returns, separates them.
+    // after the load returns, separates the memos that skip the counting
+    // together with the load; the one that only keeps the counter **moving** is
+    // caught by the outcome assertion right below, not by this one.
     //
     // `>` rather than `== +1`. As of this writing no other test both sets
     // `loaded_lens_identity` and drives a render, so an exact `+1` would be
@@ -331,6 +422,21 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
         "a second rebuild with a changed key must run the lookup again: a miss \
          must cache nothing, or a database installed later would stay invisible \
          for the rest of the session"
+    );
+    // The decisive assertion of the pair, and the reason the outcome count
+    // exists. The counter above cannot tell this mutation from a real reload: a
+    // memo in front of `load_system_with` that keeps the `fetch_add` advancing
+    // satisfies it. The outcome count cannot be satisfied that way — the sink
+    // only hears from a load that actually ran. Measured: with the counter as
+    // the only witness, that mutation kept this module green (3 passed) and the
+    // whole lib suite green (903 passed).
+    assert_eq!(
+        lensfun_load_outcomes(),
+        outcomes_before_second + 1,
+        "the second rebuild has to produce a **load outcome** in the sink, not \
+         just an attempt: a memo that skips the FFI call while the attempt \
+         counter keeps advancing would pin a stale miss for the whole session, \
+         and `report_with` emits an outcome only for a load it really performed"
     );
     assert!(
         app.lensfun_cache.is_none(),
@@ -353,12 +459,22 @@ fn the_production_lookup_logs_through_the_facade_and_caches_no_miss() {
     // fails here for the same reason; the unkeyed variant needs no such help and
     // already fails one call earlier.
     let after_second_attempts = lensfun_lookup_attempts();
+    let outcomes_before_third = lensfun_load_outcomes();
     app.ensure_lensfun_cache(65, 49);
     assert!(
         lensfun_lookup_attempts() > after_second_attempts,
         "rebuilding with an unchanged key after a miss must still run the \
          lookup: nothing is cached, so an 'already tried' memo keyed on the \
          cache key would pin the miss and hide a database installed later"
+    );
+    // Same pairing as above, on the key repeat: the counter proves the call site
+    // ran, the outcome count proves the load did.
+    assert_eq!(
+        lensfun_load_outcomes(),
+        outcomes_before_third + 1,
+        "rebuilding with an unchanged key after a miss must still load the \
+         database: no outcome means no load, so a database installed later would \
+         stay invisible"
     );
     assert!(
         app.lensfun_cache.is_none(),

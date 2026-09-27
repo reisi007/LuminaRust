@@ -10,7 +10,8 @@
 //! # The contract this cache keeps
 //!
 //! * A rebuild whose **database load** misses caches **nothing**: every rebuild
-//!   re-runs the system lookup ([`LOOKUP_ATTEMPTS`]), so a Lensfun database
+//!   re-runs the system lookup ([`LOOKUP_ATTEMPTS`], bound to the load itself by
+//!   [`super::lensfun_diag::lensfun_load_outcomes`]), so a Lensfun database
 //!   installed while the session runs is picked up on the next rebuild instead
 //!   of being pinned as a stale miss. The de-duplication lives in the *sink*
 //!   ([`super::lensfun_diag`]), never in this cache.
@@ -56,12 +57,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// The matching invariant — "every path that skips the load also skips the
 /// add" — is true of this code and of **nothing else**: it is enforced by
-/// placement alone, not by a test. A memo that skips the FFI call but *still*
-/// increments the counter (a plausible "avoid the expensive load" optimisation
-/// written by someone who wants the counter to keep moving) leaves the whole
-/// suite green, because the counter lives in the same crate as the memo. Closing
-/// that would mean counting inside `lumina-lensfun`, below the memo; it is named
-/// here rather than papered over.
+/// placement alone, not by this counter alone. A memo that skips the FFI call
+/// but *still* increments the counter (a plausible "avoid the expensive load"
+/// optimisation written by someone who wants the counter to keep moving) satisfies
+/// every assertion that watches only this number, because the counter lives in
+/// the same crate as the memo.
+///
+/// **That sentence used to end with "only counting inside `lumina-lensfun`
+/// closes it", and it was measured, not believed (2026-09-27).** A memo that
+/// loads once and then returns before `load_system_with` while the `fetch_add`
+/// keeps advancing was applied to this call site, `cargo clean -p lumina-gui`,
+/// `cargo test -p lumina-gui --lib`: the filtered module stayed green (3/3 at
+/// the time) and so did the whole lib suite (903 passed) — the regression this
+/// contract exists to prevent was completely invisible. The claim is withdrawn
+/// at this spot, with its cause, per DoD §9.
+///
+/// It is closed now one level below any memo in this crate, in code the load
+/// itself runs: [`super::lensfun_diag::lensfun_load_outcomes`] counts the sink's
+/// own *outcome* events, which `lumina_lensfun::system_load::report_with` emits
+/// exactly once per load and only after the resolution and the FFI file load ran.
+/// The same mutation freezes that count, and
+/// `tests::lensfun_diagnostics` asserts both numbers per rebuild. What remains
+/// open is a memo *below* the sink, inside `report_with`; that crate is not this
+/// file's to change, and the limit stays named.
 ///
 /// What the counter does **not** cover: the corrector lookup behind the load. It
 /// counts *database loads*, not profile searches — see the module doc's
