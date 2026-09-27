@@ -1537,7 +1537,15 @@ laut benannte Abwägung und keine stille Optimierung:
   CI-Job gebaut — das Opt-in-Feature `janklog` ist in keinem Workflow aktiviert,
   und `lib.rs:100` gated die Datei zusätzlich hinter `debug_assertions`
   (905 Lib-Tests ohne das Feature, 912 mit). Dafür ist `CI-JANKLOG-47`
-  angelegt.
+  angelegt, mit User-Einschätzung „Debugging, keine hohe Priorität": die Datei
+  ist damit ungesehen, nicht ungated gefährdet — wer daran arbeitet, sieht die
+  7 Tests lokal sofort.
+  **Abgegrenzt und geprüft: `lumina-gui-harness`** hat 5 Tests und erscheint in
+  keinem CI-Job. Das ist **kein** Drift: das Crate ist per
+  `cfg(target_os = "macos")` macOS-only und fährt per `enigo` +
+  `screencapture` das echte On-Screen-Fenster. Auf einem Linux-Runner existiert
+  es nicht, es *kann* dort nicht gebaut werden. Es gehört damit zur manuellen
+  GUI-Verifikation, die ohnehin kein headless-Gate ist.
   **Offen, bewusst nicht in dieser Welle, gleiche Regel:** `g15_batch`,
   `g15_collections`, `g16_shortcuts`, `w3_release`, `navigator_r4`,
   `library_tree_r4`, `masking_g03`, `masking_g11`, `spot_followup`,
