@@ -29,9 +29,14 @@
 use super::*;
 use std::cell::{Cell, RefCell};
 use std::time::Instant;
-
-/// U1: einheitliche Default-Schwelle, 120-Hz-ProMotion-Frame-Budget.
-const DEFAULT_THRESHOLD_MS: f64 = 8.3;
+// U1/U6: *which* limit is in force — the `LUMINA_JANK_MS` parse, the
+// process-wide memo and the test-only override — is a self-contained policy
+// without any record state, so it lives in `threshold.rs`; this module keeps
+// the RAII scope, the record and the emitted line.
+mod threshold;
+use threshold::{effective_threshold, JankThreshold};
+#[cfg(test)]
+use threshold::{resolve_threshold, set_test_threshold, DEFAULT_THRESHOLD_MS};
 
 /// An welchem äußersten Scope die Jank-Zeile hängt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,76 +54,6 @@ impl JankKind {
             Self::Render => "render",
         }
     }
-}
-
-/// Aufgelöste Schwelle: `Disabled` ist die ausdrückliche `LUMINA_JANK_MS=0`-
-/// Abschaltung (kein stiller Default), `Millis` die wirksame Grenze.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum JankThreshold {
-    Disabled,
-    Millis(f64),
-}
-
-/// Reine Schwellen-Auswertung (testbar ohne Umgebung): `None` → Default,
-/// `0` → deaktiviert, ganze Millisekunden → Grenze, sonst Default. Zweiter
-/// Wert: laute U6-Meldung (`0`→`info!`, unparsbar→`warn!`, sonst still).
-pub(crate) fn resolve_threshold(raw: Option<&str>) -> (JankThreshold, Option<log::Level>) {
-    let invalid = raw.is_some_and(|t| t.trim().parse::<u64>().is_err());
-    let parsed = match raw {
-        None => JankThreshold::Millis(DEFAULT_THRESHOLD_MS),
-        Some(value) => match value.trim().parse::<u64>() {
-            Ok(0) => JankThreshold::Disabled,
-            Ok(ms) => JankThreshold::Millis(ms as f64),
-            Err(_) => JankThreshold::Millis(DEFAULT_THRESHOLD_MS),
-        },
-    };
-    let notice = match parsed {
-        JankThreshold::Disabled => Some(log::Level::Info),
-        JankThreshold::Millis(_) if invalid => Some(log::Level::Warn),
-        JankThreshold::Millis(_) => None,
-    };
-    (parsed, notice)
-}
-
-// Einmalig aufgeloeste, prozessweite Schwelle (kein Per-Frame-Parsen, U1/U6).
-static THRESHOLD: std::sync::OnceLock<JankThreshold> = std::sync::OnceLock::new();
-
-fn global_threshold() -> JankThreshold {
-    *THRESHOLD.get_or_init(|| {
-        let raw = std::env::var("LUMINA_JANK_MS").ok();
-        let (parsed, notice) = resolve_threshold(raw.as_deref());
-        match notice {
-            Some(log::Level::Info) => log::info!("LUMINA_JANK disabled (LUMINA_JANK_MS=0)"),
-            Some(log::Level::Warn) => log::warn!(
-                "LUMINA_JANK: invalid LUMINA_JANK_MS={:?}; using default {DEFAULT_THRESHOLD_MS} ms",
-                raw.as_deref().unwrap_or_default()
-            ),
-            _ => {}
-        }
-        parsed
-    })
-}
-
-#[cfg(test)]
-thread_local! {
-    static TEST_THRESHOLD: Cell<Option<JankThreshold>> = const { Cell::new(None) };
-}
-
-fn effective_threshold() -> JankThreshold {
-    #[cfg(test)]
-    {
-        if let Some(overridden) = TEST_THRESHOLD.with(Cell::get) {
-            return overridden;
-        }
-    }
-    global_threshold()
-}
-
-/// Test-only override of the threshold so the slow/silent paths are
-/// deterministic regardless of machine load (`Millis(-1.0)` = emit always).
-#[cfg(test)]
-fn set_test_threshold(value: JankThreshold) {
-    TEST_THRESHOLD.with(|cell| cell.set(Some(value)));
 }
 
 // The record being built for the current outermost scope.

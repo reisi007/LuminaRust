@@ -1520,7 +1520,24 @@ laut benannte Abwägung und keine stille Optimierung:
   unverändert, `lib.rs` bei 12819 Zeilen. **Gemessen dabei und neu aufgenommen:
   es sind fünf Dateien bei exakt 500, nicht drei** — `jank_log.rs` und
   `render_tick.rs` sind **Produktionscode** und tragen dieselbe
-  Null-Reserve-Lage; dafür ist `FILE-SIZE-500-46` angelegt.
+  Null-Reserve-Lage.
+  **Produktionscode 2026-09-27: ebenfalls erledigt.** Die beiden im selben Zug
+  gemessenen Produktionsdateien sind nach derselben Regel gesplittet:
+  `jank_log.rs` 500 → **435** (`jank_log/threshold.rs`, 85 — die Schwellen-Policy
+  ohne Record-State, während `JankKind` als Record-Label im Parent bleibt) und
+  `render_tick.rs` 500 → **347** (`render_tick/draft_error.rs`, 170 — die
+  Draft-Fehlerberichterstattung samt ihrem Testmodul, das ohnehin nur aus genau
+  diesen Tests bestand). `take_draft_tick_throttles` blieb bewusst im Parent,
+  weil `timing_instrumentation.rs:359` es über `crate::render_tick::` erreicht
+  und der Zähler zu dem Tick gehört, der ihn erhöht. Nachweis: 0 entfernte
+  inhaltliche Zeilen (die vier `comm`-Treffer sind drei verschobene Definitionen
+  mit `pub(crate)` und ein geteilter `use`-Import), assert-Multiset 45 = 45,
+  `#[test]` 11 = 11, `lib.rs` bei 12819 Zeilen, Suite 936/0/76 unverändert.
+  **Dabei gemessen und neu aufgenommen:** `jank_log.rs` wird von **keinem**
+  CI-Job gebaut — das Opt-in-Feature `janklog` ist in keinem Workflow aktiviert,
+  und `lib.rs:100` gated die Datei zusätzlich hinter `debug_assertions`
+  (905 Lib-Tests ohne das Feature, 912 mit). Dafür ist `CI-JANKLOG-47`
+  angelegt.
   **Offen, bewusst nicht in dieser Welle, gleiche Regel:** `g15_batch`,
   `g15_collections`, `g16_shortcuts`, `w3_release`, `navigator_r4`,
   `library_tree_r4`, `masking_g03`, `masking_g11`, `spot_followup`,
