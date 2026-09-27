@@ -1489,8 +1489,13 @@ laut benannte Abwägung und keine stille Optimierung:
     Assertions, gleiche Testanzahl. Zulässig sind ausschließlich Pfad-Anpassungen
     (`mod`-Zeile, `use super::<modul>`, Dateiverweise in Doku); eine inhaltliche
     Änderung an einem Test ist ein eigener Task.
-  - Das Verzeichnis bleibt **flach**. Untergliederung in Domänen-Unterordner ist
-    **nicht** Teil dieser Welle.
+  - Das Verzeichnis ist **flach**; Untergliederung in Domänen-Unterordner ist
+    **nicht** Teil dieser Welle. **Präzisierung 2026-09-27 (User-Entscheid):**
+    bestehende Unterordner wie `tests/library_sort/` und `tests/g15_stacks/`
+    (dort liegen `rejections.rs`, `migration.rs`, `r5_sort.rs`, `r5_stacks.rs`
+    schon seit längerem) bleiben zulässig — für neue Testdateien gilt
+    weiterhin "flach", für Ratchet-Splits in einem bereits gegliederten
+    Bereich ebenso. Neu angelegt wird kein weiterer Domänen-Unterordner.
   - Gemeinsame Test-Helfer bleiben in `tests/support.rs`; neue Testdateien
     entstehen von Anfang an thematisch benannt.
   **Ist-Stand 2026-09-27:** 16 ID-benannte Dateien auf Feature-Namen umgestellt.
@@ -1504,11 +1509,22 @@ laut benannte Abwägung und keine stille Optimierung:
   `crop_display_and_denoise_policy` (Anzeige-Rezept bei armiertem Crop-Tool +
   Nachbar-/Navigator-Denoise-Policy), `preview_viewport_cap` (Preview-Kap),
   `treatment_panel_histogram` (G-01-Bereich).
+  **Ratchet-Grenze 2026-09-27: erledigt.** `check_file_sizes.sh` wertet nur
+  Dateien **> 500** Zeilen, also war „exakt 500" legal, aber ohne jede Reserve —
+  und neue Baseline-Einträge sind per User-Entscheid verboten. Die drei
+  Testdateien sind per Extraktion gesplittet: `navigator.rs` 500 → **366**
+  (`preview_zoom_mode.rs`, 157), `library_sort.rs` 500 → **404**
+  (`library_sort/clickable_sort_controls.rs`, 116), `g15_stacks.rs` 500 →
+  **382** (`g15_stacks/clickable_stack_controls.rs`, 137). Nachweis: 0
+  entfernte inhaltliche Zeilen, 158 assert-Zeilen unverändert, 33 `#[test]`
+  unverändert, `lib.rs` bei 12819 Zeilen. **Gemessen dabei und neu aufgenommen:
+  es sind fünf Dateien bei exakt 500, nicht drei** — `jank_log.rs` und
+  `render_tick.rs` sind **Produktionscode** und tragen dieselbe
+  Null-Reserve-Lage; dafür ist `FILE-SIZE-500-46` angelegt.
   **Offen, bewusst nicht in dieser Welle, gleiche Regel:** `g15_batch`,
-  `g15_collections`, `g15_stacks`, `g16_shortcuts`, `w3_release`,
-  `navigator_r4`, `library_tree_r4`, `masking_g03`, `masking_g11`,
-  `spot_followup`, `spot_followup_ui` — und die drei auf der 500-Zeilen-
-  Ratchet-Grenze (`navigator.rs`, `library_sort.rs`, `g15_stacks.rs`).
+  `g15_collections`, `g16_shortcuts`, `w3_release`, `navigator_r4`,
+  `library_tree_r4`, `masking_g03`, `masking_g11`, `spot_followup`,
+  `spot_followup_ui`.
   **Benannte Restluecke, ausdruecklich NICHT abgedeckt (DoD §9/§10):** ein
   *zusaetzlicher, nicht gezaehlter* `std::fs::read` **oberhalb** des
   memoisierten Blattes ist mit diesem Zaehler **konstruktiv nicht** erkennbar —

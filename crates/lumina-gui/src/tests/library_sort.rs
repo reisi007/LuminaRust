@@ -5,9 +5,16 @@
 //! and the stack-as-unit guarantee. Fixtures are stub `*.cr3` files with a
 //! valid sidecar so the RAW-only Library order lists them without a decode;
 //! capture timestamps are injected directly (the stub bytes carry no EXIF).
+//! The clickable sort controls (drawer mode buttons + grid drag-drop) moved to
+//! `library_sort/clickable_sort_controls.rs`.
 
 use super::*;
 
+// The clickable sort controls (mode buttons + real grid drag-drop) moved to
+// their own file so this one keeps headroom under the 500-line ratchet. The
+// shared fixtures/helpers and the drag harness stay here, as documented in the
+// child files.
+mod clickable_sort_controls;
 // Rework B1/B2/B4: rejection-classes, sidecar-safety and drag-as-unit coverage
 // (split out so both files stay within the 500-line ratchet).
 mod rejections;
@@ -257,32 +264,6 @@ fn custom_order_appends_entries_missing_from_the_file() {
     assert_eq!(visible_names(&app), vec!["c.cr3", "a.cr3", "b.cr3"]);
 }
 
-/// The sort-mode buttons in the `\` drawer are clickable and switch the mode.
-#[test]
-fn sort_buttons_are_clickable_in_the_drawer() {
-    let dir = tempfile::tempdir().unwrap();
-    stub_raw(dir.path(), "a.cr3");
-    stub_raw(dir.path(), "b.cr3");
-    let mut app = new_app();
-    scan(&mut app, dir.path());
-    app.toggle_filter_bar();
-    let _ = headless_click_label(&mut app, Str::LibrarySortDate.t(), |app, ui| {
-        let ctx = ui.ctx().clone();
-        app.draw_library_grid(&ctx, ui);
-    });
-    assert_eq!(app.library_sort(), LibrarySort::CaptureDate);
-    let _ = headless_click_label(&mut app, Str::LibrarySortCustom.t(), |app, ui| {
-        let ctx = ui.ctx().clone();
-        app.draw_library_grid(&ctx, ui);
-    });
-    assert_eq!(app.library_sort(), LibrarySort::Custom);
-    let _ = headless_click_label(&mut app, Str::LibrarySortName.t(), |app, ui| {
-        let ctx = ui.ctx().clone();
-        app.draw_library_grid(&ctx, ui);
-    });
-    assert_eq!(app.library_sort(), LibrarySort::Name);
-}
-
 /// The custom order references subfolder images by their portable relative
 /// name (`sub/file.ext`), never an absolute path, and reload restores it.
 #[test]
@@ -371,83 +352,6 @@ fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
         pressed,
         modifiers: Default::default(),
     }
-}
-
-/// Real grid drag-drop: dragging `a` onto `c` switches to `Custom` and writes
-/// the folder file.
-#[test]
-fn grid_drag_drop_reorders_and_switches_to_custom() {
-    let dir = tempfile::tempdir().unwrap();
-    let a = stub_raw(dir.path(), "a.cr3");
-    stub_raw(dir.path(), "b.cr3");
-    let c = stub_raw(dir.path(), "c.cr3");
-    let mut app = new_app();
-    scan(&mut app, dir.path());
-    // Resolve the stable cell ids before the drag (path-keyed, order-independent).
-    let key_of = |app: &LuminaApp, name: &str| -> String {
-        app.entries
-            .iter()
-            .find(|entry| entry.name == name)
-            .unwrap()
-            .thumb_key
-            .clone()
-    };
-    let key_a = key_of(&app, "a.cr3");
-    let key_c = key_of(&app, "c.cr3");
-
-    let ctx = egui::Context::default();
-    let mut time = 0.0;
-    grid_pass(&ctx, &mut app, &mut time, vec![]);
-    let cell = |key: &str| -> egui::Rect {
-        ctx.read_response(crate::library_sort::library_cell_id(key))
-            .expect("the grid cell must be registered")
-            .rect
-    };
-    let from = cell(&key_a).center();
-    let to = cell(&key_c).center();
-    let mid = from + (to - from) * 0.5;
-    grid_pass(
-        &ctx,
-        &mut app,
-        &mut time,
-        vec![egui::Event::PointerMoved(from)],
-    );
-    grid_pass(
-        &ctx,
-        &mut app,
-        &mut time,
-        vec![egui::Event::PointerMoved(from), pointer_button(from, true)],
-    );
-    grid_pass(
-        &ctx,
-        &mut app,
-        &mut time,
-        vec![egui::Event::PointerMoved(mid)],
-    );
-    grid_pass(
-        &ctx,
-        &mut app,
-        &mut time,
-        vec![egui::Event::PointerMoved(to)],
-    );
-    grid_pass(
-        &ctx,
-        &mut app,
-        &mut time,
-        vec![egui::Event::PointerMoved(to), pointer_button(to, false)],
-    );
-    grid_pass(&ctx, &mut app, &mut time, vec![]);
-
-    assert_eq!(
-        app.library_sort(),
-        LibrarySort::Custom,
-        "a drag reorder must switch to Custom"
-    );
-    assert_eq!(visible_names(&app), vec!["b.cr3", "a.cr3", "c.cr3"]);
-    assert!(
-        sort_file(dir.path()).is_file(),
-        "the custom order must be written to the folder file"
-    );
 }
 
 /// A collapsed stack stays one sorted unit: sorting by capture date hides the
