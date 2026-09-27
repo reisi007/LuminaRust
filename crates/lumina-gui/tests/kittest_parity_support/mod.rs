@@ -16,6 +16,8 @@ use std::collections::HashSet;
 
 #[cfg(feature = "lensfun")]
 mod lensfun;
+// GPU-PARITY-MASKGATE-1: the mask-present gate measured at real rendered frames.
+mod mask_gate;
 
 /// Printed when no usable adapter is bound so the run is visibly skipped,
 /// never silently passed (same policy/wording as the `lumina-gpu` oracle

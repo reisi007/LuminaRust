@@ -100,6 +100,14 @@ mod effective_source_stage;
 #[cfg(all(feature = "janklog", debug_assertions))]
 mod jank_log;
 mod present;
+// GUI-PARITY-MASKGATE-1: the VRAM mask-plane lifecycle of the present
+// composite (push the evaluated layers, keep a live brush plane, clear the
+// plane when the frame carries no coverage at all).
+#[cfg(feature = "gpu")]
+mod present_mask_plane;
+// The mutually exclusive arming state machine of the preview's competing input
+// modes (WB eyedropper, local WB, red-eye, spot tool, mask tool).
+mod preview_pickers;
 // GUI-REFACTOR-W1-20 S1.4b (GPU only): present routing, VRAM/stage gate,
 // Lensfun map bind, refusal classification and the parity diagnostic hooks.
 #[cfg(feature = "gpu")]
@@ -6639,59 +6647,6 @@ impl LuminaApp {
         self.clear_mask_gesture();
     }
 
-    /// G-14 (H1): arm the WB eyedropper and disarm the red-eye region picker.
-    /// Both pickers consume the same preview click, so they are mutually
-    /// exclusive — a single click must never sample a white balance *and* mark
-    /// a pupil.
-    fn arm_wb_picker(&mut self) {
-        instrument_gui_action!(self, GuiAction::ArmWbEyedropper);
-        self.wb_pick_mode = true;
-        self.local_wb_pick_mode = false;
-        self.red_eye_pick_mode = false;
-        self.mask_tool = MaskTool::None;
-        self.spot_tool = SpotTool::None;
-        self.clear_mask_gesture();
-        info!("GUI interaction: white-balance pick mode armed");
-    }
-
-    /// G-14 (H1): arm/disarm the red-eye region picker. Arming disarms the WB
-    /// eyedropper (see [`Self::arm_wb_picker`]).
-    fn set_red_eye_pick_mode(&mut self, armed: bool) {
-        instrument_gui_action!(self, GuiAction::SetRedEyePickMode);
-        self.red_eye_pick_mode = armed;
-        if armed {
-            self.wb_pick_mode = false;
-            self.local_wb_pick_mode = false;
-            self.mask_tool = MaskTool::None;
-            self.spot_tool = SpotTool::None;
-            self.clear_mask_gesture();
-        }
-        info!("GUI interaction: red-eye pick mode -> {armed}");
-    }
-
-    /// Disarm both preview pickers (image switch and `Esc`). The recipe and the
-    /// persisted state are never touched.
-    fn disarm_preview_pickers(&mut self) {
-        self.wb_pick_mode = false;
-        self.local_wb_pick_mode = false;
-        self.red_eye_pick_mode = false;
-    }
-
-    /// `Esc` cancels an armed WB eyedropper / red-eye region picker and an
-    /// armed spot tool (F-103-N3 / G-14 / SPOT). The recipe stays untouched.
-    fn cancel_armed_preview_tools(&mut self) {
-        self.disarm_preview_pickers();
-        self.spot_tool = SpotTool::None;
-    }
-
-    /// `Esc` key wiring: read the frame's input and cancel the armed preview
-    /// tools. Extracted so a headless test can drive the real key event.
-    fn handle_escape_shortcut(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.cancel_armed_preview_tools();
-        }
-    }
-
     pub fn set_spot_tool(&mut self, tool: SpotTool) {
         instrument_gui_action!(self, GuiAction::SetSpotTool);
         self.spot_tool = tool;
@@ -12197,6 +12152,9 @@ mod tests {
     mod generative_status;
     mod geometry;
     mod geometry_session;
+    mod gpu_mask_drafts;
+    mod gpu_mask_gate;
+    mod gpu_mask_plane;
     mod gpu_routing;
     mod treatment_panel_histogram;
     // R3-Runde-3: routing/denoise fixes (R3-ROUTING-1/-DENOISE-1/-DENOISE-2).

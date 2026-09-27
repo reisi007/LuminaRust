@@ -240,6 +240,20 @@ fn gpu_present_respects_all_mask_overlay_gates() {
     app.render_mask_layers.clear();
     assert!(!app.gpu_mask_overlay_is_selected());
 
+    // GPU-PARITY-MASKGATE-1: the checks below are about the *editorial* gates
+    // with the selected mask's evaluated layer resident, so the layer has to be
+    // back: the frame above deliberately left none, and with no evaluated layer
+    // there is no matte to gate at all — the route is then pixel-equal and
+    // allowed (`gpu_mask_gate::a_frame_without_an_evaluated_layer_takes_the_vram_path`
+    // owns that case). Re-render instead of forcing the flag.
+    app.render().unwrap();
+    app.vram_mask_is_evaluated = true;
+    assert_eq!(
+        app.render_mask_layers.len(),
+        1,
+        "the selected layer is resident again"
+    );
+
     // The non-default tint is session state consumed by both present paths;
     // visibility gates still decide whether either path may composite it.
     app.set_overlay_color([17, 129, 231]);
@@ -251,6 +265,16 @@ fn gpu_present_respects_all_mask_overlay_gates() {
     assert!(!app.gpu_mask_overlay_is_selected());
     app.set_overlay_mode(OverlayMode::Always);
     app.set_mask_visible(&id, false).unwrap();
+    // Deliberately **no** re-render here: GPU-PARITY-MASKGATE-1 case 2 is
+    // "an evaluated layer is present in the frame *and* the mask's eye is
+    // closed", i.e. exactly the transient between the toggle and the render
+    // that drops the invisible layer. The gate must still refuse the VRAM
+    // route, because the resident layer is what the CPU painter would have to
+    // draw. (Once the re-render lands, the invisible layer is no longer
+    // evaluated, nothing is left to composite and the VRAM route is correct —
+    // `gpu_mask_gate::a_frame_without_an_evaluated_layer_takes_the_vram_path`
+    // owns that side.) The stale `vram_mask_is_evaluated` that `mark_dirty`
+    // leaves behind is a separate invalidation, asserted in `dirty.rs`.
     assert!(!app.gpu_mask_overlay_is_selected());
     app.set_mask_visible(&id, true).unwrap();
 

@@ -475,10 +475,10 @@ impl LuminaApp {
         self.preview_render_src = Some((source.width, source.height));
         self.render_mask_layers = output.mask_layers;
         // GUI-WGPU-PRESENT-1 / GPU-STAGE-1: make the *pipeline-evaluated* mask
-        // coverage visible in the GPU present composite (method extracted to
-        // `present.rs`; failures stay loud there).
+        // coverage visible in the GPU present composite, or clear the plane when
+        // the frame carries none (`present_mask_plane.rs`; failures stay loud).
         #[cfg(feature = "gpu")]
-        self.upload_evaluated_mask_to_vram();
+        self.sync_mask_plane_to_vram();
         self.error = None;
         self.last_stage_work = Some(work);
         self.status = if !mask_warnings.is_empty() {

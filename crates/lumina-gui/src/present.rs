@@ -12,10 +12,10 @@
 //!
 //! `update_texture` and `source_identity` are `pub(crate)` because the app root
 //! calls them; the GPU-only helpers keep their original private visibility.
+//! The VRAM mask plane of this composite — and GPU-PARITY-MASKGATE-1's
+//! "no stale plane resident" condition — live in `present_mask_plane`.
 
 use super::*;
-#[cfg(feature = "gpu")]
-use log::warn;
 
 impl LuminaApp {
     /// The texture upload is driven by the preview-area path.
@@ -115,50 +115,6 @@ impl LuminaApp {
                 // CPU handle already exists — the upload is skipped; name the
                 // saved bytes instead (measurement only, pixels unchanged).
                 timing::emit(|| timing::texture_upload_skip_line("preview", frame.pixels.len()));
-            }
-        }
-    }
-
-    /// GUI-WGPU-PRESENT-1 / GPU-STAGE-1: push the pipeline-evaluated combined
-    /// mask planes into the VRAM present composite. Extracted verbatim from
-    /// `render_pipeline.rs` (ratchet: the pipeline hub stays <= 500 lines);
-    /// failures are loud but never break the CPU preview path.
-    #[cfg(feature = "gpu")]
-    pub(crate) fn upload_evaluated_mask_to_vram(&mut self) {
-        self.vram_mask_is_evaluated = false;
-        if self.render_mask_layers.is_empty() {
-            return;
-        }
-        let planes: Vec<lumina_core::MaskPlane> = self
-            .render_mask_layers
-            .iter()
-            .map(|layer| layer.plane.clone())
-            .collect();
-        match lumina_gpu::combine_mask_planes(&planes) {
-            Ok(Some(combined))
-                if combined.width == self.preview.as_ref().map(|p| p.width).unwrap_or(0)
-                    && combined.height == self.preview.as_ref().map(|p| p.height).unwrap_or(0) =>
-            {
-                if let Some(gpu) = self.gpu.as_ref() {
-                    if gpu.is_available()
-                        && gpu.ensure_vram(combined.width, combined.height).is_ok()
-                    {
-                        match gpu.upload_mask_plane(
-                            combined.width,
-                            combined.height,
-                            &combined.values,
-                        ) {
-                            Ok(()) => self.vram_mask_is_evaluated = true,
-                            Err(err) => {
-                                warn!("gpu evaluated-mask upload failed: {err}");
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(_) => {}
-            Err(err) => {
-                warn!("gpu evaluated-mask combination failed: {err}");
             }
         }
     }

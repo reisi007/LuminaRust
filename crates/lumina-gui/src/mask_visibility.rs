@@ -86,19 +86,67 @@ impl LuminaApp {
         self.mask_visible(id)
     }
 
-    /// GPU present may composite the evaluated mask only when that mask is
-    /// exactly the selected mask. The CPU path can rasterize a single prompt
-    /// for several masks, but the historical VRAM plane combines every layer;
-    /// falling back to the CPU texture is therefore required for correctness
-    /// whenever the two sets differ. Live brush stamps have no evaluated-layer
-    /// flag and remain on the normal GPU path.
+    /// Whether the CPU painter must draw a mask matte that the VRAM present
+    /// composite cannot contain. `false` means the readback-free VRAM path is
+    /// pixel-equal to the CPU upload for this frame.
+    ///
+    /// GPU-PARITY-MASKGATE-1: this gate answers a **pixel** question — *does the
+    /// frame to be presented carry an evaluated mask layer that the CPU painter
+    /// would not draw?* — and the answer is read from the **layers**
+    /// ([`Self::render_mask_layers`]), never from the selection. Two states
+    /// used to be conflated here:
+    ///
+    /// 1. **The frame carries no evaluated mask layer** — there is nothing
+    ///    composited that the CPU painter would miss, so the VRAM path is
+    ///    pixel-equal and *must* be reachable. This is the shipped default
+    ///    Develop state (Masking section closed, no mask); before the split it
+    ///    was unreachable, which silently demoted every default-state frame to
+    ///    the CPU upload. Pixel equality rests on a third condition — *no stale
+    ///    mask plane may be resident in the VRAM pool for the current
+    ///    dimensions* — and that one is held by construction, not by a flag:
+    ///    `present_mask_plane::LuminaApp::sync_mask_plane_to_vram` runs at the
+    ///    end of every render and writes zeros over the active pool entry
+    ///    whenever the frame carries no coverage, so a plane uploaded for a
+    ///    since-deleted mask is overwritten by the very render that empties the
+    ///    layer list. Without that write the relaxation below presented a
+    ///    deleted mask's coverage (measured on a real adapter: `maxAbsDiff=67`
+    ///    over 127 707 presented photo bytes), and `vram_mask_is_evaluated`
+    ///    could not have detected it — every `mark_dirty` resets that flag. The
+    ///    one coverage the clear preserves on purpose is a live brush plane the
+    ///    present path is allowed to composite (the `drawing` branch below).
+    /// 2. **The frame carries an evaluated layer the CPU painter would not
+    ///    draw** — a layer is present, but an editorial gate is closed
+    ///    (section, display mode, Show switch, mask eye) or the layer is not the
+    ///    selected one. The CPU painter must show the required matte, so CPU
+    ///    present stays mandatory (`R5-MASKVIS-25`).
+    ///
+    /// The selection is deliberately **not** the signal: after deleting the
+    /// selected mask a prompted mask can remain in the document with its layer
+    /// evaluated into the frame, while `selected_mask_id` is `None` and the CPU
+    /// painter has no prompt to draw. Routing that frame from VRAM presented a
+    /// mask tint no CPU path can reproduce (measured on a real adapter:
+    /// `maxAbsDiff=67` over 127 707 presented photo bytes), and the user
+    /// cannot switch it off because `mask_overlay_allowed` demands the
+    /// selection that no longer exists.
+    ///
+    /// With a selection the further equality conditions still apply: the CPU
+    /// path can rasterize a single prompt for several masks, but the historical
+    /// VRAM plane combines every layer, so falling back to the CPU texture is
+    /// required whenever the two sets differ. Live brush stamps have no
+    /// evaluated-layer flag and remain on the normal GPU path.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_mask_overlay_is_selected(&self) -> bool {
-        // Keep every editorial visibility gate off the VRAM composite, even if
-        // a stale mask texture is still resident. This makes the GPU route
-        // obey the same multiplicative contract as the CPU painter.
+        // Keep every editorial visibility gate off the VRAM composite. This
+        // makes the GPU route obey the same multiplicative contract as the CPU
+        // painter. The one relaxation is the layerless frame: with no evaluated
+        // layer in the frame there is no matte to gate, so the VRAM route is
+        // allowed — and it is pixel-equal because
+        // `present_mask_plane::LuminaApp::sync_mask_plane_to_vram` zeroed the
+        // active entry's plane on that same render. A plane left over from a
+        // deleted mask is *not* something this gate can see; that invariant is
+        // maintained where the plane is written, not here.
         if !self.mask_overlay_allowed() {
-            return false;
+            return self.render_mask_layers.is_empty();
         }
         if self.drawing && self.mask_tool != MaskTool::None {
             // Gradient/radial live prompts have no VRAM representation. A

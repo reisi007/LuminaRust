@@ -1832,19 +1832,77 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   VRAM-Vorschau ohne CPU-Readback präsentiert wird (`copy_vram_to_texture`
   → registrierte egui-User-Textur). Der CPU-Fallback (ColorImage-Upload)
   bleibt vollständig erhalten; die kittest-Goldens bleiben unverändert grün.
-- **Mask-Overlay-Gate (normativ, `GPU-PARITY-MASKGATE-1`, 2026-09-27):** Das
-  Gate `gpu_present_if_ready` → `gpu_mask_overlay_is_selected` beantwortet
-  eine **Pixel**-Frage und keine Dokumentfrage: *muss der CPU-Painter eine
-  Matte zeichnen, die der VRAM-Composite nicht enthalten kann?* Daraus folgt
-  die Trennung zweier bisher vermischter Zustände:
-  1. **Keine Maske ausgewählt** → es gibt keine Matte, die der CPU-Painter
-     zeigen müsste; der readback-freie VRAM-Pfad ist pixelgleich zum
-     CPU-Upload und **muss** zulässig sein. Das ist der ausgelieferte
-     Default-Develop-Zustand (Masking-Sektion zu, keine Maske).
-  2. **Maske ausgewählt, ein Overlay-Gate zu** (Sektion zu, Modus nicht
-     `SelectedFull`, Show aus, Auge zu) → der CPU-Painter muss die Matte
-     zeichnen, der VRAM-Composite darf sie nicht ersetzen → CPU-Present
-     bleibt Pflicht. `R5-MASKVIS-25` gilt unverändert.
+- **Mask-Overlay-Gate (normativ, `GPU-PARITY-MASKGATE-1`, 2026-09-27; am
+  selben Tag nach Verifikation korrigiert):** Das Gate `gpu_present_if_ready` →
+  `gpu_mask_overlay_is_selected` beantwortet eine **Pixel**-Frage und keine
+  Dokumentfrage: *enthält der zu präsentierende Frame eine ausgewertete
+  Maskenebene, die der CPU-Painter nicht zeichnen würde?* **Die Antwort ist an
+  den Ebenen zu prüfen (`render_mask_layers`), nicht an der Auswahl.** Die
+  erste Fassung dieser Klausel schrieb „keine Maske ausgewählt" — das ist die
+  falsche Frage, und sie wurde als genau dieser Fehler umgesetzt: bei zwei
+  Masken mit Brush-Prompt, von denen die ausgewählte gelöscht wurde, gilt
+  `selected_mask_id == None`, zugleich `render_mask_layers.len() == 1`, der
+  CPU-Painter malt nichts (`effective_overlay_prompt()` ist `None`) und der
+  VRAM-Pfad präsentiert die hochgeladene Ebene. **Am echten Adapter gemessen
+  (2026-09-27, Verifikation):** `max_abs_diff=77` über 14 164 von 737 280
+  Pixeln — und der Nutzer kann es nicht abschalten, weil `mask_overlay_allowed()`
+  eine Auswahl verlangt, die es nicht gibt. Die Trennung lautet damit:
+  1. **Der Frame enthält keine ausgewertete Maskenebene** (`render_mask_layers`
+     leer) **und** das editorial Overlay-Gate ist geschlossen **und** für die
+     aktuellen Dimensionen ist **keine veraltete Maskenebene** im VRAM-Pool
+     resident → es gibt nichts zu compositen, was dem CPU-Painter fehlt; der
+     readback-freie VRAM-Pfad ist pixelgleich zum CPU-Upload und **muss**
+     zulässig sein. Das ist der ausgelieferte Default-Develop-Zustand
+     (Masking-Sektion zu, keine Maske); dort end-to-end gemessen
+     `maxAbsDiff=0 differingBytes=0 of 603904` (Photo-Rect-RGBA-Bytes im
+     1024×720-Fenster).
+     **Die dritte Bedingung ist die Voraussetzung der Pixelgleichheit, keine
+     Feinheit.** `lumina-gpu` poolt Maskenebenen je `(w,h)` und nullt einen
+     Eintrag beim Reaktivieren **nicht**; der alte Upload kehrte bei leerer
+     Ebenenliste früh zurück. Nach dem Löschen der **letzten** Maske hielt der
+     Pool die Coverage der gelöschten Maske, während der Frame keine Ebene
+     trug — der VRAM-Pfad präsentierte damit ein **veraltetes Artefakt als
+     aktuelles**: im ausgelieferten Zustand durch eine normale Nutzeraktion
+     erreichbar und **nicht abschaltbar**, weil der Show-Schalter nicht greift
+     (`mask_overlay_allowed()` liefert ohne Auswahl `false`).
+     **Am Adapter gemessen (Verifikation, Runde 2):**
+     `maxAbsDiff=67 differingBytes=127707 of 603904`; Gegenprobe mit
+     `return false;` statt der Relaxation: `0 / 0`. Die Erreichbarkeit ist neu
+     durch diese Änderung, der Poolzustand nicht.
+     **Erreichter Stand (2026-09-27, Verifikations-Runde 3):** Die dritte
+     Bedingung ist jetzt **per Konstruktion** erfüllt und nicht überwacht:
+     `src/present_mask_plane.rs` schreibt am Ende **jedes** Renders Nullen über
+     den *aktiven* Pool-Eintrag, sobald der Frame keine Coverage trägt
+     (`MaskPlaneIntent::Clear`, Zeilenbänder mit 1-MiB-Budget über
+     `upload_mask_tile`, damit die transiente Puffergröße unabhängig von der
+     Auflösung begrenzt bleibt). Damit braucht es kein Residency-Flag, das
+     driften kann — das Leeren der Ebenenliste und das Leeren der Plane fallen
+     auf demselben Render zusammen. Bewusst **kein** `lumina-gpu`-Eingriff: der
+     Pool wird nur gelesen (`vram_dimensions`), nie re-pointiert, damit der Sync
+     nicht den Eintrag wechseln kann, aus dem der Present liest. Ausgenommen ist
+     nur die eine Coverage, die der VRAM-Pfad tatsächlich compositen darf: eine
+     laufende **Brush**-Geste (Fallback-Arm `KeepLiveBrush`, dieselbe Bedingung
+     wie der `drawing`-Zweig des Gates); ein abgebrochener Live-Gesture löscht
+     die Plane an der Abbruchstelle (`clear_mask_gesture`), weil ein Toolwechsel
+     keinen Render anstößt. **Am Adapter nach der Reparatur gemessen:**
+     `vram_present=Some([160, 120])` und `maxAbsDiff=0 differingBytes=0 of
+     603904` — der VRAM-Pfad bleibt also **erreichbar** (die Gegenprobe
+     `return false` liefert ebenfalls `0 / 0`, stellt aber die Erreichbarkeit
+     wieder her). Mutiert man die Reparatur zurück (`Clear => {}`), misst
+     dieselbe Cell wieder `maxAbsDiff=67 differingBytes=127707 of 603904`.
+     Host-Seite des Clears gemessen (Release, 100 Iterationen, ohne GPU):
+     0.004 ms pro Sync für 1280×853 (3 Bänder, 2 183 680 Bytes), 160×120
+     (1 Band) und 6000×4000 (46 Bänder, 48 MB) jeweils ebenfalls 0.004 ms;
+     die **GPU**-Seite (`write_texture`) ist damit **nicht** gemessen.
+  2. **Der Frame enthält eine ausgewertete Ebene, die der CPU-Painter nicht
+     zeichnet** (Ebene vorhanden, aber Sektion zu, Modus nicht `SelectedFull`,
+     Show aus, Auge zu) → der CPU-Painter muss die Matte zeichnen, der
+     VRAM-Composite darf sie nicht ersetzen → CPU-Present bleibt Pflicht.
+     `R5-MASKVIS-25` gilt unverändert. **Die Konjunktion mit dem Gate-Status
+     ist Teil der Bedingung**, keine Präzisierung: im reinen Draft-Zustand
+     (Maske ausgewählt, aber `masks_context = None`, also nie eine Ebene im
+     Frame) ist das Gate offen, die CPU zeichnet die Matte über den Draft, und
+     der VRAM-Pfad darf nicht präsentieren.
   Eine laufende **Gradient-/Radial**-Geste ohne Maske bleibt bei CPU: sie hat
   keine VRAM-Repräsentation. Eine laufende **Brush**-Geste bleibt auf dem
   GPU-Pfad (inkrementeller Upload).
@@ -1858,10 +1916,37 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   ausgeschlossen sind). Der Fehler ist **zuständig, nicht zeitabhängig**:
   Frames 1–3 nach dem Prime liefern alle `None`, und sobald der Zustand es
   zulässt, präsentiert der **erste** Frame.
-  **Abnahme:** beide Tests grün; ein Test belegt, dass (2) weiterhin auf CPU
-  routet (sonst wäre das Gate abgeschaltet statt korrigiert); die
+  **Abnahme:** beide Parity-Tests grün; ein Test belegt, dass (2) weiterhin auf
+  CPU routet (sonst wäre das Gate abgeschaltet statt korrigiert); ein Test
+  belegt den **divergierenden** Zustand aus dem Absatz oben (Maske mit Prompt
+  im Dokument, **keine** ausgewählt) als CPU-Pfad — ein Test, der nur den
+  maskenfreien Default prüft, deckt den Fehler nicht; ein Test belegt, dass
+  das **Löschen der letzten Maske** keine Coverage im gepoolten VRAM-Plane
+  zurücklässt (sonst präsentiert Fall 1 ein veraltetes Artefakt); die
   `develop_*`-Goldens werden durch diese Änderung **nicht** neu geschrieben —
   `GOLDEN-BASELINE-32` bleibt der einzige Ort, der Goldens anfasst.
+  **Teststand (Stand 2026-09-27, Verifikations-Runde 3):** `lumina-gui --lib`
+  917 grün (912 + 5 neu: 4 in `src/tests/gpu_mask_plane.rs`, 1 Multi-Ebenen-Fall
+  in `src/tests/gpu_mask_gate.rs`; die beiden Draft-Sub-Cases sind als reiner
+  Umzug nach `src/tests/gpu_mask_drafts.rs` gewandert, ohne Assertion-Änderung).
+  Beide Adapter-Cells in `tests/kittest_parity_support/mask_gate.rs` grün
+  (`--ignored`). Die Mutationsmenge M1–M8 mit den **gemessenen** Reaktionen
+  steht als Tabelle im Modul-Doc von `src/tests/gpu_mask_gate.rs`; M6 (Clear
+  zurückbauen) wird ausschließlich von der Adapter-Cell gefangen, M8 (den
+  `KeepLiveBrush`-Arm zur Löschung umbiegen) von **keinem** Test.
+  **M8 ist ein Verhaltensrisiko, nicht nur eine Beobachtbarkeitslücke** (am
+  2026-09-27 in der Verifikation erkannt): im `KeepLiveBrush`-Arm wird die
+  Plane **nicht** geschrieben — die Invariante „Plane hält die aktuelle
+  Coverage" gilt dort nur, *weil* sie schon vorher galt. Erreichbar ist das
+  Restloch ausschließlich über einen **fehlgeschlagenen ersten
+  Live-Brush-Upload**: `brush_plane.rs:156-159` (`ensure_vram` schlägt fehl,
+  früher Return) oder `:163-167` (`stamp_live_brush_mark` im Fehlerzweig) —
+  dann steht `drawing == true` bei veralteter Plane, ohne dass der Sync
+  löscht. Sonst lädt der erste Dab die **ganze** Plane
+  (`brush_plane.rs:172-182`), und `preview_masks.rs:111-115` ruft
+  `gpu_upload_brush_tile` im selben Zweig, der `drawing = true` setzt; das
+  veraltete Fenster ist also normalerweise geschlossen, bevor ein Render etwas
+  compositen kann. Schmal, aber **nicht** abgedeckt.
 - **VRAM-Pool:** dimensionsschlüsseltes LRU (Entry-Limit + Bytebudget,
   env-konfigurierbar) ersetzt den Single-Slot.
 - **Kein `lumina-core`-API-Bruch:** Core blieb vollständig unverändert; alle

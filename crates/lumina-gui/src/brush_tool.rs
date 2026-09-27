@@ -207,11 +207,25 @@ impl LuminaApp {
     /// before handing the preview to a competing picker/tool, so a stale
     /// in-progress brush can never intercept the next click.
     pub(crate) fn clear_mask_gesture(&mut self) {
+        // GPU-PARITY-MASKGATE-1: a live brush uploads its stamps into the VRAM
+        // mask plane, and the present gate composites that plane only while the
+        // gesture runs. `reset_brush_mask_plane` below drops the CPU-side
+        // counterpart, so after a cancel *neither* side may still show the
+        // stroke — and arming a competing tool does not schedule a render, so
+        // waiting for the next one would leave the cancelled coverage on screen
+        // indefinitely. Re-running the sync restores the invariant at the point
+        // where the plane lost its reason to exist.
+        #[cfg(feature = "gpu")]
+        let cancelled_live_brush = self.drawing && self.mask_tool == MaskTool::Brush;
         self.pending_brush_marks.clear();
         self.drag_start = None;
         self.drag_current = None;
         self.drawing = false;
         self.reset_brush_mask_plane();
+        #[cfg(feature = "gpu")]
+        if cancelled_live_brush {
+            self.sync_mask_plane_to_vram();
+        }
     }
 
     /// The first layer that belongs to the copy that owns it. Cross-copy mask
