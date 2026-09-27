@@ -1472,6 +1472,43 @@ laut benannte Abwägung und keine stille Optimierung:
   danach — **null** weitere Hashes ueber alle Folgeframes. Die Assertion ist in
   **beiden** Richtungen falschbar: entfernt man den Memo-Lookup, meldet der
   naechste Frame `Some(2)`.
+  **Dateinamen-Regel (GUITEST-STRUCT-34, User-Regel 2026-09-27):** Der
+  Dateiname benennt **das Getestete**, nicht den Vorfall. Verbindlich:
+  - **Thematische Namen** in englischer Kleinschreibung mit `_`. Ein
+    Incident-, Task- oder Feature-ID-Präfix im Dateinamen ist **verboten**
+    (`instrdbg_*`, `f100_*`, `r3_*`, `g01_*`, `g15_*`, `g16_*`, `w3_*`,
+    `masking_g*`, `*_r4`, `*_followup`).
+  - **Gruppierung über ein gemeinsames Präfix**, nicht über ein Nummern-Präfix:
+    `action_log_*` = Debug-Aktionsprotokollierung (`GuiActionTimer`-Zeile),
+    `button_audit_*` = Button-/Shortcut-Abgleich (jede `GuiAction` hat einen
+    gemalten Button).
+  - Die Herkunfts-ID bleibt als **Nachweis** im Modul-Dokumentationskommentar
+    (`//! GUI-INSTRDBG-17c: …`) und in diesem SOLL — nicht im Dateinamen.
+  - Eine Umbenennung läuft über `git mv`, damit `git log --follow` die Datei
+    weiter verfolgt, und ist **reine Umorganisation**: gleiche Testnamen, gleiche
+    Assertions, gleiche Testanzahl. Zulässig sind ausschließlich Pfad-Anpassungen
+    (`mod`-Zeile, `use super::<modul>`, Dateiverweise in Doku); eine inhaltliche
+    Änderung an einem Test ist ein eigener Task.
+  - Das Verzeichnis bleibt **flach**. Untergliederung in Domänen-Unterordner ist
+    **nicht** Teil dieser Welle.
+  - Gemeinsame Test-Helfer bleiben in `tests/support.rs`; neue Testdateien
+    entstehen von Anfang an thematisch benannt.
+  **Ist-Stand 2026-09-27:** 16 ID-benannte Dateien auf Feature-Namen umgestellt.
+  Nachzählweg: `instrdbg_*` ×7, `f100_*` ×4, `r3_*` ×4, `g01_*` ×1.
+  Die Gruppen: `action_log_contract` (Logformat, Nested-Suppression,
+  Namenstabelle, Release-Passthrough), `action_log_trigger_setup` +
+  `action_log_direct_triggers` (direkte Kommando-Auslöser), `action_log_click_*`
+  (Klick auf dem echten Panel → genau eine Logzeile), `button_audit_*` (Button-,
+  Shortcut- und Surface-Abgleich), `sidecar_rebase_race` (CAS-Rebase unter echter
+  Zwei-Writer-Race), `library_scan_async` (`begin_scan`/`poll_scan`),
+  `crop_display_and_denoise_policy` (Anzeige-Rezept bei armiertem Crop-Tool +
+  Nachbar-/Navigator-Denoise-Policy), `preview_viewport_cap` (Preview-Kap),
+  `treatment_panel_histogram` (G-01-Bereich).
+  **Offen, bewusst nicht in dieser Welle, gleiche Regel:** `g15_batch`,
+  `g15_collections`, `g15_stacks`, `g16_shortcuts`, `w3_release`,
+  `navigator_r4`, `library_tree_r4`, `masking_g03`, `masking_g11`,
+  `spot_followup`, `spot_followup_ui` — und die drei auf der 500-Zeilen-
+  Ratchet-Grenze (`navigator.rs`, `library_sort.rs`, `g15_stacks.rs`).
   **Benannte Restluecke, ausdruecklich NICHT abgedeckt (DoD §9/§10):** ein
   *zusaetzlicher, nicht gezaehlter* `std::fs::read` **oberhalb** des
   memoisierten Blattes ist mit diesem Zaehler **konstruktiv nicht** erkennbar —

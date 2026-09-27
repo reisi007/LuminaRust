@@ -1,6 +1,6 @@
 //! F-100 exhaustive GuiAction → button guard and audit tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
-use super::f100_surface::{ButtonRef, F100Surface};
+use super::button_audit_surfaces::{ButtonRef, F100Surface};
 use super::*;
 // UX-LOOK-TOOLBAR-18: icon buttons are audited by their stable widget id.
 use crate::develop_tone::tone_curve_graph::tone_curve_graph_id;
@@ -12,7 +12,7 @@ use crate::icon_toolbar::ToolbarIcon;
 // user shortcut is instrumented); this match is exhaustive over the enum,
 // so a future shortcut fails compilation until its button is mapped, and
 // the audit then fails unless that button is actually painted.
-// (Surface/button descriptors live in `super::f100_surface` — R5-DUST-23-
+// (Surface/button descriptors live in `super::button_audit_surfaces` — R5-DUST-23-
 // FOLLOWUP extraction, file-size ratchet.)
 // -----------------------------------------------------------------------
 

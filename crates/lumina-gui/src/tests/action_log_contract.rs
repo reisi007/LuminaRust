@@ -4,9 +4,9 @@
 //! nested-suppression contract, the unique snake_case name table and the
 //! release passthrough (no instrumentation compiled in).
 //!
-//! The per-action logging tests live in `tests/instrdbg.rs` (17b),
-//! `tests/instrdbg_rest.rs` (17b-REST), `tests/instrdbg_last.rs` (17c) and
-//! `tests/instrdbg_rework.rs` (17c-Rework, incl. the F-1 filmstrip buttons).
+//! The per-action logging tests live in `tests/action_log_direct_triggers.rs` (17b),
+//! `tests/action_log_click_spot_detail_optics_presets.rs` (17b-REST), `tests/action_log_click_basic_color_generative.rs` (17c) and
+//! `tests/action_log_click_section_controls_and_filmstrip.rs` (17c-Rework, incl. the F-1 filmstrip buttons).
 
 use super::*;
 

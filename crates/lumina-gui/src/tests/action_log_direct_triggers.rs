@@ -1,7 +1,7 @@
 //! GUI-INSTRDBG: headless tests for the remaining section actions
 //! (Library compare, Geometry, Masking-layer, Metadata). Each logs exactly
 //! one line. The core format/name/release tests live in
-//! `tests/instrdbg_core.rs` next to the extracted action table.
+//! `tests/action_log_contract.rs` next to the extracted action table.
 #![cfg(debug_assertions)]
 
 use super::*;
@@ -94,7 +94,7 @@ const INSTRDBG_REST_ACTIONS: [GuiAction; 73] = [
     GuiAction::ApplyPreviousToSelection,
 ];
 
-use super::instrdbg_prepare::prepare_rest_action;
+use super::action_log_trigger_setup::prepare_rest_action;
 
 /// One trigger per GUI-INSTRDBG-17b action. Results are ignored: this test
 /// proves the logging wiring, not the action semantics (covered by the

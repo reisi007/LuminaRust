@@ -42,7 +42,7 @@ pub(crate) const TONE_CURVE_MIN_GAP: f32 = 0.005;
 const TONE_CURVE_SAMPLES: usize = 72;
 
 /// Stable widget id of the per-channel curve graph: used by the F-100 audit
-/// (`f100_audit.rs`) and the headless gesture tests to locate the widget.
+/// (`button_audit_actions.rs`) and the headless gesture tests to locate the widget.
 pub(crate) fn tone_curve_graph_id(channel: &str) -> egui::Id {
     egui::Id::new("lumina.tone_curve_graph").with(channel)
 }

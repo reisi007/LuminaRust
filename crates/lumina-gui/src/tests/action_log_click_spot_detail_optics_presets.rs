@@ -2,7 +2,7 @@
 //! red-eye, Optics, Tone-Curve and Presets buttons. Every new button is
 //! clicked on its real panel and must route through its instrumented command
 //! to exactly one debug action line. The direct-trigger coverage lives in
-//! `tests/instrdbg.rs`; both files stay inside the file-size ratchet.
+//! `tests/action_log_direct_triggers.rs`; both files stay inside the file-size ratchet.
 #![cfg(debug_assertions)]
 
 use super::*;

@@ -1,7 +1,7 @@
 //! F-100 enum shortcut → button maps tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
-use super::f100_audit::{f100_assert_button, f100_surface_frame};
-use super::f100_surface::{ButtonRef, F100Surface};
+use super::button_audit_actions::{f100_assert_button, f100_surface_frame};
+use super::button_audit_surfaces::{ButtonRef, F100Surface};
 use super::*;
 // UX-LOOK-TOOLBAR-18: the preview tool strip and the Library view tabs are
 // icon-based; their buttons are located by widget id.

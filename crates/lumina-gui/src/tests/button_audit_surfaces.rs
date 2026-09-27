@@ -1,11 +1,11 @@
 //! F-100 audit surfaces (R5-DUST-23-FOLLOWUP extraction from
-//! `tests/f100_audit.rs`, keeping the audit table inside the file-size
+//! `tests/button_audit_actions.rs`, keeping the audit table inside the file-size
 //! ratchet).
 //!
 //! [`F100Surface`] is the headless draw surface hosting an action's clickable
 //! button; [`ButtonRef`] locates the button (painted text, vector icon by
 //! stable widget id, or interaction widget by id). Pure descriptor types —
-//! the frame painters and the assertion stay in `f100_audit.rs`.
+//! the frame painters and the assertion stay in `button_audit_actions.rs`.
 
 use super::*;
 // UX-LOOK-TOOLBAR-18: icon buttons are audited by their stable widget id.

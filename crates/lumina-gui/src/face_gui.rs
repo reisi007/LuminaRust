@@ -373,7 +373,7 @@ pub fn face_crop_frame(
 }
 
 // GUI-INSTRDBG-17c-Rest: `pub(crate)` so the F-100 People-surface audit
-// (`lib.rs` tests) and the People click test (`tests/instrdbg_face.rs`) can
+// (`lib.rs` tests) and the People click test (`tests/action_log_click_people_use_as_mask.rs`) can
 // reuse the exact `seed_face` fixture instead of duplicating the analysis.
 #[cfg(test)]
 pub(crate) mod tests {

@@ -2948,7 +2948,7 @@ impl LuminaApp {
     /// `cfg(test)` the same scan engine runs synchronously
     /// ([`Self::scan_directory_blocking`]) — a test seam, not a production
     /// fallback. The async worker path itself is covered by the dedicated
-    /// `begin_scan`/`poll_scan` tests (`tests/r3_f8_scan.rs`).
+    /// `begin_scan`/`poll_scan` tests (`tests/library_scan_async.rs`).
     fn request_scan(&mut self, recursive: bool) {
         #[cfg(test)]
         self.scan_directory_blocking(recursive);
@@ -12153,19 +12153,19 @@ mod tests {
     use super::*;
     // GUI-INSTRDBG-17b: the remaining section-action logging tests, extracted
     // to keep this root test module within the file-size ratchet.
-    mod instrdbg;
-    mod instrdbg_prepare;
+    mod action_log_direct_triggers;
+    mod action_log_trigger_setup;
     // GUI-INSTRDBG-17b-REST: the click tests for the Spot/Detail/Optics/
     // Tone-Curve/Presets buttons (second extracted slice).
-    mod instrdbg_rest;
+    mod action_log_click_spot_detail_optics_presets;
     // GUI-INSTRDBG-17c: core instrumentation tests (moved out of gui_action.rs)
     // plus the last-button click tests (WB eyedropper, Point Color, Spot
     // distraction, Red-Eye picker, Presets refresh, generative canvas).
-    mod instrdbg_core;
-    mod instrdbg_last;
-    mod instrdbg_rework;
+    mod action_log_click_basic_color_generative;
+    mod action_log_click_section_controls_and_filmstrip;
+    mod action_log_contract;
     // GUI-INSTRDBG-17c-Rest: the People-view "Use as mask" click test.
-    mod instrdbg_face;
+    mod action_log_click_people_use_as_mask;
     // GUI-GPU-AUDIT-17: headless audit over every `GuiAction` (Metal, --ignored).
     mod gpu_audit;
     mod gpu_audit_actions;
@@ -12182,13 +12182,12 @@ mod tests {
     mod brush_lifecycle;
     mod brush_management;
     mod brush_management_ui;
+    mod button_audit_actions;
+    mod button_audit_click_toggles;
+    mod button_audit_shortcut_maps;
+    mod button_audit_surfaces;
     mod distortion;
     mod export;
-    mod f100_audit;
-    mod f100_buttons;
-    mod f100_shortcuts;
-    mod f100_surface;
-    mod g01_release;
     mod g15_batch;
     mod g15_collections;
     mod g15_stacks;
@@ -12199,10 +12198,11 @@ mod tests {
     mod geometry;
     mod geometry_session;
     mod gpu_routing;
+    mod treatment_panel_histogram;
     // R3-Runde-3: routing/denoise fixes (R3-ROUTING-1/-DENOISE-1/-DENOISE-2).
+    mod crop_display_and_denoise_policy;
     mod gpu_state;
     mod histogram;
-    mod r3_fixes;
     // UX-LOOK-HISTORY-18: readable/clickable history entries + presets tree.
     mod history_presets_look;
     mod iptc;
@@ -12240,11 +12240,10 @@ mod tests {
     mod preview_render;
     // R3-RENDER-SIZE-1: the preview viewport cap (draft + full) and its
     // export / 1:1-loupe exemptions.
-    mod r3_render_size;
+    mod preview_viewport_cap;
     // R2-MODSWITCH-1 F8: the asynchronous folder scan (worker + drain).
-    mod r3_f8_scan;
+    mod library_scan_async;
     // R3-CONFLICT-1: the CAS-rebase path under a real two-writer race.
-    mod r3_conflict;
     mod recipe_session;
     mod red_eye;
     mod render_cache;
@@ -12253,6 +12252,7 @@ mod tests {
     mod selection;
     mod shortcuts;
     mod sidecar;
+    mod sidecar_rebase_race;
     mod sidecar_restore;
     // GUI-SRCACC-1: strict resolver, active/export parity, cache identity,
     // and navigator/neighbor/thumbnail stand-in coverage.

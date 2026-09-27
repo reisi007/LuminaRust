@@ -402,5 +402,5 @@ macro_rules! instrument_gui_action {
 
 // GUI-INSTRDBG-17: the debug instrumentation tests (format, nested suppression,
 // name-table contract, release passthrough) live in
-// `crate::tests::instrdbg_core` — extracted together with GUI-INSTRDBG-17c to
+// `crate::tests::action_log_contract` — extracted together with GUI-INSTRDBG-17c to
 // keep this name-table module inside the file-size ratchet.
