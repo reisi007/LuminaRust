@@ -1533,13 +1533,24 @@ laut benannte Abwägung und keine stille Optimierung:
   inhaltliche Zeilen (die vier `comm`-Treffer sind drei verschobene Definitionen
   mit `pub(crate)` und ein geteilter `use`-Import), assert-Multiset 45 = 45,
   `#[test]` 11 = 11, `lib.rs` bei 12819 Zeilen, Suite 936/0/76 unverändert.
-  **Dabei gemessen und neu aufgenommen:** `jank_log.rs` wird von **keinem**
-  CI-Job gebaut — das Opt-in-Feature `janklog` ist in keinem Workflow aktiviert,
-  und `lib.rs:100` gated die Datei zusätzlich hinter `debug_assertions`
-  (905 Lib-Tests ohne das Feature, 912 mit). Dafür ist `CI-JANKLOG-47`
-  angelegt, mit User-Einschätzung „Debugging, keine hohe Priorität": die Datei
-  ist damit ungesehen, nicht ungated gefährdet — wer daran arbeitet, sieht die
-  7 Tests lokal sofort.
+  **Dabei gemessen und anschließend geschlossen:** `jank_log.rs` wurde von
+  **keinem** CI-Job gebaut — das Opt-in-Feature `janklog` war in keinem Workflow
+  aktiviert, und `lib.rs:100` gated die Datei zusätzlich hinter
+  `debug_assertions` (905 Lib-Tests ohne das Feature, **912** mit). Der
+  `rust-test-gui`-Job hat jetzt einen additiven Schritt
+  `cargo test -p lumina-gui --lib --features janklog`, der die 7
+  `jank_log::tests` in CI ausführt; der Default-Lauf bleibt bei 905.
+  **Benannte Zerbrechlichkeit, nicht kaschiert:** das Gate ist
+  `all(feature = "janklog", debug_assertions)`, und `cargo test` nutzt das
+  `test`-Profil, das `dev` erbt — heute ist dort kein `[profile]`-Block
+  gesetzt. Setzt jemand jezt `[profile.test] debug-assertions = false`,
+  degradiert der Schritt still auf 905 und die 7 Tests verschwinden bei grünem
+  Job. Das folgt aus dem Feature-Design, das hier nicht geändert wurde.
+  **Abgrenzung bestätigt, kein Drift:** `lumina-gui-harness` (5 Tests, in keinem
+  CI-Job) ist per `cfg(target_os = "macos")` macOS-only und fährt per `enigo` +
+  `screencapture` das echte On-Screen-Fenster. Auf einem Linux-Runner existiert
+  es nicht, es *kann* dort nicht gebaut werden; es gehört zur manuellen
+  GUI-Verifikation, die ohnehin kein headless-Gate ist.
   **Abgegrenzt und geprüft: `lumina-gui-harness`** hat 5 Tests und erscheint in
   keinem CI-Job. Das ist **kein** Drift: das Crate ist per
   `cfg(target_os = "macos")` macOS-only und fährt per `enigo` +

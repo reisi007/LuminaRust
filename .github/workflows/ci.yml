@@ -197,6 +197,22 @@ jobs:
       - name: Run GUI tests
         run: cargo test -p lumina-gui --all-targets
 
+      # GUI-JANKLOG-19 / CI-JANKLOG-47: `src/jank_log.rs` is gated
+      # `#[cfg(all(feature = "janklog", debug_assertions))]` (lib.rs) and
+      # `janklog` is opt-in, not in `default` — so the step above never even
+      # compiles that file and a change to it could break with CI green.
+      # Measured: `cargo test -p lumina-gui --lib` = 905 passed,
+      # `--lib --features janklog` = 912, i.e. exactly the 7 `jank_log::tests`.
+      # Additive: the default-feature run above stays 905. `janklog = []` adds
+      # no dependency, so only lumina-gui's own lib target is recompiled on the
+      # warm target dir, and `--lib` (not `--all-targets`) keeps the kittest
+      # goldens/benches out of a second run. `cargo test` builds with
+      # `debug_assertions` (the gate's second half) and the 7 tests use the
+      # same headless `LuminaApp` API as the default suite, so no GPU adapter
+      # and no extra fixture is required.
+      - name: Run janklog feature tests
+        run: cargo test -p lumina-gui --lib --features janklog
+
   rust-test-rest:
     name: Rust tests (excluding GUI)
     needs: detect
