@@ -217,10 +217,26 @@ fn run_scene(harness: &mut Harness<'_, LuminaApp>, scene: &Scene) {
     );
     harness.run();
     harness.run();
+    // A present failure must name its own cause (DoD §10/§11: an unnamed
+    // failure is not actionable). `gpu_routing_fallback_badge` is the visible
+    // CPU-route reason; the mask-overlay gate state names the second (editorial)
+    // present refusal, which carries no badge by design. Both are read through
+    // `&self`, so the two calls never overlap a mutable borrow.
+    let badge = harness.state().gpu_routing_fallback_badge();
+    let mask_gate = (
+        harness.state().mask_view_open(),
+        harness.state().mask_overlay_allowed(),
+        harness.state().preview_is_draft(),
+    );
     assert!(
         harness.state().gpu_present_frame_size().is_some(),
-        "scene {}: the GPU cell must present from VRAM, not silently fall back to the CPU",
-        scene.name
+        "scene {}: the GPU cell must present from VRAM, not silently fall back \
+         to the CPU [badge={badge:?}, mask_view_open={}, mask_overlay_allowed={}, \
+         preview_is_draft={}]",
+        scene.name,
+        mask_gate.0,
+        mask_gate.1,
+        mask_gate.2
     );
     let gpu_frame = harness
         .state_mut()
