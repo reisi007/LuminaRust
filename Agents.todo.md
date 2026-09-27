@@ -132,6 +132,24 @@ bleiben Block A/B/C. Tasks ohne expliziten User-Versionsentscheid gelten als
 MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 `fortlaufend` = ab 1.0 aktiv, gilt für alle Releases (CI-Strategie im Task).
 
+**Zwei Regeln, die `PLAN-TABLE-COVERAGE-44` am 2026-09-27 praezisiert hat.** Beide
+sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
+
+1. **`Goal` wird nicht in der Planung geraten.** Fuer Tasks, die zum Zeitpunkt des
+   Releaseplans noch nicht existierten, steht in der Goal-Spalte
+   `offen — bei der Task`. Die Zuordnung wird **im Zuge der Bearbeitung** der
+   jeweiligen Task getroffen und mit Begruendung nachgetragen. Die Version ist
+   demgegenueber **belegbar**: sie steht im Task-Text und wurde von dort
+   uebernommen, nicht geschaetzt.
+2. **Ein Eintrag ohne Task ist erlaubt** und bedeutet *geplant, noch nicht
+   begonnen*. Die Tabelle ist der Release-**plan**, die Task-Liste ist der
+   Arbeitsplan; ein geplanter Releasepunkt muss nicht schon als umsetzbare
+   Task existieren. Neun Zeilen sind so begruendet (`GPU-RENDER-*-19`,
+   `LRPAR-G09-SORT-09`, `LRPAR-G03-MASKGROUP-03`, `LRPAR-G12-FACE-*-2x`,
+   `LRPAR-G15-STACK-15`; `git log -S` belegt, dass sie nie als offene Task
+   existiert haben). Eine leere Task-Zeile anzulegen waere regelwidrig, weil
+   `Agents.todo.md` ausschliesslich **offene, umsetzbare** Aufgaben enthaelt.
+
 | Version | Task-ID | Goal | Stichwort |
 | --- | --- | --- | --- |
 | 1.0 | NAMING-F1 | kein Goal | Produktname |
@@ -164,6 +182,19 @@ MVP-Annahme (1.0) und können per User-Entscheid umgebucht werden.
 | 2.0 | LRPAR-G12-FACE-ADAPTER-25 | G-12 | Face-I/O-Adapter |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
+| 1.0 | AUTO-TONE-CLI-6 | offen — bei der Task | Auto-Tone vollstaendig |
+| 1.0 | LENSFUN-LOOKUP-F12-45 | offen — bei der Task | Lookup-Zaehler-Bindung |
+| 1.0 | MASK-LOCAL-P1.1 | offen — bei der Task | lokale WB-Delta |
+| 1.0 | MASK-LOCAL-P1.2a | offen — bei der Task | lokale Tone Curves |
+| 1.0 | MASK-LOCAL-P1.2b | offen — bei der Task | lokale Farbe |
+| 1.0 | MASK-LOCAL-P1.2c | offen — bei der Task | lokale Presence |
+| 1.0 | MASK-LOCAL-P1.2d | offen — bei der Task | lokales Detail |
+| 1.5 | JSON-FLOAT-ROUNDTRIP | offen — bei der Task | f64-Roundtrip |
+| 1.5 | MCP-MASK-APPLY | offen — bei der Task | Masken anwenden (MCP) |
+| 1.5 | MCP-MASKPOLICY | offen — bei der Task | MaskPolicy-MCP |
+| 1.5 | MCP-PARITY-A | offen — bei der Task | MCP-Stage-Editoren |
+| 1.5 | MCP-PARITY-B | offen — bei der Task | MCP-Bibliothek+Stufe |
+| 2.0 | MCP-PARITY-C | offen — bei der Task | MCP-Merge-Pipelines |
 | nie | — | G-12 | Karten-Modul/GPS (Nicht-Ziel) |
 | nie | — | G-15 | Veröffentlichungsdienste (Nicht-Ziel) |
 
@@ -409,7 +440,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: niedrig
 
-- [ ] **[PRIO: mittel] PLAN-TABLE-COVERAGE-44 (Release 1.0, Planhygiene; gefunden 2026-09-26 beim Schliessen von `LENSFUN-DB-33`/`LENSFUN-CALLER-37`)** Der `Releaseplan`-Abschnitt ordnet laut eigenem Text **jede** Task-ID genau einer Version zu. Sieben offene Tasks haben dort **keine** Zeile: `MASK-LOCAL-P1.1`, `MASK-LOCAL-P1.2a`, `MASK-LOCAL-P1.2b`, `MASK-LOCAL-P1.2c`, `MASK-LOCAL-P1.2d`, `AUTO-TONE-CLI-6`, `JSON-FLOAT-ROUNDTRIP` — sowie, seit dem Merge von `origin/main` am 2026-09-26, **`MCP-PARITY-A`, `MCP-PARITY-B` und `MCP-MASKPOLICY`**. Geprueft per Abgleich der Checkbox-Zeilen gegen die Tabellenzeilen; die ersten sieben sind vorbestehend, die drei MCP-Tasks hat der Upstream-Merge ohne Tabellenzeilen mitgebracht (dort fehlt sogar `MCP-PARITY-A`). **Zehn** Tasks ohne Zeile, nicht sieben — die Zahl hier ist bewusst mitgezählt statt festgeschrieben. **Abnahme:** jede offene Task-ID hat genau eine Zeile mit Version und Goal; kein Eintrag ohne Task und keine Task ohne Eintrag. **Ausdruecklich nicht hier erledigt:** die sieben Goal-Zuordnungen zu raten waere genau die Fehlerklasse, die in diesem Projekt mehrfach Teuerungen verursacht hat (erfundene Aufgabe aus einer falschen Messung, erfundene Restgrenze). Die Zuordnung gehoert zu den Tasks, die sie betrifft, und wird dort im Zuge ihrer Bearbeitung getroffen — mit Begruendung, nicht als Tabelleausfuellung.
 - [ ] **[PRIO: niedrig] TEST-AUDIT-36 (fortlaufend, User-Regel 2026-09-26)** Redundanz-Audit der Testsuite: **höchstens einmal pro Woche** einen Build-Agenten starten, der prüft, ob es unnötige Tests gibt. Der Build-Agent **berichtet nur** und entfernt nichts eigenmächtig; jede Löschung läuft über SOLL → Implementierungs-Agent → unabhängige Verifikation. **Prüfkatalog:** (a) Tests, die eine Konstante auf sich selbst prüfen; (b) doppelte Abdeckung derselben Aussage in mehreren Dateien; (c) Tests, die eine Implementierungsentscheidung statt des Verhaltens pinnen; (d) Tests, die bei Wegfall der Logik nichts verlieren würden; (e) Tests ohne Fehlsignal — die grün bleiben, egal ob die Aussage stimmt; (f) **Laufzeit-Ballast**, der die Suite verlangsamt, ohne Aussage zu tragen (der 3:11-GUI-Shard ist das aktuelle Beispiel); (g) Assertions, die nach einem Refactor nur noch den Refactor beschreiben. **Abnahme:** ein priorisierter Befundbericht mit Test-Name, Datei und der konkret entfallenden Aussage; keine Löschung ohne Begründung; keine Reduzierung der Netto-Aussagenabdeckung — eine beim Audit entdeckte **Lücke** (Feature, Klausel, Fehlerpfad ohne Anker) wird als **neue offene Aufgabe** angelegt, nicht durch Streichen eines Nachbarn ersetzt. Grundlage: Policy in `Agents.md` §„Testabdeckungs-Politik". **Abgrenzung:** keine Produkt- oder Schemaänderung; der Audit verändert keine Abnahmegate und ersetzt keine DoD-Prüfung.
 - [ ] **[PRIO: niedrig] CI-WATCH-1 (fortlaufend)** Nach jedem Push (morgen als erstes): CI-Runs prüfen (`gh run watch` / `gh run list --branch main`), Ergebnis im Tagesstand vermerken. Bei Rot: als Next-Task in `Agents.todo.md` dokumentieren, NICHT still umsetzen (User-Vorgabe). Abnahme: jeder Push hat ein geprüftes CI-Verdict.
 - Veröffentlichungsdienste bleiben explizit nie Ziel (kein Task).
