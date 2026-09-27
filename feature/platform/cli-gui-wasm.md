@@ -1460,6 +1460,28 @@ laut benannte Abwägung und keine stille Optimierung:
   Einmal-Hash (pinnt die Chunking-Annahme); ein kalter Miss emittiert **eine**
   `trace!`-Zeile im spezifizierten Format, ein warmer **keine**; ein während
   des Lesens verrutschter Stempel wird **nicht** gememoized (5a).
+- **Nachweis-Testanker des echten Frame-Pfads (2026-09-27).** Die obigen
+  Anker pruefen das Memo ueber seinen **Blatt-Aufruf**
+  (`FileContentIdentity::from_path` in einer Schleife, die Frames simuliert).
+  Damit war der tatsaechliche Frame-Pfad **ungeprueft**. Geschlossen durch
+  `tests::scheduling::thumb_hash_frame_path::real_frame_path_hashes_an_unchanged_source_once_across_many_frames`:
+  es treibt `ensure_thumbnail_priority` (`filmstrip_frame.rs:267`, der letzte
+  Schritt jedes Filmstreifen-Frames, `filmstrip_frame.rs:223`) 13-mal mit
+  `raw_entry_indices` und 3 sichtbaren Zellen gegen unveraenderte ~300-KB-Quellen
+  und verlangt `hash_count` = `None` vor dem ersten Frame und `Some(1)` je Quelle
+  danach — **null** weitere Hashes ueber alle Folgeframes. Die Assertion ist in
+  **beiden** Richtungen falschbar: entfernt man den Memo-Lookup, meldet der
+  naechste Frame `Some(2)`.
+  **Benannte Restluecke, ausdruecklich NICHT abgedeckt (DoD §9/§10):** ein
+  *zusaetzlicher, nicht gezaehlter* `std::fs::read` **oberhalb** des
+  memoisierten Blattes ist mit diesem Zaehler **konstruktiv nicht** erkennbar —
+  `hash_count` wird ueber `store()` gefuehrt, das ausschliesslich `resolve()`
+  nach `hash_whole_file` erreicht; ein uncounted Read bewegt den Zaehler per
+  Konstruktion nicht (per Mutation gegengeprueft: bleibt gruen). Das ist keine
+  Eigenschaft dieses Tests, sondern eine des Zaehlers. Ein uncounted Read
+  braeuchte eine Naht an der Lesestelle selbst, also Produktionsinstrumentation
+  — die Abnahme dieses Tasks schliesst sie ausdruecklich aus. Als Folgeaufgabe,
+  nicht als geloest dargestellt.
 - **Abgrenzung:** Produktcode in `lumina-gui`. Keine Änderung an
   Sidecar-Schema, Persistenz, Migration, Renderpipeline oder Rezept; keine
   Änderung an Fixture-/Golden-Struktur.

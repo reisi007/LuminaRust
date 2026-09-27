@@ -2,6 +2,13 @@
 
 use super::*;
 
+// THUMB-HASH-PERF-35: the whole-file identity memo reached through the **real**
+// filmstrip frame path (`ensure_thumbnail_priority`) rather than through the
+// memo leaf directly. Own file, hooked here so the ratcheted `lib.rs` does not
+// grow for a test module (same pattern as `source_identity_trace.rs`).
+#[path = "thumb_hash_frame_path.rs"]
+mod thumb_hash_frame_path;
+
 #[test]
 fn idle_queue_is_bounded_prioritized_and_cancellable() {
     let mut queue = IdleQueue::new(2);
