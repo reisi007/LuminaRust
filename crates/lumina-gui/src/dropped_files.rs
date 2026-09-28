@@ -69,147 +69,25 @@ impl LuminaApp {
 mod decode_state_tests;
 
 #[cfg(test)]
+mod raw_fixture_scope;
+
+#[cfg(test)]
+mod raw_fixture_override;
+
+#[cfg(test)]
+mod raw_fixture_consumption;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
-    use super::*;
-    use eframe::egui;
-    use lumina_core::{ImageFileFormat, ImageFrame};
-    use lumina_sidecar::{EditRecipe, SidecarDocument};
-    use std::path::{Path, PathBuf};
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct NavigationSnapshot {
-        directory: String,
-        entries: Vec<(String, bool)>,
-        selection: Vec<String>,
-        anchor: Option<String>,
-        auto_load_attempted: bool,
-        scan_pending: bool,
-    }
-
-    fn navigation_snapshot(app: &LuminaApp) -> NavigationSnapshot {
-        NavigationSnapshot {
-            directory: app.directory.clone(),
-            entries: app
-                .entries
-                .iter()
-                .map(|entry| (entry.path.display().to_string(), entry.has_sidecar))
-                .collect(),
-            selection: app.filmstrip_selection(),
-            anchor: app.filmstrip_anchor.clone(),
-            auto_load_attempted: app.auto_load_attempted,
-            scan_pending: app.scan_pending,
-        }
-    }
-
-    fn png_bytes(rgb: [u8; 3]) -> Vec<u8> {
-        ImageFrame::new(1, 1, vec![rgb[0], rgb[1], rgb[2], 255])
-            .unwrap()
-            .encode(ImageFileFormat::Png)
-            .unwrap()
-    }
-
-    fn write_png(path: &Path, rgb: [u8; 3]) -> Vec<u8> {
-        let bytes = png_bytes(rgb);
-        std::fs::write(path, &bytes).unwrap();
-        bytes
-    }
-
-    fn new_app() -> LuminaApp {
-        LuminaApp::new(egui::Context::default())
-    }
-
-    /// Pump the same non-blocking decode channel driven by `update`.
-    fn settle_decode(app: &mut LuminaApp) {
-        for _ in 0..120_000 {
-            app.poll_decode();
-            if !app.decode_pending() {
-                assert!(
-                    app.pending_load_path.is_none(),
-                    "a settled request must clear its pending path"
-                );
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        panic!("background drop decode did not settle");
-    }
-
-    fn loaded_app_with_saved_edit(stem: &str) -> (tempfile::TempDir, PathBuf, Vec<u8>, LuminaApp) {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join(format!("{stem}.png"));
-        let bytes = write_png(&path, [10, 20, 30]);
-        let mut app = new_app();
-        app.accept_dropped_file(&path, || panic!("path drop must not read bytes"));
-        settle_decode(&mut app);
-        assert_eq!(app.path, path.display().to_string());
-        assert!(app.error().is_none());
-        app.set_adjustment("exposure", 1.25);
-        app.commit_pending_slider_save([0, 0]);
-        assert!(app.error().is_none(), "A setup edit must save");
-        (directory, path, bytes, app)
-    }
-
-    fn seed_sidecar(path: &Path, bytes: &[u8], exposure: f64) {
-        let frame = ImageFrame::decode(bytes).unwrap();
-        let identity = super::super::selection_source_identity(
-            path.file_name().unwrap().to_string_lossy().as_ref(),
-            bytes,
-            &frame,
-            1,
-            false,
-        );
-        let mut document = SidecarDocument::new(identity, "raster-mvp-1");
-        document.virtual_copies[0]
-            .recipe
-            .adjustments
-            .insert("exposure".into(), exposure);
-        lumina_sidecar::save_sidecar(&lumina_sidecar::sidecar_path_for(path), &document).unwrap();
-    }
-
-    struct PreviousSourceExpectation<'a> {
-        path: &'a Path,
-        bytes: &'a [u8],
-        recipe: &'a EditRecipe,
-        document_revision: &'a str,
-        sidecar_bytes: &'a [u8],
-        navigation: &'a NavigationSnapshot,
-        error_text: &'a str,
-    }
-
-    fn assert_previous_source_preserved(app: &LuminaApp, expected: PreviousSourceExpectation<'_>) {
-        let PreviousSourceExpectation {
-            path,
-            bytes,
-            recipe,
-            document_revision,
-            sidecar_bytes,
-            navigation,
-            error_text,
-        } = expected;
-        assert!(app.error().is_some_and(|error| error.contains(error_text)));
-        assert!(
-            !app.error_dialog_open(),
-            "an asynchronous decode failure stays a loud banner"
-        );
-        assert_eq!(app.path, path.display().to_string());
-        assert_eq!(app.source_name, "a.png");
-        assert_eq!(app.source_bytes.as_deref(), Some(bytes));
-        assert_eq!(
-            &navigation_snapshot(app),
-            navigation,
-            "a failed cross-directory drop must preserve A's full navigation lineage"
-        );
-        assert_eq!(app.recipe(), recipe);
-        let revision =
-            lumina_sidecar::document_revision(app.document.as_ref().expect("A sidecar document"))
-                .unwrap();
-        assert_eq!(revision, document_revision);
-        assert_eq!(std::fs::read(path).unwrap(), bytes);
-        assert_eq!(
-            std::fs::read(lumina_sidecar::sidecar_path_for(path)).unwrap(),
-            sidecar_bytes
-        );
-    }
+    use super::raw_fixture_consumption::run_real_raw_proof;
+    use super::test_support::{
+        assert_previous_source_preserved, loaded_app_with_saved_edit, navigation_snapshot, new_app,
+        png_bytes, seed_sidecar, settle_decode, write_png, PreviousSourceExpectation,
+    };
+    use std::path::Path;
 
     /// A real path bypasses synchronous `file.bytes()`, preserves all navigation
     /// while decoding, then adopts its directory/listing/selection exactly once.
@@ -448,75 +326,31 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir_a.path()).unwrap().count(), 2);
     }
 
-    /// Optional real-RAW path proof using the repository's licensed fixture
-    /// convention. Run with `LUMINA_RAW_FIXTURE=/path/to/aircraft-*.cr3`.
+    /// Real-RAW path proof: the committed licensed CR3 fixtures are decoded
+    /// through the native drop path, so orientation, geometry, lens identity
+    /// and the sidecar's persisted orientation are proven on real data.
+    ///
+    /// The body lives in `raw_fixture_consumption.rs`. The committed set is
+    /// resolved deterministically (no environment gate), every committed
+    /// fixture is decoded and checked against the geometry documented in
+    /// `sample-data/raw/README.md`, a missing committed fixture fails with its
+    /// path, and a missing operator operand is a reported skip
+    /// (`fixtures-licensing.md` §3.2.1 Regel 1–3). The coverage of the
+    /// committed set is a property readable in that code, not an enforced
+    /// invariant — the named limit recorded in `raw_fixture_scope.rs`.
+    ///
+    /// `LUMINA_RAW_FIXTURE` **adds** one further file and never replaces the
+    /// committed set; the addition is a **weaker** proof, not an equal one,
+    /// because it carries no documented-geometry anchor, so its decode is only
+    /// cross-checked against `lumina_raw::read_metadata`. An addition whose
+    /// name a committed fixture already carries is reported as superfluous
+    /// instead of being decoded again (`fixtures-licensing.md` §3.2.1 Regel 5).
+    ///
+    /// `#[ignore]` stays because decoding two 12 MB CR3s is real work, not
+    /// because the proof needs something the machine might lack.
     #[test]
-    #[ignore = "set LUMINA_RAW_FIXTURE to a licensed RAW fixture"]
+    #[ignore = "decodes the two committed 12 MB CR3 fixtures (~3 s); run: cargo test -p lumina-gui --lib -- --ignored dropped_raw_path_preserves_orientation"]
     fn dropped_raw_path_preserves_orientation_metadata_and_identity() {
-        let fixture = PathBuf::from(
-            std::env::var_os("LUMINA_RAW_FIXTURE")
-                .expect("LUMINA_RAW_FIXTURE must point to a licensed RAW fixture"),
-        );
-        let fixture_bytes = std::fs::read(&fixture).unwrap();
-        let metadata = lumina_raw::read_metadata(&fixture).unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join(
-            fixture
-                .file_name()
-                .expect("RAW fixture file name")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        std::fs::write(&source, &fixture_bytes).unwrap();
-        let mut app = new_app();
-
-        app.accept_dropped_file(&source, || panic!("path drop must not read bytes"));
-        settle_decode(&mut app);
-
-        assert!(
-            app.error().is_none(),
-            "RAW drop must decode: {:?}",
-            app.error()
-        );
-        assert!(app.source_is_raw);
-        assert_eq!(app.raw_orientation, metadata.orientation);
-        let frame = app.original.as_ref().expect("RAW frame");
-        assert_eq!(
-            (frame.width, frame.height),
-            (metadata.width, metadata.height)
-        );
-        if let Some(make) = metadata.camera_make.as_deref() {
-            assert_eq!(
-                app.loaded_lens_identity
-                    .as_ref()
-                    .and_then(|identity| identity.camera_make.as_deref()),
-                Some(make)
-            );
-        }
-        if let Some(lens) = metadata.lens.as_deref() {
-            assert_eq!(
-                app.loaded_lens_identity
-                    .as_ref()
-                    .and_then(|identity| identity.lens.as_deref()),
-                Some(lens)
-            );
-        }
-
-        app.set_adjustment("exposure", 0.2);
-        app.commit_pending_slider_save([0, 0]);
-        assert!(app.error().is_none());
-        let document = lumina_sidecar::load_sidecar(&lumina_sidecar::sidecar_path_for(&source))
-            .expect("sidecar written beside RAW copy");
-        assert_eq!(document.source.orientation, metadata.orientation);
-        assert_eq!(
-            document.source.relative_name,
-            source.file_name().unwrap().to_string_lossy().as_ref()
-        );
-        assert_eq!(
-            document.source.geometry_fingerprint.orientation,
-            metadata.orientation
-        );
-        assert_eq!(std::fs::read(&source).unwrap(), fixture_bytes);
-        assert_eq!(std::fs::read(&fixture).unwrap(), fixture_bytes);
+        run_real_raw_proof();
     }
 }

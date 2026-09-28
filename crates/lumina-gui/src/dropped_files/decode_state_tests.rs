@@ -3,37 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui;
-use lumina_core::{ImageFileFormat, ImageFrame};
+use lumina_core::ImageFrame;
 
 use super::super::{library_scan, DecodeRequestResult, LuminaApp, PendingDirectoryOpen};
-
-fn new_app() -> LuminaApp {
-    LuminaApp::new(egui::Context::default())
-}
-
-fn write_png(path: &Path, rgb: [u8; 3]) {
-    let bytes = ImageFrame::new(1, 1, vec![rgb[0], rgb[1], rgb[2], 255])
-        .unwrap()
-        .encode(ImageFileFormat::Png)
-        .unwrap();
-    std::fs::write(path, bytes).unwrap();
-}
-
-fn settle_decode(app: &mut LuminaApp) {
-    for _ in 0..120_000 {
-        app.poll_decode();
-        if !app.decode_pending() {
-            assert!(
-                app.pending_load_path.is_none(),
-                "a settled request must clear its pending path"
-            );
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    panic!("background decode did not settle");
-}
+use super::test_support::{new_app, settle_decode, write_png};
 
 fn load_a() -> (tempfile::TempDir, LuminaApp) {
     let directory = tempfile::tempdir().unwrap();
