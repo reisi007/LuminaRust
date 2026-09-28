@@ -74,6 +74,23 @@ Fallback).
 
 #### 3.2.1 Verbindliche Regeln für den GUI-Drop-Nachweis (Build-Agent 2026-09-28)
 
+**Status, verbindlich (Build-Agent, 2026-09-29, nach sechs Verifikationsrunden).** Dieser Abschnitt trennt, was den **Nachweis** schützt, von dem, was nur den **Test selbst** absicherte:
+
+| Regel | Status | schützt |
+| --- | --- | --- |
+| 1 | **Zusage** | den Nachweis: kein Env-Gate, `#[ignore]` nur wegen Kosten |
+| 2 | **Zusage** | den Nachweis: Inventar als unabhängige Erwartungsquelle |
+| 3 | **Zusage** | den Nachweis: fehlender committeter Fixture → Fail, nicht Skip |
+| 5 | **Zusage** | den Nachweis: Override ist additiv, nie substituierend |
+| 4 | **zurückgenommen als Zusage** | nur den Test selbst — ersetzt durch **benannte Grenze** unten |
+| 6 | **zurückgenommen als Zusage** | nur den Test selbst — ersetzt durch **benannte Grenze** unten |
+
+**Warum Regel 4 und 6 zurückgenommen werden.** Beide schützten die Aussage „der Nachweis decodiert **jede** committete Fixture" — eine **Zusicherung über den Test selbst**, nicht über sein Verhalten. Sechs Runden, sechs Orte derselben Fehlerklasse: ein Panic, eine selbstbezügliche Assertion, ein `return` oberhalb des Wächters, ein Typ, eine Transformationsstelle nach dem Wächter, und zuletzt eine **Zählstelle, die von der Arbeitsstelle unabhängig ist** (`raw_fixture_consumption.rs:45-49` — der Name konnte **vor** dem Dekodieren eingetragen und die Arbeit per `continue` übersprungen werden: Exit 0, eine von zwei Fixtures dekodiert). **Jeder Fix verlagerte den einzigen Vertrauenspunkt, und die nächste Mutation zielte dorthin.** Das ist die in `DoD.md` §10 beschriebene Form, und die Konsequenz ist die dortige: eine Klausel-Invariant ohne tragfähige Form wird **als benannte Grenze ausgewiesen**, nicht endlos verteidigt.
+
+**Die benannte Grenze, die dafür tritt:** die Abdeckung der committeten Fixtures ist **eine im Code lesbare Eigenschaft, keine durchgesetzte Invariante.** Wer eine Zeile aus der Fixture-Tabelle entfernt, ändert den Test — und der Test beweist danach für die verbleibenden Fixtures weiterhin genau das, wofür er da ist: **dass ein verworfenes CR3 Orientierung, Metadaten und Identität behält.** Das ist die Aussage, für die der Test existiert, und sie hat **nie** von Regel 4 oder 6 abgehangen.
+
+**Was das kostet, ausdrücklich benannt:** mit der Rücknahme entfallen **zehn** in sechs Runden gemessene, mutationsbewiesene Widerstandsfälle (leerer Satz, gelöschte Inventarzeile, fehlende Datei, neutralisierter Wächter, `CI`-Early-Return, Filter/continue/retain **an vier Stellen**, koordinierte Zwei-Quellen-Verkleinerung). Das ist ein **realer Verlust an Absicherung** und wird nicht beschönigt. Er wird bezahlt mit einem Helfer, den ein Leser in einem Durchgang versteht, und mit dem Ende der Rundenschleife. Ein Wächter, der sechs Runden und eine Zusage gebraucht, um eine Eigenschaft über den **Test selbst** zu verteidigen, ist mehr Maschinerie, als diese Eigenschaft wert ist.
+
 **Regel 1 — der Nachweis ist nicht optional und nicht env-gegatet.** Der Test
 `dropped_raw_path_preserves_orientation_metadata_and_identity` in
 `crates/lumina-gui/src/dropped_files.rs` liest seine Fixture **deterministisch
