@@ -142,12 +142,60 @@ verlagerte und die nächste Mutation dorthin zielte. Bei additivem Override
 committete Satz bedingungslos ist. Damit ist die Klasse nicht verlagert,
 sondern beseitigt.
 
-**Kosten, ausdrücklich benannt:** ein Lauf mit gesetzter `LUMINA_RAW_FIXTURE`
-dekodiert **drei** CR3 (zwei committete plus eine Zusatzdatei) statt einer,
-also rund 4,9 s statt 1,7 s unter `--ignored` (gemessen 3,2–4,8 s für den
-Soll-Lauf allein). Das ist der Preis der Regel, und er ist der richtige: er
-kauft die Eigenschaft, dass **kein** Ausführungspfad den Umfangsnachweis
-abschalten kann.
+**Kosten, ausdrücklich benannt** (alle Werte gemessen, `--ignored`; N=3 für den
+Soll-Lauf): der Soll-Lauf dekodiert **zwei** committete CR3, 3,82 / 3,96 /
+4,13 s. Eine **echte** Zusatzdatei (anderer Dateiname) dekodiert **drei** CR3,
+5,12 s. Ein **gleichnamiger** Zusatz wird als überflüssig **gemeldet und nicht
+dekodiert**, also **zwei** CR3, ~3,4 s. *Berichtigung 2026-09-29:* eine frühere
+Fassung nannte nur „drei CR3, rund 4,9 s" und verschwieg, dass der gleichnamige
+Fall **zwei** Dekodierungen kostet. Das ist der Preis der Regel, und er ist der
+richtige: er kauft die Eigenschaft, dass **kein** Ausführungspfad den
+Umfangsnachweis abschalten kann.
+
+**Regel 6 — geprüft wird das ERGEBNIS, nicht der Pfad.** (Normativ,
+2026-09-29, aus Verifikations-Runde 5.) Nach der Dekodierschleife gilt: die
+Anzahl **tatsächlich dekodierter** committeter Fixtures ist **gleich** der
+Anzahl der Inventarzeilen in `sample-data/raw/README.md`. Die Erwartungsquelle
+ist das **Inventar**, nicht die Tabelle, aus der iteriert wird; die Anzahl wird
+**aktiv gezählt**, nicht über eine Konstante, die jemand mit der Tabelle
+synchron hält.
+
+Diese Regel ist der **Ansatzwechsel**, nicht eine weitere Absicherung. Die
+Runden 1–5 haben **Wege** geschlossen: ein Panic, dann eine selbstbezügliche
+Assertion, dann ein `return` oberhalb des Wächters, dann ein Typ, dann eine
+Transformationsstelle **nach** dem Wächter. Jeder Fix verlagerte den einzigen
+Vertrauenspunkt, und die nächste Mutation zielte dorthin — fünf Runden, fünf
+Orte, dieselbe Fehlerklasse. Regel 6 fragt nicht mehr *wo* der Pfad
+unterbrochen werden könnte, sondern **was am Ende herauskam**: die eine Aussage
+über die dekodierte Anzahl fängt eine Verkleinerung, **wo auch immer** sie
+entsteht — im Produzenten, zwischen Prüfung und Schleife, in der Schleife, in
+einem `filter`, in einem `skip`, in einem `continue`.
+
+**Zwei Form-Forderungen, die dazugehören:**
+
+1. **Der committete Satz wird nicht mit dem Betreiber-Zusatz gemischt.** Es gibt
+   keine gemeinsame `Vec`, in der beide liegen; zwischen Prüfung und Verbrauch
+   steht damit **keine Zeile**, die den geprüften Wert in einen anderen
+   überführt. Der geprüfte Wert **ist** der verbrauchte Wert.
+2. **Herkunftsangaben kommen aus der Konstruktion, nicht aus einem
+   Musterabgleich.** Eine Meldung darf nicht aus einem `matches!`-Muster
+   rekonstruieren, woher ein Zustand kam. Wer eine Meldung erzeugt, muss den
+   Zustand **belegbar** bekommen. Begründung: in Runde 4 meldete eine sichtbare
+   `WEAKENED`-Zeile eine `LUMINA_RAW_FIXTURE`-Überschreibung, die **nie
+   stattgefunden hatte**, bei Exit 0 und grün. Eine Diagnose, die ihre eigene
+   Herkunft erfinden kann, ist eine Fehlerquelle — Sichtbarkeit ist kein Beweis
+   von Richtigkeit.
+
+**Selbstauskunft, die zu diesem Abschnitt gehört (2026-09-29):** dieser Abschnitt
+ist nach **fünf** Verifikationsrunden entstanden, und die ehrliche Bilanz ist,
+dass die **Umfangs-Aussage** („der Nachweis decodiert jede committete Fixture")
+einen Aufwand erzeugt hat, der ihre Beweislast für den *eigentlichen* Test
+übersteigt. Der eigentliche Test trägt eine andere, einfachere Aussage: **ein
+verworfenes CR3 erhält Orientierung, Metadaten und Identität.** Das ist die
+Aussage, für die der Test existiert. Die Umfangsregeln 4–6 sind eine Zusicherung
+über den **Test selbst** und stehen hier, weil sie einmal beansprucht wurden —
+nicht, weil sie den Kern des Nachweises tragen. Wer diesen Abschnitt künftig
+kürzt, kappt an der Zusicherung und **nicht** am Nachweis.
 
 **Noch offener Rest, ausdrücklich nicht als gedeckt geführt:** der
 Wächter-Metatest pinnt die *Logik* des Wächters, nicht seine *Verdrahtung* —
