@@ -79,13 +79,14 @@ Fallback).
 | Regel | Status | schützt |
 | --- | --- | --- |
 | 1 | **Zusage** | den Nachweis: kein Env-Gate, `#[ignore]` nur wegen Kosten |
-| 2 | **Zusage** | den Nachweis: Inventar als unabhängige Erwartungsquelle |
+| 2a | **Zusage** | den Nachweis: die gepinnte Geometrie wird gegen den **echten** Decode geprüft |
+| 2b | **benannte Grenze** | nur den Test selbst: die Übereinstimmung von Dokument und Code ist eine **Handprüfung**, nicht mehr automatisch |
 | 3 | **Zusage** | den Nachweis: fehlender committeter Fixture → Fail, nicht Skip |
 | 5 | **Zusage** | den Nachweis: Override ist additiv, nie substituierend |
 | 4 | **zurückgenommen als Zusage** | nur den Test selbst — ersetzt durch **benannte Grenze** unten |
 | 6 | **zurückgenommen als Zusage** | nur den Test selbst — ersetzt durch **benannte Grenze** unten |
 
-**Warum Regel 4 und 6 zurückgenommen werden.** Beide schützten die Aussage „der Nachweis decodiert **jede** committete Fixture" — eine **Zusicherung über den Test selbst**, nicht über sein Verhalten. Sechs Runden, sechs Orte derselben Fehlerklasse: ein Panic, eine selbstbezügliche Assertion, ein `return` oberhalb des Wächters, ein Typ, eine Transformationsstelle nach dem Wächter, und zuletzt eine **Zählstelle, die von der Arbeitsstelle unabhängig ist** (`raw_fixture_consumption.rs:45-49` — der Name konnte **vor** dem Dekodieren eingetragen und die Arbeit per `continue` übersprungen werden: Exit 0, eine von zwei Fixtures dekodiert). **Jeder Fix verlagerte den einzigen Vertrauenspunkt, und die nächste Mutation zielte dorthin.** Das ist die in `DoD.md` §10 beschriebene Form, und die Konsequenz ist die dortige: eine Klausel-Invariant ohne tragfähige Form wird **als benannte Grenze ausgewiesen**, nicht endlos verteidigt.
+**Warum Regel 4 und 6 zurückgenommen werden.** Beide schützten die Aussage „der Nachweis decodiert **jede** committete Fixture" — eine **Zusicherung über den Test selbst**, nicht über sein Verhalten. Sechs Runden, sechs Orte derselben Fehlerklasse: ein Panic, eine selbstbezügliche Assertion, ein `return` oberhalb des Wächters, ein Typ, eine Transformationsstelle nach dem Wächter, und zuletzt eine **Zählstelle, die von der Arbeitsstelle unabhängig ist** (`raw_fixture_consumption.rs:45-49` **zum Zeitpunkt des Befunds** — der Name konnte **vor** dem Dekodieren eingetragen und die Arbeit per `continue` übersprungen werden: Exit 0, eine von zwei Fixtures dekodiert; **diese Zeilen tragen heute den Additions-Zweig**, die Fundstelle ist also historisch und nicht mehr auffindbar). **Jeder Fix verlagerte den einzigen Vertrauenspunkt, und die nächste Mutation zielte dorthin.** Das ist die in `DoD.md` §10 beschriebene Form, und die Konsequenz ist die dortige: eine Klausel-Invariant ohne tragfähige Form wird **als benannte Grenze ausgewiesen**, nicht endlos verteidigt.
 
 **Die benannte Grenze, die dafür tritt:** die Abdeckung der committeten Fixtures ist **eine im Code lesbare Eigenschaft, keine durchgesetzte Invariante.** Wer eine Zeile aus der Fixture-Tabelle entfernt, ändert den Test — und der Test beweist danach für die verbleibenden Fixtures weiterhin genau das, wofür er da ist: **dass ein verworfenes CR3 Orientierung, Metadaten und Identität behält.** Das ist die Aussage, für die der Test existiert, und sie hat **nie** von Regel 4 oder 6 abgehangen.
 
@@ -100,14 +101,30 @@ nicht wegen einer fehlenden Umgebung. Ein Betreiber, der `LUMINA_RAW_FIXTURE`
 setzt, erhält einen **ausdrücklich schwächeren** Nachweis, und das wird an
 echtem `stderr` **sichtbar** gemeldet (`WEAKENED …`), niemals still.
 
-**Regel 2 — das Inventar ist die Erwartungsquelle, und zwar diese Tabelle plus
-der Verzeichnisinhalt.** Der Wächter vergleicht zur Laufzeit den aus dem Baum
-gelieferten Satz gegen die Zeilen dieser Tabelle und gegen `read_dir` über
-`sample-data/raw`. **Konsequenz für dieses Dokument:** eine Änderung an §3.2,
-an der Tabelle oder an `sample-data/raw/README.md`, die nicht mit dem
-Verzeichnisinhalt übereinstimmt, macht den Test **rot**, nicht grün. Das ist
-beabsichtigt — das Inventar ist die unabhängige Erwartung, und eine
-stillschweigende Verengung ist die Fehlerform, die der Wächter verhindert.
+**Regel 2a — die gepinnte Geometrie wird gegen den echten Decode geprüft.** Die
+committeten Fixtures tragen ihre dokumentierte Geometrie als **Literale** im Code
+(`crates/lumina-gui/src/dropped_files/raw_fixture_scope.rs`: Orientierung **1** /
+6032×4024 für `aircraft-landscape.cr3`, Orientierung **8** / 4024×6032 für
+`aircraft-portrait.cr3`). Der Test liest die **Bytes**, ruft
+`lumina_raw::read_metadata` und prüft beide Werte gegeneinander — ebenso die
+Orientierung an drei Stellen (`app.raw_orientation`,
+`document.source.orientation`,
+`document.source.geometry_fingerprint.orientation`). **Das ist mutationsbewiesen:**
+ein verfälschtes Literal macht den Lauf rot und nennt **beide** Werte
+(`left: (8, 4024, 6032)`, `right: (5, 4024, 6032)`).
+
+**Regel 2b — benannte Grenze: die Übereinstimmung von Dokument und Code ist eine
+Handprüfung.** §3.2 und `sample-data/raw/README.md` sind die **menschlich**
+prüfbare Quelle derselben Zahlen. Nach der Rücknahme von Regel 4 und 6 wird
+diese Übereinstimmung **nicht mehr zur Laufzeit geprüft**: es gibt **keinen**
+Abgleich gegen die Tabelle, **keinen** `read_dir`-Vergleich und **keinen**
+`#[should_panic]`-Metatest darauf. **Eine Änderung nur an §3.2, an
+`sample-data/raw/README.md` oder an der Code-Tabelle macht den Test nicht
+rot** — sie macht ihn falsch, und der Fehler fällt erst beim nächsten Lesen
+auf. Bis zur Rücknahme war das beabsichtigt abgesichert; es ist einer der
+**zehn** in §3.2.1 genannten entfallenen Widerstandsfälle. Wer eine
+Automatisierung zurückhaben will, muss sie neu bauen **und** die
+Rundengeschichte beachten, die dort steht.
 
 **Regel 3 — ein fehlender committeter Fixture ist ein defekter Baum, kein
 Betreiberwunsch.** `documented`-Quellen unterscheiden die beiden Fälle:
@@ -218,8 +235,8 @@ nicht, weil sie den Kern des Nachweises tragen. Wer diesen Abschnitt künftig
 kürzt, kappt an der Zusicherung und **nicht** am Nachweis.
 
 **Noch offener Rest, ausdrücklich nicht als gedeckt geführt (Stand 2026-09-29
-nach dem Abbau):** mit Regel 4 und Regel 6 ist auch ihr `#[should_panic]`-Metatest
-entfallen. Offen bleibt damit **genau eine** Lücke, und sie ist eine von anderer
+nach dem Abbau):** mit Regel 4 und Regel 6 sind auch ihre **beiden** `#[should_panic]`-Metatests
+entfallen (einer für den Umfangs-Wächter, einer für die Ergebnis-Assertion). Offen bleibt damit **genau eine** Lücke, und sie ist eine von anderer
 Art: die Sichtbarkeitsmechanik `report_to_real_stderr` ist **prose-gesichert, nicht
 testgesichert** — ein stilles Zurückfallen auf `eprintln!` bliebe unentdeckt, weil
 `libtest` den captured Output **grüner** Tests verwirft. Ein Test im selben Prozess

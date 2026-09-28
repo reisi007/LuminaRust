@@ -2543,14 +2543,17 @@ Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 > sichtbar meldet (`WEAKENED …`).
 >
 > **Headless-Anker** dieser Kette (die Liste oben war unvollständig):
-> `dropped_raw_path_preserves_orientation_metadata_and_identity` (der
-> Nachweis selbst) und
-> `the_scope_guard_fails_a_run_on_an_undocumented_fixture_and_names_the_defect`
-> (der `#[should_panic]`-Metatest, der ihn gegen Neutralisation sichert).
-> Beide laufen **ohne GPU**. Die normative Zielsemantik steht in
+> `dropped_raw_path_preserves_orientation_metadata_and_identity` — der Nachweis
+> selbst. Er läuft **ohne GPU**. Die normative Zielsemantik steht in
 > [`feature/quality/fixtures-licensing.md`](../quality/fixtures-licensing.md)
-> §3.2.1, insbesondere **Regel 4** (die Umfangs-Freistellung darf nicht am
-> Produzenten hängen).
+> §3.2.1, **Regeln 1, 2a, 3 und 5** (kein Env-Gate; gepinnte Geometrie gegen den
+> echten Decode; fehlender committeter Fixture ist ein Fail; Override additiv).
+> **Regeln 4 und 6 sind am 2026-09-29 zurückgenommen**, weil sie nur den **Test
+> selbst** schützten und sechs Verifikationsrunden brauchten; ihre **beiden**
+> `#[should_panic]`-Metatests sind mit ihnen entfallen. **Wer hier einen zweiten
+> Anker sucht, findet ihn nicht, weil es ihn nicht gibt** — das ist keine
+> nachgelassene Lücke, sondern eine eingelöste Zusage. Begründung und Preis stehen
+> in §3.2.1.
 
 #### F-103-N6 Runde 2 Runbook (manueller Test, 2026-09-19)
 
