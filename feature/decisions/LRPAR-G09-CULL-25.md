@@ -177,7 +177,7 @@ CLI-Slice (`--analyze`/`--status`, Exit 0/1/2/3, `--force`, nur
 `document.culling`), GUI-Slice (Badges/`cull:`-Filter/explizite Übernahme).
 Offen: Slice 5 (Stufe 2 ONNX).
 
-**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung ausstehend):** Die in
+**Stand 2026-09-17 (Perf-Slice F-074-N8, Verifizierung BESTANDEN):** *(Korrektur 2026-09-29: dieser Stand stand auf „Verifizierung ausstehend", obwohl dieselbe Datei in Zeile 165 denselben Slice als „Umgesetzt" führt und der Commit `9f8c632` „F-074-N8 BESTANDEN: Perf-Budgets Denoise/Cull (report-only)" heißt. Nach `DoD.md` §11 ist bei Widerspruch die **gemessene** Angabe maßgeblich.)** Die in
 §7 Punkt 6 geforderten Culling-Budgets sind registriert (`cull/*`,
 report-only). Offen bleibt nur noch Slice 5 (Stufe 2 ONNX).
 
