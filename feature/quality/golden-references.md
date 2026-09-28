@@ -820,6 +820,20 @@ Soll und ist hiermit als Verfahren **verworfen**. Die Seed-Alternative (gültige
 Maske statt Pending-Maske) ist verworfen: Die Warnung ist der ehrliche
 Endzustand zur Fixture.
 
+**Gemessene Eigenschaft des Netzes (Verifikation 2026-09-28):** Der
+`mark_dirty`-Ausfall macht den Test rot — als Snapshot-Mismatch (1090–1102 px),
+nicht über den Helfer-`panic!`. Und ohne `settle_render`-Aufruf bleibt der Test
+grün: Am aktuellen Aufrufort ist der Schlüssel beim Eintritt bereits `Some`
+(der Render landet in Frame 0 der vorhandenen 8 Frames), der Helfer ist dort
+Guard, kein aktiver Wartevorgang. Das Netz ist damit zweischichtig — der Helfer
+fängt `None` laut ab, das Golden fängt jeden falschen `Some`-Zustand als
+Mismatch — aber ein veraltetes `Some` (Schlüssel aus einem früheren Render,
+kein Render nach der Aktion) passiert den Helfer. Diese Lücke hat keine stille
+Folge (jeder ungewartete Zustand wird rot, nie grün), sie ist hiermit als
+benannte Grenze festgehalten, nicht als offener Task: Das Prädikat selbst war
+Eigentümer-Entscheid, und ein schärferes Prädikat würde ihn neu verhandeln,
+ohne eine stille Fehlerklasse zu schließen.
+
 ---
 
 ## 8. Exakte Regenerations-Kommandozeile

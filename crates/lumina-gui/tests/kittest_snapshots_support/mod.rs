@@ -4,7 +4,8 @@
 //!
 //! Byte-identical move of the former file-local helpers; no semantic change.
 //! `kittest_snapshots.rs` pulls them in through `use
-//! kittest_snapshots_support::*;`.
+//! kittest_snapshots_support::*;`. GOLDEN-STALE-55 adds one new helper
+//! (`settle_render`); the moved helpers are untouched.
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
@@ -121,4 +122,41 @@ pub(crate) fn open_collapsing_and_scroll_to(
     // scrolled layout before snapshotting.
     harness.run();
     harness.run();
+}
+
+/// GOLDEN-STALE-55: pump single harness frames until the render armed by a
+/// recipe/mask edit has landed (`render_key().is_some()`), then return.
+///
+/// A golden must capture the *settled* preview. `mark_dirty` drops the render
+/// identity (`dirty.rs:42`) and only a completed render restores it, so the
+/// "Stale" badge is painted exactly while the key is absent (`app_frame.rs`); a
+/// snapshot taken before that render pins a transient pre-state. The golden
+/// reference contract §7.2 (`feature/quality/golden-references.md`) makes this
+/// the normative wait for every golden whose test triggers render work.
+///
+/// The wait aborts **loudly** with the state it found when the bounded step
+/// count is exhausted: there is no silent fallback and the golden can never be
+/// taken from an unsettled frame.
+pub(crate) fn settle_render(harness: &mut Harness<'_, LuminaApp>) {
+    // A full render is deferred at most once past a module-switch frame
+    // (`render_schedule.rs`) and otherwise commits on the next frame; this is
+    // orders of magnitude of reserve over the measured "lands in frame 0"
+    // (golden-references.md §7.2). The count is bounded on purpose so a
+    // regression can never hang the suite.
+    const MAX_STEPS: usize = 200;
+    for _ in 0..MAX_STEPS {
+        if harness.state().render_key().is_some() {
+            return;
+        }
+        harness.run_steps(1);
+    }
+    let app = harness.state();
+    panic!(
+        "settle_render: render_key stayed None after {MAX_STEPS} steps; refusing to \
+         snapshot an unsettled render\n\
+         found: render_key={:?}, preview_generation={}, status={:?}",
+        app.render_key(),
+        app.preview_generation(),
+        app.status(),
+    );
 }

@@ -516,7 +516,6 @@ fn develop_section_history() {
     assert_label_on_screen(&mut harness, &label);
     harness.snapshot("develop_section_history");
 }
-
 #[test]
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn develop_section_rating() {
@@ -533,6 +532,7 @@ fn develop_section_rating() {
         .expect("seed mask entry");
     // Only Rating open: star buttons + flag + color-label rows.
     open_collapsing_and_scroll_to(&mut harness, "Rating", "Color Label");
+    settle_render(&mut harness);
     // Non-vacuous guard: the color-label row must actually be on-screen.
     assert_label_on_screen(&mut harness, "Color Label");
     harness.snapshot("develop_section_rating");

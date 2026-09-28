@@ -1,6 +1,6 @@
 # golden_ref.lock - gepinnter Golden-Referenz-Fingerabdruck (GOLDEN-REF-30).
 # Erzeugt von: sh scripts/golden_ref.sh record --confirm "<reason>"
-# Grund: GUI-INT-MASKLOCAL-38: vier neue mask-local Editor-Goldens (tone_curve, color, presence, detail), Klasse C/S2, byte-stabil auf dieser Plattform. fixtures.count 16->4 aus GOLDEN-FIXT-31 (11 synthetische .arw entfernt) und goldens.count 62->66 werden hiermit mitgepinnt. Keine bestehende Golden-Datei wurde veraendert; die 13 als stale bekannten Goldens bleiben unberuehrt und gehoeren weiter zu GOLDEN-BASELINE-32.
+# Grund: GOLDEN-STALE-55: develop_section_rating auf den abgewarteten Render-Zustand neu aufgenommen (render_key=Some, Mask-Warnung sichtbar, Stale-Marke weg, golden-references.md 7.2); Maske der Fixture bleibt pending; os.macos 27.0->27.0.1 ist gemessener Drift dieser Maschine (sw_vers 27.0.1) und wird hiermit mitgepinnt
 #
 # Format: eine Zeile pro Schluessel als <key>=<value>, '#'-Zeilen sind
 # Kommentar, Schluesselreihenfolge ist Teil des Formats (kanonisch, von
@@ -10,7 +10,7 @@
 #
 schema.golden_ref=1
 os.name=macOS
-os.macos=27.0
+os.macos=27.0.1
 os.arch=arm64
 os.cpu=Apple M5 Pro
 toolchain.channel=stable
@@ -28,4 +28,4 @@ libraw.version=0.22.2
 fixtures.count=4
 fixtures.digest=git:e949f6835ed1e4de980934547a995d96e122dba495f97e6a36e9a285226fea4a
 goldens.count=66
-goldens.digest=git:507558ec0f6374ff250359e5310b50d09b5a3358ac0fa0d15aabcbf2298d835e
+goldens.digest=git:36db33fa1338d10b367feebc2efd6a62f00123982a702fb9f73cbeedb546610e
