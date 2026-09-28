@@ -146,6 +146,23 @@ beantwortet sind:
   dieser Sitzung haben je eine unerklärte Abweichung gemeldet (350,95 s gegen
   521,50 s gegen 348,61 s für denselben Serienlauf); keine dieser Zahlen war
   falsch, keine war allein aussagekräftig.
+- **Ein negatives Grep-Ergebnis ist nur so stark wie das Muster.** „Nicht
+  gefunden" ist erst nach der Pruefung des Musters eine Aussage, sonst ist es
+  eine Vermutung. **Gemessen 2026-09-28:** der Build-Agent meldete, ein
+  `#[allow(dead_code)]` existiere im Testbaum nicht — `grep -rn
+  '#\[allow(dead_code)\]'` lieferte null Treffer, also war er sich seiner
+  Sache sicher und widersprach damit dem Implementierungsbericht, der das
+  Attribut **korrekt** gemeldet hatte. Das Attribut stand an
+  `tests/kittest_decode_support/mod.rs:161`, **mehrzeilig** formatiert
+  (`#[allow(` / `dead_code,` / `reason = "…"`) — der Muster passte nicht.
+  Der Verifizierer fand es mit `grep -A3 '#\[allow($'`. **Regel:** bevor ein
+  Fehlen behauptet wird, (a) das Muster gegen die tatsaechliche Form pruefen
+  (einzeilig/mehrzeilig, andere Schreibweise, `#[expect]` statt `#[allow]`,
+  Lint-Konfiguration, `Cargo.toml`), (b) das **Gegenteil** durch eine
+  **andere** Methode suchen, und (c) beim Widerspruch zu einem gemeldeten
+  Befund **nicht** auf der eigenen Suche beharren, sondern die Behauptung
+  zuruecknehmen und die Diskrepanz melden. Ein zurueckgenommener Befund
+  kostet einen Absatz; ein darauf aufgebauter falscher Task kostet mehr.
 - Ein Task wird nicht durch die Summe seiner Einzelfixings geschlossen,
   sondern durch ein Urteil über ihn als Ganzes.
 
