@@ -217,6 +217,38 @@ den er bewacht.** Wer Erwartung und Code gemeinsam verschiebt, gewinnt
   „durch Begründung getragen, nicht durch einen Test" ausgewiesen. Erfundene
   Tests, die ihn nur symbolisch berühren, sind schlimmer als die ehrliche
   Kennzeichnung.
+- **Ein Wächter erzeugt genau einen Vertrauenspunkt — und die nächste Mutation
+  zielt darauf.** Das ist keine Schwäche des Wächters, es ist seine Form: er
+  entscheidet an *einer* Stelle, und diese Stelle ist das einzige, was ein
+  Angreifer zu ändern braucht. Belegt am 2026-09-28 an `KITT-IGNORED-PANIC-56`,
+  wo dieselbe Fehlerklasse („voller grüner Pass, der nichts beweist") in
+  **fünf** Runden an **vier verschiedenen** Stellen wieder auftrat: erst ein
+  Panic, dann eine selbstbezügliche Assertion, dann ein `return` **oberhalb**
+  des Wächters, dann ein Typ, der einen Feld-Zugriff untypisierbar machte —
+  und jedes Mal war der neue Wächter vorhanden, korrekt dokumentiert und
+  mutationsbewiesen. **Ein Modellwechsel änderte daran nichts:** das frische
+  Modell fand dieselbe Klasse *eine Ebene tiefer* und *schneller*. Der Befund
+  war damit **kein Modellproblem, sondern ein Entwurfsproblem**.
+  **Regel:** wiederholt sich eine Fehlerklasse über Runden, wird **kein
+  weiterer Wächter ergänzt**, sondern die **Form** so geändert, dass **kein
+  Entscheidungspunkt übrig bleibt**, an dem die Aussage abgeschaltet werden
+  könnte. Vorher ist die Frage zu stellen: *wo genau* entscheidet der Code —
+  und existiert dieser Ort nach dem Fix überhaupt noch?
+  Vorherige Fassungen von Regeln, die einen **Weg** abschließen statt einer
+  **Klasse**, sind damit als Absichtserklärung zurückgenommen und nicht als
+  erfüllt zu führen — siehe `feature/quality/fixtures-licensing.md` §3.2.1
+  Regel 4 (berichtigt) und Regel 5.
+- **Eine sichtbare Meldung, die falsch sein *kann*, ist schlimmer als gar
+  keine.** Ebenfalls `KITT-IGNORED-PANIC-56`, Runde 4: die `WEAKENED`-Zeile
+  meldete eine `LUMINA_RAW_FIXTURE`-Überschreibung, die im Test **nie
+  stattgefunden hatte**, weil ein Fallback sie erzeugt hatte. Die Meldung war
+  an echtem `stderr` sichtbar, korrekt formatiert und **inhaltlich falsch** —
+  und sie blieb bei Exit 0 grün. Sichtbarkeit ist kein Beweis von Richtigkeit:
+  eine Diagnose, die ihre eigene Herkunft erfinden kann, ist eine
+  **Fehlerquelle**. **Regel:** wer eine Meldung aus einem Zustand erzeugt,
+  muss diesen Zustand **belegbar** vom Produzenten bekommen, nicht aus dem
+  Umfeld rekonstruieren. „Woher kam das?" ist eine Frage, deren falsche
+  Antwort schlimmer ist als keine Antwort.
 
 ## 11. Kein Fix ohne Reproduktion
 
