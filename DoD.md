@@ -165,6 +165,29 @@ beantwortet sind:
   kostet einen Absatz; ein darauf aufgebauter falscher Task kostet mehr.
 - Ein Task wird nicht durch die Summe seiner Einzelfixings geschlossen,
   sondern durch ein Urteil über ihn als Ganzes.
+- **Eine Mutation, die kompiliert und grün meldet, ohne die Aussage zu
+verletzen, ist keine Mutation.** Belegt am 2026-09-28 in der Verifikation zu
+  `KITT-IGNORED-PANIC-56`, Runde 2: der erste Leerversuch fügte nur
+  `let _leer: [(&str, DocumentedGeometry); 0] = [];` ein. Das **kompilierte und
+  lief grün**, leerte die Tabelle aber nicht — der Mutationsnachweis sah damit
+  korrekt aus und bewies **nichts**. Ebenso scheitert das Löschen eines
+  Tabelleneintrags zuerst am Array-Längen-Typ (`error[E0308]`); die wirksame
+  Mutation braucht **beide** Hälften. **Regel:** eine Mutation gilt erst als
+  wirksam, wenn sie den geprüften **Ausführungspfad** tatsächlich verändert.
+  Das ist durch **Inspektion** festzustellen, nicht durch den Lauf — ein
+  „grün" aus einem Mutationslauf beweist ohne diese Vorprüfung gar nichts.
+- **Kein Pin, dessen Erwartung in derselben Quelldatei steht wie der Code,
+den er bewacht.** Wer Erwartung und Code gemeinsam verschiebt, gewinnt
+  zwangsläufig; die Wacht lässt sich dann umstellen, ohne dass ein Lauf rot
+  wird. Das ist **keine** Forderung nach Unveränderlichkeit — Code ändert
+  sich. Es ist die Feststellung, dass eine Erwartung in derselben Datei keine
+  Wacht ist, sondern eine **Absichtserklärung**. **Regel:** die Erwartung eines
+  Wächters stammt aus einer Quelle, die die Handlung, gegen die er schützt,
+  **nicht** mitverändern kann — ein committetes Artefakt, ein
+  Dateisystem-Zustand, ein Golden, ein fremder Prozess. Und: **ein
+  Early-Return oberhalb des Pins umgeht ihn**, ohne dass irgendetwas auffällt;
+  der Pin gehört an die **Aufrufstelle**, nicht in den Produzenten, aus dem
+  man zurückkehren kann, bevor er geprüft hat.
 
 ## 10. Tests, die nicht scheitern können
 
