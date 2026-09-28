@@ -275,6 +275,22 @@ Agent derselben Änderung gelten.
   **jede** committete Fixture" wurde am 2026-09-29 zurückgenommen und ist in
   `feature/quality/fixtures-licensing.md` §3.2.1 als **ZURÜCKGENOMMEN**
   gekennzeichnet; sie darf **nicht** als offene Lücke reimplementiert werden.
+- **Aufgabenreihenfolge: alle offenen Tasks werden abgearbeitet; der Build-Agent
+  wählt die Reihenfolge** (Eigentümer-Entscheid 2026-09-28: *„egal, alle müssen
+  abgearbeitet werden"*). Das ist **keine** carte blanche zur Priorisierung nach
+  Bequemlichkeit, sondern eine ausdrückliche Festlegung, **kein** Punkt fallen zu
+  lassen. Die Wahl der Reihenfolge wird **begründet** und folgt drei Kriterien,
+  in dieser Rangfolge:
+  1. **Gate-Gefährdung** — was einen Merge blockieren oder ein `main`-Rot
+     verursachen kann (z. B. `KITT-SCAN-PREMISSE-58`: ein nicht-deterministisch
+     rotes CI trifft **jeden** künftigen Merge).
+  2. **Abhängigkeit** — was andere Tasks freigibt (z. B. `lumina-gui`-Änderungen
+     blockieren parallele Agenten in `lumina-raw`/`lumina-sidecar`).
+  3. **Hardware-Gate** — was ohne den manuellen Fahrplan (R5-LOG-1) nicht
+     bearbeitbar ist, wird **nicht** vorgezogen, sondern vorbereitet.
+  Ein Task, der nur **Hardware oder einen Menschen** braucht, ist kein Grund
+  anzuhalten: die übrigen Tasks werden abgearbeitet und der Fahrplan bleibt
+  offen im Plan.
 
 ## Verbindlicher Arbeitsablauf
 
