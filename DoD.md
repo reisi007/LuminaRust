@@ -132,6 +132,20 @@ beantwortet sind:
   eines Laufs über **alle** Klassen) verglichen — das Ergebnis war in beiden
   Richtungen falsch, obwohl beide Mengen für sich korrekt waren. Die Prüfung
   kostet einen Blick in die Definition und spart eine öffentliche Rücknahme.
+- **Eine Wanduhr-Zahl ist erst mit ihrer Streuung eine Aussage.** Ein einzelner
+  Lauf belegt keinen Wert, sondern eine Beobachtung. Gemessen am 2026-09-28 auf
+  `kittest_snapshots`: **46,41 s / 51,92 s / 245,66 s** bei identischem Baum,
+  identischer Pass/Fail-Menge und byte-stabilen Diff-Pixelzahlen — ein
+  Fünffaches. Eine Schranke wie „unter 60 s" ist auf dieser Grundlage eine
+  Behauptung, keine Abnahme. Verbindlich ist darum: **Bandbreite mit
+  Laufzahl** („gemessen bei N Läufen, min–max") oder, wenn eine Schranke
+  gefordert ist, ein **Vergleich zweier Schranken auf demselben Baum** — nicht
+  ein Wert gegen eine Konstante. Aus demselben Grund wird eine beschleunigte
+  Fehlschlagzeit nur als **A/B auf identischer Konfiguration** berichtet, mit
+  beiden Seiten und der einen Zeile Unterschied dazwischen. Zwei Verifikationsrunden
+  dieser Sitzung haben je eine unerklärte Abweichung gemeldet (350,95 s gegen
+  521,50 s gegen 348,61 s für denselben Serienlauf); keine dieser Zahlen war
+  falsch, keine war allein aussagekräftig.
 - Ein Task wird nicht durch die Summe seiner Einzelfixings geschlossen,
   sondern durch ein Urteil über ihn als Ganzes.
 

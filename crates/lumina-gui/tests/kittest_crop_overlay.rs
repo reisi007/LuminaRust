@@ -20,6 +20,21 @@ use egui_kittest::Harness;
 use lumina_gui::{LuminaApp, Module};
 use std::path::{Path, PathBuf};
 
+// KITT-IDENTITY-49: the wall-clock bound for opening a real file and the state
+// report it prints on timeout (shared with `kittest_snapshots` and
+// `kittest_sidecar_identity`).
+mod kittest_decode_support;
+use kittest_decode_support::{pump_until_ready, Ready};
+
+/// The preview has rendered at least once: the state both goldens below wait
+/// for before the crop overlay is driven. Described here so an expiry report
+/// names it next to the values it found.
+fn ready_rendered() -> Ready<impl FnMut(&LuminaApp) -> bool> {
+    Ready::new("preview_generation() >= 1", |app: &LuminaApp| {
+        app.preview_generation() >= 1
+    })
+}
+
 /// Fixed, committed fixture directory so no random tempdir prefix renders
 /// (same rationale as `kittest_snapshots::LIBRARY_FIXTURE_DIR`).
 const LIBRARY_FIXTURE_DIR: &str = "tests/fixtures/library";
@@ -41,19 +56,13 @@ fn photo_png_fixture() -> (tempfile::TempDir, PathBuf) {
 /// Open a real file (async decode), wait for the render, then point the browser
 /// back at the deterministic fixture directory so the tempdir prefix never
 /// reaches pixels.
+///
+/// KITT-IDENTITY-49: the wait's wall-clock bound now reports the state it
+/// actually found (expected vs. found, plus any error banner) instead of the
+/// bare "never settled in headed harness" that made a five-minute failure
+/// undiagnosable.
 fn open_file_and_restore_fixture(harness: &mut Harness<'_, LuminaApp>, path: &Path) {
-    harness.state_mut().open_file(path.display().to_string());
-    for _ in 0..500 {
-        harness.run_steps(1);
-        if harness.state_mut().preview_generation() >= 1 {
-            break;
-        }
-    }
-    assert!(
-        harness.state_mut().preview_generation() >= 1,
-        "decode of {} never settled in headed harness",
-        path.display()
-    );
+    pump_until_ready(harness, path, ready_rendered());
     harness
         .state_mut()
         .set_directory(LIBRARY_FIXTURE_DIR.to_owned());

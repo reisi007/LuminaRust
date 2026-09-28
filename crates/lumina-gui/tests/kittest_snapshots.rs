@@ -27,7 +27,6 @@ use lumina_gui::{
     SECTION_COUNT, SECTION_DETAIL, SECTION_EFFECTS, SECTION_GEOMETRY, SECTION_MASKING,
     SECTION_OPTICS, SECTION_TONE_CURVE,
 };
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // UX-LOOK-HISTORY-18: shared harness helpers moved here so this file stays
@@ -40,6 +39,51 @@ use kittest_snapshots_support::*;
 // Shared with `kittest_library_stack`, which owns the stack-membership golden.
 mod kittest_fixtures_support;
 use kittest_fixtures_support::*;
+
+// KITT-IDENTITY-49: the wall-clock bound for opening a real file and the state
+// report it prints on timeout (shared with `kittest_crop_overlay` and
+// `kittest_sidecar_identity`).
+mod kittest_decode_support;
+use kittest_decode_support::{pump_until_ready, Ready};
+// KITT-IDENTITY-49: sidecar fixtures must carry the fingerprint of the bytes on
+// disk; see the module docs for why the History seed used to violate that.
+mod kittest_sidecar_support;
+use kittest_sidecar_support::{seed_metadata_history_sidecar, test_jpeg_bytes};
+
+/// The preview has rendered at least once — the state most file-open goldens
+/// below wait for before snapshotting. Described here so an expiry report names
+/// it next to the values it found.
+fn ready_rendered() -> Ready<impl FnMut(&LuminaApp) -> bool> {
+    Ready::new("preview_generation() >= 1", |app: &LuminaApp| {
+        app.preview_generation() >= 1
+    })
+}
+
+/// The document was adopted with **exactly** `count` metadata history entries.
+/// The exact count is the point: a sidecar refused as stale leaves the history
+/// empty, and "some history" would hide exactly that.
+fn ready_history_of(count: usize) -> Ready<impl FnMut(&LuminaApp) -> bool> {
+    Ready::new(
+        format!("metadata_history().len() == {count}"),
+        move |app: &LuminaApp| app.metadata_history().len() == count,
+    )
+}
+
+/// The preview rendered **and** the source's embedded IPTC became readable.
+fn ready_rendered_with_embedded_iptc() -> Ready<impl FnMut(&LuminaApp) -> bool> {
+    Ready::new(
+        "preview_generation() >= 1 && embedded_metadata() is Some",
+        |app: &LuminaApp| {
+            app.preview_generation() >= 1
+                && app
+                    .embedded_metadata()
+                    .unwrap_or_else(|error| {
+                        panic!("embedded IPTC must be readable once the preview rendered: {error}")
+                    })
+                    .is_some()
+        },
+    )
+}
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
 /// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
@@ -1249,15 +1293,6 @@ fn library_rated_badges() {
 // touched; existing goldens are not rebaselined.
 // ---------------------------------------------------------------------------
 
-/// 2x1 JPEG bytes through the real encoder (same fixture pixels as the
-/// lib `jpeg()` helper) so embedded-IPTC tests decode genuine JPEG bytes.
-fn test_jpeg_bytes() -> Vec<u8> {
-    ImageFrame::new(2, 1, vec![10, 20, 30, 255, 200, 180, 160, 255])
-        .expect("fixture frame")
-        .encode(ImageFileFormat::Jpeg)
-        .expect("jpeg encodes")
-}
-
 /// Write `photo.jpg` with embedded IPTC into a fresh tempdir on the fly
 /// (no repo binary). Returns the dir (keep alive until the snapshot is
 /// taken) and the image path. The file name is fixed so the `Loaded:
@@ -1275,52 +1310,6 @@ fn embedded_jpeg_fixture(title: &str, keywords: &[&str]) -> (tempfile::TempDir, 
     let path = dir.path().join("photo.jpg");
     std::fs::write(&path, embedded).expect("write jpeg fixture");
     (dir, path)
-}
-
-/// Seed `photo.jpg`'s sidecar with exactly 10 metadata history entries
-/// carrying fixed RFC 3339 UTC timestamps (no wall-clock): the History
-/// panel renders `rev | timestamp | origin | changed`, so real timestamps
-/// would leak nondeterministic pixels into the golden. Seeding goes through
-/// the public sidecar API into a tempdir file — the snapshot itself (like
-/// the `create_mask` precedents) performs no disk write.
-fn seed_metadata_history_sidecar(photo: &Path) {
-    use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SidecarDocument, SourceIdentity};
-    let identity = SourceIdentity {
-        relative_name: "photo.jpg".to_owned(),
-        content_hash: "blake3:kittest-meta-history".to_owned(),
-        byte_length: 0,
-        modified_at: None,
-        raw_format: "JPG".to_owned(),
-        orientation: 1,
-        decode_fingerprint: DecodeFingerprint {
-            decoder: "kittest".to_owned(),
-            version: "1".to_owned(),
-            parameters: BTreeMap::new(),
-            extras: BTreeMap::new(),
-        },
-        geometry_fingerprint: GeometryFingerprint {
-            width: 2,
-            height: 1,
-            orientation: 1,
-            pixel_aspect_ratio: 1.0,
-            extras: BTreeMap::new(),
-        },
-        extras: BTreeMap::new(),
-    };
-    let mut document = SidecarDocument::new(identity, "raster-mvp-1");
-    for index in 1..=10_u32 {
-        let mut fields = BTreeMap::new();
-        fields.insert("title".to_owned(), format!("Titel {index}"));
-        let timestamp = format!("2026-01-{index:02}T12:00:00Z");
-        assert!(
-            document
-                .apply_metadata_draft(&fields, "gui", &timestamp)
-                .expect("seed history entry"),
-            "history entry {index} must change the draft"
-        );
-    }
-    let sidecar = lumina_sidecar::sidecar_path_for(photo);
-    lumina_sidecar::save_sidecar(&sidecar, &document).expect("seed sidecar");
 }
 
 /// Rendered History line for a seeded entry (`MetadataHistoryEntryPattern`).
@@ -1349,21 +1338,15 @@ fn write_dynamic_meta_preset(dir: &Path, file: &str, name: &str) {
 ///
 /// The bound is a wall-clock deadline for the same reason as `settle_scan`
 /// (GOLDEN-FIXT-31): a 24-megapixel RAW needs seconds, not 500 fast frames.
-fn open_file_and_restore_fixture(
+/// `ready` carries its own description, so a timeout prints the expected state
+/// next to the found one (KITT-IDENTITY-49: a bare "never settled" cost five
+/// minutes to diagnose).
+fn open_file_and_restore_fixture<F: FnMut(&LuminaApp) -> bool>(
     harness: &mut Harness<'_, LuminaApp>,
     path: &Path,
-    mut ready: impl FnMut(&mut LuminaApp) -> bool,
+    ready: Ready<F>,
 ) {
-    harness.state_mut().open_file(path.display().to_string());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-    while !ready(harness.state_mut()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "decode of {} never settled in headed harness",
-            path.display()
-        );
-        harness.run_steps(1);
-    }
+    pump_until_ready(harness, path, ready);
     set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());
     harness.run();
 }
@@ -1431,9 +1414,7 @@ fn library_meta_embedded() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     use_library_fixture(&mut harness);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| {
-        app.preview_generation() >= 1 && app.embedded_metadata().unwrap().is_some()
-    });
+    open_file_and_restore_fixture(&mut harness, &photo, ready_rendered_with_embedded_iptc());
     // Non-vacuous in-memory guard: the file really carries IPTC.
     let meta = harness
         .state_mut()
@@ -1459,15 +1440,21 @@ fn library_meta_embedded() {
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
 fn library_meta_history() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let photo = dir.path().join("photo.jpg");
-    std::fs::write(&photo, test_jpeg_bytes()).expect("write jpeg");
-    seed_metadata_history_sidecar(&photo);
+    let photo = seed_metadata_history_sidecar(dir.path(), |_| {});
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
     use_library_fixture(&mut harness);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| {
-        app.metadata_history().len() == 10
-    });
+    open_file_and_restore_fixture(&mut harness, &photo, ready_history_of(10));
+    // Non-vacuity guard (KITT-IDENTITY-49): the 10 entries exist only because
+    // the seeded sidecar passed the production source-identity validation in
+    // `finish_decode`. A refused sidecar leaves an error banner and no
+    // document, so an error here means the fixture is stale — never a golden
+    // that quietly shows an empty History panel.
+    assert!(
+        harness.state().error().is_none(),
+        "the seeded sidecar must be adopted, not refused as stale: {:?}",
+        harness.state().error()
+    );
     // Non-vacuous in-memory guard: newest-first order with fixed labels.
     // (Row-label existence is asserted after expanding below: collapsed
     // section content has no accesskit nodes.)
@@ -1579,7 +1566,7 @@ fn draw_meta_preset_dialog() {
     harness
         .state_mut()
         .set_meta_presets_dir(Some(presets.path().to_path_buf()));
-    open_file_and_restore_fixture(&mut harness, &png, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &png, ready_rendered());
     // Non-vacuous in-memory guard: the dynamic preset is listed. The
     // panel auto-refresh runs inside the (closed) section closure, so an
     // explicit refresh is needed before the section is opened below.
@@ -2142,7 +2129,7 @@ fn develop_overlay_mask() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &photo, ready_rendered());
     assert_no_tmp_leak(&mut harness, tmp.path());
     harness.state_mut().set_section_open(SECTION_MASKING, true);
     harness
@@ -2290,7 +2277,7 @@ fn develop_overlay_crop() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &photo, ready_rendered());
     assert_no_tmp_leak(&mut harness, tmp.path());
     harness
         .state_mut()
@@ -2380,7 +2367,7 @@ fn develop_overlay_lens_blur() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &photo, ready_rendered());
     assert_no_tmp_leak(&mut harness, tmp.path());
     harness.state_mut().set_lens_blur_enabled(true);
     harness
@@ -2640,7 +2627,7 @@ fn library_metadata_copy_paste() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
-    open_file_and_restore_fixture(&mut harness, &photo, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &photo, ready_rendered());
     assert_no_tmp_leak(&mut harness, tmp.path());
     harness
         .state_mut()
@@ -2822,7 +2809,7 @@ fn generative_expand_panel_ready() {
     let source = ensure_generative_fixture("photo.png", LuminaApp::sample_image_png());
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
-    open_file_and_restore_fixture(&mut harness, &source, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &source, ready_rendered());
     // Arm the expand role (loud until a canvas exists) and generate the
     // deterministic fixture canvas + persisted bundle.
     let _ = harness.state_mut().set_expand_beyond_image(true);
@@ -2871,7 +2858,7 @@ fn generative_auto_fill_panel() {
     );
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
-    open_file_and_restore_fixture(&mut harness, &source, |app| app.preview_generation() >= 1);
+    open_file_and_restore_fixture(&mut harness, &source, ready_rendered());
     let _ = harness.state_mut().set_auto_fill_transparent(true);
     harness
         .state_mut()

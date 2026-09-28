@@ -738,11 +738,53 @@ Ordnerbaum leaken).
 Alle sind `#[ignore]`. Es gibt dabei **zwei** dokumentierte Gründe, nicht einen:
 `"headless GPU required; …"` in den Integrationstest-Targets
 (`kittest_snapshots`, `kittest_spot_tool`, `kittest_crop_overlay`,
-`kittest_parity`, `kittest_library_stack`) und
+`kittest_parity`, `kittest_library_stack`, `kittest_sidecar_identity`,
+`kittest_decode_bound`) und
 `"native wgpu adapter required; …"` in `kittest_mask_visibility.rs` und im
 Lib-Target (`brush_management.rs`). Der Dateiname je Golden ist der
 `harness.snapshot(<name>)`-Name; die konkrete Liste steht in
 `crates/lumina-gui/tests/snapshots/`.
+
+**Nicht jeder `#[ignore]`d GPU-Target trägt ein Golden.** `kittest_sidecar_identity`
+(2 Tests) und `kittest_decode_bound` (2 Tests) haben **0** `harness.snapshot`-Aufrufe
+und zählen daher **nicht** in die 66. Sie sind hier genannt, weil sie dieselbe Ignore-Politik
+tragen und bei `cargo test --all-targets` mitgelinkt werden — nicht, weil sie
+Golden-Zustand sichern. Ihr Gegenstand ist Vertrags- und Verweigerungsverhalten
+(Quellidentitäts-Validierung, Decode-Wartegrenze), nicht ein Render-Pixelbild.
+
+### 7.1 Der geteilte Decode-Warte-Helfer
+
+`crates/lumina-gui/tests/kittest_decode_support/mod.rs` ist der **eine** Ort, an dem
+ein kittest-Test auf einen echten Datei-Open wartet (`pump_until_ready`, mit
+`pump_until_ready_within` als injizierbarer Variante). Er hat zwei Austrittspfade mit
+**einer** gemeinsamen Bedingung `is_settled`:
+
+1. **Settled-Exit** — der Decode ist terminal (`!decode_pending() && (error().is_some()
+   || preview_generation() >= 1)`), das Aufrufer-Prädikat ist trotzdem unerfüllt. Ein
+   terminaler Decode mit unerfülltem Prädikat ist ein **Fehlerfall**, kein Wartefall.
+   Gemessen (macOS/Metal, 2026-09-28): **305,77 s → 2 Frames** bei identischem Report.
+2. **Bound-Exit** — die Wanduhrschranke `DECODE_DEADLINE` (300 s) greift.
+
+Beide Ausstiege melden **denselben** Zustandsbericht: erwartetes Prädikat, gefundene
+Werte (`preview_generation`, `metadata_history_len`, `metadata_draft_len`,
+`scan_pending`, `decode_pending`), Statuszeile und Fehlerbanner. Vor
+`KITT-IDENTITY-49` bestand dieser Bericht aus **null** Zustandswerten — ein Timeout sah
+damit aus wie eine langsame Maschine.
+
+**Gemessene Randbedingung, nicht geschätzt:** über alle Konsumenten-Suites
+**14 Wait-Invocations, jeder genau 2 Frames** (temporär in `pump_until_ready_within`
+gezählt, dann zurückgenommen). Das frühere 500-Frame-Budget hatte ~250× Reserve. Der
+Settled-Exit ist damit **kein** Fix für ein zu frühes Abbrechen — er ist der Grund,
+warum ein Fehlerfall in Sekunden statt in fünf Minuten erkennbar ist.
+
+**Offener Vertrag, prose-only und nicht erzwungen:** ein Aufrufer-Prädikat darf **nur**
+Zustand lesen, den `finish_decode` synchron schreibt. Ein Prädikat aus einer *späteren*
+asynchronen Quelle (Thumbnail-Worker, Ordnerscan) würde vom Settled-Exit abgeschnitten.
+Ein solcher Aufrufer bekäme einen **lauten** roten Test mit vollem Zustandsbericht,
+also kein falsches Grün — die Schalltrichtung ist sicher, die Erkennung ist es nicht.
+Für die heute drei benutzten Prädikate ist die Bedingung strukturell haltbar
+(`self.document` wird vor `render()` gesetzt, das `preview_generation` erhöht).
+
 
 > **Merke zur Zahlenangabe:** „56 Goldens" bezeichnet die **Tests** in
 > `kittest_snapshots.rs`, nicht die Vergleichsanzahl. Vergleichsanzahl in
