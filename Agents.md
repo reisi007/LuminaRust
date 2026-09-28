@@ -446,6 +446,25 @@ jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
 Baseline-Einträge, fmt/Clippy clean, und das Feature-Dokument nennt den GUI- und
 kittest-Stand ausdrücklich.
 
+### Golden-SOLL (Eigentümer-Entscheide 2026-09-28)
+
+- **`develop_section_rating` friert künftig den abgewarteten Render-Zustand
+  ein** (`GOLDEN-STALE-55`): Der Mechanismus ist belegt — das alte Golden hielt
+  einen nicht abgewarteten Vorzustand fest (`render_key == None`, Status aus
+  `create_mask`), bei HEAD löst `push_mask_definition` → `mark_dirty` einen
+  Render aus, der die Statuszeile mit der ehrlichen Mask-Warnung überschreibt.
+  Der Test wartet künftig per geteiltem `settle_render`-Helfer
+  (Prädikat `render_key.is_some()`) auf Renderabschluss, das Golden wird für
+  genau diesen Zustand neu aufgenommen. Die Seed-Alternative (gültige Maske
+  statt Pending-Maske) ist verworfen: Die Warnung ist der ehrliche Endzustand
+  zur Fixture, kein Rauschen. Normativ: `feature/quality/golden-references.md`
+  §7.2.
+- **Kein fester Neuaufnahme-Rhythmus für Goldens.** Jedes `record` bleibt ein
+  einzeln begründeter Schritt (Modell `GOLDEN-BASELINE-32`): Ein Rhythmus
+  hätte den unbelegten Vorzustand aus `GOLDEN-STALE-55` nur neu eingefroren,
+  statt ihn zu definieren. Normativ: `feature/quality/golden-references.md`
+  §9 Punkt 7.
+
 ### Modellwechsel nach dreifacher Verifikations-Niederlage (User-Regel 2026-09-26)
 
 **Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
@@ -477,6 +496,20 @@ falsch war — der Fehler war nicht Sorgfalt, sondern die Art, wie geprüft
 wurde (aus der C++-Quelle schließen statt das exportierte Symbol messen).
 Ein anderes Modell ist die naheliegendste Gegenmaßnahme, weil die
 Fehlerkette eine Denk- und nicht eine Sorgfaltfrage war.
+
+### Modellsparsamkeit (User-Regel 2026-09-28)
+
+**`opencode-go/deepseek-v4.1-flash` wird nur für sehr schwere Probleme
+eingesetzt; sonst läuft das Standardmodell.** (User: „wenn möglich nicht
+deepseek v 4.1, wenn das Problem nicht sehr schwer ist".) Die Eskalationsregel
+oben (Wechsel nach dreifacher Verifikations-Niederlage) bleibt der einzige
+automatische Wechselgrund und ist von dieser Sparsamkeit unberührt — sie
+greift gerade dort, wo das Problem sich als schwer erwiesen hat. Praktisch:
+`SIDECAR-SUFFIX-CONST`, `FIXTURE-ENV-1`, `KITT-DECODE-CONTRACT-52`,
+`KITT-SCAN-M2-DOC-59` und die MCP-Parität sind Normalfälle;
+`LINT-BLANKET-1`, `KITT-WAIT-PIN-57` und `GOLDEN-BASELINE-32` sind
+deepseek-Kandidaten, weil dort eine unbekannte Menge stiller Befunde über
+viele Dateien zu beurteilen ist.
 
 ### Testabdeckungs-Politik (User-Regel 2026-09-26)
 

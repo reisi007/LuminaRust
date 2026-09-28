@@ -801,6 +801,25 @@ Für die heute drei benutzten Prädikate ist die Bedingung strukturell haltbar
 > Referenzplattform; bis dahin wird „12 fehlschlagende Goldens" hier bewusst
 > nicht als feststehende Zahl geführt.
 
+### 7.2 Render-Settle-Vertrag (`GOLDEN-STALE-55`, Eigentümer-Entscheid 2026-09-28)
+
+Ein Golden, dessen Test Render-Arbeit auslöst (`create_mask`, Regler,
+Modulwechsel), nimmt den Snapshot erst nach Renderabschluss. **Gemessen
+(2026-09-28, drei Sonden, Sonde danach zurückgebaut):** `develop_section_rating`
+fror einen nicht abgewarteten Vorzustand ein — bei `5ba13da` unmittelbar vor dem
+Snapshot `status = MaskCreated`, `render_key = None`, `gen = 1` über 10 Frames
+(nie ein Render); bei HEAD `status = Mask-Warnung`, `render_key = Some`,
+`gen = 2`, Render in Frame 0. Ursache ist `46e2917`: `create_mask` ruft
+`push_mask_definition` → `mark_dirty` (`lib.rs:6106`) → `pending_full_render =
+true` (`dirty.rs:47`); die Status-Überschreibung (`render_pipeline.rs:484`) ist
+alt. **SOLL:** Der Test wartet per geteiltem `settle_render`-Helfer im
+Support-Modul (Prädikat `render_key.is_some()`, lauter Abbruch, wenn der Render
+nie landet); das Golden wird für genau diesen abgewarteten Zustand neu
+aufgenommen. Ein `record` ohne Warten pinnt frame-zahl-abhängigen Zufall als
+Soll und ist hiermit als Verfahren **verworfen**. Die Seed-Alternative (gültige
+Maske statt Pending-Maske) ist verworfen: Die Warnung ist der ehrliche
+Endzustand zur Fixture.
+
 ---
 
 ## 8. Exakte Regenerations-Kommandozeile
@@ -898,6 +917,11 @@ sh scripts/golden_ref.sh record --confirm "GOLDEN-BASELINE-32: <Plattform> / <To
 6. **`wgpu.backend_env` und `font.resolution` sind Absichtsschalter.** Wer
    `LUMINA_GPU_BACKENDS` setzt oder eine Font-Umleitung einbaut, verändert die
    Golden-Bedingungen; das Skript macht das sichtbar, statt es zu übergehen.
+7. **Kein fester Neuaufnahme-Rhythmus** (Eigentümer-Entscheid 2026-09-28).
+   Goldens werden nicht „alle X" neu aufgenommen: Ein Rhythmus hätte den
+   unbelegten Vorzustand aus `GOLDEN-STALE-55` (§7.2) nur neu eingefroren, statt
+   ihn zu definieren. Jedes `record` bleibt ein einzeln begründeter Schritt
+   (Punkt 4); die Bündelung gehört in `GOLDEN-BASELINE-32`, nicht in den Kalender.
 
 ---
 
