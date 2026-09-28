@@ -39,7 +39,7 @@ mod kittest_decode_support;
 mod scan_settle_support;
 
 use egui_kittest::Harness;
-use kittest_decode_support::{is_settled, pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{is_settled, pump, pump_until_ready, Ready, SETTLE_DEADLINE};
 use lumina_gui::LuminaApp;
 use scan_settle_support::{scan_and_decode_settled, settle_scan, settle_scan_within};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -103,6 +103,12 @@ fn build_harness() -> Harness<'static, LuminaApp> {
 /// `entries()` still holding the *previous* folder's single entry. The assertion
 /// *after* `settle_scan` is what turns "the two conditions differ" into "the wait
 /// behaves accordingly".
+///
+/// The *previous* folder's listing is itself produced by a later async source
+/// (the scan worker `open_file` arms), so it is a **wait condition** here and
+/// not a fixed-point assertion (KITT-SCAN-PREMISSE-58): `preview_generation()`
+/// is bumped by a render and implies nothing about the applied listing, and a
+/// fixed `entries().len() == 1` therefore flaked as `left: 0 right: 1` on `main`.
 #[test]
 fn settle_scan_waits_for_the_listing_even_when_the_decode_is_already_settled() {
     let source_dir = tempfile::tempdir().expect("temp dir");
@@ -120,6 +126,20 @@ fn settle_scan_waits_for_the_listing_even_when_the_decode_is_already_settled() {
             app.preview_generation() >= 1
         }),
         SETTLE_DEADLINE,
+    );
+    // The opened file's folder is listed by a *second* async source — the scan
+    // worker — so wait for that listing instead of assuming it. No settled exit
+    // is armed: `is_settled` cannot decide a scan predicate, and arming it here
+    // would panic in exactly the window this test is about (its settled cause
+    // says the decode settled, which is precisely the state we are still in).
+    pump(
+        &mut harness,
+        source_dir.path(),
+        Ready::new("the source folder's listing landed", |app: &LuminaApp| {
+            app.entries().len() == 1
+        }),
+        SETTLE_DEADLINE,
+        None,
     );
     // A navigation, with no frame pumped yet: the scan worker is armed.
     harness
@@ -146,12 +166,10 @@ fn settle_scan_waits_for_the_listing_even_when_the_decode_is_already_settled() {
              would be sound for a folder scan and the two waits would be \
              interchangeable"
         );
-        assert_eq!(
-            app.entries().len(),
-            1,
-            "premise: the previous folder's single entry is still listed — the new \
-             listing is not applied until the scan lands"
-        );
+        // `entries().len() == 1` is deliberately **not** asserted here: it is the
+        // exit condition of the listing wait above, so after it the previous
+        // folder's single entry is a consequence and not a second assumption. A
+        // fixed-point assert on it was the flake this task removes.
     }
 
     settle_scan(&mut harness);
