@@ -155,6 +155,23 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
    `DENOISE` belegt der Code die Lücke ausdrücklich
    (`denoise_ai (not GPU-wired)`, `lumina-gpu/src/lib.rs:323-324`); für
    `PREVIEW`/`EXPORT` ist sie **nicht** ausgeschlossen, aber unbelegt.
+   **Zweiter Durchgang 2026-09-29 (Lese-Audit + eigene Nachmessung):** Von den
+   vier `GPU-RENDER-*-19`-Zeilen ist eine **Dublette** und drei sind ungeklärt.
+   `GPU-RENDER-DENOISE-19` ist **(D)**: die Arbeit läuft unter
+   `LRPAR-G14-DENOISE-IMPL-20` (eigene Task-Zeile, Release 2.0), und genau diese
+   ID nennt `lumina-gpu/src/lib.rs:324` als Beleg der Lücke — der Code führt
+   `denoise_ai (not GPU-wired)` mit dieser Task, nicht mit `GPU-RENDER-DENOISE-19`.
+   Die Zeile ist deshalb entfernt; **eine eigene Task dafür anzulegen hätte
+   Arbeit doppelt erfasst.** Das Lese-Audit hatte sie als (C) „offen" eingestuft —
+   das war **falsch**, und die Korrektur folgt dem Codeverweis, nicht der
+   Vermutung. `GPU-RENDER-MASK-19` ist **nicht** durch `MASK-LOCAL-P0`…`P1.2d`
+   abgedeckt: diese Tasks bauen das **Rezept-Datenmodell** (Tone Curves, HSL,
+   Presence, Detail), während die Zeile den **GPU-Masken-Pixelpass** meint; die
+   vorhandenen `GPU-MASKPLANE-BRUSH-50`/`-CLEAR-PERF-51` betreffen Brush-Upload
+   und Plane-Clear-Performance. `GPU-RENDER-PREVIEW-19` und `-EXPORT-19` bleiben
+   ungeklärt (die Fähigkeit existiert — `gpu_present_if_ready`, GPU-first
+   CLI-Render — aber ohne ID-Brücke). Für die **drei verbleibenden** Zeilen ist
+   eine **offene Frage** als Task in Block B eingetragen.
 
 | Version | Task-ID | Goal | Stichwort |
 | --- | --- | --- | --- |
@@ -166,7 +183,6 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | 1.0 | FIXTURE-ENV-1 | alle G | Env-gegateter Fixture-Test panickt unter `--ignored` |
 | 1.0 | FIXTURE-SKIP-VISIBLE-2 | alle G | Stiller Fixture-Skip im Default-Lauf unsichtbar |
 | 1.0 | GPU-PARITY-HW-28 | alle G | Hardware-GPU-Parität |
-| 1.0 | GPU-RENDER-DENOISE-19 | G-14 | Denoise-WGSL-Pass |
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
 | 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
@@ -441,6 +457,8 @@ Lizenz-/Schema- oder Übernahme-Fragen). Blockiert Block A nicht; sollte aber,
 wo möglich, vor dem nächsten manuellen GUI-Test geklärt werden.
 
 ### PRIO: mittel
+
+- [ ] **[PRIO: mittel] GPU-RENDER-ID-BRIDGE-52 (Release 1.0/2.0; aus dem Releaseplan-Audit vom 2026-09-29)** **Drei Releaseplan-Zeilen ohne Task-Zeile: `GPU-RENDER-PREVIEW-19`, `GPU-RENDER-EXPORT-19`, `GPU-RENDER-MASK-19`. Für keine davon gibt es außerhalb des Plans irgendeine Spur — kein Code, kein Test, kein `feature/`-Eintrag.** **Die Frage ist bewusst eine Frage und keine Feature-Aufgabe:** für `PREVIEW` und `EXPORT` ist **nicht** entscheidbar, ob die Fähigkeit schon unter anderer ID erledigt ist (Kategorie D) oder offen (Kategorie C) — vorhanden sind `LuminaApp::gpu_present_if_ready` (`crates/lumina-gui/src/present.rs:6`, unter `GUI-WGPU-PRESENT-1`) und GPU-first-Render in `crates/lumina-cli/src/main.rs:43,250`, aber **kein Dokument verbindet sie mit diesen IDs**. Für `MASK` ist die Lage klarer: der GPU-Masken-Pixelpass ist nicht erledigt (`upload_mask_plane`/`combine_mask_planes` existieren, betreffen aber Upload und Clear, nicht den Pass selbst), und `MASK-LOCAL-P0`…`P1.2d` decken ihn **nicht** ab — sie bauen das Rezept-Datenmodell. **Abgabe der Messung, je Zeile einzeln mit Datei und Zeile:** (1) existiert die Fähigkeit? (2) unter welcher ID? (3) ist sie verifiziert (unabhängiger Beleg: Commit-Text, SOLL-Reichweite)? **Danach, und erst danach:** pro Zeile **entweder** eine Task-Zeile anlegen **oder** die Releaseplan-Zeile als erledigt streichen. **Nicht vorher** eine Task anlegen, um die Zeile zu „schließen" — das wäre eine leere Task und regelwidrig. **Abgrenzung:** `GPU-RENDER-DENOISE-19` ist **nicht** Teil dieses Tasks; sie ist als Dublette zu `LRPAR-G14-DENOISE-IMPL-20` erkannt und entfernt.
 
 **Produktname (Rest von F-101-F1)**
 
