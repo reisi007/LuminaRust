@@ -625,6 +625,173 @@ report/warn/gate). Kurzfassung (implementiert):
   keine Cloud-Fähigkeit. Der tests-only Fixture-/Stub-Pfad wird nicht als
   echtes Denoise-Modell ausgeliefert.
 
+## Manueller Abnahmelauf (R5-LOG-1) — Fahrplan für die fünf hardware-gegaten Tasks
+
+**Stand 2026-09-28.** Vier `hoch`-Tasks und ein `mittel`-Task warten
+ausschließlich auf diesen Lauf: `R5-MASKVIS-25`, `R5-BRUSH-24`,
+`R5-DUST-23-FOLLOWUP`, `F-103-N6-GUI-COVERAGE-27` (alle `hoch`) und
+`GPU-PARITY-HW-28` (`mittel`). Dieser Abschnitt ist die fehlende Lieferung:
+`Agents.md` R5-LOG-1 definiert das **Verfahren**, aber niemanden, der fährt.
+
+### Was dieser Lauf ist — und was nicht
+
+Er ist eine **User-Aktion**: ein gestarteter Prozess mit echtem Fenster, echter
+Maus und echter Anzeige. Er ist **kein** headless Test und **kein** CI-Gate; die
+kittest-Goldens sind `#[ignore]`d und laufen in CI nie. Er ist damit die
+**einzige** verbleibende Instanz, die ein Fenster als Fenster prüft — und er
+wird nicht dadurch ersetzt, dass sehr viele headless Tests grün sind.
+
+### Teil A — headless bereits erledigt, hier **nicht** erneut anfordern
+
+Diese Punkte sind maschinell belegt und dürfen den Fahrplan nicht belasten:
+
+- GPU-/CPU-Parität am echten wgpu-Adapter: `kittest_parity --ignored` (6 Tests
+  grün, darunter `cpu_gpu_path_parity_matrix` und
+  `lensfun_corrector_cell_presents_gpu_without_badge`).
+- Overlay-/Masken-Sichtbarkeit als **Zustandsmaschine**: CPU- und GPU-Gates,
+  Overlay-Farbparität und der 110-Aktion-Audit sind headless verifiziert.
+- Pinsel-Persistenz, kumulative Live-Plane, Struktur-Golden 1024×720.
+- `R5-DUST-23-FOLLOWUP`: CLI-Kontradiktionsmatrix, eindeutige Spot-IDs,
+  Referenz-basierter missing/stale/corrupt-Status in GUI **und** CLI.
+
+Fragt der Fahrplan nach etwas aus Teil A, ist er falsch.
+
+### Teil B — was ausschließlich ein echter Lauf beweisen kann
+
+| # | Fall | Pass-Kriterium | Logbeleg |
+| --- | --- | --- | --- |
+| B1 | Overlay ohne geöffnete Maskenansicht | kein Masken-Overlay im Bildfeld | `mask`/`overlay`-Zeilen ohne Gate-Treffer |
+| B2 | Maskenansicht öffnen | Overlay der **aktuell gewählten** Maske sichtbar | Overlay-Gate nennt die Layer-ID |
+| B3 | Umschalten Pins-nur ↔ volles Overlay | Verhalten wechselt sofort sichtbar | zwei verschiedene Gate-Treffer |
+| B4 | Seitenpanels ausblenden | Bildfeld **messbar** größer (Vorher/Nachher-Screenshot) | Layout-Render, Panel-Knoten fehlen |
+| B5 | Pinsel Größe/Weichheit/Fluss | alle drei Regler vorhanden und wirksam | `set_brush_*`-Aktionen |
+| B6 | `[` / `]` | verändern die Pinselgröße als Alias zum Regler; Cursorkreis folgt | Tastaturaktion + Folgeaktion |
+| B7 | Kreis-Cursor | folgt dem Zeiger mit **live** Größe | `drawing`-Zeilen mit Radius |
+| B8 | zweite Maske + Pin-Liste | Pin-Liste **anklickbar**, wählt einzeln | `select_mask`-Aktionen |
+| B9 | Maskenverwaltung | Umbenennen/Löschen/Reihenfolge/Duplizieren als **Buttons**; überlebt Neustart | Persistenz-Aktionen, Reload-Zeile |
+| B10 | Dust nur bei Auswahl | Eintrag erscheint nur bei Auswahl | Auswahl-/Anzeige-Aktion |
+| B11 | Dust bearbeiten + regenerieren | bearbeitbar, Regeneration wirkt, Typ **Generate/KI** — **nie Clone** | `spot`/`dust`-Aktionen |
+| B12 | echter GPU-Pfad | Log nennt den **Metal-Adapter**; **kein** „Render routed to CPU" | Adapter-Zeile, Rendelpfad |
+| B13 | Restliche GUI-Fälle | jeder nicht-`#[ignore]`-belegte Desktop-Fall gefahren und quittiert | Fallliste mit Ergebnis |
+
+**B12 ist die harte Bedingung.** Ein Lauf auf llvmpipe oder einem
+Software-Adapter ist **kein** Nachweis und macht `GPU-PARITY-HW-28` **nicht**
+zu. Taucht im Log „Render routed to CPU" auf, ist das ein **Fail mit
+Fix-Pflicht**, kein akzeptierter Zustand.
+
+### Vorbereitung (exakt)
+
+```sh
+# 1) genau eine Instanz — vorher prüfen und notfalls beenden
+pgrep -fl lumina-gui || echo "keine Instanz"
+
+# 2) Fixtures: die zwei committeten CR3, unverändert
+ls -l sample-data/raw/
+
+# 3) Log ziel festlegen (Datum im Namen)
+LOG=/tmp/lumina_manual_2026-09-28.log
+```
+
+### Start
+
+```sh
+# Debug-Build MIT janklog: janklog ist kein Default-Feature, und Release
+# schweigt zusaetzlich per debug_assertions-Gate (GUI-JANKLOG-19, U2/U5).
+RUST_LOG=trace LUMINA_JANK_MS=8.3 \
+  cargo run -p lumina-gui --features janklog -- sample-data/raw 2>&1 | tee "$LOG"
+```
+
+- `gpu` **und** `lensfun` sind **Default-Features** (`crates/lumina-gui/Cargo.toml`,
+  `default = ["lensfun", "gpu"]`) — es ist **kein** `--features gpu` nötig, und
+  ohne GPU-Feature wäre der Lauf wertlos.
+- **Kein `--release`**, wenn der Jank-Beleg gebraucht wird: `jank_log` ist
+  per `debug_assertions` stummgeschaltet, ein Release-Build liefert also
+  **nie** eine `LUMINA_JANK`-Zeile. Mit `--release` gilt B4/B6/B7 nur als
+  Verhaltens-, nicht als Zeitnachweis.
+- `janklog` ist **Opt-in** (`janklog = []`, nicht in `default`) — ohne das
+  Flag existiert das Modul gar nicht. `LUMINA_JANK_MS` Default **8,3 ms**,
+  `0` schaltet aus.
+- Aufruf-Syntax: `lumina-gui [directory] [--module library|develop|export] [--fullscreen]`
+  (`crates/lumina-gui/src/main.rs:69`).
+- `RUST_LOG=trace` ist **Pflicht**: ohne Trace-Timings sind Switch/Drag/Warmup
+  unsichtbar, und genau die Fälle B3/B4/B6/B7 sind Timings.
+
+### Logauswertung
+
+```sh
+# B12: Adapter nachweisen (jeder Treffer "llvmpipe"/"software" ist ein FAIL)
+grep -niE "adapter|llvmpipe|software"        "$LOG"
+
+# B12: dokumentierte CPU-Umleitungen (diese drei Strings existieren)
+grep -n "keeping CPU route"                  "$LOG"
+grep -n "kept on the CPU reference"          "$LOG"
+grep -n "gui present refused"                "$LOG"
+
+# Ruckel, je Fall notieren (nur mit --features janklog und Debug-Build)
+grep -c "LUMINA_JANK"                        "$LOG"
+
+# Auffaelligkeiten
+grep -n "panic\|ERROR\|WARN"                 "$LOG"
+```
+
+Jeder Fall aus Teil B wird mit **Fall-Nummer, Logauszug und Ergebnis**
+quittiert. Ein Fall ohne Logauszug gilt als **nicht** gefahren — auch wenn er
+visuell plausibel wirkte.
+
+#### Was B12 aus dem Log **nicht** belegen kann — und warum
+
+`gpu_present_if_ready` (`crates/lumina-gui/src/present.rs`) hat neun
+`return None`-Zweigstellen. Nur **drei** davon loggen etwas
+(`gpu present target unavailable`, `gpu overlay present failed`, dazu
+`gpu render_to_vram failed` im Render-Pfad). Die uebrigen sind **stumm** —
+darunter die Verweigern `!self.vram_fresh || self.before_after ||
+self.preview_roi.is_some()` (Z. 147) und der **Masken-Gate**
+`!self.gpu_mask_overlay_is_selected()` (Z. 155).
+
+Entscheidend ist die Unterscheidung zweier Arten von Umleitung, die der Code
+selbst trifft (`src/gpu_routing.rs`, `format_routing_fallback_reason` und
+dessen Doc-Kommentar):
+
+| Art | Beispiel | Sichtbar? | Log? |
+| --- | --- | --- | --- |
+| **Capability** | nicht unterstützte Stufen, `geometry (default content crop)`, `lens_correction (Lensfun corrector; …)` | **ja** — gelbes Badge mit exakten Gründen plus Tooltip (`app_frame.rs:148-156`), getestet in `src/tests/gpu_routing.rs` | ja, `gpu present refused, keeping CPU route: {stage}` |
+| **Editorial** | Masken-Gate, Before/After-Ansicht, ROI | **nein** — bewusst: `None`, „wenn nur eine editoriale Ursache vorliegt" | **nein** |
+
+Fuer **B12** ist das die entscheidende Lesart: die Capability-Umleitung ist
+**im Fenster sichtbar** und damit per Sichtpruefung belegbar — ein gelbes
+Badge mit praezisen Gruenden, das man nicht uebersehen kann. Die
+**editoriale** Umleitung ist weder am Bildschirm noch im Log sichtbar; sie ist
+**by design** still, weil ein Badge fuer „du bist in Before/After" nur
+Rauschen waere.
+
+**Konsequenz fuer die Abnahme:** B12 wird als **Sichtpruefung** beurteilt und
+gegen die drei geloggten Umleitungen abgeglichen. Besteht das Badge, ist die
+Capability-Seite **nicht** verletzt. Erscheint **kein** Badge, ist damit
+**nicht** bewiesen, dass der VRAM-Pfad lief — es kann eine editoriale
+Umleitung sein. Genau diese Luecke ist als `GPU-ROUTE-LOG-54` erfasst: der
+Log soll erklaeren, was der Bildschirm absichtlich nicht zeigt. Sie ist
+**nicht** Nachlieferungsauftrag dieses Laufs, sondern die dauerhafte Behebung.
+
+### Was der Lauf ausdrücklich **nicht** beweist
+
+- **Kein** Ersatz für die headless Gates. Er ergänzt sie um genau das, was sie
+  prinzipiell nicht können: ein echtes Fenster, echte Zeigerereignisse, echte
+  DPI- und Skalierungsbehandlung.
+- **Kein** Nachweis für **Multi-Monitor** oder ein anderes DPI als das der
+  Maschine, auf der gelaufen wird. Ein Lauf auf einem 1x-Display belegt kein
+  2x-Verhalten.
+- **Kein** Nachweis für Vulkan, wenn auf Metal gelaufen wurde (und umgekehrt).
+  B12 gilt pro Backend.
+- **Kein** Ersatz für `GOLDEN-BASELINE-32`: er fällt in einen anderen Corridor.
+
+### Freigabe
+
+Erst wenn **alle 13 Fälle** quittiert sind, werden `R5-MASKVIS-25`,
+`R5-BRUSH-24`, `R5-DUST-23-FOLLOWUP`, `F-103-N6-GUI-COVERAGE-27` und
+`GPU-PARITY-HW-28` aus `Agents.todo.md` entfernt. Teilweise Freigabe ist nicht
+zulässig: alle fünf hängen am **selben** Lauf, und fünf einzelne Läufe sind
+genau die Blockade, die die Wave auflösen soll.
+
 ## Geplante generative Capabilities (Doku-first, 2026-09-02, GEN-EXPAND-1 / SPOT-REMOVE-1)
 
 Noch nicht implementiert — nur dokumentiert (kein Code, kein Gate-Bruch):
