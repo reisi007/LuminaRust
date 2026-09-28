@@ -65,8 +65,8 @@ Median/p95-Vergleich neu aufzeichnen.
 
 | Datei | Maße | Orientierung | Verwendung |
 | --- | --- | --- | --- |
-| `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench; **GUI-Drop-Nachweis** `dropped_raw_path_preserves_orientation_metadata_and_identity` + sein Wächter-Metatest; **Erwartungsquelle des Wächters** (Inventar, §3.2.1) |
-| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`); **GUI-Drop-Nachweis** + Wächter-Metatest; **Erwartungsquelle des Wächters** (Inventar, §3.2.1) |
+| `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench; **GUI-Drop-Nachweis** `dropped_raw_path_preserves_orientation_metadata_and_identity`; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
+| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`); **GUI-Drop-Nachweis**; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
 
 Decode-Benchmarks lesen das Verzeichnis über die Env-Variablen
 **`LUMINA_RAW_FIXTURE`**; ohne sie wird sauber übersprungen (kein Panic, kein
@@ -117,9 +117,11 @@ Pfad; aus `LUMINA_RAW_FIXTURE` stammend und **fehlend** → `SKIPPED` + Exit 0.
 wörtlich: die Fußnote ändert die Klasse nicht, denn ein Gate, das auf den
 Exit-Code schließt, sieht grün.
 
-**Regel 4 — der committete Satz ist bedingungslos; es gibt nichts zu
-freistellen.** (Normativ, aus der Verifikations-Runde 3 zu `KITT-IGNORED-PANIC-56`,
-in Runde 4 **präzisiert**.) Der Umfangsnachweis wird an der Aufrufstelle aus
+**Regel 4 — ZURÜCKGENOMMEN am 2026-09-29.** (Historisch, aus der
+Verifikations-Runde 3; in Runde 4 präzisiert. **Keine Zusage mehr** — siehe die
+Statustabelle am Kopf dieses Abschnitts und die benannte Grenze weiter unten.) Die
+damalige Fassung lautete: der committete Satz ist bedingungslos, es gibt nichts zu
+freistellen. Der Umfangsnachweis wird an der Aufrufstelle aus
 der **Umgebung** entschieden, nicht aus einem Feld, das der Produzent selbst
 setzen kann: `raw_fixtures()` liefert **ausschließlich** committete Fixtures,
 und `CommittedFixture.documented` ist **kein** `Option`, so dass die
@@ -169,8 +171,9 @@ Fall **zwei** Dekodierungen kostet. Das ist der Preis der Regel, und er ist der
 richtige: er kauft die Eigenschaft, dass **kein** Ausführungspfad den
 Umfangsnachweis abschalten kann.
 
-**Regel 6 — geprüft wird das ERGEBNIS, nicht der Pfad.** (Normativ,
-2026-09-29, aus Verifikations-Runde 5.) Nach der Dekodierschleife gilt: die
+**Regel 6 — ZURÜCKGENOMMEN am 2026-09-29.** (Historisch, aus Verifikations-
+Runde 5. **Keine Zusage mehr** — siehe Statustabelle und benannte Grenze.) Die
+damalige Fassung lautete: geprüft wird das Ergebnis, nicht der Pfad. Nach der Dekodierschleife gilt: die
 Anzahl **tatsächlich dekodierter** committeter Fixtures ist **gleich** der
 Anzahl der Inventarzeilen in `sample-data/raw/README.md`. Die Erwartungsquelle
 ist das **Inventar**, nicht die Tabelle, aus der iteriert wird; die Anzahl wird
@@ -214,11 +217,17 @@ Aussage, für die der Test existiert. Die Umfangsregeln 4–6 sind eine Zusicher
 nicht, weil sie den Kern des Nachweises tragen. Wer diesen Abschnitt künftig
 kürzt, kappt an der Zusicherung und **nicht** am Nachweis.
 
-**Noch offener Rest, ausdrücklich nicht als gedeckt geführt:** der
-Wächter-Metatest pinnt die *Logik* des Wächters, nicht seine *Verdrahtung* —
-ein Auskommentieren des Aufrufs lässt ihn grün. Geschützt ist die Verdrahtung
-allein durch die Mutation `if var("CI").is_ok() { return Vec::new(); }` (muss
-Exit ≠ 0 ergeben) und durch Review.
+**Noch offener Rest, ausdrücklich nicht als gedeckt geführt (Stand 2026-09-29
+nach dem Abbau):** mit Regel 4 und Regel 6 ist auch ihr `#[should_panic]`-Metatest
+entfallen. Offen bleibt damit **genau eine** Lücke, und sie ist eine von anderer
+Art: die Sichtbarkeitsmechanik `report_to_real_stderr` ist **prose-gesichert, nicht
+testgesichert** — ein stilles Zurückfallen auf `eprintln!` bliebe unentdeckt, weil
+`libtest` den captured Output **grüner** Tests verwirft. Ein Test im selben Prozess
+kann das nicht beobachten; die Deckung gehört in einen Kind-Prozess-Test und ist als
+`FIXTURE-SKIP-VISIBLE-2` in `Agents.todo.md` offen geführt. Bis dahin gilt: der
+Skip- und Caveat-Grund wird **im Defaultlauf sichtbar gemacht** (empirisch belegt —
+`SKIPPED`/`WEAKENED` erscheinen bei Exit 0 an echtem `stderr`), aber der **Kanal**
+selbst ist nicht durch einen Test abgesichert.
 
 ### 3.3 Golden-Referenzbilder
 
