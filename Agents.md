@@ -14,6 +14,7 @@ unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
 - [Architekturgrenzen](#architekturgrenzen)
 - [Rollen und Delegation](#rollen-und-delegation)
 - [Branch- und Merge-Konvention](#branch--und-merge-konvention-user-regel-2026-09-26)
+- [Entscheidungen an den Projekteigentümer](#entscheidungen-an-den-projekteigentümer-user-regel-2026-09-28)
 - [Verbindlicher Arbeitsablauf](#verbindlicher-arbeitsablauf)
 - [Verifizierung und Tests](#verifizierung-und-tests)
 - [Definition of Done](#definition-of-done) (normativ: [`DoD.md`](DoD.md))
@@ -245,7 +246,42 @@ Agent derselben Änderung gelten.
   Commits zu mergen. Merge-Konflikte werden **nachgemessen** entschieden
   (Zeilenzahlen, Testzahlen), nicht nach Erinnerung.
 
+## Entscheidungen an den Projekteigentümer (User-Regel 2026-09-28)
+
+- **Jede Entscheidung mit echten Wahlmöglichkeiten wird als interaktive Frage
+  gestellt** (Werkzeug `question`), **niemals** als Frage im Fließtext. Echte
+  Wahlmöglichkeiten sind z. B.: Alternative ja/nein, Datenmodell, Event-Form,
+  Abbruch-vs-weiter, Task-Reihenfolge. Die **Empfehlung steht als erste Option**,
+  die Varianten sind je **in einem Satz** begründet.
+  *Warum:* eine Entscheidung, die irgendwo im Chat-Text steht, wird beim nächsten
+  Turn übersehen; eine Frage mit Optionen nicht.
+- **Der Build-Agent entscheidet nicht allein.** Er sammelt die Optionen, misst
+  die Fakten, und legt sie dem Eigentümer vor. Er entscheidet **nur** dann ohne
+  Frage, wenn es keine Wahl gibt — Messungen, Formprüfungen, Pflichtschritte
+  aus `DoD.md` und das Ausführen einer bereits getroffenen, im Repo
+  festgeschriebenen Entscheidung. Ein Auftrag, der sich auf eine Zusage stützt
+  („diese Runde ist die letzte"), wird **ausgeführt, nicht neu verhandelt**.
+- **Jede so getroffene Entscheidung wird in diesem Dokument festgeschrieben**,
+  zusätzlich im **projektspezifischen** Abschnitt, wenn sie Datenmodell,
+  Event-Regeln, GUI-Verhalten, Persistenz oder eine SOLL-Zielsemantik betrifft.
+  Dieses Repo-Dokument ist die dauerhafte Quelle der Wahrheit, nicht der
+  Chatverlauf.
+- **Zurückgezogene Ansätze werden nicht nachträglich implementiert.** Wenn ein
+  Ansatz verworfen wurde, wird die **geltende Regel** klar benannt und der alte
+  Stand als zurückgezogen gekennzeichnet — damit der nächste Agent (oder das
+  nächste Gespräch) ihn nicht für gültig hält. Eine Regel, die sich später als
+  falsch herausstellt, wird **ersetzt**, nicht daneben stehen gelassen.
+  Beispiel aus diesem Projekt: die Umfangs-Zusicherung „der Nachweis decodiert
+  **jede** committete Fixture" wurde am 2026-09-29 zurückgenommen und ist in
+  `feature/quality/fixtures-licensing.md` §3.2.1 als **ZURÜCKGENOMMEN**
+  gekennzeichnet; sie darf **nicht** als offene Lücke reimplementiert werden.
+
 ## Verbindlicher Arbeitsablauf
+
+- **Entscheidungen mit Wahlmöglichkeiten vorher als Frage stellen** (siehe
+  Abschnitt „Entscheidungen an den Projekteigentümer"), und die getroffene
+  Entscheidung vor dem nächsten Arbeitsschritt hier und im betroffenen
+  `feature/`-Dokument festschreiben.
 
 0. **Vor jedem Pull/Fetch/Merge/Rebase die lokale Arbeit committen
    (User-Regel 2026-09-26).** Niemals in einen schmutzigen Arbeitsbaum
