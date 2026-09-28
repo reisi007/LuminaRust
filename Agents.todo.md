@@ -132,8 +132,23 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
    Releaseplans noch nicht existierten, steht in der Goal-Spalte
    `offen — bei der Task`. Die Zuordnung wird **im Zuge der Bearbeitung** der
    jeweiligen Task getroffen und mit Begruendung nachgetragen. Die Version ist
-   demgegenueber **belegbar**: sie steht im Task-Text und wurde von dort
-   uebernommen, nicht geschaetzt.
+   demgegenueber **belegbar** — mit einer Einschränkung, die dieser Absatz
+   zuvor falsch darstellte. **Korrektur 2026-09-29 (Build-Agent, nachgemessen):**
+   die alte Fassung behauptete pauschal, die Version stehe im Task-Text. Das trifft
+   auf **29** der 41 Zeilen zu und auf **12** nicht. Die 41 Zeilen zerfallen so:
+   **23** mit eigener Task und Versionsangabe im Task-Text; **7** mit eigener
+   Task, aber **ohne** jede Versionsangabe im Text (`F-103-N6-GUI-COVERAGE-27`,
+   `GPU-PARITY-HW-28`, `R5-DUST-23-FOLLOWUP`, `R5-BRUSH-24`, `R5-MASKVIS-25`,
+   `CI-WATCH-1`, `TEST-AUDIT-36` — nachgemessen, in keinem dieser Texte kommt
+   `Release` oder eine nackte `1.0`/`1.5`/`2.0` vor); **6**, deren Task nur unter
+   einer Combined-ID existiert (`R2-GUIMOD-04b`/`04c`, `MASK-LOCAL-P1.2a`…`d` —
+   die Version steht im **Elterntask**); **3**, die in der offenen Frage
+   `GPU-RENDER-ID-BRIDGE-52` gebündelt sind; **2** Platzhalter (`—`, nie-Ziel,
+   ohne Version). **Bei den 7** stammt der Spaltenwert aus einer **anderen**
+   Quelle: der **Vorgabe** dieses Abschnitts — `1.0` als MVP-Annahme mangels
+   User-Versionsentscheid, `fortlaufend` für ab 1.0 dauerhaft aktive Aufgaben.
+   Beide Quellen sind belegbar, aber sie sind **nicht dieselbe**; eine Regel, die
+   eine Quelle für alle behauptet, ist an zwölf Zeilen falsch.
 2. **Ein Eintrag ohne Task ist erlaubt** und bedeutet *geplant, noch nicht
    begonnen*. Die Tabelle ist der Release-**plan**, die Task-Liste ist der
    Arbeitsplan; ein geplanter Releasepunkt muss nicht schon als umsetzbare
