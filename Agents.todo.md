@@ -137,11 +137,24 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 2. **Ein Eintrag ohne Task ist erlaubt** und bedeutet *geplant, noch nicht
    begonnen*. Die Tabelle ist der Release-**plan**, die Task-Liste ist der
    Arbeitsplan; ein geplanter Releasepunkt muss nicht schon als umsetzbare
-   Task existieren. Neun Zeilen sind so begruendet (`GPU-RENDER-*-19`,
-   `LRPAR-G09-SORT-09`, `LRPAR-G03-MASKGROUP-03`, `LRPAR-G12-FACE-*-2x`,
-   `LRPAR-G15-STACK-15`; `git log -S` belegt, dass sie nie als offene Task
-   existiert haben). Eine leere Task-Zeile anzulegen waere regelwidrig, weil
+   Task existieren. Eine leere Task-Zeile anzulegen waere regelwidrig, weil
    `Agents.todo.md` ausschliesslich **offene, umsetzbare** Aufgaben enthaelt.
+   **Korrektur 2026-09-29 — der alte Satz war falsch.** Die frühere Fassung
+   führte **neun** Zeilen als Beleg an (`GPU-RENDER-*-19`, `LRPAR-G09-SORT-09`,
+   `LRPAR-G03-MASKGROUP-03`, `LRPAR-G12-FACE-*-2x`, `LRPAR-G15-STACK-15`) und
+   schrieb, `git log -S` habe belegt, dass sie **nie** als offene Task
+   existiert hätten. Geprüft wurde aber nur **eine** ID
+   (`git log -S 'PRIO: hoch] GPU-RENDER-MASK-19'`), und die Aussage wurde auf
+   alle neun verallgemeinert. Nachgemessen per Lese-Audit: für die **fünf**
+   LRPAR-IDs ist sie **widerlegt** — `a3f797e`, `dab4aa8`, `7328da7` und
+   `e707ed4` legten die Tasks an, `23c9595`, `c76e65c`, `318a8dc` und `a5968a3`
+   schlossen sie nach **BESTANDEN** ab und entfernten die Task-Zeile. Diese fünf
+   Zeilen waren keine geplanten Punkte, sondern **Reste erledigter Tasks**; sie
+   sind ersatzlos aus der Tabelle entfernt. Was bleibt, ist die Begründung für
+   `GPU-RENDER-*-19` — dort trifft „geplant, noch nicht begonnen" zu: für
+   `DENOISE` belegt der Code die Lücke ausdrücklich
+   (`denoise_ai (not GPU-wired)`, `lumina-gpu/src/lib.rs:323-324`); für
+   `PREVIEW`/`EXPORT` ist sie **nicht** ausgeschlossen, aber unbelegt.
 
 | Version | Task-ID | Goal | Stichwort |
 | --- | --- | --- | --- |
@@ -157,9 +170,6 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
 | 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
-| 1.0 | LRPAR-G15-STACK-15 | G-15 | Bilderstapel |
-| 1.0 | LRPAR-G09-SORT-09 | G-09 | Sortierung + Custom-Sort |
-| 1.0 | LRPAR-G03-MASKGROUP-03 | G-03 | Maskengruppen |
 | 1.0 | R5-DUST-23-FOLLOWUP | G-04 | Spot-Heal-Followup |
 | 1.0 | R5-BRUSH-24 | G-03 | Pinsel-Masken |
 | 1.0 | R5-MASKVIS-25 | G-03 | Masken-Overlay |
@@ -174,8 +184,6 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | 1.0 | GOLDEN-BASELINE-32 | alle G | eine geprüfte Golden-Baseline |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | fortlaufend | TEST-AUDIT-36 | alle G | Test-Redundanz-Audit (1×/Woche) |
-| 2.0 | LRPAR-G12-FACE-IMPL-20 | G-12 | Gesichtserkennung-Impl |
-| 2.0 | LRPAR-G12-FACE-ADAPTER-25 | G-12 | Face-I/O-Adapter |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
 | 1.0 | AUTO-TONE-CLI-6 | offen — bei der Task | Auto-Tone vollstaendig |

@@ -2,7 +2,10 @@
 
 **Task:** `LRPAR-G12-FACE-20` (Release 2.0, G-12-Abspaltung, User-Entscheid 2026-09-03)
 **Typ:** Doku-first Entscheid (kein Code, keine Tests, keine Schemaänderung)
-**Status:** Entscheid vorgeschlagen, Umsetzung ausstehend
+**Status:** umgesetzt (S1–S6 + Face-I/O-Adapter), unabhängige Verifikation BESTANDEN
+*(Korrektur 2026-09-29: dieser Status-Header stand auf „Umsetzung ausstehend", obwohl
+dieselbe Datei weiter unten den belegten Stand führt — er ist hiermit an der
+Fundstelle berichtigt.)*
 **Referenzen (normativ, unverändert):** `feature/product/ai-masks.md` (F-004, gelesen, nicht geändert),
 `feature/README.md`, `feature/platform/capability-matrix.md`, `feature/quality/fixtures-licensing.md` (F-073/F-078),
 `feature/decisions.md`, `.goal/Goal.md` G-12 (~0 %)
@@ -359,7 +362,12 @@ reale Detektor/Embedder ist jetzt an den echten I/O-Vertrag angebunden (YuNet:
 die frühere laute Grenze aus §3.3 ist damit aufgelöst. Die
 `input_spec_digest`-Werte wurden neu gepinnt; ein Graph, der seinen
 deklarierten Vertrag nicht erfüllt, wird weiterhin beim Laden laut abgelehnt.
-Verifizierung ausstehend.
+Verifizierung BESTANDEN (`a5968a3`, 2026-09-20, mit OpenCV-Quellvergleich und
+eigenen NMS-/Digest-Mutationen).
+*(Korrektur 2026-09-29: dieser Satz stand auf „Verifizierung ausstehend" und widprach
+dem belegten Stand im selben Dokument; `git blame` wies die Zeile auf `a5968a3`
+zurück, dessen Commit-Text „BESTANDEN" sagt. Nach `DoD.md` §11 ist bei
+Widerspruch die **gemessene** Angabe maßgeblich — sie ist hiermit berichtigt.)*
 
 Jeder Slice braucht: SOLL-Satz im Feature-Dokument vor Code (falls Semantik
 unklar), Tests mit der Implementierung, Verifizierungsbericht mit
