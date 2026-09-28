@@ -2529,8 +2529,28 @@ Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 > `drop_after_loaded_image_never_writes_previous_sidecar`,
 > `unreadable_drop_preserves_previous_source`,
 > `unsupported_drop_preserves_previous_source` und
-> `superseded_deferred_worker_cannot_adopt_its_directory`; der optionale echte
-> CR3-Nachweis nutzt das etablierte Env-Gate `LUMINA_RAW_FIXTURE`.
+> `superseded_deferred_worker_cannot_adopt_its_directory`.
+>
+> **Korrektur 2026-09-28 (Build-Agent, `KITT-IGNORED-PANIC-56`):** der
+> „optionale echte CR3-Nachweis über das Env-Gate `LUMINA_RAW_FIXTURE`" ist
+> **nicht mehr optional und nicht mehr env-gegatet**. Er läuft unter
+> `cargo test -p lumina-gui --lib -- --ignored` aus dem **committeten**
+> Inventar `sample-data/raw/` **ohne jede Umgebungsvariable** und dekodiert
+> beide CR3 real; `#[ignore]` trägt er allein wegen der Decode-Kosten
+> (zwei 12-MB-CR3, gemessen 3,2–4,1 s gegenüber `0,00 s` beim Überspringen).
+> `LUMINA_RAW_FIXTURE` ist nur noch ein **Override**, dessen Lauf einen
+> ausdrücklich **schwächeren** Nachweis hat und das an echtem `stderr`
+> sichtbar meldet (`WEAKENED …`).
+>
+> **Headless-Anker** dieser Kette (die Liste oben war unvollständig):
+> `dropped_raw_path_preserves_orientation_metadata_and_identity` (der
+> Nachweis selbst) und
+> `the_scope_guard_fails_a_run_on_an_undocumented_fixture_and_names_the_defect`
+> (der `#[should_panic]`-Metatest, der ihn gegen Neutralisation sichert).
+> Beide laufen **ohne GPU**. Die normative Zielsemantik steht in
+> [`feature/quality/fixtures-licensing.md`](../quality/fixtures-licensing.md)
+> §3.2.1, insbesondere **Regel 4** (die Umfangs-Freistellung darf nicht am
+> Produzenten hängen).
 
 #### F-103-N6 Runde 2 Runbook (manueller Test, 2026-09-19)
 

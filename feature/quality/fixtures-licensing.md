@@ -65,13 +65,59 @@ Median/p95-Vergleich neu aufzeichnen.
 
 | Datei | Maße | Orientierung | Verwendung |
 | --- | --- | --- | --- |
-| `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench |
-| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`) |
+| `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench; **GUI-Drop-Nachweis** `dropped_raw_path_preserves_orientation_metadata_and_identity` + sein Wächter-Metatest; **Erwartungsquelle des Wächters** (Inventar, §3.2.1) |
+| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`); **GUI-Drop-Nachweis** + Wächter-Metatest; **Erwartungsquelle des Wächters** (Inventar, §3.2.1) |
 
 Decode-Benchmarks lesen das Verzeichnis über die Env-Variablen
 **`LUMINA_RAW_FIXTURE`**; ohne sie wird sauber übersprungen (kein Panic, kein
-Fallback). Ein separater, `#[ignore]`-Test erwartet eine *eigene lizenzierte*
-RAW über dieselbe Env-Variablen.
+Fallback).
+
+#### 3.2.1 Verbindliche Regeln für den GUI-Drop-Nachweis (Build-Agent 2026-09-28)
+
+**Regel 1 — der Nachweis ist nicht optional und nicht env-gegatet.** Der Test
+`dropped_raw_path_preserves_orientation_metadata_and_identity` in
+`crates/lumina-gui/src/dropped_files.rs` liest seine Fixture **deterministisch
+aus diesem committeten Inventar** (Workspace-Root, `sample-data/raw/`). Er trägt
+`#[ignore]` allein wegen der realen Decode-Kosten (zwei 12-MB-CRDekodierungen),
+nicht wegen einer fehlenden Umgebung. Ein Betreiber, der `LUMINA_RAW_FIXTURE`
+setzt, erhält einen **ausdrücklich schwächeren** Nachweis, und das wird an
+echtem `stderr` **sichtbar** gemeldet (`WEAKENED …`), niemals still.
+
+**Regel 2 — das Inventar ist die Erwartungsquelle, und zwar diese Tabelle plus
+der Verzeichnisinhalt.** Der Wächter vergleicht zur Laufzeit den aus dem Baum
+gelieferten Satz gegen die Zeilen dieser Tabelle und gegen `read_dir` über
+`sample-data/raw`. **Konsequenz für dieses Dokument:** eine Änderung an §3.2,
+an der Tabelle oder an `sample-data/raw/README.md`, die nicht mit dem
+Verzeichnisinhalt übereinstimmt, macht den Test **rot**, nicht grün. Das ist
+beabsichtigt — das Inventar ist die unabhängige Erwartung, und eine
+stillschweigende Verengung ist die Fehlerform, die der Wächter verhindert.
+
+**Regel 3 — ein fehlender committeter Fixture ist ein defekter Baum, kein
+Betreiberwunsch.** `documented`-Quellen unterscheiden die beiden Fälle:
+aus dem Inventar stammend und **fehlend** → **Fail** (Exit ≠ 0) mit konkretem
+Pfad; aus `LUMINA_RAW_FIXTURE` stammend und **fehlend** → `SKIPPED` + Exit 0.
+„Keine stillen Fallbacks bei fehlenden Artefakten" (`Agents.md`) gilt hier
+wörtlich: die Fußnote ändert die Klasse nicht, denn ein Gate, das auf den
+Exit-Code schließt, sieht grün.
+
+**Regel 4 — die Freistellung vom Umfang darf nicht am Produzenten hängen.**
+(Normativ, aus der Verifikations-Runde 3 zu `KITT-IGNORED-PANIC-56`.) Eine
+Aussage wie „der Umfangsnachweis entfällt, weil ein optionaler Operand
+vorliegt" wird **an der Aufrufstelle** aus der **Umgebung** entschieden, nicht
+aus einem Feld, das der Produzent selbst setzen kann. Sonst kann sich der
+Produzent die Freistellung gewähren: `raw_fixtures()` beschriftet seine
+committeten Fixtures als `documented: None`, und die Freistellung wird
+freigeschaltet — Clippy meldet **0** Warnungen, alle Tests **grün**. Die
+strukturelle Form ist deshalb zwingend: **der Optional-Operand wird an der
+Aufrufstelle konstruiert, und `raw_fixtures()` liefert ausschließlich
+committete Fixtures.** Dann existiert im Produzenten kein Feld, an dem eine
+Freistellung hängen *könnte*, und der Zustand ist nicht mehr ausdrückbar.
+
+**Noch offener Rest, ausdrücklich nicht als gedeckt geführt:** der
+Wächter-Metatest pinnt die *Logik* des Wächters, nicht seine *Verdrahtung* —
+ein Auskommentieren des Aufrufs lässt ihn grün. Geschützt ist die Verdrahtung
+allein durch die Mutation `if var("CI").is_ok() { return Vec::new(); }` (muss
+Exit ≠ 0 ergeben) und durch Review.
 
 ### 3.3 Golden-Referenzbilder
 
