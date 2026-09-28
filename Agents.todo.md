@@ -195,220 +195,30 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 
 ## GUI-Test-Arbeit: Gate-Struktur
 
-**Ermittelt 2026-09-25 auf `ci-shard-gui-tests` @ `83c0a2f`, macOS,
-Apple M5 Pro, Metal 4, LibRaw 0.22.2.** Grundlage: `cargo test -p
-lumina-gui --all-targets` (grün), `cargo test -p lumina-gui --test
-kittest_snapshots -- --ignored` (12/56 rot, reproduziert).
+**Dieser Abschnitt hält die Abhängigkeitsordnung der offenen Waves — nicht die
+Analyse, die sie begründet hat.** Die Analyse (`### Befund`, ~210 Zeilen:
+Zahlenbasis, vier gemessene Defekte, Fixture-Vertrag, Testgruppen-Themen) ist am
+2026-09-25 abgeschlossen worden, steht im **Git-Verlauf** und ist in den
+Feature-Dokumenten festgehalten: `feature/quality/golden-references.md`
+(Referenzplattform, Fingerabdruck, Wächtervertrag),
+`feature/quality/golden-fixtures.md` (Fixture-Vertrag, Klassen R1/S1/S2/C) und
+`feature/platform/capability-matrix.md` (Welle 2 ist **kein** Hardwareproblem).
+Sie wird hier bewusst **nicht** wiederholt: der Plan führt offene Aufgaben, und
+eine abgeschlossene Analyse ist keine.
 
-### Befund
+**Zahlenbasis, gemessen 2026-09-25 auf `ci-shard-gui-tests` @ `83c0a2f`** (macOS,
+Apple M5 Pro, Metal 4, LibRaw 0.22.2) — **vor** der Neumessung durch
+`GOLDEN-BASELINE-32`, also als **historischer Ausgangspunkt** zu lesen, nicht als
+aktueller Sollwert: committet waren **62** Golden-PNGs über 6 Golden-Targets plus
+Lib-Target; auf dem Target `kittest_snapshots` schlugen **12 von 56** Tests fehl;
+die Fehlerzahl für den **vollständigen** 62er-Korpus war offen und sollte
+einmalig gemessen werden. Die Corpus-Zählung war gegen die Call-Sites geprüft:
+**keine verwaisten Goldens** (acht `parity_paths_*` werden per `format!` erzeugt,
+`mask_management_controls` stammt aus `src/tests/brush_management.rs`, also aus dem
+Lib-Target). **Vier Defekte** waren gemessen und sind in den genannten
+Feature-Dokumenten benannt.
 
-Die offenen Tasks wirkten unabhängig (13 zu Beginn dieser Analyse, 19 nach
-der Zerlegung). Sie sind es nicht: **8 von ihnen warten auf ein und
-dasselbe undefinierte Gate** — einen Lauf auf echter Hardware gegen eine
-*definierte* Referenz-Umgebung. Weil weder die Referenzumgebung noch der
-Fixture-Vertrag je festgeschrieben wurde, erzeugt jeder „nur die Goldens
-einmal refreshen"-Schritt dasselbe Blockade-Muster erneut.
-
-**Zahlenbasis, korrigiert 2026-09-25 (die alte Angabe „12 von 56" war
-eine Verwechslung zweier Nenner):** committet sind **62** Golden-PNGs
-über 6 Golden-Targets plus Lib-Target. `kittest_snapshots.rs` enthält
-**56 `#[test]`s**, davon **46** mit `harness.snapshot(...)` — die übrigen 10
-assertieren etwas anderes. Nachgemessen wurde bisher nur dieses eine
-Target: **12 von 56 Tests dort schlagen fehl.** Die Fehlerzahl für den
-**vollständigen** 62er-Korpus ist damit **offen** und wird nach
-`GOLDEN-FIXT-31` einmalig gemessen (`GOLDEN-BASELINE-32`). Die Corpus-
-Zählung wurde gegen die Call-Sites geprüft: **keine verwaisten Goldens**
-(acht `parity_paths_*` werden per `format!` erzeugt,
-`mask_management_controls` aus `src/tests/brush_management.rs`, also aus
-dem Lib-Target).
-
-Vier konkrete Defekte, gemessen:
-
-1. **Die Goldens sind nicht reproduzierbar.** Auf dem Target
-   `kittest_snapshots` schlagen 12/56 Tests fehl, nicht die 3 in
-   `MASK-LOCAL-P0`/`P1.1` dokumentierten. Ein Blatt-Vergleich
-   (`library_compare`) zeigt Layout- und **Farb**-Differenzen, nicht
-   nur Text-Antialiasing; `develop_section_rating` und
-   `library_loupe`/`library_survey` sind ebenfalls betroffen. Ursache
-   ist mit hoher Wahrscheinlichkeit fehlende Plattform-Pins (wgpu-
-   Backend, Font-Stack, Skalierung, LibRaw-Patchstand) — **nicht
-   abschließend bewiesen**, siehe Abnahme von `GOLDEN-REF-30`.
-2. **Die Doku über das Ausmaß der Abweichung ist bereits falsch.**
-   Commit `83c0a2f` und die Task-Stände nennen 3 betroffene Goldens;
-   gemessen sind es 12. Die recenten Matrix-Commits (`2f5561d`,
-   `46e2917`, `a4eb230`) haben 7 Goldens erneuert — 3 davon
-   (`develop_overlay_mask`, `develop_overlay_pins`,
-   `develop_section_masking`) schlagen hier *trotzdem* weiterhin fehl.
-   Werkszeug-Status im Plan war also nicht verlässlich.
-3. **Viele Goldens sichern keinen Render-Zustand, sondern einen
-   Fehler-Zustand.** `crates/lumina-gui/tests/fixtures/library_views/
-   a01.arw` ist 18 Byte groß und enthält wörtlich
-   `lumina-raw-fixture` — keine RAW-Datei. Der Decoder schlägt fehl,
-   das committed Golden `library_compare.png` zeigt den roten Banner
-   „LibRaw opening input failed (-100009)" mit Farbklötzen als
-   Platzhalter. Diese Bilder können echte Bild-Render-Regressionen
-   prinzipiell nicht aufdecken; sie belegen nur das Zustandbild eines
-   Fehlers.
-4. **Ein als „vorbestehend" abgehakter Testbefund — die Diagnose war
-   falsch, der Befund nicht.** `Agents.md` verbietet, rote Tests als
-   „vorbestehend" abzuhaken. Der Plan nannte 10 rote
-   Lensfun-Datenbank-Tests mit der Begründung „panic auf
-   `LensfunDb::load_system()`, weil `/usr/share/lensfun` fehlt".
-   **Nachmessung 2026-09-25: auf dieser Maschine sind die Tests grün
-   (0 rot).** `load_system()` ruft `lf_db_load()` auf, das den in der
-   Homebrew-dylib kompilierten `LENSFUN_DATADIR` nutzt — korrekt
-   `/opt/homebrew/...`; der Kommentar in `lib.rs` benennt den macOS-Pfad
-   sogar ausdrücklich. Die rote Meldung stammt aus einer *anderen*
-   Laufumgebung (eigenes Target `target/p11-remediate` + gepinnte
-   `env.sh`), nicht aus dem Code. Der echte, unabhängig davon
-   bestätigte Defekt: die Auflösung war nicht portabel, nicht
-   dokumentiert, nicht testbar und fehlschlug über ein **stilles
-   `None`** (verwechselbar mit „kein passendes Profil", also ein stiller
-   byte-identischer No-op — Verstoß gegen „keine stillen Fallbacks").
-   → `LENSFUN-DB-33`. **Merksatz für künftige Läufe:** keinen
-   Root-Cause aus einer Fehlermeldung in einem Task-Text ableiten, ohne
-   den Fehler selbst zu reproduzieren.
-
-**Nachtrag 2026-09-27 (gemessen auf `f005444` am echten Adapter; Diff-Belege mit mtime 22:10-22:19, Commit 21:53) — zwei der vier Befunde oben sind widerlegt bzw. praezisiert:**
-
-1. **Die Font-Hypothese aus Befund 1 ist laufweit widerlegt.**
-   `develop_section_history` ist bis auf einen 302x11-Streifen **bit-identisch**
-   (**0,21 %** abweichende Pixel, Box `302x11+281+6`) — 99,79 % des Fensters
-   sind also gleich, **einschliesslich all seines Textes**. Ein abweichender
-   Font-Stack haette **jedes** Glyph des Fensters veraendert. Da alle Goldens
-   eines Laufs aus demselben Prozess mit demselben Font-Stack stammen, gilt
-   das fuer den **gesamten** Lauf, nicht nur fuer dieses eine Golden. Ebenso
-   widerlegt ist ein **Layout-Versatz**: jeder 1px-Versatz in x und y sowie
-   2/3/5/11/22 px in y **verschlechtert** AE um das 2- bis 15-Fache, die
-   Originalausrichtung ist bereits die beste (einzige Randspalte
-   `library_rated_badges` bei +22 px: 29 903 -> 28 457, -4,8 %, Rauschen).
-   **Offen bleibt von Befund 1 damit nur** wgpu-Backend/Skalierung/LibRaw-
-   Patchstand — weiterhin nicht bewiesen.
-2. **Befund 2 hat eine andere Ursache als angenommen, und die ist harmloser.**
-   Die drei Goldens (`develop_overlay_mask`, `develop_overlay_pins`,
-   `develop_section_masking`) wurden am 2026-09-24 von `46e2917`/`a4eb230`
-   erneuert und scheitern heute mit **30,0 / 31,3 / 30,2 %** abweichenden
-   Pixeln. Ursache ist **nicht** ein unzuverlaessiger Refresh, sondern die
-   **Mask-Local-Serie**: `2753ce6`, `83c0a2f`, `1c490b7`, `223f0e6` (alle
-   2026-09-25) sowie `7f4fceb`, `a6607ef` (2026-09-26) — sechs Commits, die
-   `develop_masking.rs` um lokale Regler erweitern; 20 Dateien in
-   `crates/lumina-gui/src/` referenzieren `mask_local`. `git merge-base
-   --is-ancestor` bestaetigt fuer **alle drei** Goldens, dass ihr
-   Aufzeichnungs-Commit Vorfahr von `2753ce6` ist: die Bilder sind **aelter**
-   als das Feature, das sie zeigen muessten. Der sichtbare Mechanismus (Alt-
-   und Neu-Render nebeneinander verglichen): die Masking-Sektion sitzt im
-   neuen Render 12-19 px tiefer, die Aktions-Buttons brechen von **4+3** auf
-   **5+2** um, und das Bildfeld wird dadurch neu vermessen — der Verlauf wird
-   kleiner gezeichnet. Das ist eine **beabsichtigte UI-Aenderung** im Sinne
-   von Abnahme (c) von `GOLDEN-BASELINE-32` und **keine** Plattformdrift.
-   Die Formulierung "Werkszeug-Status im Plan war nicht verlaesslich" gilt
-   damit **nicht** fuer diese drei: sie wurden zu Recht erneuert und danach
-   durch ein Feature invalidiert.
-3. **Die fehlende Mengendefinition:** "known-red" (die 6 `library_*` in
-   `GFC_KNOWN_RED`, `scripts/golden_ref_test.sh:1886`) ist ein **Status**,
-   keine Begruendung. Die 7 `develop_*` stehen nicht in dieser Liste, die 6
-   `library_*` schon — beide Mengen sind damit **gleich unzugeordnet**, denn
-   fuer keine der 13 ist belegt, dass das committete Bild den eigenen Baum
-   erzeugt hat. Genau das ist der Auftrag von `GOLDEN-ATTRIB-33`.
-
-
-Zusätzlich, ohne eigenen Task: In CI sind alle 6 kittest-Binaries zu
-100 % `#[ignore]`d und laufen nie, werden aber im 3:11-Shard
-`rust-test-gui` weiterhin kompiliert und gelinkt.
-
-**Nachtrag 2026-09-28 (`GOLDEN-ATTRIB-33` abgeschlossen) — alle 10 offenen Goldens einem Commit zugeordnet, und drei Fehler in der Auftragsvorgabe des Build-Agenten korrigiert:**
-
-**Das Ergebnis:** kein einziger Fall „schon bei der Aufzeichnung falsch", kein
-widersprüchliches Ergebnis. Alle 10 sind **nach** dem Aufzeichnungs-Commit
-entstanden und durch einen benannten Commit mit benanntem Element gedeckt:
-
-| Golden | erster Commit nach C | Element |
-| --- | --- | --- |
-| `develop_basic`, `develop_sections_expanded` | **`2753ce6`** | neuer Knopf „Reset to As Shot" (`develop_basic.rs:163`) + 22 px Nachschub darunter |
-| `mask_view_visibility` | **`2753ce6`** | Masking-Panel gewachsen, Beschriftungsreihen brechen anders um |
-| `develop_section_rating` | **`46e2917`** | Statuszeile (2 578 px von 2 705) — **127 px offen, siehe `GOLDEN-STALE-55`** |
-| `library_rated_badges`, `library_subfolder_badges`, `library_survey`, `library_compare`, `library_stack_membership` | **`ff365db`** | Fixture: 18-Byte-`.arw` → echte CR3; Folge: Fehlerbanner entfällt ⇒ **18 px Versatz** |
-| `library_loupe` | **`ff365db`** | nur Bildinhalt; **Titelleiste byte-gleich**, also kein Banner und kein Versatz |
-
-**Die drei Fehler in der Vorgabe — alle drei vom Build-Agenten, alle drei
-hiermit an der Fundstelle berichtigt:**
-
-1. **`magick compare -metric AE` ist auf diesem Build keine Pixelanzahl.**
-   Kontrollfall: ein Block mit nachweislich 100 verschiedenen Pixeln wird mit
-   AE 12,06 / 25 / 29,12 gemeldet, je nach Füllung. Der Diff-Bild-Zähler
-   derselben Auswertung liefert 100. **Folge:** die Prozentzahlen in diesem
-   Plan stammen aus `-fx:mean` des Diff-Bildes und sind **korrekt**; die
-   neben ihnen stehenden AE-Werte sind eine **andere Groesse** und dürfen
-   **nicht** als Pixelzahl gelesen werden. Künftige Berichte nennen eine der
-   beiden Größen, nicht beide ohne Kennzeichnung.
-2. **Das Tripel (1)/(2)/(3) war in der Vorgabe degeneriert.** `git log -- <datei>`
-   liefert per Definition den **letzten** Commit, der die Datei anfasste —
-   (1) == 0 ist also bei allen Dateien **Konsequenz der Konstruktion**, keine
-   Messung, und (3) == (2) folgt daraus zwingend. Die eigentliche Zuordnung
-   lieferte stattdessen die Verengung auf die **zeichnenden** Dateien plus die
-   Pixelanalyse. Die Vorgabe enthielt also eine Tautologie; sie ist hier als
-   solche benannt.
-3. **Die Formel für die offene Rechnung war falsch.** Gefordert war
-   `blake3("Snapshot Seed")[:16] == 4e693aefca3413e0`. Gemessen:
-   `blake3("Snapshot Seed")[:16] = 170057e2c2bed40d` — **kein** Treffer.
-   Der Code hasht **zweimal** (`crates/lumina-gui/src/mask_persistence.rs:76-77`):
-   `blake3(mask_id)` mit `mask_id = "mask-" + blake3(name)`, und
-   `layer_id = format!("layer-mask-{}", &digest[..16])`. Erst der zweite Hash
-   ergibt `4e693aefca3413e0`. **Vom Build-Agenten am Codestelle nachgelesen
-   und bestätigt:** `git log -S 'layer-mask-{}'` liefert **genau einen** Commit,
-   `46e2917` (2026-09-24), und bei `5ba13da` (2026-09-20) stand wörtlich
-   `id: "layer-1".into()`. Damit ist auch `develop_section_history` zugeordnet:
-   C = `5ba13da`, erster Commit danach `46e2917`.
-
-**Zwei eigene Kontrollen des Build-Agenten — eine praezisiert eine Zahl, eine
-widerlegt eine Behauptung aus dem Bericht:**
-
-1. **`-metric AE` ist nur bei vollamplitudigen Unterschieden eine Pixelanzahl.**
-   Eigene Kontrolle mit vollamplitudigen Bloecken (200x200, schwarz gegen
-   weiss): 10x10 → AE **100**, 20x10 → AE **200**, 40x40 → AE **1600** — also
-   **exakt** die wahren Pixelzahlen. Der Bericht dagegen mit grauen Fuellungen:
-   100 verschiedene Pixel → AE 12,06 / 25 / 29,12. **Die genaue Aussage ist
-   also:** AE zaehlt bei 0-gegen-255-Differenzen korrekt, ist bei
-   anteiligen, anti-aliasten Differenzen aber eine **gewichtete Groesse** — und
-   genau anti-aliastes Text-Rendering ist der Normalfall bei diesen Goldens.
-   **Konsequenz:** die AE-Werte in diesem Plan duerfen **nicht** als
-   Pixelzahlen gelesen werden. Die **Prozentzahlen** in der Tabelle stammen
-   aus dem Diff-Bild-Zaehler (`-fx:round(mean*w*h)` nach Schwellwert) und sind
-   die richtige Groesse.
-2. **Die „18-px-Versatz mit 0 Restpixeln" reproduziert nicht.** Sie ist im
-   Bericht als Messung angegeben, mit Restpixel **0** fuer fuenf der sechs
-   `library_*`. **Eigene Nachmessung im vollen Bild:** `dy = 0` ist bei **allen
-   sechs** das Minimum, jeder Versatz in **beide** Richtungen erhoeht das
-   Residuum (z. B. `library_rated_badges` 125 928 bei dy=0 gegen 154 915 bei
-   dy=-18). **Eigene Nachmessung in einem Grid-Ausschnitt** (x224..700,
-   y300..500, 476x200): konstant 274 (`library_rated_badges`) bzw. 800
-   (`library_stack_membership`) bei **jedem** dy — ein unter jedem Versatz
-   unveraenderliches Residuum. **Erklaerung, und sie ist plausibel:** bei
-   diesen fuenf dominiert der **Thumbnail-Inhaltswechsel** (Farbblock → echtes
-   Foto), der gegen jeden vertikalen Versatz immun ist und jedes
-   Regionsresiduum ueberlagert. **Die Behauptung ist damit weder bestaetigt
-   noch widerlegt, und sie wird hier als offen gefuehrt — nicht als Beleg.**
-   **Die Zuordnung der fuenf `library_*` steht unabhaengig davon**, auf einem
-   Git-Fakt: `ff365db` (2026-09-26) loescht per `--name-status` genau
-   **12** `.arw`-Sentinels, und der Modulkommentar benennt den Wechsel selbst
-   ("GOLDEN-FIXT-31 replaced 18-byte sentinels plus seeded synthetic gradients
-   with these real CR3s"). Beides vom Build-Agenten nachgemessen.
-
-**Präzisierung ohne Richtungsänderung:** Für `develop_overlay_mask` und
-`develop_section_masking` (beide C = `46e2917`) liegt `a4eb230` ebenfalls im
-Bereich C..HEAD und fasst `develop_masking.rs` an — der erste Panel-Commit nach
-C ist für diese beiden also `a4eb230`, nicht `2753ce6`. Für
-`develop_overlay_pins` und `mask_view_visibility` (C = `a4eb230`) ist
-`2753ce6` nachweislich der erste.
-
-**Der Gegencheck aus Abnahme (2) hat keine eigene Beweiskraft** und ist als
-solcher benannt: er verglich den historischen Blob mit dem heutigen Render, und
-der historische Blob **ist** die committete Datei, weil `C` per Definition der
-letzte anfassende Commit ist. Er ist damit konstruktionsbedingt identisch zum
-Vergleich gegen die committete Datei. Die Zuordnung wurde stattdessen an der
-**Pixelebene** bestätigt: im ALT bricht die Aktions-Buttons-Zeile auf **zwei**
-Zeilen um, im NEU passt sie auf **eine** — genau die Signatur der
-Mask-Local-Serie.
+### Abhängigkeitsordnung der offenen Waves
 
 ### Auflösung
 
@@ -726,7 +536,17 @@ Die erste produktiv nutzbare Version muss mindestens Folgendes erfüllen:
 
 ## Festgelegte Produktentscheidungen
 
-Die fachlichen Entscheidungen sind in `feature/README.md` und den verlinkten
-SOLL-Dokumenten festgeschrieben. Neue offene Punkte werden als konkrete
-Implementierungsaufgaben mit Feature-ID ergänzt, nicht als unpriorisierte
-Entscheidungsliste gesammelt.
+Die fachlichen Entscheidungen stehen in [`feature/README.md`](feature/README.md)
+und den verlinkten SOLL-Dokumenten; die **kurze Checkliste mit Begründung je
+Entscheidung** steht oben in [Gepinnte Entscheidungen und
+Absprachen](#gepinnte-entscheidungen-und-absprachen), die **offenen** Fragen in
+der Tabelle darunter und die **zurückgezogenen** Ansätze im Abschnitt
+`Verworfen`.
+
+**Wohin eine neue Feststellung gehört** (User-Regel 2026-09-28, und es ist eine
+Korrektur der früheren Fassung dieses Abschnitts): eine Entscheidung mit echten
+Wahlmöglichkeiten wird **zuerst interaktiv gestellt** (Werkzeug `question`), dann
+**hier** mit Begründung und Stand eingetragen, und die betroffene
+SOLL-Zielsemantik in `feature/` **vor** dem Code geschrieben. Sie wird **nicht**
+als unpriorisierte Entscheidungsliste gesammelt **und nicht** erst nachträglich
+als Task beigelegt — der Task entsteht aus der Entscheidung, nicht umgekehrt.
