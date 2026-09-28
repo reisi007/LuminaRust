@@ -66,7 +66,7 @@ Median/p95-Vergleich neu aufzeichnen.
 | Datei | Maße | Orientierung | Verwendung |
 | --- | --- | --- | --- |
 | `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench; **GUI-Drop-Nachweis** `dropped_raw_path_preserves_orientation_metadata_and_identity`; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
-| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:44`); **GUI-Drop-Nachweis**; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
+| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:52`); **GUI-Drop-Nachweis**; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
 
 Decode-Benchmarks lesen das Verzeichnis über die Env-Variablen
 **`LUMINA_RAW_FIXTURE`**; ohne sie wird sauber übersprungen (kein Panic, kein
@@ -90,7 +90,19 @@ Fallback).
 
 **Die benannte Grenze, die dafür tritt:** die Abdeckung der committeten Fixtures ist **eine im Code lesbare Eigenschaft, keine durchgesetzte Invariante.** Wer eine Zeile aus der Fixture-Tabelle entfernt, ändert den Test — und der Test beweist danach für die verbleibenden Fixtures weiterhin genau das, wofür er da ist: **dass ein verworfenes CR3 Orientierung, Metadaten und Identität behält.** Das ist die Aussage, für die der Test existiert, und sie hat **nie** von Regel 4 oder 6 abgehangen.
 
-**Was das kostet, ausdrücklich benannt:** mit der Rücknahme entfallen **zehn** in sechs Runden gemessene, mutationsbewiesene Widerstandsfälle (leerer Satz, gelöschte Inventarzeile, fehlende Datei, neutralisierter Wächter, `CI`-Early-Return, Filter/continue/retain **an vier Stellen**, koordinierte Zwei-Quellen-Verkleinerung). Das ist ein **realer Verlust an Absicherung** und wird nicht beschönigt. Er wird bezahlt mit einem Helfer, den ein Leser in einem Durchgang versteht, und mit dem Ende der Rundenschleife. Ein Wächter, der sechs Runden und eine Zusage gebraucht, um eine Eigenschaft über den **Test selbst** zu verteidigen, ist mehr Maschinerie, als diese Eigenschaft wert ist.
+**Was das kostet, ausdrücklich benannt.** *Definition der Menge, weil eine Zahl
+ohne Definition ein Kategoriefehler ist (`DoD.md` §9):* ein **Widerstandsfall** ist
+eine Mutation, die den committeten Fixture-Satz **verkleinert, ersetzt oder leer**
+macht und die **vor** der Rücknahme durch Regel 4 oder 6 **rot** war. Mit dieser
+Definition sind es **neun**: leerer Satz; gelöschte Inventarzeile; neutralisierter
+Wächter; `CI`-Early-Return; **vier** Verkleinerungs-Mutationen (Filter zwischen
+Prüfung und Schleife, `continue` in der Schleife, `retain` vor der Assertion, Filter
+in der Produzententabelle); koordinierte Zwei-Quellen-Verkleinerung. **1+1+1+1+4+1
+= 9.** *Korrektur 2026-09-29:* eine frühere Fassung nannte **zehn** und führte
+darin „fehlende Datei" auf. Das war **falsch gezählt**: eine **fehlende committete
+Datei** ist weiterhin **rot**, weil Regel 3 sie als Fail behandelt — sie ist also
+**kein** entfallener Fall, sondern eine Zusage. Die frühere Zahl ist hiermit an der
+Fundstelle berichtigt. Es entfallen also (leerer Satz, gelöschte Inventarzeile, fehlende Datei, neutralisierter Wächter, `CI`-Early-Return, Filter/continue/retain **an vier Stellen**, koordinierte Zwei-Quellen-Verkleinerung). Das ist ein **realer Verlust an Absicherung** und wird nicht beschönigt. Er wird bezahlt mit einem Helfer, den ein Leser in einem Durchgang versteht, und mit dem Ende der Rundenschleife. Ein Wächter, der sechs Runden und eine Zusage gebraucht, um eine Eigenschaft über den **Test selbst** zu verteidigen, ist mehr Maschinerie, als diese Eigenschaft wert ist.
 
 **Regel 1 — der Nachweis ist nicht optional und nicht env-gegatet.** Der Test
 `dropped_raw_path_preserves_orientation_metadata_and_identity` in
@@ -118,11 +130,16 @@ Handprüfung.** §3.2 und `sample-data/raw/README.md` sind die **menschlich**
 prüfbare Quelle derselben Zahlen. Nach der Rücknahme von Regel 4 und 6 wird
 diese Übereinstimmung **nicht mehr zur Laufzeit geprüft**: es gibt **keinen**
 Abgleich gegen die Tabelle, **keinen** `read_dir`-Vergleich und **keinen**
-`#[should_panic]`-Metatest darauf. **Eine Änderung nur an §3.2, an
-`sample-data/raw/README.md` oder an der Code-Tabelle macht den Test nicht
-rot** — sie macht ihn falsch, und der Fehler fällt erst beim nächsten Lesen
-auf. Bis zur Rücknahme war das beabsichtigt abgesichert; es ist einer der
-**zehn** in §3.2.1 genannten entfallenen Widerstandsfälle. Wer eine
+`#[should_panic]`-Metatest darauf. **Nicht durchgesetzt ist die
+*Vollständigkeit* der Code-Tabelle:** das **Entfernen einer Zeile** aus ihr — oder
+eine Änderung nur an §3.2 oder an `sample-data/raw/README.md` — macht den Test
+**nicht** rot; es macht ihn falsch, und der Fehler fällt erst beim nächsten Lesen
+auf. *Korrektur 2026-09-29:* eine frühere Fassung sagte pauschal „eine Änderung …
+an der Code-Tabelle macht den Test nicht rot" und widersprach damit Regel 2a
+unmittelbar darüber — denn ein **verfälschter Wert** in derselben Tabelle macht
+den Lauf sehr wohl rot. Genau das ist die Grenze zwischen 2a und 2b: **Werte**
+sind durchgesetzt, **Vollständigkeit** nicht. Bis zur Rücknahme war das beabsichtigt abgesichert; es ist einer der
+**neun** dort definierten entfallenen Widerstandsfälle. Wer eine
 Automatisierung zurückhaben will, muss sie neu bauen **und** die
 Rundengeschichte beachten, die dort steht.
 
@@ -208,7 +225,10 @@ unterbrochen werden könnte, sondern **was am Ende herauskam**: die eine Aussage
 entsteht — im Produzenten, zwischen Prüfung und Schleife, in der Schleife, in
 einem `filter`, in einem `skip`, in einem `continue`.
 
-**Zwei Form-Forderungen, die dazugehören:**
+**Zwei Form-Forderungen, die dazugehören — WEITERHIN NORMATIV (2026-09-29).** Sie
+standen unter dieser Überschrift und konnten daher als mit Regel 6 zurückgenommen
+gelesen werden; das ist **falsch**, sie gelten weiter. Sie gehören sachlich zu
+**Regel 5** (Override) und sind hier nur historisch verortet:
 
 1. **Der committete Satz wird nicht mit dem Betreiber-Zusatz gemischt.** Es gibt
    keine gemeinsame `Vec`, in der beide liegen; zwischen Prüfung und Verbrauch
@@ -224,7 +244,8 @@ einem `filter`, in einem `skip`, in einem `continue`.
    von Richtigkeit.
 
 **Selbstauskunft, die zu diesem Abschnitt gehört (2026-09-29):** dieser Abschnitt
-ist nach **fünf** Verifikationsrunden entstanden, und die ehrliche Bilanz ist,
+ist nach **sechs** Verifikationsrunden entstanden (die siebte, schmale, prüfte
+nur noch diesen Text), und die ehrliche Bilanz ist,
 dass die **Umfangs-Aussage** („der Nachweis decodiert jede committete Fixture")
 einen Aufwand erzeugt hat, der ihre Beweislast für den *eigentlichen* Test
 übersteigt. Der eigentliche Test trägt eine andere, einfachere Aussage: **ein
@@ -308,7 +329,14 @@ Ermittelte Metadaten (via `exiftool`):
 | Datei | Kamera | Objektiv | Aufnahme (EXIF) | Orientierung | Maße |
 | --- | --- | --- | --- | --- | --- |
 | `aircraft-landscape.cr3` | Canon EOS R1 | RF200-800mm F6.3-9 IS USM | 2026:08:14 20:16:49, 1/1000 s, ISO 1000, 800 mm | 1 (Horizontal) | 6032×4024 |
-| `aircraft-portrait.cr3` | Canon EOS R1 | RF200-800mm F6.3-9 IS USM | 2026:08:14 20:17:32, 1/1000 s, ISO 1250, 800 mm | 5 (Rotate 270 CW) | 4024×6032 |
+| `aircraft-portrait.cr3` | Canon EOS R1 | RF200-800mm F6.3-9 IS USM | 2026:08:14 20:17:32, 1/1000 s, ISO 1250, 800 mm | 8 (Rotate 270 CW) | 4024×6032 |
+
+**Korrektur 2026-09-29 (war 5, ist 8):** `exiftool -n -Orientation
+sample-data/raw/aircraft-portrait.cr3` liefert **8**, bestätigt durch
+`lumina-raw/src/lib.rs:1238` (`assert_eq!(metadata.orientation, 8)`) und
+`kittest_fixtures_support/mod.rs:52`. Die Verwechslung ist dokumentiert in
+`lumina-raw/src/lib.rs:137`: *„dcraw flip 5 is EXIF orientation 8, not 5"*. Die
+Zeile wurde **an dieser Stelle** berichtigt und nicht fortgeschrieben.
 
 Das ist ein **Release-Blocker** (F-078): urheberrechtlich geschützte Kamera-RAWs
 ohne Lizenzgewährung zu distribuieren ist ein rechtliches Risiko — unabhängig
