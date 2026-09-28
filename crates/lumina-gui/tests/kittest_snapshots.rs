@@ -44,7 +44,7 @@ use kittest_fixtures_support::*;
 // report it prints on timeout (shared with `kittest_crop_overlay` and
 // `kittest_sidecar_identity`).
 mod kittest_decode_support;
-use kittest_decode_support::{pump_until_ready, Ready};
+use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
 // KITT-IDENTITY-49: sidecar fixtures must carry the fingerprint of the bytes on
 // disk; see the module docs for why the History seed used to violate that.
 mod kittest_sidecar_support;
@@ -339,14 +339,14 @@ fn develop_section_denoise() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("sample.png");
     std::fs::write(&source, LuminaApp::sample_image_png()).unwrap();
-    harness.state_mut().open_file(source.display().to_string());
-    for _ in 0..400 {
-        harness.run();
-        if harness.state().preview().is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    pump_until_ready(
+        &mut harness,
+        &source,
+        Ready::new("preview().is_some()", |app: &LuminaApp| {
+            app.preview().is_some()
+        }),
+        SETTLE_DEADLINE,
+    );
     harness
         .state_mut()
         .set_denoise_enabled(true)
@@ -1346,7 +1346,7 @@ fn open_file_and_restore_fixture<F: FnMut(&LuminaApp) -> bool>(
     path: &Path,
     ready: Ready<F>,
 ) {
-    pump_until_ready(harness, path, ready);
+    pump_until_ready(harness, path, ready, SETTLE_DEADLINE);
     set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());
     harness.run();
 }

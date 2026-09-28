@@ -25,6 +25,18 @@ use std::path::Path;
 mod kittest_fixtures_support;
 use kittest_fixtures_support::*;
 
+// KITT-SETTLE-UNIFY-53: the shared folder-scan wait. This file used to carry a
+// byte-identical copy of `kittest_snapshots_support::settle_scan`, expiry message
+// included; the single definition now lives in `scan_settle_support` together
+// with the wall-clock bound and the state report.
+mod scan_settle_support;
+use scan_settle_support::settle_scan;
+
+// KITT-SETTLE-UNIFY-53: this target reaches the shared loop and report through
+// the crate root rather than through a second `#[path]` declaration of the same
+// file, which would be `clippy::duplicate_mod`.
+mod kittest_decode_support;
+
 /// Fixed, committed fixture directory (relative, so no tempdir randomness can
 /// leak into folder-tree / path-field pixels — same rationale as
 /// `kittest_snapshots::LIBRARY_FIXTURE_DIR`). Nothing binary is committed
@@ -59,26 +71,6 @@ fn build_harness() -> Harness<'static, LuminaApp> {
         .with_size([1024.0_f32, 720.0_f32])
         .wgpu()
         .build_eframe(|cc| LuminaApp::new(cc.egui_ctx.clone()))
-}
-
-/// Drive the async folder scan (and the auto-load decode it starts) to settle
-/// before snapshotting — copied from `kittest_snapshots_support::settle_scan`,
-/// including its GOLDEN-FIXT-31 deadline bound: a real 24-megapixel RAW fixture
-/// needs far more wall time than the old failing sentinel did.
-fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-    loop {
-        harness.step();
-        if !harness.state().scan_pending() && !harness.state().decode_pending() {
-            harness.step();
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "folder scan/decode did not settle within the bounded deadline"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
 }
 
 /// (Re-)stage the real RAW files, pre-create the folder cache and write the

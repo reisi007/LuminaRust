@@ -31,7 +31,7 @@ mod kittest_sidecar_support;
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use kittest_decode_support::{is_settled, pump_until_ready, Ready};
+use kittest_decode_support::{is_settled, pump_until_ready, Ready, SETTLE_DEADLINE};
 use kittest_sidecar_support::{seed_metadata_history_sidecar, written_source_identity};
 use lumina_gui::LuminaApp;
 use lumina_sidecar::SourceIdentity;
@@ -83,7 +83,7 @@ fn sidecar_with_real_identity_is_adopted() {
         "the seeded identity must be the fingerprint of the written bytes"
     );
     let mut harness = build_harness();
-    pump_until_ready(&mut harness, &photo, ready_settled());
+    pump_until_ready(&mut harness, &photo, ready_settled(), SETTLE_DEADLINE);
     let app = harness.state();
     assert!(
         app.error().is_none(),
@@ -140,7 +140,7 @@ fn assert_stale_sidecar_rejected(field: &str, corrupt: Corrupt) {
     );
 
     let mut harness = build_harness();
-    pump_until_ready(&mut harness, &photo, ready_settled());
+    pump_until_ready(&mut harness, &photo, ready_settled(), SETTLE_DEADLINE);
 
     // 1. The refusal is loud: the production message, naming the conflict.
     let error = harness.state().error().unwrap_or_else(|| {

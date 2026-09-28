@@ -1,6 +1,11 @@
 //! MITTEL-3: the two exit paths of the shared file-open wait must stay
 //! distinguishable — and both must stay real.
 //!
+//! KITT-SETTLE-UNIFY-53: the loop and the report moved to
+//! `kittest_decode_support` -> `settle_support`; this file still pins both exits,
+//! now including the one thing the move could have broken — the frame count of a
+//! healthy wait, which the settled exit must not shorten.
+//!
 //! `kittest_decode_support::pump_until_ready` gives up for exactly two
 //! reasons, and this file pins both:
 //!
@@ -32,9 +37,7 @@
 mod kittest_decode_support;
 
 use egui_kittest::Harness;
-use kittest_decode_support::{
-    is_settled, pump_until_ready, pump_until_ready_within, Ready, DECODE_DEADLINE,
-};
+use kittest_decode_support::{is_settled, pump_until_ready, Ready, SETTLE_DEADLINE};
 use lumina_gui::LuminaApp;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -103,8 +106,14 @@ const REPORT_FIELDS: &[&str] = &[
 fn settled_decode_with_unmet_predicate_is_reported_at_once() {
     let (_dir, photo) = png_fixture();
     let mut harness = build_harness();
-    let (message, elapsed) =
-        timed_panic_message(|| pump_until_ready(&mut harness, &photo, needs_a_second_render()));
+    let (message, elapsed) = timed_panic_message(|| {
+        pump_until_ready(
+            &mut harness,
+            &photo,
+            needs_a_second_render(),
+            SETTLE_DEADLINE,
+        )
+    });
     assert!(
         message.contains("cause:     the decode settled"),
         "the cause must name the settled exit, got:\n{message}"
@@ -133,13 +142,13 @@ fn settled_decode_with_unmet_predicate_is_reported_at_once() {
     assert!(
         elapsed < Duration::from_secs(5),
         "a settled decode must be reported at once, took {elapsed:?} \
-         (production bound {DECODE_DEADLINE:?})"
+         (production bound {SETTLE_DEADLINE:?})"
     );
     // The timings are the point of this test, so they are logged, not just
     // asserted: `--nocapture` shows the number that the defect would inflate
     // from milliseconds to five minutes.
     eprintln!(
-        "KITT-IDENTITY-49 settled exit: gave up after {elapsed:?} (bound {DECODE_DEADLINE:?})"
+        "KITT-IDENTITY-49 settled exit: gave up after {elapsed:?} (bound {SETTLE_DEADLINE:?})"
     );
 }
 
@@ -156,7 +165,7 @@ fn decode_in_flight_waits_for_the_bound() {
     let mut harness = build_harness();
     let bound = Duration::from_secs(2);
     let (message, elapsed) = timed_panic_message(|| {
-        pump_until_ready_within(&mut harness, Path::new(""), needs_a_second_render(), bound)
+        pump_until_ready(&mut harness, Path::new(""), needs_a_second_render(), bound)
     });
     assert!(
         message.contains("cause:     the wall-clock bound of 2s elapsed"),

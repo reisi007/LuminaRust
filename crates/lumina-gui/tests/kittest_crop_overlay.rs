@@ -24,7 +24,13 @@ use std::path::{Path, PathBuf};
 // report it prints on timeout (shared with `kittest_snapshots` and
 // `kittest_sidecar_identity`).
 mod kittest_decode_support;
-use kittest_decode_support::{pump_until_ready, Ready};
+use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
+
+// KITT-SETTLE-UNIFY-53: the shared folder-scan wait. This file used to carry its
+// own 500-frame loop with **no assertion**: exhausting the budget returned
+// normally, so an unsettled scan still produced a golden and a green test.
+mod scan_settle_support;
+use scan_settle_support::settle_scan;
 
 /// The preview has rendered at least once: the state both goldens below wait
 /// for before the crop overlay is driven. Described here so an expiry report
@@ -57,25 +63,26 @@ fn photo_png_fixture() -> (tempfile::TempDir, PathBuf) {
 /// back at the deterministic fixture directory so the tempdir prefix never
 /// reaches pixels.
 ///
-/// KITT-IDENTITY-49: the wait's wall-clock bound now reports the state it
-/// actually found (expected vs. found, plus any error banner) instead of the
-/// bare "never settled in headed harness" that made a five-minute failure
+/// KITT-IDENTITY-49: the wait's wall-clock bound reports the state it actually
+/// found (expected vs. found, plus any error banner) instead of the bare
+/// "never settled in headed harness" that made a five-minute failure
 /// undiagnosable.
+///
+/// KITT-SETTLE-UNIFY-53: the folder-scan settle after the navigation is the
+/// shared [`settle_scan`]. It used to be a local 500-frame loop with no
+/// assertion, so exhausting the budget returned normally and the golden below
+/// was taken from an unsettled state with a green test. The shared wait also
+/// arms **no** settled exit: a settled decode says nothing about a scan still in
+/// flight, and this navigation+decode order produces exactly that state (see
+/// `folder_scan_settle`).
 fn open_file_and_restore_fixture(harness: &mut Harness<'_, LuminaApp>, path: &Path) {
-    pump_until_ready(harness, path, ready_rendered());
+    pump_until_ready(harness, path, ready_rendered(), SETTLE_DEADLINE);
     harness
         .state_mut()
         .set_directory(LIBRARY_FIXTURE_DIR.to_owned());
     // R2-MODSWITCH-1 F8: the folder scan is async in production; settle it (and
     // the auto-load decode) so the golden captures the applied status.
-    for _ in 0..500 {
-        harness.step();
-        if !harness.state().scan_pending() && !harness.state().decode_pending() {
-            harness.step();
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    settle_scan(harness);
 }
 
 fn assert_preview_loaded(harness: &mut Harness<'_, LuminaApp>) {

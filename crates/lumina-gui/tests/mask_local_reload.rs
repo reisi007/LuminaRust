@@ -43,16 +43,10 @@ fn reopen_over_existing_source(dir: &tempfile::TempDir) -> Harness<'static, Lumi
         .build_eframe(|cc| LuminaApp::new(cc.egui_ctx.clone()));
     harness.state_mut().set_module(Module::Develop);
     let source = smoke_png(dir);
-    harness.state_mut().open_file(source.display().to_string());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while harness.state().decode_pending() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the re-opened source did not decode within the bounded deadline"
-        );
-        harness.step();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    // KITT-SETTLE-UNIFY-53: the shared decode wait (its bound, its report and
+    // its loop), so this reopen leg reports the state it found instead of a bare
+    // "did not decode" sentence.
+    settle_decode(&mut harness, &source);
     for index in 0..lumina_gui::SECTION_COUNT {
         let open = index == lumina_gui::SECTION_MASKING;
         harness.state_mut().set_section_open(index, open);

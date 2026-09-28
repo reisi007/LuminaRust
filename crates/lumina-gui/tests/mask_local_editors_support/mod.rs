@@ -34,6 +34,16 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use lumina_gui::{LuminaApp, Module, SECTION_COUNT, SECTION_MASKING};
 use std::path::PathBuf;
+use std::time::Duration;
+
+// KITT-SETTLE-UNIFY-53: the shared file-open wait, so the decode waits below
+// give up with the same state report as the golden suites instead of a bare
+// sentence. The module needs no renderer, which is why a plain harness may use
+// it. Reached by path: it lives one directory up, next to the other targets that
+// share it.
+#[path = "../kittest_decode_support/mod.rs"]
+mod kittest_decode_support;
+use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
 
 /// Viewport for the interaction tests. Deliberately **taller** than the
 /// 1024x720 golden reference: the four mask-local blocks are one long column
@@ -79,6 +89,40 @@ pub fn smoke_png(dir: &tempfile::TempDir) -> PathBuf {
     path
 }
 
+/// Bound for the decode of a *smoke* fixture.
+///
+/// A tenth of the production bound ([`SETTLE_DEADLINE`]), derived rather than
+/// spelled out so the two cannot drift apart. The source is a 4x3 synthetic PNG
+/// whose decode is measured in ~30 ms, so even this is generous by three orders
+/// of magnitude — and a bound in minutes would make a genuine hang ten times
+/// more expensive to see. A real 24-megapixel RAW needs seconds, which is why
+/// the golden suites wait out the full bound.
+const SMOKE_DECODE_BOUND: Duration = Duration::from_secs(SETTLE_DEADLINE.as_secs() / 10);
+
+/// Open `path` and wait for its background decode to finish.
+///
+/// KITT-SETTLE-UNIFY-53: one implementation for both mask-local decode waits
+/// (`open_masking_panel` and `mask_local_reload::reopen_over_existing_source`),
+/// built on the shared wait so the failure report names the expected condition
+/// and the five found state values instead of printing a single sentence.
+///
+/// The settled exit *is* armed — `pump_until_ready` arms it — and it cannot
+/// fire one step earlier than the predicate: the ready state here,
+/// `!decode_pending()`, is a premise of `is_settled`, so whenever the predicate
+/// is false the settled condition is false too. The wall-clock bound therefore
+/// remains the only exit that can end this wait, exactly as in the loop it
+/// replaces.
+pub fn settle_decode(harness: &mut Harness<'_, LuminaApp>, path: &std::path::Path) {
+    pump_until_ready(
+        harness,
+        path,
+        Ready::new("decode_pending() == false", |app: &LuminaApp| {
+            !app.decode_pending()
+        }),
+        SMOKE_DECODE_BOUND,
+    );
+}
+
 /// Build the harness, decode the source, seed one selected mask and open
 /// exactly the Masking section.
 ///
@@ -91,17 +135,7 @@ pub fn open_masking_panel(dir: &tempfile::TempDir) -> Harness<'static, LuminaApp
         .with_step_dt(STEP_DT)
         .build_eframe(|cc| LuminaApp::new(cc.egui_ctx.clone()));
     harness.state_mut().set_module(Module::Develop);
-    let source = smoke_png(dir);
-    harness.state_mut().open_file(source.display().to_string());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while harness.state().decode_pending() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the smoke source did not decode within the bounded deadline"
-        );
-        harness.step();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    settle_decode(&mut harness, &smoke_png(dir));
     harness.step();
     harness
         .state_mut()

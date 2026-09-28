@@ -10,6 +10,16 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use lumina_gui::{LuminaApp, SECTION_COUNT};
 
+// KITT-SETTLE-UNIFY-53: the folder-scan wait, re-exported for
+// `kittest_snapshots` (which sits at its committed size baseline and must not
+// grow, so the `mod` line lives here). It has three consumers
+// (`kittest_snapshots`, `kittest_crop_overlay`, `kittest_library_stack`) and
+// therefore its own module: putting it in one consumer's support module would
+// leave the rest of that module's helpers dead in the other two targets.
+#[path = "../scan_settle_support/mod.rs"]
+mod scan_settle_support;
+pub(crate) use scan_settle_support::settle_scan;
+
 /// Create a headless harness running the Lumina app at a fixed window size.
 pub(crate) fn build_harness() -> Harness<'static, LuminaApp> {
     Harness::builder()
@@ -27,47 +37,21 @@ pub(crate) fn load_sample(harness: &mut Harness<'_, LuminaApp>) {
         .expect("sample image loads");
 }
 
-/// R2-MODSWITCH-1 F8: the folder scan is asynchronous in production (worker +
-/// `poll_scan` in the frame loop). A snapshot must be taken from the *settled*
-/// listing, so drive frames until the in-flight scan lands (bounded), then one
-/// extra frame so the applied status/list is painted. Without this the golden
-/// would capture the transient "Scanning folder…" status.
-///
-/// GOLDEN-FIXT-31: the bound is a wall-clock deadline, not a frame count. A
-/// real 24-megapixel RAW fixture (the committed sentinels used to fail in
-/// microseconds) spends ~0.7 s in LibRaw, so a 500-frame budget could expire
-/// mid-decode under parallel test execution and turn a settling scan into a
-/// spurious failure. The deadline is generous on purpose: exceeding it is a
-/// real hang, and the fixtures are all local.
-pub(crate) fn settle_scan(harness: &mut Harness<'_, LuminaApp>) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-    loop {
-        // `step()` (not `run()`): a scheduled thumbnail/scan repaint would make
-        // `run()` exceed its max_steps bound. Settle both async background
-        // paths — the folder scan AND the auto-load decode it starts — so a
-        // decode failure surfaces in the status line before the snapshot.
-        harness.step();
-        if !harness.state().scan_pending() && !harness.state().decode_pending() {
-            harness.step();
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "folder scan/decode did not settle within the bounded deadline"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
-
 /// R2-MODSWITCH-1 F8: `LuminaApp::set_directory` (flat listing) followed by
-/// [`settle_scan`] — the async scan must land before a snapshot/assert.
+/// the shared folder-scan settle — the async scan must land before a
+/// snapshot/assert.
+///
+/// KITT-SETTLE-UNIFY-53: the wait itself, with its GOLDEN-FIXT-31 wall-clock
+/// bound, now lives once in `scan_settle_support`. This file used to carry a
+/// copy that `kittest_library_stack` duplicated byte for byte, and
+/// `kittest_crop_overlay` a third variant that could expire silently.
 pub(crate) fn set_directory_and_settle(harness: &mut Harness<'_, LuminaApp>, directory: String) {
     harness.state_mut().set_directory(directory);
     settle_scan(harness);
 }
 
 /// R2-MODSWITCH-1 F8: `LuminaApp::list_directory` (recursive listing) followed
-/// by [`settle_scan`].
+/// by the shared folder-scan settle.
 pub(crate) fn list_directory_and_settle(harness: &mut Harness<'_, LuminaApp>) {
     harness.state_mut().list_directory();
     settle_scan(harness);
