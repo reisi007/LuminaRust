@@ -8,53 +8,46 @@ Feature-Dokumenten und der Git-Historie.
 
 ## Gepinnte Entscheidungen und Absprachen
 
-- **LIZ / Projektlizenz (F-073-R2, MVP-Release-Gate):** interim proprietär/
-  kommerziell — bewusst kein `license`-Feld, keine `LICENSE`-Datei (Entscheidung
-  des Projekteigentümers 2026-08-20). Sobald entschieden (MIT / Apache-2.0 /
-  Dual / MPL-2.0): `license`-Felder + Root-`LICENSE` ergänzen. Fixtures-R1 ist
-  geschlossen (uneingeschränkte Nutzungs-/Distributionsgewährung für
-  LuminaRust, dokumentiert in `feature/quality/fixtures-licensing.md` §4/§8).
-  Lensfun
-  (LGPL-3.0 dynamisch gelinkt, DB CC-BY-SA-3.0) ist in
-  `THIRD-PARTY-NOTICES.md` dokumentiert und gilt unabhängig von der Wahl.
-- **MVP-Grenze:** MVP = CLI + native Desktop-GUI inkl. nativem RAW. WASM/Browser
-  ist ersatzlos gestrichen (2026-09-04, kein Post-MVP). Cache- und
-  Mehrbild-Synchronisierung sind bewusst Post-MVP. Architektur bleibt nativ
-  (einheitlicher `decode_bytes`/`RawMetadata`-Vertrag).
-- **Release-Staffel (User-Entscheid 2026-09-03, MVP = 1.0; Aktualisierung
-  2026-09-04):** IPTC-/Metadaten-Presets + -Verwaltung wurden per
-  User-Entscheid 2026-09-04 von 1.5 nach **1.0** vorgezogen (LRPAR-G15-IPTC-
-  S1…S8; Entscheid: `feature/decisions/LRPAR-G15-META-15.md`, Sidecar-Draft,
-  pure-Rust-Bake-In ohne Runtime-Abhängigkeit, JPEG-only, GUI-Panel gleich
-  mit). Damit: 1.5 = HDR/Panorama-Merge, Rote Augen, Auto-Upright;
-  2.0 = Gesichtserkennung, KI-Denoise; 2.5 = KI-Culling; nie Ziel:
-  Karten-Modul/GPS, Veröffentlichungsdienste. Lensfun-Vollausbau,
-  Keywords/Filter/Sammlungen/Smart-Sammlungen sind MVP (1.0).
-- **Sidecar-Schema Pre-MVP:** Schemaänderungen sind bis zum MVP Breaking Changes
-  (keine Abwärtskompatibilitätspflicht, Altdateien müssen nicht lesbar
-  bleiben); die Migrations-Maschinerie (`migrate_sidecar_file`, `.bak`-Backup,
-  `migrate_json`) bleibt dauerhaft im Code und wird ab dem MVP für
-  Release-Migrationen genutzt; „Tests für jede Migration" gilt ab dem MVP. Der
-  v1→v2-Migrationspfad mit Tests bleibt als Muster umgesetzt. Pre-Alpha-
-  Ergänzung: `schema_version` bleibt 1; der Loader lehnt inkompatible Sidecars
-  laut ab (keine stille Normalisierung außer dem historischen v0→v1-Bump).
-- **Dependency-Pins (kein Upgrade ohne ADR):** libraw-sys vendored
-  `[patch.crates-io]` (macOS-C++-Fix), `ort =2.0.0-rc.13` (= neueste RC),
-  LibRaw 0.22.2 + Ubuntu-24.04-lensfun-Distro-Pin (Determinismus;
-  Upgrade-Pfad skizziert: neuer Image-Tag parallel → Golden-Rebaseline wegen
-  CR3-Dimensionen → alter Tag erst dann entfernen).
-- **CI-Gate `onnx-rt` (2026-09-02, CI-ONNX-RT):** `onnx-rt` wird jetzt im CI geprüft — Image liefert `libssl-dev` + `clang` für `openssl-sys`, `ci.yml` führt `cargo clippy -p lumina-onnx --features onnx-rt` und `cargo test -p lumina-onnx --features onnx-rt` aus. Nur **GPU bleibt hartes CI-Nein** (kein Metal auf Runnern, nur `cargo check -p lumina-gpu --features gpu`).
-- **Toolchain:** CI fährt `@stable` → neue Clippy-Lints schlagen automatisch an
-  (Beispiel `chunks_exact_to_as_chunks`). Lokal vor jedem Push `rustup update`
-  + workspace-clippy laufen lassen.
-- **Post-MVP Backlog (nicht MVP-blockierend):** F-019 (siehe Phase 2), Phase 9
-  Index (F-064…F-067), MCP-Erweiterungen (siehe
-  F-101-F1; die Metadaten-Tools/-Resource sind mit LRPAR-G15-IPTC ab 1.0
-  normativ und gehören nicht in dieses Backlog),
-  Lensfun-Ausbau (CA via Lensfun, automatische Profil-Erkennung per
-  EXIF), Produktnamen-Entscheidung (`docs/naming-brainstorm.md`,
-  Brainstorm-Phase offen bis MVP-Entscheidung). WASM-Browser (F-069…F-071)
-  ist ersatzlos gestrichen, kein Backlog.
+**Formregel (User-Regel 2026-09-28, bestaetigt):** Jede hier gefuehrte
+Entscheidung traegt **ihre Begruendung** und einen **Stand**. Eine Entscheidung,
+die **verifiziert abgeschlossen** ist, wird **aus dieser Datei entfernt** — genau
+wie eine Aufgabe, und aus demselben Grund: der erledigte Zustand gehoert in die
+Git-Historie und in die `feature/`-Dokumente, nicht in eine Liste, die als
+Arbeitsvorrat gelesen wird. Es gibt hier **kein** `- [x]`; `scripts/check_plan_format.sh`
+verbietet es in dieser Datei, und der Spaltenwert `umgesetzt`/`erledigt` ist
+dort ebenfalls ein Verstoss. **Zurueckgezogene** Ansätze stehen in
+[Verworfen](#verworfen) — sie sind keine offenen Entscheidungen, sondern
+Negativrecords, damit sie nicht erneut implementiert werden.
+
+### Geltende Entscheidungen
+
+| Kürzel | Entscheidung | Begründung | Stand |
+| --- | --- | --- | --- |
+| `LIZ` | interim proprietär/kommerziell: **kein** `license`-Feld, **keine** `LICENSE`-Datei | Eigentümerentscheid 2026-08-20; eine erfundene Lizenz wäre eine Rechtsbehauptung ohne Grundlage. Fixtures-R1 ist davon **unberührt** geschlossen (`fixtures-licensing.md` §4/§8); Lensfun (LGPL-3.0 dynamisch, DB CC-BY-SA-3.0) ist in `THIRD-PARTY-NOTICES.md` dokumentiert und gilt unabhängig von der Wahl | **offen** (Sobald entschieden: `license`-Felder + Root-`LICENSE` ergänzen) |
+| `MVP-Grenze` | MVP = CLI + native Desktop-GUI inkl. nativem RAW. WASM/Browser **ersatzlos gestrichen** (2026-09-04), Cache- und Mehrbild-Synchronisierung bewusst Post-MVP | Architektur bleibt nativ, einheitlicher `decode_bytes`/`RawMetadata`-Vertrag; ein zweiter Backend-Pfad hätte zwei Render-Mengen erzwungen | gilt |
+| `Release-Staffel` | IPTC/Metadaten-Presets von 1.5 nach **1.0** vorgezogen; 1.5 = HDR/Panorama-Merge + Rote Augen + Auto-Upright; 2.0 = Gesichtserkennung + KI-Denoise; 2.5 = KI-Culling; **nie** Ziel: Karten/GPS, Veröffentlichungsdienste | User-Entscheid 2026-09-04; Entscheid dokumentiert in `feature/decisions/LRPAR-G15-META-15.md` (Sidecar-Draft, pure-Rust-Bake-In, JPEG-only, GUI-Panel mit) | gilt |
+| `Sidecar-Pre-MVP` | Schemaänderungen sind bis zum MVP Breaking Changes; die Migrations-Maschinerie bleibt **dauerhaft** im Code; `schema_version` bleibt 1, inkompatibles wird laut abgelehnt | Vor-MVP gibt es keine Abwärtskompatibilitätspflicht, aber die Maschinerie wird ab MVP für Release-Migrationen gebraucht — der v1→v2-Pfad ist als Muster mit Tests umgesetzt | gilt |
+| `PINS` | libraw-sys vendored (`[patch.crates-io]`, macOS-C++-Fix), `ort =2.0.0-rc.13`, LibRaw 0.22.2 + Ubuntu-24.04-lensfun-Distro-Pin | Determinismus; ein Upgrade-Pfad ist skizziert (neuer Image-Tag parallel → Golden-Rebaseline wegen CR3-Dimensionen → alter Tag erst dann entfernt) | gilt |
+| `CI-GATE` | `onnx-rt` wird im CI **geprüft** (Image liefert `libssl-dev` + `clang`); **GPU bleibt hartes CI-Nein** | Runner haben kein Metal, dort ist nur `cargo check -p lumina-gpu --features gpu` möglich; ein GPU-Test in CI wäre ein grüner Schein | gilt |
+| `Toolchain` | CI fährt `@stable`, damit neue Clippy-Lints automatisch anschlagen; lokal vor jedem Push `rustup update` + Workspace-Clippy | Ein Lint, der erst beim nächsten Toolchain-Wechsel sichtbar wird, ist kein Gate (Beispiel: `chunks_exact_to_as_chunks`) | gilt |
+| `REIHENFOLGE` | **alle** offenen Tasks werden abgearbeitet; der Build-Agent wählt die Reihenfolge nach Gate-Gefährdung → Abhängigkeit → Hardware-Gate | Eigentümerentscheid 2026-09-28 („alle müssen abgearbeitet werden"). Kein Fallenlassen, aber eine **begründete** Wahl — ein hardwaregegateter Punkt ist kein Grund anzuhalten | gilt |
+
+### Offene Entscheidungen (warten auf den Eigentümer)
+
+| Kürzel | Frage | Optionen | Begründung / Kosten | Stand |
+| --- | --- | --- | --- | --- |
+| `NAMING-F1 (1)` | Wie heißt das Produkt im **Anzeigenamen**? | A: bisheriger Name; B: neuer Name | **Zwei** Stellen, gemessen: `crates/lumina-gui/src/main.rs:30` (Fenstertitel) und `crates/lumina-gui/src/lib.rs:11965` (UI-Überschrift). Der **Formatbezeichner** ist davon getrennt und bereits entschieden: `.lumina.*` bleibt (siehe `SIDECAR-SUFFIX-CONST`), weil ein Formatbezeichner konventionell unabhängig vom Produktnamen ist (`.xmp`/`.aae` gehören Lightroom) — sonst müsste der Produktname eine Migration für alle Sidecars im Feld bezahlen | **offen** — der Build-Agent erfindet **keinen** Produktnamen; das ist eine Produktentscheidung |
+
+### Verworfen
+
+Zurückgezogene Ansätze. Sie sind **keine** offenen Entscheidungen und dürfen
+**nicht** erneut implementiert werden; der geltende Stand steht jeweils daneben.
+
+| Verworfener Ansatz | Warum verworfen | Geltender Stand |
+| --- | --- | --- |
+| Umfangs-Zusicherung „der Nachweis decodiert **jede** committete Fixture" (`fixtures-licensing.md` §3.2.1 **Regel 4 und Regel 6**) | Sechs Verifikationsrunden, sechs Orte **derselben** Fehlerklasse. Jeder Fix verlagerte den einzigen Vertrauenspunkt, und die nächste Mutation zielte dorthin. Ein **Modellwechsel** änderte nichts — der Befund war ein **Entwurfsproblem** | Als **Zusage** zurückgenommen; die Abdeckung ist eine **im Code lesbare Eigenschaft**, keine durchgesetzte Invariante. Die Produktaussage („ein verworfenes CR3 behält Orientierung, Metadaten, Identität") hat **nie** daran gehangen. Preis: **zehn** mutationsbewiesene Widerstandsfälle |
+| Fassung von **Regel 4** mit dem Schlusssatz „der Zustand ist nicht mehr ausdrückbar" | Durch Messung widerlegt: eine Regel, die einen **Weg** abschließt statt einer **Klasse**, ist eine Absichtserklärung (`DoD.md` §9). Zurückgenommen **an der Fundstelle**, nicht fortgeschrieben | Regel 4 als **Zusage** zurückgenommen, siehe oben |
+| `check_plan_format.sh`-Ausnahme für abgehakte Entscheidungen | Der Eigentümer hat am 2026-09-28 bestätigt: **verifiziert abgeschlossene Sachen werden aus `Agents.todo.md` entfernt** — auch Entscheidungen. Eine Ausnahme hätte das Gate genau dort geschwächt, wo es am ehesten sichtbar bleiben soll | Kein Checkbox-Syntax; der `Stand`-Wert `umgesetzt`/`erledigt` ist im Skript ein Formverstoß |
 
 ## Arbeitsregeln
 

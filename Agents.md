@@ -248,6 +248,30 @@ Agent derselben Änderung gelten.
 
 ## Entscheidungen an den Projekteigentümer (User-Regel 2026-09-28)
 
+- **Entscheidungen stehen doppelt:** hier in `Agents.md` (dauerhafte Quelle für
+  Datenmodell, Event-Regeln, GUI-Verhalten) **und** als kurze Checkliste mit
+  Begründung pro Entscheidung in `Agents.todo.md`. **Nie nur im Chat.**
+- **Eine verifiziert abgeschlossene Entscheidung wird aus `Agents.todo.md`
+  entfernt** — genau wie eine Aufgabe (Eigentümer-Bestätigung 2026-09-28:
+  *„verifiziert abgeschlossene Sachen müssen aus der `agents.todo.md` entfernt
+  werden"*). Die Checkliste führt deshalb **keine** `- [x]`, sondern eine
+  Spalte `Stand`; der Wert `umgesetzt`/`erledigt`/`abgeschlossen` in der letzten
+  Zelle einer Tabellenzeile ist ein **Formverstoß** und wird von
+  `scripts/check_plan_format.sh` (Formprüfung 3) gemeldet. Erledigter Zustand
+  lebt in der Git-Historie und in den `feature/`-Dokumenten.
+  *Warum kein Checkbox-Format:* die globale Konfiguration verlangt `[x]`/`[ ]`,
+  das Gate dieser Repo-Ebene verbietet jede `- [x]`-Zeile in genau dieser Datei.
+  Eine Ausnahme für den Entscheidungsabschnitt hätte das Gate geschwächt statt
+  die Form gelöst — und die Form zu ändern, um eine Regel zu umgehen, ist
+  Regel-Umgehung.
+- **Zurückgezogene Ansätze stehen im Abschnitt `Verworfen`** in
+  `Agents.todo.md` — sie sind **keine** offenen Entscheidungen, sondern
+  Negativrecords, damit sie nicht erneut implementiert werden. Der Plan
+  enthält heute drei: die Umfangs-Zusicherung „der Nachweis decodiert **jede**
+  committete Fixture" (Regel 4 und 6), die Fassung von Regel 4 mit dem
+  Schlusssatz „der Zustand ist nicht mehr ausdrückbar" (durch Messung
+  widerlegt) und eine Ausnahme für abgehakte Entscheidungen im Plan-Format-Gate.
+  **Keine dieser drei darf erneut gebaut werden.**
 - **Jede Entscheidung mit echten Wahlmöglichkeiten wird als interaktive Frage
   gestellt** (Werkzeug `question`), **niemals** als Frage im Fließtext. Echte
   Wahlmöglichkeiten sind z. B.: Alternative ja/nein, Datenmodell, Event-Form,

@@ -14,6 +14,12 @@
 #
 # Was hier geprueft wird, ist ausschliesslich die **Form**, nicht der Inhalt:
 #   1. keine `- [x]`-Eintraege (abgeschlossene Tasks gehoeren entfernt)
+#   3. keine als erledigt markierte **Entscheidung** (User-Regel 2026-09-28,
+#      vom Eigentuemer bestaetigt): auch eine verifiziert abgeschlossene
+#      Entscheidung wird **entfernt**, nicht markiert. Erzwungen ueber den
+#      `Stand`-Wert in der Entscheidungstabelle am Kopf des Plans. Ohne diese
+#      Pruefung waere Form 1 fuer Entscheidungen umgehbar, indem man sie in eine
+#      Tabelle schreibt -- die Form waende, nicht die Regel.
 #   2. kein "Erledigt"/"Done"/"Verifiziert"-Sammelabschnitt, in den
 #      abgeschlossene Tasks verschoben werden
 set -eu
@@ -44,6 +50,25 @@ blocks=$(grep -nE '^#{1,6} +(Erledigt|Done|Verifiziert|Abgeschlossen)' "$plan" |
 if [ -n "$blocks" ]; then
     echo "plan_format FEHLER: Sammelabschnitt fuer abgeschlossene Aufgaben in $plan" >&2
     echo "$blocks" | cut -c1-100 >&2
+    status=1
+fi
+
+# (3) Eine verifiziert abgeschlossene Entscheidung wird entfernt, nicht
+# markiert. Geprueft wird die **letzte Zelle einer Tabellenzeile**, weil dort der
+# `Stand` steht -- die Spaltenzahl ist bewusst frei, eine Tabelle mit mehr
+# oder weniger Spalten soll nicht durch die Form umgehen. Auszeichnung
+# (`**umgesetzt**`, `` `erledigt` ``) ist erlaubt; Prosa, die das Wort nur
+# enthaelt, ist erlaubt. Erste Fassung pruefte eine nackte Zelle in
+# Spalte 4 und lies die in diesem Plan verwendete Form `**umgesetzt**`
+# durch -- mutationsbewiesen korrigiert (M1), 2026-09-28.
+done_cells=$(grep -cE '^\|.*\|[[:space:]*_`]*(umgesetzt|erledigt|abgeschlossen)[*_`]*[[:space:]]*\|$' "$plan" || true)
+if [ "$done_cells" -ne 0 ]; then
+    echo "plan_format FEHLER: $done_cells Entscheidung(en) als erledigt markiert in $plan" >&2
+    echo "  User-Regel 2026-09-28: verifiziert abgeschlossene Entscheidungen" >&2
+    echo "  werden aus Agents.todo.md ENTFERNT, nicht abgehakt. Der erledigte" >&2
+    echo "  Zustand lebt in der Git-Historie und in den feature/-Dokumenten." >&2
+    echo "  Zurueckgezogene Ansätze gehoeren in den Abschnitt 'Verworfen'." >&2
+    grep -nE '^\|.*\|[[:space:]*_`]*(umgesetzt|erledigt|abgeschlossen)[*_`]*[[:space:]]*\|$' "$plan" | cut -c1-100 >&2
     status=1
 fi
 
