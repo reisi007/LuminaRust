@@ -100,18 +100,54 @@ Pfad; aus `LUMINA_RAW_FIXTURE` stammend und **fehlend** → `SKIPPED` + Exit 0.
 wörtlich: die Fußnote ändert die Klasse nicht, denn ein Gate, das auf den
 Exit-Code schließt, sieht grün.
 
-**Regel 4 — die Freistellung vom Umfang darf nicht am Produzenten hängen.**
-(Normativ, aus der Verifikations-Runde 3 zu `KITT-IGNORED-PANIC-56`.) Eine
-Aussage wie „der Umfangsnachweis entfällt, weil ein optionaler Operand
-vorliegt" wird **an der Aufrufstelle** aus der **Umgebung** entschieden, nicht
-aus einem Feld, das der Produzent selbst setzen kann. Sonst kann sich der
-Produzent die Freistellung gewähren: `raw_fixtures()` beschriftet seine
-committeten Fixtures als `documented: None`, und die Freistellung wird
-freigeschaltet — Clippy meldet **0** Warnungen, alle Tests **grün**. Die
-strukturelle Form ist deshalb zwingend: **der Optional-Operand wird an der
-Aufrufstelle konstruiert, und `raw_fixtures()` liefert ausschließlich
-committete Fixtures.** Dann existiert im Produzenten kein Feld, an dem eine
-Freistellung hängen *könnte*, und der Zustand ist nicht mehr ausdrückbar.
+**Regel 4 — der committete Satz ist bedingungslos; es gibt nichts zu
+freistellen.** (Normativ, aus der Verifikations-Runde 3 zu `KITT-IGNORED-PANIC-56`,
+in Runde 4 **präzisiert**.) Der Umfangsnachweis wird an der Aufrufstelle aus
+der **Umgebung** entschieden, nicht aus einem Feld, das der Produzent selbst
+setzen kann: `raw_fixtures()` liefert **ausschließlich** committete Fixtures,
+und `CommittedFixture.documented` ist **kein** `Option`, so dass die
+Beschriftung eines committeten Fixtures als „optional" **innerhalb des
+Typs** nicht darstellbar ist.
+
+**Berichtigung 2026-09-28 (Runde 4):** eine frühere Fassung dieser Regel
+schloss mit „der Zustand ist nicht mehr ausdrückbar". **Das war zu absolut
+und ist widerlegt.** Die Freistellung ist weiterhin erreichbar — über die
+Stelle, an der der Optional-Operand entsteht (`operator_operand()`), mit
+**einer** Zeile, und ohne dass ein Lauf rot wird. Eine Regel, die einen Weg
+abschließt statt einer Klasse, ist eine Absichtserklärung. **Regel 5** ist
+die Antwort darauf.
+
+**Regel 5 — der Override ist additiv, niemals substituierend.** (Normativ,
+2026-09-28.) Der Nachweis dekodiert **immer** den vollständigen committeten
+Satz. `LUMINA_RAW_FIXTURE` **ergänzt** eine Datei, es **ersetzt** nichts.
+
+- Eine Zusatzdatei wird mit ausdrücklich **schwächerer** Aussage geprüft: nur
+  gegen `lumina_raw::read_metadata`, ohne dokumentierten Geometrie-Anker, und
+  das wird an echtem `stderr` sichtbar gemeldet.
+- **Kein** Zusatz-Fixture betritt den Umfangsvergleich und **kein** Zusatz
+  kann eine committete Fixture ersetzen, verdrängen oder aus dem committeten
+  Satz herausnehmen.
+- Eine Zusatzdatei, deren Dateiname einer committeten Fixture entspricht, ist
+  damit **kein** Fall, der eine Ausnahme braucht — sie wird schlicht als
+  überflüssig behandelt und gemeldet, weil die committete Datei ohnehin
+  dekodiert wird.
+
+**Warum additiv und nicht „nur committete plus Operator“:** die vorherige Form
+hatte genau **einen** Entscheidungspunkt, an dem der Umfang abgeschaltet
+werden konnte — und die Abschaltung war der **Normalfall** des vorgesehenen
+Features. Vier Verifikationsrunden haben dieselbe Fehlerklasse an vier
+verschiedenen Stellen gefunden, weil jeder Fix den einzigen Vertrauenspunkt
+verlagerte und die nächste Mutation dorthin zielte. Bei additivem Override
+**entfällt der Entscheidungspunkt**: es gibt nichts abzuschalten, weil der
+committete Satz bedingungslos ist. Damit ist die Klasse nicht verlagert,
+sondern beseitigt.
+
+**Kosten, ausdrücklich benannt:** ein Lauf mit gesetzter `LUMINA_RAW_FIXTURE`
+dekodiert **drei** CR3 (zwei committete plus eine Zusatzdatei) statt einer,
+also rund 4,9 s statt 1,7 s unter `--ignored` (gemessen 3,2–4,8 s für den
+Soll-Lauf allein). Das ist der Preis der Regel, und er ist der richtige: er
+kauft die Eigenschaft, dass **kein** Ausführungspfad den Umfangsnachweis
+abschalten kann.
 
 **Noch offener Rest, ausdrücklich nicht als gedeckt geführt:** der
 Wächter-Metatest pinnt die *Logik* des Wächters, nicht seine *Verdrahtung* —
