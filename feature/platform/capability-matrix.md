@@ -61,7 +61,30 @@ Linux/Distro-Paketen, `/opt/homebrew/share/lensfun` auf Homebrew/Apple
 Silicon, `/usr/local/share/lensfun` auf Homebrew/Intel macOS). `lumina-lensfun`
 löst das deshalb **selbst** auf — portabel, geprüft und auditierbar.
 
+### Umgebungsbedingte Fehlmeldungen sind kein Code-Defekt (LENSFUN-DB-ENV)
+
+In einer abweichenden Laufumgebung — eigenes Target-Verzeichnis und gepinnte
+`env.sh` — meldeten **14** Lensfun-Datenbank-Tests rot, mit `panic` auf
+`LensfunDb::load_system()` und der Meldung „`/usr/share/lensfun` fehlt". **Das
+war eine Fehldiagnose, kein Defekt.** Nachgemessen auf der normalen
+Umgebung (2026-09-28, Build-Agent):
+
+```
+cargo test -p lumina-lensfun --features native   ->  92 passed; 0 failed
+cargo test -p lumina-core   --features lensfun   ->  560 passed; 0 failed
+```
+
+`load_system()` benutzt den in der Homebrew-dylib kompilierten
+`LENSFUN_DATADIR` — also korrekt `/opt/homebrew/...` auf Apple Silicon — und
+nicht den verdrahteten Linux-Pfad. **Merksatz für künftige Läufe:** keinen
+Root-Cause aus einer Fehlermeldung in einem Task-Text ableiten, ohne den Fehler
+auf der Umgebung zu reproduzieren, auf der der Task geführt wird. Ein Rotbefund,
+der nur unter einer bestimmten Laufumgebung auftritt, ist eine **Eigenschaft
+dieser Umgebung** und gehört hierher, nicht in einen Feature-Task als offener
+Post.
+
 ### Verbindliche Auflösungsreihenfolge
+
 
 `LensfunDb::resolve_system_with()` prüft genau diese Reihenfolge und nimmt die
 **erste** Quelle, die eine Profil-Datenbank enthält. Die Reihenfolge selbst ist

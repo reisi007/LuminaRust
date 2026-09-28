@@ -164,6 +164,12 @@ jobs:
       - name: Check file-size ratchet
         run: sh scripts/check_file_sizes.sh
 
+      # Plan-Format-Schranke (2026-09-28): Agents.todo.md darf nur offene
+      # Aufgaben enthalten. Abgeschlossene Punkte werden vollstaendig entfernt,
+      # nie abgehakt — vier Eintraege hatten diese Regel am 2026-09-28 verletzt.
+      - name: Check plan format
+        run: sh scripts/check_plan_format.sh
+
   rust-test-gui:
     name: Rust GUI tests
     needs: detect
