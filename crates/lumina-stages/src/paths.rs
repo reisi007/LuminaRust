@@ -17,7 +17,7 @@
 use crate::error::StageError;
 use lumina_sidecar::{
     load_sidecar, sidecar_path_for, validate_smart_collection_def, SidecarDocument,
-    SmartCollectionDef, SMART_COLLECTION_VERSION,
+    SmartCollectionDef, SIDECAR_FILE_SUFFIX, SMART_COLLECTION_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -44,7 +44,7 @@ pub fn require_sidecar(input: &Path) -> Result<(PathBuf, SidecarDocument), Stage
 /// scanned recursively (symlink-/loop-safe, same walk as `reindex`).
 pub fn collect_target_sidecars(input: &Path) -> Result<Vec<PathBuf>, StageError> {
     if input.is_file() {
-        if input.to_string_lossy().ends_with(".lumina.json") {
+        if input.to_string_lossy().ends_with(SIDECAR_FILE_SUFFIX) {
             return Ok(vec![input.to_path_buf()]);
         }
         return Ok(vec![sidecar_path_for(input)]);
@@ -114,7 +114,7 @@ where
 /// dangling or special (FIFO) entries out of the scan.
 pub fn collect_sidecars(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), StageError> {
     collect_tree_files(path, output, |p| {
-        p.to_string_lossy().ends_with(".lumina.json")
+        p.to_string_lossy().ends_with(SIDECAR_FILE_SUFFIX)
     })
 }
 

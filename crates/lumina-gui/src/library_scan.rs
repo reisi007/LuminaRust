@@ -23,6 +23,7 @@
 
 use super::*;
 use log::{info, trace};
+use lumina_sidecar::SIDECAR_FILE_SUFFIX;
 
 /// Visible, non-blocking scan progress line (status). Constant instead of a
 /// `Str` variant: `i18n.rs` is at its committed size ceiling (Ratchet), same
@@ -236,8 +237,8 @@ fn scan_single_dir(root: &Path, dir: &Path, out: &mut Vec<FileBrowserEntry>) {
         for entry in sidecar_entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".lumina.json") {
-                    if let Some(source_name) = name.strip_suffix(".lumina.json") {
+                if name.ends_with(SIDECAR_FILE_SUFFIX) {
+                    if let Some(source_name) = name.strip_suffix(SIDECAR_FILE_SUFFIX) {
                         let source_path = dir.join(source_name);
                         if !out.iter().any(|e| e.path == source_path) {
                             if let Some(mut scanned) = scan_entry(&source_path) {

@@ -23,7 +23,7 @@ use crate::error::StageError;
 use crate::paths::move_file_cross_volume;
 use crate::report::{BulkReport, BulkRun};
 use log::info;
-use lumina_sidecar::{sidecar_path_for, zdata_path_for};
+use lumina_sidecar::{sidecar_path_for, zdata_path_for, SIDECAR_FILE_SUFFIX};
 use serde_json::json;
 use std::path::Path;
 
@@ -107,7 +107,7 @@ pub fn run(request: &RelocateRequest) -> Result<BulkRun, StageError> {
                 source.display(),
                 target.display()
             );
-            let kind = if source.to_string_lossy().ends_with(".lumina.json") {
+            let kind = if source.to_string_lossy().ends_with(SIDECAR_FILE_SUFFIX) {
                 "sidecar"
             } else {
                 "bundle"

@@ -9,7 +9,9 @@ use lumina_core::{
 #[cfg(feature = "gpu")]
 use lumina_gpu::{log_cpu_routing_once, unsupported_gpu_stages_with_context, GpuContext};
 use lumina_raw::RawMetadata;
-use lumina_sidecar::{DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity};
+use lumina_sidecar::{
+    DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity, SIDECAR_FILE_SUFFIX,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -216,9 +218,11 @@ pub fn has_batch_image_extension(path: &Path) -> bool {
 }
 
 /// Returns `true` when the path looks like a Lumina sidecar JSON
-/// (`*.lumina.json`) — the exact predicate of the CLI reindex scan.
+/// (`*.lumina.json`) — the exact predicate of the CLI reindex scan. The suffix
+/// comes from `SIDECAR_FILE_SUFFIX` (SIDECAR-SUFFIX-CONST), so a rename cannot
+/// silently leave this scan looking for a suffix no writer produces.
 pub fn is_sidecar_json_path(path: &Path) -> bool {
-    path.to_string_lossy().ends_with(".lumina.json")
+    path.to_string_lossy().ends_with(SIDECAR_FILE_SUFFIX)
 }
 
 /// Cycle-safe recursive file collection behind `lumina_batch` and

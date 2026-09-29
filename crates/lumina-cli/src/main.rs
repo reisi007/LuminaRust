@@ -51,7 +51,7 @@ use log::info;
 #[allow(unused_imports)]
 use lumina_sidecar::{
     append_repair_region, load_validated_source_action_bundle, load_zdata, zdata_path_for,
-    RepairRegionArtifact,
+    RepairRegionArtifact, ZDATA_FILE_SUFFIX,
 };
 // LRPAR-G12-FACE-IMPL-20-REST: the `face_embedding` write path only exists in
 // the `onnx-rt` build (the only build that can produce real vectors).
@@ -7216,8 +7216,8 @@ fn denoise_record_rgb(
     let relative_path = zdata
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("bundle.lumina.zdata")
-        .to_string();
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("bundle{ZDATA_FILE_SUFFIX}"));
     let mut denoise = DenoiseAi {
         version: DENOISE_AI_VERSION,
         enabled: true,
