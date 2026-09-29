@@ -313,11 +313,14 @@ impl LuminaApp {
     /// `present::editorial_refusal`), so this trace line is the only place the
     /// decision is explainable — an `RUST_LOG=trace` acceptance run otherwise
     /// cannot tell "the GPU was never asked" from "the GPU said no". The
-    /// throttle is the [`TimingState::present_refusal_warned`] pattern: the same
-    /// reason on consecutive frames emits only the cheap `unchanged` trace, so a
-    /// long before/after session cannot flood the log, while a *change* of
-    /// reason is always reported. A recurrence after a GPU-present frame is
-    /// re-armed by [`Self::clear_editorial_present_refusal`].
+    /// throttle is the [`TimingState::present_refusal_warned`] pattern, and it
+    /// throttles the **counted emit**, not the log volume: a repeat of the same
+    /// reason still logs one `unchanged` line per frame, so a long before/after
+    /// session stays traceable frame by frame rather than silent. What the memo
+    /// buys is that a *change* of reason is never lost in that stream, and that
+    /// the counter a test observes means "reason changes", not "frames". A reason
+    /// that recurs after a GPU-present frame is re-armed by
+    /// [`Self::clear_editorial_present_refusal`].
     ///
     /// `trace!` rather than `warn!` on purpose: these are deliberate, expected
     /// routes, and a warning per frame is exactly the spam this task removes.
@@ -343,12 +346,14 @@ impl LuminaApp {
     }
 }
 
-// GPU-ROUTE-LOG-54: test-only count of *emitted* editorial refusal traces, so
-// a test can prove the throttle both fires on a change and stays quiet on a
-// repeat. Without the counter the debounce could silently degrade into
-// "never logs" while every test still passed. A plain `//` comment rather than
-// `///`: a doc comment on a `thread_local!` item is an `unused_doc_comments`
-// warning, because the macro cannot emit documentation for it.
+// GPU-ROUTE-LOG-54: test-only count of the *counted* editorial refusal emits,
+// i.e. reason CHANGES, not frames: the counter sits behind the `unchanged`
+// early-return, and an `unchanged` frame still logs a line. A test can therefore
+// prove the throttle fires on a change and stays quiet on a repeat. Without the
+// counter the debounce could silently degrade into "never logs" while every
+// test still passed. A plain `//` comment rather than `///`: a doc comment on a
+// `thread_local!` item is an `unused_doc_comments` warning, because the macro
+// cannot emit documentation for it.
 #[cfg(all(test, feature = "gpu"))]
 thread_local! {
     static EDITORIAL_REFUSAL_TRACES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };

@@ -318,6 +318,16 @@ Agent derselben Änderung gelten.
 
 ## Verbindlicher Arbeitsablauf
 
+**Auf headless Maschinen (kein Display, kein GPU-Adapter, geteilter Build-Host)
+gilt zusätzlich [`Agents.headless.md`](Agents.headless.md).** Dort steht die
+zentrale Regel dieser Datei in der Form, die am häufigsten falsch gelesen wird:
+**ein fehlender Adapter ist kein Grund, einen Task nicht umzusetzen.** Er wird
+implementiert, muss auf dieser Maschine kompilieren, alles headless Prüfbare wird
+geprüft, und der GPU-Teil wird als benanntes Gate geführt. Ergänzend dort die
+zwei Fehlerklassen, die diese Umgebung provoziert — „kompiliert" als
+„verifiziert" zu lesen, und vakuose Tests, die grün aussehen wie gute — sowie
+der reproduzierbare Verifikationslauf (`target/verify_cpu_tasks.sh`).
+
 - **Entscheidungen mit Wahlmöglichkeiten vorher als Frage stellen** (siehe
   Abschnitt „Entscheidungen an den Projekteigentümer"), und die getroffene
   Entscheidung vor dem nächsten Arbeitsschritt hier und im betroffenen
