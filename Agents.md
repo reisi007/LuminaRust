@@ -465,51 +465,48 @@ kittest-Stand ausdrücklich.
   statt ihn zu definieren. Normativ: `feature/quality/golden-references.md`
   §9 Punkt 7.
 
-### Modellwechsel nach dreifacher Verifikations-Niederlage (User-Regel 2026-09-26)
+### Dreifache Verifikations-Niederlage ohne Modellwechsel (User-Regeln 2026-09-26/29)
 
 **Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
 Verifikation durch (`NICHT BESTANDEN` dreimal für dieselbe Findings-Gruppe),
-wechselt der Build-Agent das Modell für die Verifikation und alle
-weiteren Fix-Runden dieser Aufgabe.**
+gibt es KEINEN Modellwechsel: Es werden ausschließlich freie Subagenten
+eingesetzt (User-Weisung 2026-09-29: „bitte kein deepseek verwenden, nur free
+subagenten nutzen"). Die deepseek-Eskalation vom 2026-09-26 ist damit ERSETZT
+— Zählung und Dokumentation bleiben, der Ausweg ist ein anderer.**
 
-- **Modell:** `opencode-go/deepseek-v4.1-flash` (User: „deepseek v 4.1").
-  Ein Modellwechsel bricht die Fehlerserie, indem eine andere Modellfamilie
-  dieselbe Evidenz neu bewertet — drei Runden desselben Modells hatten
-  denselben Denkfehler dreimal wiederholt.
-- **Gilt für:** die Verifikation **und** die anschließenden
-  Implementierungs-/Remediierungsrunden. Ein frisches `continue` oder eine
-  neue Session ändert daran nichts: das Modell ist der Wechsel, nicht die
-  Sitzung.
-- **Nicht ersetzt durch:** „mehr Kontext", „frischer Agent", „einmal
-  genauer hinsehen". Erschwerte Fehlschläge sind ein Signal zum
-  Perspektivwechsel, nicht zur Wiederholung.
+- **Ausweg statt Modell:** Aufgabe weiter zerlegen (kleinere, unabhängig
+  prüfbare Einheiten), höchstens einmal `continue` pro Aufgabe, danach frische
+  Session mit vollem Auftragskontext. Hält die Serie an, gehen die Befunde als
+  interaktive Frage an den Eigentümer — drei gleiche Fehlschläge sind ein
+  Signal zum Perspektivwechsel, nicht zur vierten Wiederholung.
+- **Gilt für:** die Verifikation **und** alle weiteren Fix-Runden dieser
+  Aufgabe. Ein frisches `continue` oder eine neue Session ändert daran nichts:
+  Der Ausweg ist Zerlegung und Eskalation an den Eigentümer, nicht ein anderes
+  Modell.
 - **Zählung:** aufeinanderfolgende Runden **derselben** Aufgabe. Ein
   zwischenzeitlich bestandener Task setzt die Zählung zurück; ein
   dazwischen liegender, sachlich unabhängiger Task ebenfalls nicht.
-- **Dokumentation:** der Modellwechsel und der auslösende Befund stehen im
+- **Dokumentation:** die dreifache Niederlage und der auslösende Befund stehen im
   Commit-Text und im Task-Eintrag, damit die Historie nachvollziehbar
-  bleibt, **warum** ein anderes Modell eingesetzt wurde.
+  bleibt, **warum** zerlegt und an den Eigentümer eskaliert wurde.
 
-Begründung aus der Praxis: `LENSFUN-DB-33` fiel viermal durch. Alle vier
-Runden behaupteten eine exakte upstream-Parität, die jeweils messbar
-falsch war — der Fehler war nicht Sorgfalt, sondern die Art, wie geprüft
-wurde (aus der C++-Quelle schließen statt das exportierte Symbol messen).
-Ein anderes Modell ist die naheliegendste Gegenmaßnahme, weil die
-Fehlerkette eine Denk- und nicht eine Sorgfaltfrage war.
+Praxisbeispiel `LENSFUN-DB-33` (viermal durchgefallen, jeweils messbar falsche
+Paritätsbehauptung: aus der C++-Quelle geschlossen statt das exportierte Symbol
+gemessen) bleibt das Muster für Zählung und Dokumentation; die damalige
+Folgerung (Modellwechsel) gilt nicht mehr — heute wäre der vierte Anlauf
+Zerlegung plus Eigentümer-Frage gewesen.
 
-### Modellsparsamkeit (User-Regel 2026-09-28)
+### Nur freie Subagenten (User-Weisung 2026-09-29)
 
-**`opencode-go/deepseek-v4.1-flash` wird nur für sehr schwere Probleme
-eingesetzt; sonst läuft das Standardmodell.** (User: „wenn möglich nicht
-deepseek v 4.1, wenn das Problem nicht sehr schwer ist".) Die Eskalationsregel
-oben (Wechsel nach dreifacher Verifikations-Niederlage) bleibt der einzige
-automatische Wechselgrund und ist von dieser Sparsamkeit unberührt — sie
-greift gerade dort, wo das Problem sich als schwer erwiesen hat. Praktisch:
-`SIDECAR-SUFFIX-CONST`, `FIXTURE-ENV-1`, `KITT-DECODE-CONTRACT-52`,
-`KITT-SCAN-M2-DOC-59` und die MCP-Parität sind Normalfälle;
-`LINT-BLANKET-1`, `KITT-WAIT-PIN-57` und `GOLDEN-BASELINE-32` sind
-deepseek-Kandidaten, weil dort eine unbekannte Menge stiller Befunde über
-viele Dateien zu beurteilen ist.
+**Es werden ausschließlich freie Subagenten eingesetzt — kein deepseek, kein
+Bezahlmodell, keine Ausnahme für schwere Probleme.** Dies ersetzt die
+Modellsparsamkeit vom 2026-09-28 (die deepseek-Kategorie für
+`LINT-BLANKET-1`, `KITT-WAIT-PIN-57`, `GOLDEN-BASELINE-32` entfällt ersatzlos)
+und die deepseek-Eskalation aus dem Abschnitt oben. Übergang: Die drei
+laufenden Aufträge (`SIDECAR-SUFFIX-CONST`, `LINT-BLANKET-1`, `MCP-PARITY-A`)
+wurden noch unter der alten Regel auf dem Standardmodell gestartet und laufen
+unverändert zu Ende — ein laufender Hintergrund-Agent kann nicht umgestellt
+werden. Jede NEUE Delegation nutzt den `free`-Typ.
 
 ### Testabdeckungs-Politik (User-Regel 2026-09-26)
 
