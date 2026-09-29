@@ -39,7 +39,9 @@ mod kittest_decode_support;
 mod scan_settle_support;
 
 use egui_kittest::Harness;
-use kittest_decode_support::{is_settled, pump, pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{
+    is_settled, pump, pump_until_ready, DecodeSettled, Ready, SETTLE_DEADLINE,
+};
 use lumina_gui::LuminaApp;
 use scan_settle_support::{scan_and_decode_settled, settle_scan, settle_scan_within};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -98,11 +100,42 @@ fn build_harness() -> Harness<'static, LuminaApp> {
 /// A **settled decode is not a settled folder scan**, and the wait pays for it.
 ///
 /// The state is one production really produces: a decoded source, then a folder
-/// navigation. The mutation this pins is a rewire of `settle_scan` onto the
-/// file-open wait's exit — it would return at the `assert!`s below, with
-/// `entries()` still holding the *previous* folder's single entry. The assertion
-/// *after* `settle_scan` is what turns "the two conditions differ" into "the wait
-/// behaves accordingly".
+/// navigation. What this test pins — and what it measurably catches, N=25 runs
+/// each, `KITT-SCAN-M2-DOC-59`:
+///
+/// | Mutation | Caught | Rate | Source |
+/// | --- | --- | --- | --- |
+/// | **M1** — collapse `scan_and_decode_settled` onto `is_settled`, so the wait accepts a settled decode as a settled scan | yes | red | **measured here**, N=3 |
+/// | **M-B** — rewire `settle_scan` onto the file-open wait's exit | yes | 23/25 red | quoted, `KITT-SCAN-PREMISSE-58` (N=25) |
+///
+/// The rates are deliberately **not** on one scale. M1 was re-measured on this
+/// host while correcting this comment; M-B is quoted from that task's
+/// verification round and was **not** re-run here. Presenting a quoted number as
+/// if it were a local measurement is the exact failure this comment is being
+/// corrected for, so the column says which is which.
+///
+/// N=3 is enough to show M1 is caught *reliably*; it is not the 25-run
+/// flake rate of M-B and must not be read as one.
+///
+/// Both reach the same product claim from different directions, and both make
+/// the `assert!`s below fire: the decode is terminal before the folder scan is
+/// applied, so a wait that conflates the two returns early with `entries()`
+/// still holding the *previous* folder's single entry. The assertion *after*
+/// `settle_scan` is what turns "the two conditions differ" into "the wait behaves
+/// accordingly".
+///
+/// **Named limit, not a covered claim (measured, N=25):** a silent early return
+/// of the *wait itself* is **not** caught by this test. The earlier version of
+/// this comment claimed it was, and that was false. Placing the early return in
+/// the **source** folder leaves the run 25/25 green, because
+/// `settle_scan_within` pumps one extra frame after the wait
+/// (`scan_settle_support/mod.rs:104`) and the two-file scan lands exactly in
+/// that trailing frame — by then `entries() == 2` holds and the assertion is
+/// satisfied by the real result rather than by the wait having waited. It turns
+/// red only when the *target* folder is the slow one. Catching it structurally
+/// would mean removing the trailing frame, which exists to paint the settled
+/// status for the golden; that trade is a different task, and until it is taken
+/// the honest statement is this limit, not the earlier one.
 ///
 /// The *previous* folder's listing is itself produced by a later async source
 /// (the scan worker `open_file` arms), so it is a **wait condition** here and
@@ -118,20 +151,23 @@ fn settle_scan_waits_for_the_listing_even_when_the_decode_is_already_settled() {
     write_png(library.path(), "two.png");
 
     let mut harness = build_harness();
-    // A decoded source: the decode is terminal, so `is_settled` holds.
+    // A decoded source: the decode is terminal, so `is_settled` holds. The ready
+    // state is the *declared* form — a render generation is written by the render
+    // `finish_decode` schedules, so the settled exit can decide it.
     pump_until_ready(
         &mut harness,
         &photo,
-        Ready::new("preview_generation() >= 1", |app: &LuminaApp| {
+        DecodeSettled::new("preview_generation() >= 1", |app: &LuminaApp| {
             app.preview_generation() >= 1
         }),
         SETTLE_DEADLINE,
     );
     // The opened file's folder is listed by a *second* async source — the scan
-    // worker — so wait for that listing instead of assuming it. No settled exit
-    // is armed: `is_settled` cannot decide a scan predicate, and arming it here
-    // would panic in exactly the window this test is about (its settled cause
-    // says the decode settled, which is precisely the state we are still in).
+    // worker — so wait for that listing instead of assuming it. The bound-only
+    // wait: `pump` has no settled exit at all, so this cannot be cut short by a
+    // decode that settled a frame earlier (which is precisely the state we are
+    // still in — KITT-DECODE-CONTRACT-52, and KITT-SCAN-PREMISSE-58 for the
+    // measured panic that the type split now makes unrepresentable).
     pump(
         &mut harness,
         source_dir.path(),
@@ -139,7 +175,6 @@ fn settle_scan_waits_for_the_listing_even_when_the_decode_is_already_settled() {
             app.entries().len() == 1
         }),
         SETTLE_DEADLINE,
-        None,
     );
     // A navigation, with no frame pumped yet: the scan worker is armed.
     harness
