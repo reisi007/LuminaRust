@@ -276,12 +276,11 @@ impl LuminaApp {
         let Some(document) = &self.document else {
             return Err(GuiError::Io(Str::NoSidecarLoaded.t().to_string()));
         };
-        let copy = document
-            .virtual_copies
-            .iter()
-            .find(|copy| copy.id == id)
-            .cloned()
-            .ok_or_else(|| GuiError::Io(Str::VirtualCopyNotFound.t().to_string()))?;
+        // Validate the target before any pending-edit work: a missing id must
+        // fail loudly and leave the session untouched.
+        if !document.virtual_copies.iter().any(|copy| copy.id == id) {
+            return Err(GuiError::Io(Str::VirtualCopyNotFound.t().to_string()));
+        }
         if id == self.virtual_copy_id {
             return Ok(());
         }

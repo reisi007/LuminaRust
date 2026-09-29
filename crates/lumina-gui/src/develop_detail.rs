@@ -19,7 +19,7 @@ impl LuminaApp {
             // GUI-SLIDER-SAVE-1: sharpening sliders commit through
             // `set_sharpening_value` (save at debounce); `sh` is only a
             // slider binding buffer.
-            let mut sh = self.recipe.sharpening.unwrap_or(Sharpening {
+            let sh = self.recipe.sharpening.unwrap_or(Sharpening {
                 version: 1,
                 amount: 0.0,
                 radius: 0.5,
@@ -77,7 +77,7 @@ impl LuminaApp {
             ui.label(Str::NoiseReduction.t());
             // GUI-SLIDER-SAVE-1: same commit pattern via
             // `set_noise_reduction_value`.
-            let mut nr = self.recipe.noise_reduction.unwrap_or(NoiseReduction {
+            let nr = self.recipe.noise_reduction.unwrap_or(NoiseReduction {
                 version: 1,
                 luminance: 0.0,
                 color: 0.0,

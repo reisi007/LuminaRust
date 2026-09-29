@@ -78,7 +78,7 @@ pub(super) fn action_fixture(mode: ActionFixtureMode) -> ActionFixture {
         append_repair_region(&lumina_sidecar::zdata_path_for(&source), artifact.clone()).unwrap();
     }
 
-    let mut fixture = ActionFixture {
+    let fixture = ActionFixture {
         _dir: dir,
         source,
         frame,

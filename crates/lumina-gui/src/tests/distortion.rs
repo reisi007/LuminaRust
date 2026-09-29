@@ -29,10 +29,9 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
         ca_blue: None,
     };
     app.recipe.lens_correction = Some(lens.clone());
-    let recipe_without = {
-        let mut r = EditRecipe::default();
-        r.lens_correction = Some(lens.clone());
-        r.generative_edit = Some(GenerativeEdit {
+    let recipe_without = EditRecipe {
+        lens_correction: Some(lens.clone()),
+        generative_edit: Some(GenerativeEdit {
             version: 1,
             canvas: None,
             artifact: None,
@@ -42,8 +41,8 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
             seed: None,
             prompt: None,
             extras: Default::default(),
-        });
-        r
+        }),
+        ..Default::default()
     };
     let out_without_core = lumina_core::render_frame(
         &frame,
@@ -61,10 +60,9 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
     // Lens distortion may not always create pure transparent/black border for small images, but auto_fill should still change pixels if border exists
     // If no border, we still check that auto_fill doesn't break and that with is not transparent
     let _ = has_transparent_pixels(&out_without_core);
-    let recipe_with = {
-        let mut r = EditRecipe::default();
-        r.lens_correction = Some(lens.clone());
-        r.generative_edit = Some(GenerativeEdit {
+    let recipe_with = EditRecipe {
+        lens_correction: Some(lens.clone()),
+        generative_edit: Some(GenerativeEdit {
             version: 1,
             canvas: None,
             artifact: None,
@@ -74,8 +72,8 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
             seed: Some(42),
             prompt: None,
             extras: Default::default(),
-        });
-        r
+        }),
+        ..Default::default()
     };
     let out_with_core = lumina_core::render_frame(
         &frame,
@@ -161,18 +159,20 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
         !with.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255),
         "auto_fill must make all pixels opaque in app preview"
     );
-    let mut recipe_without2 = EditRecipe::default();
-    recipe_without2.generative_edit = Some(GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: Some(false),
-        expand_beyond_image: None,
-        seed: None,
-        prompt: None,
-        extras: Default::default(),
-    });
+    let recipe_without2 = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(false),
+            expand_beyond_image: None,
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        }),
+        ..Default::default()
+    };
     let mut recipe_with2 = recipe_without2.clone();
     recipe_with2
         .generative_edit

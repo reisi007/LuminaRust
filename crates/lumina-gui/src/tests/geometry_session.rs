@@ -40,7 +40,7 @@ fn red_eye_picker_is_freed_while_geometry_is_active() {
 
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
     let pos = screen.center();
-    let mut pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
+    let pass = |app: &mut LuminaApp, events: Vec<egui::Event>, time: f64| {
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),

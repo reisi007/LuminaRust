@@ -61,7 +61,7 @@ fn toast_overlay_paints_message_and_dismiss() {
     // frames on the SAME context (like the live event loop) and assert
     // on the second.
     let ctx = egui::Context::default();
-    let mut run = |app: &mut LuminaApp| {
+    let run = |app: &mut LuminaApp| {
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -116,7 +116,7 @@ fn toast_does_not_block_thumbnail_clicks() {
     // `run` lebt nur in diesem Block: Danach endet sein Mutable-Borrow
     // von `app`, sodass die Abschluss-Asserts wieder an `app` dürfen
     // (ohne `drop` auf einem Non-Drop-Typ — Clippy `drop_non_drop`).
-    let (center, end_time) = {
+    let (_, end_time) = {
         let mut run = |events: Vec<egui::Event>| {
             t += 1.0 / 60.0;
             let mut output = ctx.run_ui(

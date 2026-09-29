@@ -271,7 +271,7 @@ fn auto_level_applies_rotation_and_persists_fingerprint() {
 /// stash and no recipe/sidecar write.
 #[test]
 fn auto_level_low_confidence_reports_and_saves_nothing() {
-    let mut harness = CropHarness::new();
+    let harness = CropHarness::new();
     let (directory, mut app) = crop_app(&harness.ctx);
     let source = directory.path().join("photo.png");
     let sidecar = lumina_sidecar::sidecar_path_for(&source);

@@ -32,6 +32,11 @@ pub use source_action_refs::{
     validate_source_action_bundle_reference, validate_source_action_spec, SourceActionArtifactRef,
 };
 
+// SIDECAR-SUFFIX-CONST: the one definition of the two sidecar file suffixes,
+// plus the path builder derived from it.
+mod sidecar_paths;
+pub use sidecar_paths::{sidecar_path_for, SIDECAR_FILE_SUFFIX, ZDATA_FILE_SUFFIX};
+
 // R5-DUST-23-FOLLOWUP: shared spot IDs, entry normalization and artifact
 // status live in one small module so CLI and GUI cannot classify the same
 // typed/extras operation differently.
@@ -2923,15 +2928,6 @@ pub enum ArtifactStatus {
     /// verification. A corrupt artifact must never be reported as available;
     /// callers treat it like missing data with a visible message.
     Corrupt,
-}
-
-/// Returns the sidecar path immediately next to `source`.
-pub fn sidecar_path_for(source: &Path) -> PathBuf {
-    let filename = source
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    source.with_file_name(format!("{filename}.lumina.json"))
 }
 
 pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {

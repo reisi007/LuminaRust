@@ -43,9 +43,9 @@ fn sort_buttons_are_clickable_in_the_drawer() {
 #[test]
 fn grid_drag_drop_reorders_and_switches_to_custom() {
     let dir = tempfile::tempdir().unwrap();
-    let a = stub_raw(dir.path(), "a.cr3");
+    stub_raw(dir.path(), "a.cr3");
     stub_raw(dir.path(), "b.cr3");
-    let c = stub_raw(dir.path(), "c.cr3");
+    stub_raw(dir.path(), "c.cr3");
     let mut app = new_app();
     scan(&mut app, dir.path());
     // Resolve the stable cell ids before the drag (path-keyed, order-independent).

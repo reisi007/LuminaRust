@@ -58,7 +58,7 @@ fn spot_heal_headless_quick_heal_q_shortcut_and_render() {
     // PSNR vs before: use core direct render for determinism
     let frame_before = lumina_core::ImageFrame::new(8, 8, {
         let mut p = Vec::new();
-        for y in 0..8 {
+        for _ in 0..8 {
             for x in 0..8 {
                 let v = if x < 4 { 0 } else { 255 };
                 p.extend_from_slice(&[v, v, v, 255]);
@@ -93,7 +93,6 @@ fn spot_heal_headless_quick_heal_q_shortcut_and_render() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("spot.png");
     std::fs::write(&src, LuminaApp::sample_image_png()).unwrap();
-    let mut app2 = new_app();
     // Simulate sidecar save via recipe extras JSON roundtrip
     let json = serde_json::to_string(app.recipe()).unwrap();
     let decoded: EditRecipe = serde_json::from_str(&json).unwrap();

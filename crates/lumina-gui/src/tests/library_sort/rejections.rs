@@ -115,7 +115,7 @@ fn sort_actions_leave_sidecar_and_original_untouched() {
 #[test]
 fn grid_drag_of_a_stack_member_moves_the_whole_unit() {
     let dir = tempfile::tempdir().unwrap();
-    let a = stub_raw(dir.path(), "a.cr3");
+    stub_raw(dir.path(), "a.cr3");
     let b = stub_raw(dir.path(), "b.cr3");
     let c = stub_raw(dir.path(), "c.cr3");
     stub_raw(dir.path(), "d.cr3");

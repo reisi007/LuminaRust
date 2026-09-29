@@ -216,7 +216,7 @@ fn preview_center_clamp_swaps_inverted_bounds_without_panic() {
     ));
 
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-    let mut pass = |app: &mut LuminaApp, time: f64| {
+    let pass = |app: &mut LuminaApp, time: f64| {
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),

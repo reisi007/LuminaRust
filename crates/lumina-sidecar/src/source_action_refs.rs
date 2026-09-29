@@ -53,7 +53,7 @@ pub fn validate_source_action_bundle_reference(
             reference.id
         ));
     }
-    if !relative.ends_with(".lumina.zdata") {
+    if !relative.ends_with(crate::ZDATA_FILE_SUFFIX) {
         return Err(format!(
             "source action `{}` relative_path must name a .lumina.zdata bundle",
             reference.id

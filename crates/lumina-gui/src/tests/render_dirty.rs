@@ -467,12 +467,12 @@ fn the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs() {
     open_and_decode(&mut app, source.display().to_string());
     let ctx = egui::Context::default();
     let mut held = egui::RawInput::default(); // a held primary button
-    held.events = vec![egui::Event::PointerButton {
+    held.events.push(egui::Event::PointerButton {
         pos: egui::pos2(1.0, 1.0),
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: Default::default(),
-    }];
+    });
     app.mark_dirty(); // 1) a pure view edit (bare `mark_dirty`, as zoom/pan use)
     app.render().unwrap();
     app.last_edit_time = 0.01; // a t=0 context keeps this inside the window

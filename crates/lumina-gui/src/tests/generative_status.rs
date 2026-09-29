@@ -266,18 +266,20 @@ fn generative_auto_fill_hook_and_caller_convention() {
         opaque_pixels.extend_from_slice(&[100, 100, 100, 255]);
     }
     let opaque = ImageFrame::new(4, 4, opaque_pixels).unwrap();
-    let mut recipe = EditRecipe::default();
-    recipe.generative_edit = Some(GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: Some(true),
-        expand_beyond_image: None,
-        seed: Some(1),
-        prompt: None,
-        extras: Default::default(),
-    });
+    let recipe = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: Some(true),
+            expand_beyond_image: None,
+            seed: Some(1),
+            prompt: None,
+            extras: Default::default(),
+        }),
+        ..Default::default()
+    };
     let ctx = RenderContext {
         recipe: &recipe,
         camera_white_balance: None,

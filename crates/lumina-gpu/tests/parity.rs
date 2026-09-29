@@ -38,7 +38,7 @@ use lumina_sidecar::{
     NoiseReduction, Perspective, PointColor, PointColorEntry, Presence, RedEyeCorrection,
     RedEyeRegion, Sharpening, SourceActionArtifactRef, SourceActionKind, SourceActionSpec,
     SpotRemoval, SpotRemovalMode, Upright, UprightAnalysis, Vignette, DENOISE_AI_VERSION,
-    SOURCE_ACTION_VERSION,
+    SOURCE_ACTION_VERSION, ZDATA_FILE_SUFFIX,
 };
 use std::collections::BTreeMap;
 
@@ -2826,7 +2826,7 @@ fn source_action(id: &str) -> SourceActionSpec {
         kind: SourceActionKind::DustRemoval,
         artifact: SourceActionArtifactRef {
             id: id.into(),
-            relative_path: format!("{id}.lumina.zdata"),
+            relative_path: format!("{id}{ZDATA_FILE_SUFFIX}"),
             checksum: "unused".into(),
         },
     }

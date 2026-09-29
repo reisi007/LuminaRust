@@ -1,10 +1,3 @@
-#![allow(
-    clippy::identity_op,
-    clippy::field_reassign_with_default,
-    clippy::chunks_exact_to_as_chunks,
-    unused_variables,
-    unused_mut
-)]
 //! Shared eframe application for the native desktop GUI.
 
 // Native-only capabilities (background thumbnail pool, disk-cache probes,
@@ -1164,7 +1157,7 @@ pub fn clip_fractions(frame: &ImageFrame) -> (f64, f64) {
     }
     let mut shadow = 0usize;
     let mut highlight = 0usize;
-    for px in frame.pixels.chunks_exact(4) {
+    for px in frame.pixels.as_chunks::<4>().0 {
         if px[0] == 0 && px[1] == 0 && px[2] == 0 {
             shadow += 1;
         } else if px[0] == 255 && px[1] == 255 && px[2] == 255 {
@@ -12555,7 +12548,9 @@ mod tests {
     fn avg_luminance(frame: &ImageFrame) -> f64 {
         let sum: u64 = frame
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
             .sum();
         sum as f64 / (frame.width as f64 * frame.height as f64 * 3.0)

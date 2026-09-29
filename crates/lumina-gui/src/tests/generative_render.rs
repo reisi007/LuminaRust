@@ -38,24 +38,26 @@ fn generative_expand_golden_preview_headless() {
         ],
     )
     .unwrap();
-    let mut recipe = EditRecipe::default();
-    recipe.generative_edit = Some(GenerativeEdit {
-        version: 1,
-        canvas: Some(GenerativeCanvas {
-            output_width: 6,
-            output_height: 6,
-            source_offset_x: 1,
-            source_offset_y: 1,
+    let recipe = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 6,
+                output_height: 6,
+                source_offset_x: 1,
+                source_offset_y: 1,
+                extras: Default::default(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: None,
+            prompt: None,
             extras: Default::default(),
         }),
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: None,
-        expand_beyond_image: Some(true),
-        seed: None,
-        prompt: None,
-        extras: Default::default(),
-    });
+        ..Default::default()
+    };
     let ctx = RenderContext {
         recipe: &recipe,
         camera_white_balance: None,
@@ -77,14 +79,14 @@ fn generative_expand_golden_preview_headless() {
         .unwrap()
         .frame;
     assert_eq!((expanded.width, expanded.height), (6, 6));
-    let src_origin_idx = (1 * 6 + 1) * 4;
+    let src_origin_idx = (6 + 1) * 4;
     let src_idx = 0;
     assert_eq!(
         &expanded.pixels[src_origin_idx..src_origin_idx + 4],
         &frame.pixels[src_idx..src_idx + 4]
     );
     let center_idx = (2 * 6 + 2) * 4;
-    let src_1_1_idx = (1 * 4 + 1) * 4;
+    let src_1_1_idx = (4 + 1) * 4;
     assert_eq!(
         &expanded.pixels[center_idx..center_idx + 4],
         &frame.pixels[src_1_1_idx..src_1_1_idx + 4]

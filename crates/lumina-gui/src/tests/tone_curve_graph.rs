@@ -378,12 +378,14 @@ fn display_sampler_matches_core_render() {
         pixels.extend_from_slice(&[v, v, v, 255]);
     }
     let ramp = ImageFrame::new(256, 1, pixels).unwrap();
-    let mut recipe = EditRecipe::default();
-    recipe.curves = Some(Curves {
-        version: 1,
-        master: points.clone(),
-        channels: CurveChannels::default(),
-    });
+    let recipe = EditRecipe {
+        curves: Some(Curves {
+            version: 1,
+            master: points.clone(),
+            channels: CurveChannels::default(),
+        }),
+        ..Default::default()
+    };
     let context = RenderContext {
         recipe: &recipe,
         camera_white_balance: None,

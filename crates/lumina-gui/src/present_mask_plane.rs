@@ -170,7 +170,7 @@ impl LuminaApp {
             return;
         }
         let rows_per_band = zero_band_rows(width, ZERO_BAND_BYTES);
-        let mut band = vec![0u16; width as usize * rows_per_band as usize];
+        let band = vec![0u16; width as usize * rows_per_band as usize];
         let mut y = 0u32;
         let mut failed = false;
         while y < height {

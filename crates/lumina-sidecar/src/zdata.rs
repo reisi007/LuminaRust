@@ -760,7 +760,7 @@ pub fn zdata_path_for(source: &Path) -> PathBuf {
         .file_name()
         .map(|name| name.to_string_lossy())
         .unwrap_or_default();
-    source.with_file_name(format!("{filename}.lumina.zdata"))
+    source.with_file_name(format!("{filename}{}", crate::ZDATA_FILE_SUFFIX))
 }
 
 impl ZDataContainer {

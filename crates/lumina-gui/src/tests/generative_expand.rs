@@ -13,24 +13,26 @@ fn generative_expand_synthetic_8x8_expand_true_creates_larger_canvas() {
         pixels.extend_from_slice(&[42, 42, 42, 255]);
     }
     let frame = ImageFrame::new(8, 8, pixels).unwrap();
-    let mut recipe = EditRecipe::default();
-    recipe.generative_edit = Some(GenerativeEdit {
-        version: 1,
-        canvas: Some(GenerativeCanvas {
-            output_width: 12,
-            output_height: 12,
-            source_offset_x: 2,
-            source_offset_y: 2,
+    let recipe = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: Some(GenerativeCanvas {
+                output_width: 12,
+                output_height: 12,
+                source_offset_x: 2,
+                source_offset_y: 2,
+                extras: Default::default(),
+            }),
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(true),
+            seed: None,
+            prompt: None,
             extras: Default::default(),
         }),
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: None,
-        expand_beyond_image: Some(true),
-        seed: None,
-        prompt: None,
-        extras: Default::default(),
-    });
+        ..Default::default()
+    };
     let ctx = RenderContext {
         recipe: &recipe,
         camera_white_balance: None,
@@ -85,18 +87,20 @@ fn generative_expand_false_is_cropped_to_image() {
     // Expand off (Default „auf Bild beschneiden"): the shared core render
     // leaves the frame untouched — no canvas, no second pass.
     let frame = ImageFrame::new(8, 8, vec![10u8; 8 * 8 * 4]).unwrap();
-    let mut recipe = EditRecipe::default();
-    recipe.generative_edit = Some(GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: None,
-        expand_beyond_image: Some(false),
-        seed: None,
-        prompt: None,
-        extras: Default::default(),
-    });
+    let recipe = EditRecipe {
+        generative_edit: Some(GenerativeEdit {
+            version: 1,
+            canvas: None,
+            artifact: None,
+            keep_generative_content: None,
+            auto_fill_transparent: None,
+            expand_beyond_image: Some(false),
+            seed: None,
+            prompt: None,
+            extras: Default::default(),
+        }),
+        ..Default::default()
+    };
     let ctx = RenderContext {
         recipe: &recipe,
         camera_white_balance: None,

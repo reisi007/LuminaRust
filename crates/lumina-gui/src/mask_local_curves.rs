@@ -71,7 +71,6 @@ impl LuminaApp {
     /// pending history snapshot byte-for-byte unchanged.
     fn mutate_selected_local_curve(
         &mut self,
-        channel: &str,
         action: &str,
         mutate: &dyn Fn(&mut LocalAdjustments) -> Result<(), String>,
     ) -> Result<(), GuiError> {
@@ -108,7 +107,7 @@ impl LuminaApp {
         let stored = points.len();
         let set =
             |recipe: &mut LocalAdjustments| recipe.set_local_curve_channel(channel, points.clone());
-        self.mutate_selected_local_curve(channel, &format!("mask.local.curves.{channel}"), &set)?;
+        self.mutate_selected_local_curve(&format!("mask.local.curves.{channel}"), &set)?;
         info!("GUI interaction: local curves.{channel} replaced ({stored} points)");
         Ok(())
     }
@@ -179,11 +178,7 @@ impl LuminaApp {
     /// Reset one local curve channel back to the identity.
     pub fn reset_mask_local_curve_channel(&mut self, channel: &str) -> Result<(), GuiError> {
         let reset = |recipe: &mut LocalAdjustments| recipe.reset_local_curve_channel(channel);
-        self.mutate_selected_local_curve(
-            channel,
-            &format!("mask.local.curves.{channel}.reset"),
-            &reset,
-        )
+        self.mutate_selected_local_curve(&format!("mask.local.curves.{channel}.reset"), &reset)
     }
 
     /// Reset every local curve of the selected mask layer.
