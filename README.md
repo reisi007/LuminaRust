@@ -200,7 +200,8 @@ keinen bestandenen Kamera-Golden-Test.
 Die lokalen Nutzer-Fixtures `sample-data/raw/aircraft-landscape.cr3` und
 `sample-data/raw/aircraft-portrait.cr3` sind für den Testlauf geeignet. Der
 echte Testlauf lautet zum Beispiel
-`LUMINA_RAW_FIXTURE="$PWD/sample-data/raw/aircraft-landscape.cr3" rustup run stable cargo test -p lumina-raw -- --ignored`.
+`rustup run stable cargo test -p lumina-raw` (beide committeten Fixtures laufen
+unbedingt; `LUMINA_RAW_FIXTURE` wird nur noch von den Decode-Benches gelesen).
 Die Golden-Dimensionen (6032×4024) gelten für LibRaw 0.22.2; die CI läuft
 deshalb im gepinnten `lumina-ci`-Container (LibRaw 0.22.2; siehe Abschnitt CI
 und `docker/Dockerfile`).

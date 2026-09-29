@@ -363,10 +363,10 @@ die Dateien per `include_bytes!` fest verdrahtet) sowie die Decode-Benchmarks in
 `LUMINA_RAW_FIXTURE`). Die Decode-Pipeline benötigt funktional nur RAW-Bytes;
 LuminaRust kann mit **einem** RAW-Fixture arbeiten. Das generierte Fixture müsste
 jedoch **beide Rollen** erfüllen (landscape-Orientierung 1 **und**
-portrait-Orientierung 5), d.h. entweder zwei generierte Dateien oder eine
-Test-Refaktorierung. Die `#[ignore]`-Test
-`optional_real_fixture_checks_decode_orientation_and_dimensions` bleibt
-unabhängig (eigene, separat lizenzierte RAW via Env-Var). Die Fixture-DATEIEN
+portrait-Orientierung 8), d.h. entweder zwei generierte Dateien oder eine
+Test-Refaktorierung. Der env-gegatete Test `optional_real_fixture_checks_decode_orientation_and_dimensions`
+ist entfallen (FIXTURE-ENV-1, 2026-09-29); beide committeten Fixtures werden
+unbedingt dekodiert. Die Fixture-DATEIEN
 selbst wurden in diesem Schritt **nicht** verändert/entfernt — die Entscheidung
 liegt beim Build-Agenten/Eigentümer.
 

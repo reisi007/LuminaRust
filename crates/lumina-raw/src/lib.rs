@@ -1347,22 +1347,21 @@ mod tests {
         }
     }
 
+    /// FIXTURE-ENV-1: reads the committed CR3s via `include_bytes!` like the
+    /// neighbouring tests (no env gate, no skip branch), geometry pinned per fixture.
     #[test]
-    #[ignore = "set LUMINA_RAW_FIXTURE to a licensed fixture"]
-    fn optional_real_fixture_checks_decode_orientation_and_dimensions() {
-        let path = std::env::var_os("LUMINA_RAW_FIXTURE")
-            .expect("LUMINA_RAW_FIXTURE must point to a licensed RAW fixture");
-        let image = decode_file(std::path::PathBuf::from(path)).unwrap();
-        assert!(image.metadata.width > 0 && image.metadata.height > 0);
-        assert!((1..=8).contains(&image.metadata.orientation));
-        assert_eq!(
-            (image.frame.width, image.frame.height),
-            (image.metadata.width, image.metadata.height)
-        );
-        assert_eq!(
-            image.frame.pixels.len(),
-            image.frame.width as usize * image.frame.height as usize * 4
-        );
+    fn committed_fixtures_decode_orientation_and_dimensions() {
+        let landscape = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
+        let portrait = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
+        let check = |(name, bytes, orientation, w, h): (&str, &[u8], u8, u32, u32)| {
+            let RawImage { metadata, frame } = decode_bytes(bytes, name).unwrap();
+            let len = w as usize * h as usize * 4;
+            assert_eq!(metadata.orientation, orientation, "{name} orientation");
+            assert_eq!((frame.width, frame.height), (w, h), "{name} frame");
+            assert_eq!(frame.pixels.len(), len, "{name} buffer");
+        };
+        check(("aircraft-landscape.cr3", landscape, 1, 6032, 4024));
+        check(("aircraft-portrait.cr3", portrait, 8, 4024, 6032));
     }
 
     #[test]

@@ -11,7 +11,7 @@
 1919 crates/lumina-core/src/mask_loader.rs
 1531 crates/lumina-lensfun/src/lib.rs  # 2026-09-25: LENSFUN-DB-33 (1789 -> 1531, DB-Aufloesung nach db_path.rs/db_layers.rs/db_timestamp.rs/db_error.rs/system_load.rs extrahiert, corrector_rows.rs abgespalten; F1-Remediierung ergaenzt den User-DB-Merge und die echte timestamp.txt-Semantik, F3 entfernt den mutierenden env-Override-Test)
 1665 crates/lumina-core/src/generative.rs
-1572 crates/lumina-raw/src/lib.rs
+1571 crates/lumina-raw/src/lib.rs  # 2026-09-29 FIXTURE-ENV-1 (15 entfernt/14 hinzu, Netto −1; Verifikation: Datei 1571).
 1564 crates/lumina-core/src/tone.rs
 1050 crates/lumina-gpu/src/geometry.rs  # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
 516 crates/lumina-gpu/src/lensfun.rs  # neu 2026-09-18: GPU-LENSFUN-PARITY-1 Resample-Pass (kein Split ohne Kohaesion)

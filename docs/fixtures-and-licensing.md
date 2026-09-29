@@ -49,16 +49,15 @@ reads committed RAW fixtures, see §1.2).
 | File | Dimensions (W×H) | EXIF orientation | Used by |
 | --- | --- | --- | --- |
 | `aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw` test `aircraft_landscape_fixture_has_expected_geometry_and_metadata`; decode benches |
-| `aircraft-portrait.cr3` | 4024×6032 | 5 | `lumina-raw` test `aircraft_portrait_fixture_applies_exif_orientation`; decode benches |
+| `aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw` test `aircraft_portrait_fixture_applies_exif_orientation`; decode benches |
 
 - Decoded via `include_bytes!("../../../sample-data/raw/<file>.cr3")` directly in
   `crates/lumina-raw/src/lib.rs` tests (no env gating).
 - Decode benchmarks in `crates/lumina-bench/bench/decode.rs` read these files
   from the directory named by the **`LUMINA_RAW_FIXTURE`** environment variable;
   without it they print a skip note and return early (no panic, no fallback).
-- A separate, **ignored** test `optional_real_fixture_checks_decode_orientation_and_dimensions`
-  is `#[ignore = "set LUMINA_RAW_FIXTURE to a licensed fixture"]` — it expects the
-  operator to point at a *separately licensed* RAW via the env var.
+- (FIXTURE-ENV-1, 2026-09-29: der env-gegatete Test ist entfallen; beide
+  Fixtures laufen unbedingt, siehe vorigen Punkt.)
 
 ### 1.3 Golden reference images
 
