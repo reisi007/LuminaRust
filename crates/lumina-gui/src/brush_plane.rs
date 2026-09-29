@@ -110,6 +110,28 @@ impl LuminaApp {
         Ok(true)
     }
 
+    /// GPU-MASKPLANE-BRUSH-50: record whether a live-brush upload attempt
+    /// actually wrote to the VRAM plane.
+    ///
+    /// `written == false` means "nothing reached the plane": either
+    /// `ensure_vram` failed, the mark could not be stamped, or the tile upload
+    /// itself failed. Every one of those leaves whatever plane was resident
+    /// before **untouched and still-looking-current**, because the caller sets
+    /// `drawing = true` before attempting the upload
+    /// (`preview_masks::handle_mask_tool_drag`). Keeping that plane would present
+    /// stale coverage, so the flag demotes
+    /// [`Self::vram_mask_plane_intent`] to [`MaskPlaneIntent::Clear`] and the
+    /// per-render sync wipes it instead of silently retaining it.
+    ///
+    /// Split out as a separate, pure method on purpose: `gpu_upload_brush_tile`
+    /// returns early when no adapter is bound, so an adapter-less machine can
+    /// never reach its failure branches and therefore could not observe the
+    /// error path at all. This recorder is what the headless test drives.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn note_live_brush_upload_outcome(&mut self, written: bool) {
+        self.live_brush_plane_stale = !written;
+    }
+
     /// Rebuild (when needed) and stamp one live mark into the selected mask's
     /// plane. Returns the tiles that changed and whether a full prompt upload is
     /// required. Kept separate from wgpu so headless tests exercise identity and
@@ -155,6 +177,7 @@ impl LuminaApp {
         if let Some(gpu) = self.gpu.as_ref() {
             if let Err(error) = gpu.ensure_vram(width, height) {
                 log::warn!("gpu ensure_vram({width}x{height}) failed: {error}");
+                self.note_live_brush_upload_outcome(false);
                 return;
             }
         }
@@ -163,10 +186,12 @@ impl LuminaApp {
             Ok(value) => value,
             Err(error) => {
                 self.show_error(error);
+                self.note_live_brush_upload_outcome(false);
                 return;
             }
         };
         let Some(gpu) = self.gpu.as_ref() else {
+            self.note_live_brush_upload_outcome(false);
             return;
         };
         if rebuilt {
@@ -177,6 +202,9 @@ impl LuminaApp {
                     width,
                     height
                 );
+                self.note_live_brush_upload_outcome(false);
+            } else {
+                self.note_live_brush_upload_outcome(true);
             }
             return;
         }
@@ -201,6 +229,14 @@ impl LuminaApp {
             }
             let tile_bytes: &[u8] = bytemuck::cast_slice(&tile_u16);
             if let Err(error) = gpu.upload_mask_tile(x0, y0, tile_width, tile_height, tile_bytes) {
+                // GPU-MASKPLANE-BRUSH-50: deliberately does NOT mark the plane
+                // stale. A failed *tile* leaves the plane holding the live brush
+                // content it already had, one dab behind — which is exactly what
+                // `KeepLiveBrush` assumes. Demoting to `Clear` here would erase
+                // the user's in-progress brush over a single failed tile, which
+                // is a worse outcome than the lost dab. Staleness is reserved for
+                // the paths where the resident plane may belong to something
+                // else entirely (see `note_live_brush_upload_outcome`).
                 log::warn!(
                     "brush tile upload failed at tile ({x0},{y0}) ({tile_width}x{tile_height}): {error}"
                 );

@@ -76,6 +76,18 @@ impl LuminaApp {
         if !self.render_mask_layers.is_empty() {
             return MaskPlaneIntent::Push;
         }
+        // GPU-MASKPLANE-BRUSH-50: a live brush plane only survives while the
+        // upload that would have replaced it actually wrote. Every failure path
+        // in `gpu_upload_brush_tile` leaves the previous plane resident and
+        // still-resident-looking, because `preview_masks` sets `drawing = true`
+        // *before* the upload is attempted. Keeping that plane would present
+        // another mask's coverage, which is the very thing the clear exists to
+        // prevent — so a failed upload demotes the intent to `Clear` instead of
+        // silently keeping stale residency. The demo normal case is unaffected:
+        // a successful upload clears the flag and the plane survives.
+        if self.live_brush_plane_stale {
+            return MaskPlaneIntent::Clear;
+        }
         // A live brush plane is the one coverage that is *not* reproducible by a
         // full-plane write, and it is composited exactly while the present
         // gate's live-gesture branch allows it. Mirroring that triple here

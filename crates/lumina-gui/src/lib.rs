@@ -1989,6 +1989,12 @@ pub struct LuminaApp {
     /// dimensions. A mismatch forces a full selected-prompt rebuild/upload.
     #[cfg(feature = "gpu")]
     brush_mask_plane_scope: Option<(String, String, String, u32, u32)>,
+    /// GPU-MASKPLANE-BRUSH-50: the live brush upload wrote nothing, so whatever
+    /// plane is still resident must not be presented as current. Set by
+    /// `note_live_brush_upload_outcome(false)` and read by
+    /// `vram_mask_plane_intent`, which demotes the intent to `Clear`.
+    #[cfg(feature = "gpu")]
+    live_brush_plane_stale: bool,
     /// GUI-WGPU-PRESENT-1: the eframe wgpu renderer's shared state. When
     /// present, `lumina-gpu` was constructed on the *same* Device/Queue
     /// (see `attach_wgpu_render_state`), so the VRAM overlay composite can be
@@ -2792,6 +2798,8 @@ impl LuminaApp {
             brush_mask_plane_dims: None,
             #[cfg(feature = "gpu")]
             brush_mask_plane_scope: None,
+            #[cfg(feature = "gpu")]
+            live_brush_plane_stale: false,
             frame_thumb_enqueued: 0,
             frame_thumbs_ready: 0,
             // PREVIEW-CACHE-FEATURE: lazy — no worker pool until the first
@@ -12126,6 +12134,8 @@ mod tests {
     mod gpu_mask_drafts;
     mod gpu_mask_gate;
     mod gpu_mask_plane;
+    // GPU-MASKPLANE-BRUSH-50: a failed live-brush upload clears the plane.
+    mod gpu_mask_plane_brush;
     mod gpu_routing;
     // GPU-ROUTE-LOG-54: editorial present refusals explained in the trace.
     // Declared here rather than beside the other `gpu_*` modules to keep
