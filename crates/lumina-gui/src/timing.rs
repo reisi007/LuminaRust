@@ -325,10 +325,10 @@ impl LuminaApp {
     #[cfg(feature = "gpu")]
     pub(crate) fn note_editorial_present_refusal(&mut self, reason: &str) {
         if self.timing.editorial_refusal_traced.as_deref() == Some(reason) {
-            trace!("GUI timing: editorial present refusal unchanged");
+            trace!("GUI timing: editorial present refusal unchanged reason={reason}");
             return;
         }
-        trace!("GUI timing: editorial present refusal, keeping CPU route");
+        trace!("GUI timing: editorial present refusal, keeping CPU route reason={reason}");
         self.timing.editorial_refusal_traced = Some(reason.to_owned());
         #[cfg(all(test, feature = "gpu"))]
         EDITORIAL_REFUSAL_TRACES.with(|traces| traces.set(traces.get() + 1));

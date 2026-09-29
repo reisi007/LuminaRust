@@ -175,8 +175,15 @@ impl LuminaApp {
     ///   dimensions must match the preview dimensions — a full-resolution CPU
     ///   result whose geometry differs from the (draft-sized) VRAM content
     ///   must win even if a stale freshness flag ever slipped through.
+    ///
+    /// GPU-ROUTE-LOG-54: `pub(crate)` (not private) so the headless tests can
+    /// drive the **real** branch. The editorial gates are all evaluated before
+    /// any GPU state is touched, so a machine without an adapter still reaches
+    /// them and can prove that closing the mask gate reports itself. A test that
+    /// called `note_editorial_present_refusal` directly would pass with this
+    /// wiring deleted — the vacuous-green shape, measured.
     #[cfg(feature = "gpu")]
-    fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
+    pub(crate) fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
         // GPU-ROUTE-LOG-54: the editorial gates are checked one at a time so the
         // log can name the branch that actually closed. The evaluation ORDER is
         // unchanged from the historical combined condition, so the routing

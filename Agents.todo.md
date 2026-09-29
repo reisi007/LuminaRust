@@ -99,6 +99,49 @@ Future-Release-Tasks proaktiv vorgezogen werden, sobald keine aktuelle
 Abhängigkeit und kein unüberwindbares Hardware-/User-Gate blockiert. Die
 Releaseplan-Zuordnung und die bestehenden Abnahme-Gates bleiben dabei unverändert.
 
+## Umgebungsgrenze: headless Maschine ohne GPU (Build-Agent, 2026-09-29)
+
+**Was eine headless Maschine ohne Adapter prüfen kann: den CPU-Pfad vollständig.**
+`cargo test -p lumina-gui --lib` laeuft dort ohne wgpu-Adapter grün; die
+gesamte Rezept-/Render-/Sidecar-Logik, alle klickbaren headless GUI-Tests und
+alle CLI-/MCP-Pfade sind headless abgedeckt. Ein erster Lauf auf einer solchen
+Maschine (LibRaw 0.22.2 wie im CI-Image, 5 `#[ignore]`-Tests) ergab
+`919 passed / 2 failed / 5 ignored` — die zwei roten Tests lagen in neuem
+Testcode, nicht im Produktionspfad, und sind im selben Lauf behoben worden.
+
+**Was dort ausdruecklich NICHT behauptet wird:** GPU-/wgpu-Paritaet, der
+Paint-Schritt (Shader-Kompilierung, MSAA, Textur-Sampling, Treiberfehler) und
+jede Aussage ueber VRAM-Pixel. Das ist eine **benannte Luecke mit
+Hardware-Gate**, kein gruener Pass und kein stiller Ersatz (`DoD.md` §10).
+Betroffen sind `GPU-PARITY-HW-28`, `R5-DUST-23-FOLLOWUP`, `R5-BRUSH-24`,
+`R5-MASKVIS-25`, `GPU-MASKPLANE-CLEAR-PERF-51` und die kittest-Goldens.
+
+**Die Grenze ist nicht die einzige offene Sache — das wird hier ausdruecklich
+nicht behauptet.** Eine headless Maschine ohne GPU loest keinen Task aus
+Block B und ersetzt keinen manuellen Lauf:
+
+| Art der Luecke | Beispiel | Was sie braucht |
+| --- | --- | --- |
+| **Adapter/Hardware** | `GPU-PARITY-HW-28`, die kittest-Goldens | echter wgpu-Adapter (Metal/Vulkan) |
+| **Eigentuemer-Entscheid** | `NAMING-F1` (Produktname), `JSON-FLOAT-ROUNDTRIP` (`float_roundtrip` ja/nein) | Antwort des Eigentuemers; ein Build-Agent erfindet keinen Produktnamen |
+| **Referenz-Fixture** | `GOLDEN-BASELINE-32`, `MCP-PARITY-C` | gepinnte Referenzmaschine bzw. echte RAW-Fixture-Reihe |
+| **Menschlicher Lauf** | `F-103-N6` | `RUST_LOG=trace` GUI-Lauf nach R5-LOG-1 durch einen Menschen |
+
+**Konsequenz fuer die Abnahme:** ein Task gilt erst als abgeschlossen, wenn die
+zugehoerige Abnahme auf der **jeweils zutreffenden** Umgebung gemessen wurde. Ein
+CPU-gate, das gruen ist, deckt die GPU-Paritaet desselben Tasks **nicht** ab —
+die beiden Aussagen werden getrennt gefuehrt und nie zusammengefasst. Umgekehrt
+gilt: eine fehlende GPU-Paritaet invalidiert ein gruenes CPU-Ergebnis nicht.
+
+**Handwerkliche Folge fuer Agenten auf so einer Maschine:** `#[ignore]`-Tests
+mit `#[cfg(feature = "gpu")]` sind dort **echt lauffaehig**, wenn sie keine
+Adapter-routen betreten (die Testsuite selbst benennt das so). Ein Test, der an
+`CustomNativeAdapterSelectionError("No adapter found")` scheitert, ist **kein
+Befund am Produkt** — das ist die Hardware-Grenze in ihrer eigenen Form. Ebenso
+ist ein OOM/SIGKILL beim Codegen **kein** Defekt: er ist eine RAM-Erschoepfung
+der Bauumgebung und wird durch Wiederholen mit freiem Speicher neu gemessen, nicht
+durch Aendern am Code.
+
 - **Block A — „Vor dem nächsten manuellen GUI/User-Test umsetzbar“:** alles,
   was ohne Rückfrage direkt umgesetzt werden kann und nicht von einem
   manuellen Test abhängt (Reihenfolge: PRIO hoch → mittel → niedrig).
