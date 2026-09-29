@@ -17,6 +17,39 @@
 
 use super::*;
 
+/// GPU-ROUTE-LOG-54: the concrete branch that closed an **editorial** gate on the
+/// VRAM present path this frame.
+///
+/// These four are *deliberate* CPU routes, not capability failures: a yellow
+/// "unsupported stages" badge for "you are looking at Before/After" would be
+/// noise, so `routing_fallback_reason` returns `None` for them by design. The
+/// screen is therefore silent **on purpose** — but the log was silent by
+/// accident, which made the GPU→CPU decision unexplainable in an `RUST_LOG=trace`
+/// acceptance run. Each constant names its own branch so the log says *which*
+/// gate closed, never a blanket "gate closed" (the four are indistinguishable
+/// otherwise, and `GPU-PARITY-MASKGATE-1` spent two waves debugging exactly
+/// that gate).
+///
+/// Capability and structural refusals are deliberately **not** listed here:
+/// they already reach the user through the badge with precise reasons
+/// (`gpu_routing.rs`), or already carry a loud `warn!`.
+#[cfg(feature = "gpu")]
+pub(crate) mod editorial_refusal {
+    /// The VRAM content is stale (no render, or a render key is outstanding), so
+    /// presenting it would show pixels that do not match the displayed recipe.
+    pub(crate) const VRAM_STALE: &str = "vram_stale";
+    /// Before/After shows the unmodified source by definition; the VRAM tone
+    /// output is never that frame.
+    pub(crate) const BEFORE_AFTER: &str = "before_after";
+    /// A preview ROI crops to a sub-rectangle the source-sized VRAM texture
+    /// cannot express.
+    pub(crate) const PREVIEW_ROI: &str = "preview_roi";
+    /// The evaluated plane set is not exactly the selected mask, or an editorial
+    /// mask-visibility gate is closed, so the VRAM composite cannot carry the
+    /// matte the CPU painter would draw (`R5-MASKVIS-25`).
+    pub(crate) const MASK_GATE: &str = "mask_gate";
+}
+
 impl LuminaApp {
     /// The texture upload is driven by the preview-area path.
     ///
@@ -144,7 +177,20 @@ impl LuminaApp {
     ///   must win even if a stale freshness flag ever slipped through.
     #[cfg(feature = "gpu")]
     fn gpu_present_if_ready(&mut self) -> Option<(egui::TextureId, [usize; 2])> {
-        if !self.vram_fresh || self.before_after || self.preview_roi.is_some() {
+        // GPU-ROUTE-LOG-54: the editorial gates are checked one at a time so the
+        // log can name the branch that actually closed. The evaluation ORDER is
+        // unchanged from the historical combined condition, so the routing
+        // decision itself stays identical — only its explainability is new.
+        if !self.vram_fresh {
+            self.note_editorial_present_refusal(editorial_refusal::VRAM_STALE);
+            return None;
+        }
+        if self.before_after {
+            self.note_editorial_present_refusal(editorial_refusal::BEFORE_AFTER);
+            return None;
+        }
+        if self.preview_roi.is_some() {
+            self.note_editorial_present_refusal(editorial_refusal::PREVIEW_ROI);
             return None;
         }
         // R5-MASKVIS-25: the VRAM overlay pass combines all evaluated layers.
@@ -153,8 +199,12 @@ impl LuminaApp {
         // when the evaluated plane set is not exactly the selected mask;
         // otherwise the CPU painter can show the required selected matte.
         if !self.gpu_mask_overlay_is_selected() {
+            self.note_editorial_present_refusal(editorial_refusal::MASK_GATE);
             return None;
         }
+        // No editorial gate is closed: re-arm the throttle so a later
+        // recurrence of the same reason is reported again (R4-WARN-1 pattern).
+        self.clear_editorial_present_refusal();
         let dims = self.gpu.as_ref()?.vram_dimensions()?;
         if !self.gpu.as_ref()?.is_available() {
             return None;

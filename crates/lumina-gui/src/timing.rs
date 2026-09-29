@@ -22,7 +22,6 @@
 
 use super::*;
 use log::{info, trace};
-use std::path::Path;
 use std::time::Instant;
 
 /// One-decimal millisecond format shared by every R3-LOG-1 line.
@@ -87,6 +86,16 @@ pub(crate) struct TimingState {
     /// writer lives in the `gpu`-gated `note_vram_refusal`.
     #[cfg(feature = "gpu")]
     present_refusal_warned: Option<String>,
+    /// GPU-ROUTE-LOG-54: the last **editorial** present-refusal reason
+    /// (`mask_gate`, `before_after`, `preview_roi`, `vram_stale`) that already
+    /// produced a `trace!`. A separate memo from
+    /// [`TimingState::present_refusal_warned`] on purpose: that one throttles
+    /// *capability* `warn!`s, this one throttles *editorial* `trace!`s, and the
+    /// two throttle independently so neither can suppress the other. Same
+    /// cohesion as its writer (the `gpu`-gated
+    /// `note_editorial_present_refusal`) and never read by a routing decision.
+    #[cfg(feature = "gpu")]
+    editorial_refusal_traced: Option<String>,
     /// R5-WARN-2: the last denoise fallback `(status, reason)` that already
     /// produced a core `warn!`. The GUI render loop resolves the denoise state
     /// every tick; without this memo the core `fail_or_fallback` warned once per
@@ -95,102 +104,13 @@ pub(crate) struct TimingState {
     denoise_refusal_warned: Option<(String, String)>,
 }
 
-// ---- Pure log-line builders (single source of truth for the format) ----
-
-pub(crate) fn module_switch_event_line(module: Module) -> String {
-    format!("GUI timing: module switch event module={module:?}")
-}
-
-pub(crate) fn module_first_paint_line(module: Module, ms: f64) -> String {
-    format!(
-        "GUI timing: module switch first paint module={module:?} switch_to_paint_ms={}",
-        format_ms(ms)
-    )
-}
-
-pub(crate) fn decode_start_line(path: &str) -> String {
-    format!("GUI timing: decode start path={path}")
-}
-
-pub(crate) fn decode_done_line(path: &str, ms: f64, width: u32, height: u32) -> String {
-    format!(
-        "GUI timing: decode done path={path} decode_ms={} resolution={width}x{height}",
-        format_ms(ms)
-    )
-}
-
-pub(crate) fn decode_failed_line(path: &str, ms: f64) -> String {
-    format!(
-        "GUI timing: decode failed path={path} decode_ms={}",
-        format_ms(ms)
-    )
-}
-
-pub(crate) fn preview_index_line(folder: &Path, entries: usize, ms: f64) -> String {
-    format!(
-        "GUI timing: preview index built folder={} entries={entries} build_ms={}",
-        folder.display(),
-        format_ms(ms)
-    )
-}
-
-/// THUMB-HASH-PERF-35: one whole-file source identity that was really computed
-/// (a memo miss). `hash_ms` is the wall clock of the read+BLAKE3 pass, so a
-/// manual `RUST_LOG=trace` acceptance run (Agents.md R5-LOG-1) can *count* the
-/// hashes a browse session spent and see that they stop after the first frame.
-pub(crate) fn source_identity_hashed_line(path: &Path, bytes: u64, ms: f64) -> String {
-    format!(
-        "GUI source identity hashed (cache miss) path={} bytes={bytes} hash_ms={}",
-        path.display(),
-        format_ms(ms)
-    )
-}
-
-/// R4-SWITCH-2: the depth-limited RAW count of one folder-tree node. This walk
-/// runs synchronously on the UI thread the first time a node is shown and was
-/// the uninstrumented block behind the first Library paint; the line makes it
-/// visible in the trace (`files` is the counted number, not the walk size).
-pub(crate) fn folder_scan_line(path: &Path, files: usize, ms: f64) -> String {
-    format!(
-        "GUI timing: folder raw count folder={} files={files} scan_ms={}",
-        path.display(),
-        format_ms(ms)
-    )
-}
-
-/// R4-SWITCH-2: the one-shot cold-start warmup was armed at native startup.
-pub(crate) fn warmup_armed_line() -> String {
-    "GUI timing: warmup armed".to_string()
-}
-
-/// R4-SWITCH-2: the armed warmup was deferred this frame; `reason` is the
-/// concrete gate (`pointer down`, `no listing yet`) so a late warmup is
-/// explainable from the trace instead of an uninstrumented gap.
-pub(crate) fn warmup_deferred_line(reason: &str) -> String {
-    format!("GUI timing: warmup deferred reason={reason}")
-}
-
-pub(crate) fn thumbnail_ready_line(key: &str, ms: f64) -> String {
-    format!(
-        "GUI timing: thumbnail ready key={key} enqueue_to_ready_ms={}",
-        format_ms(ms)
-    )
-}
-
-pub(crate) fn full_render_line(ms: f64, width: u32, height: u32) -> String {
-    format!(
-        "GUI timing: full render done render_ms={} output={width}x{height}",
-        format_ms(ms)
-    )
-}
-
-pub(crate) fn texture_upload_line(target: &str, bytes: usize) -> String {
-    format!("GUI timing: texture upload target={target} bytes={bytes}")
-}
-
-pub(crate) fn texture_upload_skip_line(target: &str, saved_bytes: usize) -> String {
-    format!("GUI timing: texture upload skipped target={target} saved_bytes={saved_bytes}")
-}
+// ---- Pure log-line builders ----
+//
+// File-size-ratchet extraction (GPU-ROUTE-LOG-54): the pure format functions
+// moved to `timing_log_lines.rs` so the format of every trace line lives in one
+// readable place, separate from the stateful anchors/throttles below. Re-exported
+// rather than re-imported at the call sites, so this stays a relocation.
+pub(crate) use super::timing_log_lines::*;
 
 // ---- Emission + test capture seam ----
 
@@ -385,6 +305,59 @@ impl LuminaApp {
     pub(crate) fn clear_present_refusal_warn(&mut self) {
         self.timing.present_refusal_warned = None;
     }
+
+    /// GPU-ROUTE-LOG-54: name the **editorial** gate that closed the VRAM
+    /// present path this frame, once per reason change.
+    ///
+    /// The editorial routes are silent on screen by design (see
+    /// `present::editorial_refusal`), so this trace line is the only place the
+    /// decision is explainable — an `RUST_LOG=trace` acceptance run otherwise
+    /// cannot tell "the GPU was never asked" from "the GPU said no". The
+    /// throttle is the [`TimingState::present_refusal_warned`] pattern: the same
+    /// reason on consecutive frames emits only the cheap `unchanged` trace, so a
+    /// long before/after session cannot flood the log, while a *change* of
+    /// reason is always reported. A recurrence after a GPU-present frame is
+    /// re-armed by [`Self::clear_editorial_present_refusal`].
+    ///
+    /// `trace!` rather than `warn!` on purpose: these are deliberate, expected
+    /// routes, and a warning per frame is exactly the spam this task removes.
+    /// The capability routes that *do* warn keep their own `warn!`.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn note_editorial_present_refusal(&mut self, reason: &str) {
+        if self.timing.editorial_refusal_traced.as_deref() == Some(reason) {
+            trace!("GUI timing: editorial present refusal unchanged");
+            return;
+        }
+        trace!("GUI timing: editorial present refusal, keeping CPU route");
+        self.timing.editorial_refusal_traced = Some(reason.to_owned());
+        #[cfg(all(test, feature = "gpu"))]
+        EDITORIAL_REFUSAL_TRACES.with(|traces| traces.set(traces.get() + 1));
+    }
+
+    /// GPU-ROUTE-LOG-54: re-arm the editorial trace after a frame in which no
+    /// editorial gate closed. Without this, toggling Before/After repeatedly
+    /// would report `before_after` only once for the whole session.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn clear_editorial_present_refusal(&mut self) {
+        self.timing.editorial_refusal_traced = None;
+    }
+}
+
+// GPU-ROUTE-LOG-54: test-only count of *emitted* editorial refusal traces, so
+// a test can prove the throttle both fires on a change and stays quiet on a
+// repeat. Without the counter the debounce could silently degrade into
+// "never logs" while every test still passed. A plain `//` comment rather than
+// `///`: a doc comment on a `thread_local!` item is an `unused_doc_comments`
+// warning, because the macro cannot emit documentation for it.
+#[cfg(all(test, feature = "gpu"))]
+thread_local! {
+    static EDITORIAL_REFUSAL_TRACES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Drains the test-only editorial-refusal trace count.
+#[cfg(all(test, feature = "gpu"))]
+pub(crate) fn take_editorial_refusal_traces() -> u32 {
+    EDITORIAL_REFUSAL_TRACES.with(|traces| traces.replace(0))
 }
 
 // ---- R5-WARN-2: denoise fallback-warn throttle (the Denoise-Gate path) ----

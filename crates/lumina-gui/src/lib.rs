@@ -108,7 +108,12 @@ mod gpu_routing;
 // GUI-SRCACC-1: one strict resolver for persisted repair-region artifacts,
 // shared by active preview/export and the navigator/neighbor/thumbnail paths.
 mod source_actions;
+// File-size-ratchet extraction (GPU-ROUTE-LOG-54): the three drag-gesture tool
+// selectors. `pub use` keeps every existing path (`crate::MaskTool`, …) intact,
+// so this is a relocation with no call-site change.
+mod tool_selectors;
 use source_actions::ResolvedSourceActions;
+pub use tool_selectors::{MaskTool, SpotMode, SpotTool};
 // THUMB-HASH-PERF-35: what a source file *is* — the one persisted
 // `SourceIdentity` constructor (shared by `present` and the selection-sidecar
 // path, replacing two field-for-field copies) plus the process-wide
@@ -208,6 +213,7 @@ mod render_schedule;
 mod thumb_cache;
 mod thumb_worker;
 mod timing;
+mod timing_log_lines;
 // R3-OPEN-1 / R3-WARMUP-1 (Release 1.0): Develop-switch selection open and the
 // one-shot cold-start warmup (new logic in new files, file-size ratchet).
 mod develop_open;
@@ -1220,34 +1226,6 @@ pub fn flag_label(flag: Flag) -> &'static str {
         Flag::Reject => Str::Reject.t(),
         Flag::Unflagged => Str::Unflagged.t(),
     }
-}
-
-/// Active interactive masking tool (F-103-N4). `None` means the preview accepts
-/// the ordinary click/eyedropper interactions; any other variant arms the
-/// preview for a drag gesture that builds a [`MaskPrompt`] for the selected
-/// mask.  The tool only chooses *how* the drag is interpreted; persistence goes
-/// through the existing sidecar paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SpotTool {
-    #[default]
-    None,
-    Heal,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SpotMode {
-    #[default]
-    Heuristic,
-    Generative,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MaskTool {
-    #[default]
-    None,
-    Brush,
-    LinearGradient,
-    Radial,
 }
 
 /// Preview zoom behaviour (Lightroom-like). `Fit` is object-contain (the
@@ -12149,6 +12127,11 @@ mod tests {
     mod gpu_mask_gate;
     mod gpu_mask_plane;
     mod gpu_routing;
+    // GPU-ROUTE-LOG-54: editorial present refusals explained in the trace.
+    // Declared here rather than beside the other `gpu_*` modules to keep
+    // this insertion zero-width for the `lib.rs` ratchet: the
+    // alphabetical group above is full and ratcheted files may not grow.
+    mod gpu_route_log;
     mod treatment_panel_histogram;
     // R3-Runde-3: routing/denoise fixes (R3-ROUTING-1/-DENOISE-1/-DENOISE-2).
     mod crop_display_and_denoise_policy;
