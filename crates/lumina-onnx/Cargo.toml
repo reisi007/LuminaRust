@@ -37,3 +37,7 @@ onnx-rt = ["dep:ort"]
 # the `.lumina.zdata` codec types; test-only, so the library build stays
 # zdata-free.
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
+# FIXTURE-SKIP-VISIBLE-2: a gate needing a *pair* of variables must tell
+# "neither set" (an ordinary skip) from "one set" (a typo) apart; the
+# classification is shared test infrastructure, not product code.
+lumina-testskip = { path = "../lumina-testskip" }

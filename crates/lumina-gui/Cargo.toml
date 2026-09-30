@@ -72,6 +72,10 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
+# FIXTURE-SKIP-VISIBLE-2: a skip reason must reach the REAL stderr, because
+# libtest discards the captured output of a passing test. Dev-dependency only —
+# this is test infrastructure, never linked into the shipped binary.
+lumina-testskip = { path = "../lumina-testskip" }
 # UX-SLICE-2 (F4): the rated-badge fixture writes a conflict-free sidecar
 # (matching BLAKE3 content hash) so the golden pins badges, not a conflict
 # state. Same crate/version as the normal dependency above.

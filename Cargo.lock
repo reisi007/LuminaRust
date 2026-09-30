@@ -2147,6 +2147,7 @@ dependencies = [
  "lumina-raw",
  "lumina-sidecar",
  "lumina-stages",
+ "lumina-testskip",
  "rayon",
  "serde",
  "serde_json",
@@ -2219,6 +2220,7 @@ dependencies = [
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
+ "lumina-testskip",
  "rfd",
  "serde",
  "serde_json",
@@ -2287,6 +2289,7 @@ version = "0.1.0"
 dependencies = [
  "lumina-core",
  "lumina-sidecar",
+ "lumina-testskip",
  "ort",
  "serde",
  "serde_json",
@@ -2332,6 +2335,10 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "lumina-testskip"
+version = "0.1.0"
 
 [[package]]
 name = "lzma-rust2"

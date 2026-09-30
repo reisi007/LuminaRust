@@ -170,6 +170,15 @@ jobs:
       - name: Check plan format
         run: sh scripts/check_plan_format.sh
 
+      # Env-Gate-Schranke (2026-09-30, FIXTURE-SKIP-VISIBLE-2): ein
+      # `#[ignore]`-Beweis, der an einer Umgebungsvariable haengt, muss sagen
+      # WAS fehlt und mit WELCHEM Befehl, und seinen Skip an das echte stderr
+      # melden — `eprintln!` ist unsichtbar, weil libtest den captured Output
+      # eines gruengen Tests verwirft. Das Skript zaehlt die noch nicht
+      # migrierten Stellen als benannte Luecke mit, statt sie zu verschweigen.
+      - name: Check env-gate reasons
+        run: sh scripts/check_env_gate_reasons.sh
+
   rust-test-gui:
     name: Rust GUI tests
     needs: detect

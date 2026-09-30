@@ -65,3 +65,4 @@
 552 crates/lumina-core/src/histogram.rs
 551 crates/lumina-gpu/src/tiling.rs
 531 crates/lumina-cli/tests/meta_preset_e2e.rs
+507 crates/lumina-gui/src/matrix.rs  # 2026-09-30 FIXTURE-SKIP-VISIBLE-2: bewusste Aufnahme, KEIN angehobener Bestand. HEAD lag bei 499, also bei EINER Zeile Reserve; die Regel dieses Tasks (reasoned #[ignore] + sichtbarer Kanal ueber lumina_testskip) kostet hier 8 Zeilen (reasoned Attribut, report_env_gate-Aufruf, 3 Zeilen Doczeiger) und die Eine-Zeilen-Reserve reicht dafuer nicht. Der Detailbeweis steht in crates/lumina-testskip/src/lib.rs, nicht in dieser Datei. Der guenstigere Weg waere eine Extraktion des gated Tests nach src/tests/ -- die kostet aber eine `mod`-Zeile in lib.rs und damit eine ZWEITE Baseline-Anhebung (12544), also wurde sie bewusst nicht gewaehlt. 499 -> 507.

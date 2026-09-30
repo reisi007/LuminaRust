@@ -1,0 +1,15 @@
+[package]
+name = "lumina-testskip"
+version = "0.1.0"
+edition = "2021"
+description = "Visible, explained skip reporting for env-gated tests (test infrastructure, not product code)"
+license = "MIT"
+publish = false
+
+[lib]
+# Test infrastructure. Named `lumina_testskip` so a call site reads as
+# `lumina_testskip::report_env_skip(...)`.
+name = "lumina_testskip"
+path = "src/lib.rs"
+
+[dependencies]

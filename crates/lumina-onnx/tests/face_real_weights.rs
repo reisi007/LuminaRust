@@ -61,15 +61,52 @@ fn detection() -> DetectedFace {
     }
 }
 
+/// FIXTURE-SKIP-VISIBLE-2: this gate needs a **pair** of variables, and the two
+/// ways of being unrun are not the same. Neither set is an ordinary skip;
+/// exactly one set is a **misconfiguration** — the operator asked for the
+/// proof, so skipping quietly hides a typo in the name of the variable that
+/// *was* set. The old code collapsed both into one `else { return }`.
 #[test]
-#[ignore = "requires operator-supplied real YuNet/SFace artifacts (env paths)"]
+#[ignore = "real_weights_match_the_adapter_contract: needs LUMINA_FACE_DETECT_MODEL_PATH + LUMINA_FACE_EMBED_MODEL_PATH; run: LUMINA_FACE_DETECT_MODEL_PATH=... LUMINA_FACE_EMBED_MODEL_PATH=... cargo test -p lumina-onnx --test face_real_weights -- --ignored real_weights_match_the_adapter_contract"]
 fn real_weights_match_the_adapter_contract() {
-    let (Ok(detect_path), Ok(embed_path)) = (
-        std::env::var("LUMINA_FACE_DETECT_MODEL_PATH"),
-        std::env::var("LUMINA_FACE_EMBED_MODEL_PATH"),
-    ) else {
-        eprintln!("skipping: set LUMINA_FACE_DETECT_MODEL_PATH / LUMINA_FACE_EMBED_MODEL_PATH");
-        return;
+    const DETECT: &str = "LUMINA_FACE_DETECT_MODEL_PATH";
+    const EMBED: &str = "LUMINA_FACE_EMBED_MODEL_PATH";
+    let detect = std::env::var(DETECT).ok();
+    let embed = std::env::var(EMBED).ok();
+    let required = [(DETECT, detect.as_deref()), (EMBED, embed.as_deref())];
+    let gate = || {
+        lumina_testskip::env_gate(
+            "real_weights_match_the_adapter_contract",
+            "LUMINA_FACE_DETECT_MODEL_PATH + LUMINA_FACE_EMBED_MODEL_PATH",
+            "LUMINA_FACE_DETECT_MODEL_PATH=... LUMINA_FACE_EMBED_MODEL_PATH=... cargo test \
+             -p lumina-onnx --test face_real_weights -- --ignored \
+             real_weights_match_the_adapter_contract",
+        )
+    };
+    let (detect_path, embed_path) = match lumina_testskip::classify_required(&required) {
+        lumina_testskip::EnvState::Armed => (
+            detect.expect("Armed means the detect path is set"),
+            embed.expect("Armed means the embed path is set"),
+        ),
+        lumina_testskip::EnvState::Absent => {
+            lumina_testskip::report_env_gate(&gate());
+            return;
+        }
+        lumina_testskip::EnvState::Partial { missing } => {
+            // Loud, not a skip: an aborted `--ignored` invocation is the right
+            // outcome for a proof whose environment is half configured. The
+            // cost is named in the crate doc — one broken gate turns that run
+            // red — and it is the cost of not hiding the typo.
+            panic!(
+                "real_weights_match_the_adapter_contract: half-configured — {} of {} required \
+                 variables are set, missing: {}. A half-set gate is a typo, not an unarmed proof: \
+                 set them all, or unset them all. Gate: {}",
+                required.len() - missing.len(),
+                required.len(),
+                missing.join(", "),
+                gate(),
+            );
+        }
     };
 
     let detector = OrtFaceDetector::new(

@@ -411,11 +411,22 @@ fn require_gpu_without_gpu_backend_is_loud() {
 /// renders are expensive and fixture-dependent. Runs a bounded, fast recipe
 /// subset (the full set is run via the release binary / the nightly); see
 /// `LUMINA_MATRIX=1 cargo test -p lumina-cli --test matrix_e2e -- --ignored`.
+/// FIXTURE-SKIP-VISIBLE-2: the gate reason names what is missing and the exact
+/// command, and the runtime skip goes to the **real** stderr — a plain
+/// `eprintln!` was invisible in the default run, because libtest discards the
+/// captured output of a *passing* test. One required variable, so
+/// `lumina_testskip::classify_required` would have no `Partial` case to reach;
+/// this gate is a *value* check (`=1`), not a presence check.
 #[test]
-#[ignore]
+#[ignore = "real_matrix_against_committed_goldens: needs LUMINA_MATRIX=1; run: LUMINA_MATRIX=1 cargo test -p lumina-cli --test matrix_e2e -- --ignored real_matrix_against_committed_goldens"]
 fn real_matrix_against_committed_goldens() {
     if std::env::var("LUMINA_MATRIX").ok().as_deref() != Some("1") {
-        eprintln!("LUMINA_MATRIX=1 not set; skipping real CR3 matrix test");
+        lumina_testskip::report_env_gate(&lumina_testskip::env_gate(
+            "real_matrix_against_committed_goldens",
+            "LUMINA_MATRIX=1",
+            "LUMINA_MATRIX=1 cargo test -p lumina-cli --test matrix_e2e -- --ignored \
+             real_matrix_against_committed_goldens",
+        ));
         return;
     }
     let run = cli()

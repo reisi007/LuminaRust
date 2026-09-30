@@ -466,11 +466,19 @@ mod tests {
     /// `LUMINA_MATRIX_RECIPES` optionally bounds the run to a comma-separated
     /// recipe-id list (time-bounded local proof); unset runs the full set, as
     /// the nightly does.
+    ///
+    /// FIXTURE-SKIP-VISIBLE-2: the gate reason comes from
+    /// `lumina_testskip::env_gate` and the skip goes to the **real** stderr
+    /// (libtest discards a passing test's captured output); see that crate.
     #[test]
-    #[ignore]
+    #[ignore = "real_matrix_headless: needs LUMINA_MATRIX=1; run: LUMINA_MATRIX=1 cargo test -p lumina-gui --lib -- --ignored real_matrix_headless"]
     fn real_matrix_headless() {
         if std::env::var("LUMINA_MATRIX").ok().as_deref() != Some("1") {
-            eprintln!("LUMINA_MATRIX=1 not set; skipping the headless GUI matrix");
+            lumina_testskip::report_env_gate(&lumina_testskip::env_gate(
+                "real_matrix_headless",
+                "LUMINA_MATRIX=1",
+                "LUMINA_MATRIX=1 cargo test -p lumina-gui --lib -- --ignored real_matrix_headless",
+            ));
             return;
         }
         let selected: Vec<String> = std::env::var("LUMINA_MATRIX_RECIPES")

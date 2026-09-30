@@ -69,3 +69,9 @@ lensfun = ["lumina-core/lensfun", "lumina-lensfun/native"]
 # `LUMINA_MODEL_PATH` artifact and fails hard when the artifact is unusable —
 # never a silent stub substitute.
 onnx-rt = ["lumina-onnx/onnx-rt"]
+
+[dev-dependencies]
+# FIXTURE-SKIP-VISIBLE-2: an env-gated skip must reach the REAL stderr, because
+# libtest discards the captured output of a passing test. Dev-dependency only —
+# test infrastructure, never linked into the shipped binary.
+lumina-testskip = { path = "../lumina-testskip" }
