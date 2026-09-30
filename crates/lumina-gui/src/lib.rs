@@ -1105,6 +1105,12 @@ pub enum GuiError {
     Core(#[from] lumina_core::CoreError),
     #[error("{0}")]
     Sidecar(#[from] lumina_sidecar::SidecarError),
+    // AUTO-TONE-CLI-6: the shared Auto-Tone writer lives in `lumina-stages`, so
+    // its failure reaches the GUI as a typed error rather than as a stringified
+    // `Io` — a stage failure and a disk failure are different facts, and the
+    // status line must not conflate them.
+    #[error("{0}")]
+    Stages(#[from] lumina_stages::StageError),
     #[error("{0}")]
     Io(String),
     #[error(transparent)]
@@ -3710,8 +3716,12 @@ impl LuminaApp {
             AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = Some(value),
         }
         self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
-            algorithm: "tone-rgba8-rec709".into(),
-            version: "1".into(),
+            // AUTO-TONE-CLI-6: the identity constants are the shared ones. A
+            // literal here would be a second definition of "which algorithm
+            // produced this", and the freshness predicate compares the string —
+            // a typo would make every endpoint-written recipe permanently stale.
+            algorithm: lumina_stages::auto_tone::FINGERPRINT_ALGORITHM.into(),
+            version: lumina_stages::auto_tone::FINGERPRINT_VERSION.into(),
             input_fingerprint,
             extras: BTreeMap::new(),
         });
@@ -9367,41 +9377,44 @@ impl LuminaApp {
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
         instrument_gui_action!(self, GuiAction::AutoTone);
-        if self.original.is_none() {
+        let Some(frame) = self.original.clone() else {
             return Ok(());
-        }
-        // G-16: single shared evaluation path (see `compute_auto_tone`) —
-        // `apply_auto_endpoint` reuses exactly this algorithm + fingerprint.
-        let (result, input_fingerprint) = self.compute_auto_tone()?;
-        // AUTO-TONE-2: all six sliders persist 1:1 into `recipe.adjustments`
-        // (domains match the sidecar validation: exposure ±10 EV, the other
-        // five `-1..=1`).
-        for (key, value) in [
-            ("exposure", result.exposure),
-            ("contrast", result.contrast),
-            ("whites", result.whites),
-            ("blacks", result.blacks),
-            ("highlights", result.highlights),
-            ("shadows", result.shadows),
-        ] {
-            self.recipe.adjustments.insert(key.into(), value);
-        }
-        self.recipe.auto_features.enable_auto_tone = true;
-        self.recipe.auto_features.auto_exposure = Some(result.exposure);
-        self.recipe.auto_features.auto_contrast = Some(result.contrast);
-        // AUTO-TONE-2: the four end/balance mirrors mark these adjustments as
-        // auto-written (parallel to `adjustments`); `clear_stale_auto_tone`
-        // uses them to tell auto values apart from manual edits.
-        self.recipe.auto_features.auto_whites = Some(result.whites);
-        self.recipe.auto_features.auto_blacks = Some(result.blacks);
-        self.recipe.auto_features.auto_highlights = Some(result.highlights);
-        self.recipe.auto_features.auto_shadows = Some(result.shadows);
-        self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
-            algorithm: "tone-rgba8-rec709".into(),
-            version: "1".into(),
-            input_fingerprint,
-            extras: BTreeMap::new(),
-        });
+        };
+        // AUTO-TONE-CLI-6 clause (1): THIS IS THE SHARED WRITER. The GUI used to
+        // write the six sliders, the six mirrors and the fingerprint itself, with
+        // the algorithm as a hand-copied string literal. Two consequences, both
+        // measured: the GUI diverged from `process --auto-tone` and from
+        // `regenerate --module auto-tone`, which both go through
+        // `apply_auto_tone_result`; and a divergence in the algorithm string makes
+        // `auto_tone_is_fresh` refuse the recipe, so a GUI-written auto-tone was
+        // permanently stale and the next regeneration run overwrote it.
+        //
+        // A user pressing Auto Tone is an explicit request, so it recomputes
+        // (`AlwaysRecompute`) — never the CLI's `ReuseIfComplete`. No preset
+        // layer here: the GUI applies presets separately, and the CLI's
+        // `preset_overrides` is what expresses "preset beats auto" on that path.
+        let target_luminance = self.recipe.auto_features.target_luminance;
+        let outcome = lumina_stages::auto_tone::apply_auto_tone_result(
+            &mut self.recipe,
+            &frame,
+            target_luminance,
+            lumina_stages::auto_tone::PersistedAutoTone::AlwaysRecompute,
+            None,
+        )?;
+        debug_assert_eq!(
+            outcome.source,
+            lumina_stages::auto_tone::AutoToneSource::Computed,
+            "an explicit Auto Tone press must recompute, never reuse"
+        );
+        // The save commit (GUI-AUTOTONE-SAVE-1) needs the exposure as the log
+        // representative. Read it back through the shared key list rather than
+        // keeping a fourth copy of "exposure is the first knob".
+        let exposure = self
+            .recipe
+            .adjustments
+            .get(lumina_stages::auto_tone::AUTO_TONE_ADJUSTMENT_KEYS[0])
+            .copied()
+            .unwrap_or_default();
         // GUI-AUTOTONE-SAVE-1: record the save commit so the debounced path
         // (`commit_pending_slider_save`) persists the sidecar (CAS, loud
         // conflicts) with an INFO log — same as GUI-SLIDER-SAVE-1. The
@@ -9410,7 +9423,7 @@ impl LuminaApp {
         // bare `render()` would clear `pending_full_render` while the commit
         // stays armed, stranding the save until an unrelated later edit
         // (N6: `auto_tone saved` only fired via a later pan).
-        self.mark_recipe_dirty("auto_tone", result.exposure);
+        self.mark_recipe_dirty("auto_tone", exposure);
         self.commit_pending_slider_save([0, 0]);
         Ok(())
     }
@@ -11904,6 +11917,10 @@ mod tests {
     mod g15_batch;
     mod g15_collections;
     mod g15_stacks;
+    // AUTO-TONE-CLI-6 clause (1): the GUI and the CLI must write the same
+    // auto-tone contract. Differential (GUI vs. the shared writer) plus the
+    // structural guard that a second hand-copied algorithm literal cannot return.
+    mod auto_tone_contract;
     mod g16_shortcuts;
     mod generative_expand;
     mod generative_render;

@@ -2220,6 +2220,7 @@ dependencies = [
  "lumina-onnx",
  "lumina-raw",
  "lumina-sidecar",
+ "lumina-stages",
  "lumina-testskip",
  "rfd",
  "serde",

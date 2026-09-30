@@ -58,8 +58,12 @@ pub const AUTO_TONE_ADJUSTMENT_KEYS: [&str; 6] = [
 
 /// Analysis-fingerprint identity of the tone analysis. Shared with the
 /// freshness predicate, so a foreign algorithm is never mistaken for ours.
-const FINGERPRINT_ALGORITHM: &str = "tone-rgba8-rec709";
-const FINGERPRINT_VERSION: &str = "1";
+///
+/// AUTO-TONE-CLI-6: `pub` because the GUI writes an endpoint fingerprint of the
+/// same identity, and a second hand-copied literal is exactly the divergence
+/// these two constants exist to prevent.
+pub const FINGERPRINT_ALGORITHM: &str = "tone-rgba8-rec709";
+pub const FINGERPRINT_VERSION: &str = "1";
 
 /// The Auto-Tone configuration of one run. Only the target luminance is
 /// parameterized; every bound stays at the `lumina-core` default (the slider

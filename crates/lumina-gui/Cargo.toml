@@ -33,6 +33,22 @@ lumina-cull = { path = "../lumina-cull" }
 # same `lumina-merge` alignment/merge/DNG entry points as the CLI commands; the
 # GUI owns no merge image logic of its own.
 lumina-merge = { path = "../lumina-merge" }
+# AUTO-TONE-CLI-6 clause (1): ONE writer for the six sliders, the six mirrors and
+# the analysis fingerprint. The GUI carried its own copy of that write, with the
+# fingerprint algorithm as a hand-copied string literal.
+#
+# MEASURED, so this is not overstated: the old copy was functionally EQUIVALENT
+# — a differential test runs both writers on equal frames and every field agrees
+# (six sliders, six mirrors, fingerprint value). So no GUI-written recipe was
+# actually stale. The defect was the DUPLICATION, and the risk was latent: a
+# foreign algorithm string is exactly what the freshness predicate refuses, so
+# the two copies could have drifted into a permanent-staleness bug without any
+# test noticing. The structural test now pins that they cannot.
+#
+# Every dependency of lumina-stages (core, onnx, raw, sidecar, serde,
+# serde_json, thiserror, log) is already a direct dependency here, so the edge
+# costs no new transitive build.
+lumina-stages = { path = "../lumina-stages" }
 # GEN-ONNX-1 Welle 2b: the GUI resolves/produces the persisted
 # `generative_canvas` artifact through the same fixture/identity surface the
 # CLI uses (`fixture_manifest` / `produce_canvas`). Default features are pure
