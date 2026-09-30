@@ -37,7 +37,7 @@
 mod kittest_decode_support;
 
 use egui_kittest::Harness;
-use kittest_decode_support::{is_settled, pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{is_settled, pump_until_ready, DecodeSettled, SETTLE_DEADLINE};
 use lumina_gui::LuminaApp;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -53,8 +53,12 @@ fn png_fixture() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// A predicate no single decode can satisfy: the second render never comes.
-fn needs_a_second_render() -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new("preview_generation() >= 2", |app: &LuminaApp| {
+///
+/// `DecodeSettled`, not `Ready`: a render generation is state the decode
+/// schedules, so the settled exit is entitled to end this wait — which is the
+/// whole point of the test.
+fn needs_a_second_render() -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new("preview_generation() >= 2", |app: &LuminaApp| {
         app.preview_generation() >= 2
     })
 }

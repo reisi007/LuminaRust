@@ -3,15 +3,20 @@
 //!
 //! # Why this is not the file-open wait
 //!
-//! `kittest_decode_support::pump_until_ready` waits for a *decode* and may end
-//! early on a settled decode. This waits for a *scan* as well, and the two
-//! conditions genuinely differ: `LuminaApp::open_file` navigates first
+//! `kittest_decode_support::pump_until_ready` waits for a *decode* and ends early
+//! on a settled decode. This waits for a *scan* as well, and the two conditions
+//! genuinely differ: `LuminaApp::open_file` navigates first
 //! (`prepare_open_directory` -> `list_directory`) and decodes second, so there
 //! is a production state with `scan_pending() == true` while the decode is
-//! already settled. A settled exit armed here would return before the listing
-//! lands and the golden would capture an empty grid — a silent flake.
-//! [`settle_scan`] therefore arms **no** settled exit and the wall-clock bound
-//! is its only exit; the report then names the state it was in.
+//! already settled. [`settle_scan`] therefore uses the bound-only wait
+//! [`pump`], which has **no** settled exit to arm — the report then names the
+//! state it was in.
+//!
+//! KITT-DECODE-CONTRACT-52 made that structural rather than a promise: the
+//! settled exit lives in exactly one function of the tree (`pump_until_ready`,
+//! which only accepts a ready state *declared* decode-settled), so a scan
+//! condition cannot be paired with it. The old `SettledExit` argument — and the
+//! `None` this call site had to write to withhold the exit — no longer exist.
 //!
 //! Before this module the condition was written **three** times — twice
 //! byte-identical (`kittest_snapshots_support`, `kittest_library_stack`) and
@@ -93,7 +98,6 @@ pub(crate) fn settle_scan_within(harness: &mut Harness<'_, LuminaApp>, bound: Du
             scan_and_decode_settled,
         ),
         bound,
-        None,
     );
     // One extra frame so the applied status/list is painted: without it the
     // golden would capture the transient "Scanning folder…" status.

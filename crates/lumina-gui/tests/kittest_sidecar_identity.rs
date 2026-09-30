@@ -31,7 +31,7 @@ mod kittest_sidecar_support;
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use kittest_decode_support::{is_settled, pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{is_settled, pump_until_ready, DecodeSettled, SETTLE_DEADLINE};
 use kittest_sidecar_support::{seed_metadata_history_sidecar, written_source_identity};
 use lumina_gui::LuminaApp;
 use lumina_sidecar::SourceIdentity;
@@ -40,8 +40,13 @@ use lumina_sidecar::SourceIdentity;
 /// state a caller that waits for the *decode result* itself needs. The
 /// condition is the shared [`is_settled`], so there is no second copy of it
 /// here; only the description lives with this file's two call sites.
-fn ready_settled() -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new(
+///
+/// `DecodeSettled` and not `Ready` is the declared form of the contract
+/// (KITT-DECODE-CONTRACT-52): the decode itself decides this state, so it may
+/// be paired with the settled exit. A later-async state — a folder listing, a
+/// thumbnail — is a `Ready` and cannot reach this wait at all.
+fn ready_settled() -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new(
         "the decode settled (is_settled: !decode_pending() && reported)",
         is_settled,
     )

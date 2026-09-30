@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 // report it prints on timeout (shared with `kittest_snapshots` and
 // `kittest_sidecar_identity`).
 mod kittest_decode_support;
-use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{pump_until_ready, DecodeSettled, SETTLE_DEADLINE};
 
 // KITT-SETTLE-UNIFY-53: the shared folder-scan wait. This file used to carry its
 // own 500-frame loop with **no assertion**: exhausting the budget returned
@@ -34,9 +34,11 @@ use scan_settle_support::settle_scan;
 
 /// The preview has rendered at least once: the state both goldens below wait
 /// for before the crop overlay is driven. Described here so an expiry report
-/// names it next to the values it found.
-fn ready_rendered() -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new("preview_generation() >= 1", |app: &LuminaApp| {
+/// names it next to the values it found. `DecodeSettled` is the declared form:
+/// a render generation is decided by the render `finish_decode` schedules, so
+/// the settled exit may end this wait.
+fn ready_rendered() -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new("preview_generation() >= 1", |app: &LuminaApp| {
         app.preview_generation() >= 1
     })
 }

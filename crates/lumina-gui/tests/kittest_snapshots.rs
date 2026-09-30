@@ -42,9 +42,9 @@ use kittest_fixtures_support::*;
 
 // KITT-IDENTITY-49: the wall-clock bound for opening a real file and the state
 // report it prints on timeout (shared with `kittest_crop_overlay` and
-// `kittest_sidecar_identity`).
+// `kittest_sidecar_identity`); KITT-DECODE-CONTRACT-52: all `DecodeSettled`.
 mod kittest_decode_support;
-use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{pump_until_ready, DecodeSettled, SETTLE_DEADLINE};
 // KITT-IDENTITY-49: sidecar fixtures must carry the fingerprint of the bytes on
 // disk; see the module docs for why the History seed used to violate that.
 mod kittest_sidecar_support;
@@ -53,8 +53,8 @@ use kittest_sidecar_support::{seed_metadata_history_sidecar, test_jpeg_bytes};
 /// The preview has rendered at least once — the state most file-open goldens
 /// below wait for before snapshotting. Described here so an expiry report names
 /// it next to the values it found.
-fn ready_rendered() -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new("preview_generation() >= 1", |app: &LuminaApp| {
+fn ready_rendered() -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new("preview_generation() >= 1", |app: &LuminaApp| {
         app.preview_generation() >= 1
     })
 }
@@ -62,16 +62,16 @@ fn ready_rendered() -> Ready<impl FnMut(&LuminaApp) -> bool> {
 /// The document was adopted with **exactly** `count` metadata history entries.
 /// The exact count is the point: a sidecar refused as stale leaves the history
 /// empty, and "some history" would hide exactly that.
-fn ready_history_of(count: usize) -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new(
+fn ready_history_of(count: usize) -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new(
         format!("metadata_history().len() == {count}"),
         move |app: &LuminaApp| app.metadata_history().len() == count,
     )
 }
 
 /// The preview rendered **and** the source's embedded IPTC became readable.
-fn ready_rendered_with_embedded_iptc() -> Ready<impl FnMut(&LuminaApp) -> bool> {
-    Ready::new(
+fn ready_rendered_with_embedded_iptc() -> DecodeSettled<impl FnMut(&LuminaApp) -> bool> {
+    DecodeSettled::new(
         "preview_generation() >= 1 && embedded_metadata() is Some",
         |app: &LuminaApp| {
             app.preview_generation() >= 1
@@ -342,7 +342,7 @@ fn develop_section_denoise() {
     pump_until_ready(
         &mut harness,
         &source,
-        Ready::new("preview().is_some()", |app: &LuminaApp| {
+        DecodeSettled::new("preview().is_some()", |app: &LuminaApp| {
             app.preview().is_some()
         }),
         SETTLE_DEADLINE,
@@ -1344,7 +1344,7 @@ fn write_dynamic_meta_preset(dir: &Path, file: &str, name: &str) {
 fn open_file_and_restore_fixture<F: FnMut(&LuminaApp) -> bool>(
     harness: &mut Harness<'_, LuminaApp>,
     path: &Path,
-    ready: Ready<F>,
+    ready: DecodeSettled<F>,
 ) {
     pump_until_ready(harness, path, ready, SETTLE_DEADLINE);
     set_directory_and_settle(harness, LIBRARY_FIXTURE_DIR.to_owned());

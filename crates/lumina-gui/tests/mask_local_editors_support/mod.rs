@@ -43,7 +43,7 @@ use std::time::Duration;
 // share it.
 #[path = "../kittest_decode_support/mod.rs"]
 mod kittest_decode_support;
-use kittest_decode_support::{pump_until_ready, Ready, SETTLE_DEADLINE};
+use kittest_decode_support::{pump_until_ready, DecodeSettled, SETTLE_DEADLINE};
 
 /// Viewport for the interaction tests. Deliberately **taller** than the
 /// 1024x720 golden reference: the four mask-local blocks are one long column
@@ -111,12 +111,14 @@ const SMOKE_DECODE_BOUND: Duration = Duration::from_secs(SETTLE_DEADLINE.as_secs
 /// `!decode_pending()`, is a premise of `is_settled`, so whenever the predicate
 /// is false the settled condition is false too. The wall-clock bound therefore
 /// remains the only exit that can end this wait, exactly as in the loop it
-/// replaces.
+/// replaces. `DecodeSettled` states that premise in the type
+/// (KITT-DECODE-CONTRACT-52): a later-async state could not be handed to this
+/// wait at all.
 pub fn settle_decode(harness: &mut Harness<'_, LuminaApp>, path: &std::path::Path) {
     pump_until_ready(
         harness,
         path,
-        Ready::new("decode_pending() == false", |app: &LuminaApp| {
+        DecodeSettled::new("decode_pending() == false", |app: &LuminaApp| {
             !app.decode_pending()
         }),
         SMOKE_DECODE_BOUND,

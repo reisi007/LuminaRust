@@ -37,22 +37,53 @@
 //!
 //! # What lives here and what does not
 //!
-//! The **loop** and the **report** are here because every wait needs them, and
-//! they are `pub(crate)` so the folder-scan wait (`scan_settle_support`) can
-//! reuse them instead of carrying a second copy. The **folder-scan condition**
-//! is *not* here: it is a different question (see [`is_settled`]), and putting it
-//! here would arm the settled exit for a predicate that the settled exit cannot
-//! decide.
+//! The **wait**, the **loop** and the **report** are here because every wait
+//! needs them, and they are `pub(crate)` so the folder-scan wait
+//! (`scan_settle_support`) reuses them instead of carrying a second copy. The
+//! **folder-scan condition** is *not* here: it is a different question (see
+//! [`is_settled`]), and putting it here would give a wait a settled exit for a
+//! state that exit cannot decide.
 //!
-//! # The contract a caller must keep
+//! # The contract, and what holds a caller to it
 //!
-//! A ready predicate must be **decidable once the decode settled** (see
-//! [`is_settled`]): it may only read state that `finish_decode` writes
-//! synchronously (`preview_generation`, the error banner, the metadata
-//! accessors). A predicate fed by a *later* async source — a thumbnail worker, a
-//! folder scan — must not be armed with the settled exit; such a caller waits
-//! with its own bound. The soundness of the early exit rests on this, so it is
-//! stated here rather than assumed per call site.
+//! A ready state may be paired with the **settled exit** only if it is
+//! *decidable once the decode settled* (see [`is_settled`]): it may read nothing
+//! but state `finish_decode` writes synchronously — the render it schedules
+//! (`preview_generation()`, `preview()`), the document it adopts
+//! (`metadata_history()`, `metadata_draft()`), the banner it raises (`error()`),
+//! and `decode_pending()` itself. A ready state fed by a **later** async
+//! source — the folder scan, a thumbnail worker — is decided later, and the
+//! settled exit reports it as unreachable while that worker is still in flight.
+//!
+//! That was prose, and prose is not a gate. **Measured 2026-09-29** (headless,
+//! no adapter, N=6 runs of one scenario on the shape this module had *before*
+//! the change below): a folder-listing ready state run under the settled exit
+//! was **reported unreachable in 7.2-33.4 ms**, its own found line reading
+//! `scan_pending=true` — and the **same harness** then observed exactly that
+//! state arrive **4.7-8.3 ms** later. The old fail direction was therefore
+//! loud but **wrong in its cause**: "the expected state can no longer arrive" is
+//! false while the scan is still in flight, and it sends the reader hunting a
+//! defect that does not exist. KITT-DECODE-CONTRACT-52 makes it structural:
+//!
+//! * [`DecodeSettled`] is the **only** type [`pump_until_ready`] accepts, and it
+//!   is built only through `DecodeSettled::new`, whose doc restates the
+//!   obligation where a caller chooses it. A later-async ready state is a
+//!   [`Ready`], and handing that to `pump_until_ready` is a **type error** — the
+//!   KITT-SCAN-PREMISSE-58 mutation, measured: `error[E0308]: expected
+//!   `DecodeSettled<_>`, found `Ready<_>``. The violating shape no longer
+//!   compiles, so it can no longer reach a red run.
+//! * [`pump`] — the one wait loop — takes **no exit parameter at all**. What may
+//!   end it early is a property of the ready state it is handed, and the settled
+//!   exit is attached in exactly one private place,
+//!   [`DecodeSettled::into_ready`], whose only caller is [`pump_until_ready`].
+//!   So no call site can end a wait early for a state that exit cannot decide:
+//!   the `SettledExit` argument, and the `None` every scan caller had to write,
+//!   are gone with it.
+//!
+//! What the contract *permits* is a closed set of reads, and the frame on which
+//! a settled decode decides each of them is **measured** in
+//! `tests/kittest_decode_contract.rs` — the headless coverage of the settled
+//! exit that this mechanism had none of on a host without an adapter.
 //!
 //! # The bound, and why it is named at the call site
 //!
@@ -127,33 +158,105 @@ const FRAME_YIELD: Duration = Duration::from_millis(1);
 const SETTLED_CAUSE: &str = "the decode settled and reported its outcome, so the expected \
      state can no longer arrive";
 
-/// A ready predicate together with the sentence a timeout report must print.
+/// A ready state whose predicate reads **only** state the decode itself
+/// decides, and the sentence a timeout report must print.
 ///
-/// Built through [`Ready::new`], so the two halves always sit next to each
-/// other at the definition site and cannot describe different states.
-pub(crate) struct Ready<F> {
-    description: String,
-    predicate: F,
+/// Built through [`DecodeSettled::new`], so the two halves always sit next to
+/// each other at the definition site and cannot describe different states.
+///
+/// This is the *declared* form of the contract (see [`is_settled`] and the module
+/// docs): it exists so that a ready state fed by a **later** async source — a
+/// folder scan, a thumbnail worker — is a different *type* and therefore cannot
+/// be routed through the wait that arms the settled exit.
+#[allow(
+    dead_code,
+    reason = "only `kittest_library_stack` declares this module without a file-open wait \
+              (it scans a folder and never opens a file), so it builds no declared ready \
+              state. Same structural cause as the allow on `pump_until_ready`, and the same \
+              alternative: a second `#[path]` copy of the shared loop is `clippy::duplicate_mod`."
+)]
+pub(crate) struct DecodeSettled<F> {
+    ready: Ready<F>,
 }
 
-impl<F: FnMut(&LuminaApp) -> bool> Ready<F> {
-    /// Pair `predicate` with the `description` an expiry report prints.
+#[allow(
+    dead_code,
+    reason = "the constructor, like the type, is dead only in `kittest_library_stack`: the \
+              one target that declares this module for a folder scan and never declares a \
+              ready state. See the allow on `pump_until_ready` for the structural cause."
+)]
+impl<F: FnMut(&LuminaApp) -> bool> DecodeSettled<F> {
+    /// Declare `predicate` **decidable once the decode settled** and pair it with
+    /// the `description` an expiry report prints.
+    ///
+    /// # The obligation this constructor accepts
+    ///
+    /// `predicate` may read nothing but what `finish_decode` writes
+    /// synchronously, or what the render it schedules writes: the render
+    /// generation and `preview()`, the adopted document
+    /// (`metadata_history()`, `metadata_draft()`), the error banner, and
+    /// `decode_pending()`. Anything a **later** worker owns — the folder scan,
+    /// a thumbnail — is decided *after* the decode settled, so a wait armed with
+    /// the settled exit would report it as unreachable while the worker is still
+    /// in flight (measured 2026-09-29, see the module docs). A caller that needs
+    /// such a state uses [`Ready::new`] and [`pump`], whose only exit is the
+    /// wall-clock bound.
     pub(crate) fn new(description: impl Into<String>, predicate: F) -> Self {
+        DecodeSettled {
+            ready: Ready::new(description, predicate),
+        }
+    }
+
+    /// Arm the settled exit — **the only place in the tree that does**.
+    ///
+    /// Private, and reached only from [`pump_until_ready`], so an exit cannot be
+    /// attached to a ready state a caller built for a later async source. The
+    /// declared form is what this consumes: there is no path from
+    /// [`Ready::new`] to here.
+    fn into_ready(self) -> Ready<F> {
         Ready {
-            description: description.into(),
-            predicate,
+            settled_exit: Some(is_settled),
+            ..self.ready
         }
     }
 }
 
-/// What may end a wait before its bound: `Some(predicate)` arms the **settled
-/// exit**, `None` leaves the wall-clock bound as the only exit.
+/// A ready state for a wait, plus the exit — if any — that may end it early.
 ///
-/// A predicate is only eligible if it is *decidable once the decode settled*:
-/// it may read state `finish_decode` writes synchronously, never a later async
-/// source. [`is_settled`] is the one such predicate; a predicate fed by the
-/// folder scan must pass `None` (see `scan_settle_support`).
-pub(crate) type SettledExit = Option<fn(&LuminaApp) -> bool>;
+/// The two forms of the same thing, and the difference is the contract:
+///
+/// * [`Ready::new`] builds one with **no** exit, so the wall-clock bound is all a
+///   later-async state (a folder scan, a thumbnail worker) can be waited out by.
+/// * [`DecodeSettled::new`] builds one *declared* decode-settled, and
+///   [`DecodeSettled::into_ready`] is the single private door to the settled
+///   exit — reachable only from [`pump_until_ready`], which takes nothing but
+///   the declared form.
+///
+/// A caller that wants a scan to land cannot hand that state to
+/// [`pump_until_ready`] at all: it is a type error, and the settled exit has no
+/// other way in. See the module docs for the measurement behind that split.
+pub(crate) struct Ready<F> {
+    description: String,
+    predicate: F,
+    settled_exit: Option<fn(&LuminaApp) -> bool>,
+}
+
+impl<F: FnMut(&LuminaApp) -> bool> Ready<F> {
+    /// Pair `predicate` with the `description` an expiry report prints, with **no**
+    /// exit armed.
+    ///
+    /// Use this whenever the state comes from something other than the decode
+    /// being waited for — a folder scan, a thumbnail worker. The wait that takes
+    /// it ([`pump`]) has no other way to end early, so a later-async state is
+    /// waited for instead of being declared unreachable.
+    pub(crate) fn new(description: impl Into<String>, predicate: F) -> Self {
+        Ready {
+            description: description.into(),
+            predicate,
+            settled_exit: None,
+        }
+    }
+}
 
 /// The single definition of "the background decode has finished and said so".
 ///
@@ -176,7 +279,15 @@ pub(crate) fn is_settled(app: &LuminaApp) -> bool {
     !app.decode_pending() && (app.error().is_some() || app.preview_generation() >= 1)
 }
 
-/// Open `path` and wait for `ready` under `bound`.
+/// Open `path` and wait for `ready` under `bound`, with the **settled exit**
+/// armed.
+///
+/// The one wait in the tree that may end before its bound, and the only place in
+/// the tree that arms an exit at all — which is why it takes [`DecodeSettled`]
+/// and not [`Ready`]. A ready state fed by a later async source cannot reach
+/// this function (type error), so the exit it arms can never report a state that
+/// is still on its way as unreachable; see the module docs for the measurement
+/// that moved the contract from prose to that split.
 ///
 /// `bound` is a parameter, not a hidden constant, because the bound genuinely
 /// differs per fixture class: a 24-megapixel RAW needs seconds and takes
@@ -193,23 +304,28 @@ pub(crate) fn is_settled(app: &LuminaApp) -> bool {
 pub(crate) fn pump_until_ready<F: FnMut(&LuminaApp) -> bool>(
     harness: &mut Harness<'_, LuminaApp>,
     path: &Path,
-    ready: Ready<F>,
+    ready: DecodeSettled<F>,
     bound: Duration,
 ) {
     harness.state_mut().open_file(path.display().to_string());
-    pump(harness, path, ready, bound, Some(is_settled));
+    // The single door to the settled exit: the declared form is converted here and
+    // nowhere else, so no call site can arm it for a state of its own choosing.
+    pump(harness, path, ready.into_ready(), bound);
 }
 
 /// Pump `harness` until `ready` holds, then return; give up loudly otherwise.
 ///
-/// The one wait loop in the tree, so the two exits cannot drift apart again: a
-/// **settled exit** when `settled_exit` is armed and the decode is terminal (a
-/// millisecond failure), and the **wall-clock bound** otherwise. Both print the
-/// same state report.
+/// The one wait in the tree. It takes **no exit parameter**: what may end it early
+/// is a property of the ready state it was handed, and only a state declared
+/// decode-settled ([`DecodeSettled::new`], reachable from
+/// [`pump_until_ready`]) carries one. A ready state built with [`Ready::new`] —
+/// a folder scan, a thumbnail worker, anything the decode cannot decide — is
+/// therefore waited out to the bound, and no call site can hand that state a
+/// settled exit.
 ///
-/// `subject` names what is being waited for in that report: the file being
-/// opened, or the directory whose scan is landing. It is a snapshot taken by the
-/// caller, so a wait on state the app owns can still name its target.
+/// `subject` names what is being waited for in that report: the file being opened,
+/// or the directory whose scan is landing. It is a snapshot taken by the caller, so
+/// a wait on state the app owns can still name its target.
 ///
 /// # Frame counts are part of the contract
 ///
@@ -225,9 +341,9 @@ pub(crate) fn pump<F: FnMut(&LuminaApp) -> bool>(
     subject: &Path,
     mut ready: Ready<F>,
     bound: Duration,
-    settled_exit: SettledExit,
 ) {
     let deadline = Instant::now() + bound;
+    let settled_exit = ready.settled_exit;
     loop {
         // `step()` (not `run()`): a scheduled thumbnail/scan repaint would make
         // `run()` exceed its max_steps bound.
