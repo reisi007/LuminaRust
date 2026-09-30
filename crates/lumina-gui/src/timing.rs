@@ -328,10 +328,18 @@ impl LuminaApp {
     #[cfg(feature = "gpu")]
     pub(crate) fn note_editorial_present_refusal(&mut self, reason: &str) {
         if self.timing.editorial_refusal_traced.as_deref() == Some(reason) {
-            trace!("GUI timing: editorial present refusal unchanged reason={reason}");
+            // GPU-ROUTE-LOG-54 acceptance (1): through `emit`, not a bare
+            // `trace!`. The file's own contract (see the header) is that `emit`
+            // records every line in tests so each call site has a firing
+            // assertion; these two lines were the exception, which is why no
+            // test could observe their *text*. Same level, same text, and the
+            // lazy formatting of `emit` keeps it hot-path-safe.
+            emit(|| format!("GUI timing: editorial present refusal unchanged reason={reason}"));
             return;
         }
-        trace!("GUI timing: editorial present refusal, keeping CPU route reason={reason}");
+        emit(|| {
+            format!("GUI timing: editorial present refusal, keeping CPU route reason={reason}")
+        });
         self.timing.editorial_refusal_traced = Some(reason.to_owned());
         #[cfg(all(test, feature = "gpu"))]
         EDITORIAL_REFUSAL_TRACES.with(|traces| traces.set(traces.get() + 1));

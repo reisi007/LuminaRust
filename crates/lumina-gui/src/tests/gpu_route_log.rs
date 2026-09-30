@@ -157,6 +157,52 @@ fn the_editorial_refusal_trace_is_throttled_but_repeats_on_a_change() {
     );
 }
 
+/// GPU-ROUTE-LOG-54 acceptance (1): the emitted **line text** is the deliverable
+/// — an operator reading an `RUST_LOG=trace` run cannot see a counter. This test
+/// is what was missing: `note_editorial_present_refusal` used to call `trace!`
+/// directly, bypassing `emit`, so the line was never recorded and no in-process
+/// test could read it. Deleting `reason={reason}` from both lines kept the whole
+/// suite green — the acceptance criterion was half-pinned.
+///
+/// Both lines are reached through the **real** present path, not the throttle
+/// helper: the first refusal takes the "keeping CPU route" branch, the second
+/// hits the memo and takes the "unchanged" branch, so neither line is produced by
+/// a call a production frame would not make.
+///
+/// The match is **exact**, which is the point: the string a developer greps for
+/// is the contract. A presence check for `reason=` would pass on a line whose
+/// branch is unnamed, which is exactly the degradation this task exists to stop.
+#[test]
+fn the_editorial_refusal_lines_carry_the_reason_a_trace_run_needs() {
+    let mut app = live_editorial_app();
+    let _ = crate::timing::take_timing_log();
+    app.vram_fresh = true;
+
+    for _ in 0..2 {
+        assert!(
+            app.gpu_present_if_ready().is_none(),
+            "a closed editorial gate must fall back to the CPU present"
+        );
+    }
+
+    let log = crate::timing::take_timing_log();
+    assert!(
+        log.contains(&format!(
+            "GUI timing: editorial present refusal, keeping CPU route reason={}",
+            crate::present::editorial_refusal::MASK_GATE
+        )),
+        "the first refusal must name the branch and the concrete reason: {log:?}"
+    );
+    assert!(
+        log.contains(&format!(
+            "GUI timing: editorial present refusal unchanged reason={}",
+            crate::present::editorial_refusal::MASK_GATE
+        )),
+        "the throttled repeat must still name the reason, or a trace run cannot \
+         tell which gate held: {log:?}"
+    );
+}
+
 /// The screen stays silent on purpose: an editorial route must not invent a
 /// capability badge ("you are in Before/After" as a yellow "unsupported stages"
 /// warning is noise). This pins that the change is log-only — GPU-ROUTE-LOG-54
