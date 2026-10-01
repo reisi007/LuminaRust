@@ -9381,13 +9381,13 @@ impl LuminaApp {
             return Ok(());
         };
         // AUTO-TONE-CLI-6 clause (1): THIS IS THE SHARED WRITER. The GUI used to
-        // write the six sliders, the six mirrors and the fingerprint itself, with
-        // the algorithm as a hand-copied string literal. Two consequences, both
-        // measured: the GUI diverged from `process --auto-tone` and from
-        // `regenerate --module auto-tone`, which both go through
-        // `apply_auto_tone_result`; and a divergence in the algorithm string makes
-        // `auto_tone_is_fresh` refuse the recipe, so a GUI-written auto-tone was
-        // permanently stale and the next regeneration run overwrote it.
+        // carry its own copy of the six sliders, the six mirrors and the fingerprint,
+        // with the algorithm as a hand-copied string literal. WITHDRAWN, because this
+        // change's own measurement refuted the first version of this comment
+        // (DoD.md §9): the copy did NOT make every GUI-written auto-tone permanently
+        // stale — both writers agreed on every field, so no GUI recipe was ever stale.
+        // The defect was the DUPLICATION and its latent risk: a diverging algorithm
+        // string is exactly what `auto_tone_is_fresh` compares.
         //
         // A user pressing Auto Tone is an explicit request, so it recomputes
         // (`AlwaysRecompute`) — never the CLI's `ReuseIfComplete`. No preset

@@ -1430,22 +1430,38 @@ dieser Sechserschritt ist der Vertrag: **es gibt keine Teilmenge.** Der frühere
 Zweier-Zustand (`exposure`/`contrast` ohne die vier End-/Balance-Spiegel) ist
 kein gültiger persistierter Zustand.
 
-**Genau ein Schreibpfad.** Im CLI schreibt **ausschließlich**
-`apply_auto_tone_result` (`crates/lumina-cli/src/auto_tone_cli.rs`) die sechs
-Adjustments, die sechs `auto_features`-Spiegel (`auto_exposure`,
+**Genau ein Schreibpfad.** `apply_auto_tone_result`
+(`crates/lumina-stages/src/auto_tone.rs`; MCP-PARITY-B hat den Writer von
+`crates/lumina-cli/src/auto_tone_cli.rs` dorthin verschoben, weil
+`lumina_regenerate` ihn ebenfalls braucht) schreibt **ausschließlich** die
+sechs Adjustments, die sechs `auto_features`-Spiegel (`auto_exposure`,
 `auto_contrast`, `auto_whites`, `auto_blacks`, `auto_highlights`,
 `auto_shadows`) und den `analysis_fingerprint` — als **eine** Funktion, die
-diese dreizehn Felder gemeinsam setzt. Beide Aufrufer gehen durch dieselbe
-Funktion: `process_selected` (mit `--auto-tone`) und
-`lumina regenerate --module auto-tone`. Die GUI hält ihren eigenen, inhaltlich
-identischen Vertrag in `LuminaApp::auto_tone` (dieselben sechs Regler,
-dieselben sechs Spiegel, derselbe Fingerprint-Algorithmus
-`tone-rgba8-rec709`, Version `1`); sie wird von diesem Slice **nicht**
-angefasst. Ein zweiter, schlankerer Kopierpfad im CLI existiert nicht mehr,
-und die CLI-Tests pinnen das strukturell ab: ein Quellscan über
-`crates/lumina-cli/src` (ohne die Tests) muss jede der sechs Spiegel-Zuweisungen,
-die Fingerprint-Zuweisung und die sechs Adjustment-Schreibvorgänge genau einmal
-finden, und alle Fundstellen müssen in `auto_tone_cli.rs` liegen.
+diese dreizehn Felder gemeinsam setzt. **Alle** Schreiber gehen durch
+dieselbe Funktion: `process_selected` (mit `--auto-tone`),
+`lumina regenerate --module auto-tone`, das MCP-Werkzeug
+`lumina_regenerate op="auto_tone"` und — seit AUTO-TONE-CLI-6 Klausel (1),
+2026-09-30 — `LuminaApp::auto_tone`. Die GUI hatte bis dahin eine **zweite
+Kopie** dieser dreizehn Felder in `lib.rs` mit handkopiertem
+Algorithmus-Literal; der Defekt war die **Duplikation mit latentem Risiko**,
+kein Benutzerfehler (siehe unten). Ein zweiter, schlankerer Kopierpfad
+existiert nicht mehr, und die Tests pinnen das strukturell ab: ein Quellscan
+über `lumina-cli` **und** `lumina-stages` (ohne die Tests) muss jede der
+sechs Spiegel-Zuweisungen, die Fingerprint-Zuweisung und die sechs
+Adjustment-Schreibvorgänge genau einmal finden, und alle Fundstellen müssen im
+Writer liegen. Der GUI-Raum ist durch einen zweiten Strukturcheck abgedeckt:
+das Algorithmus-Literal darf in den vier contract-schreibenden Crates
+(`lumina-stages`, `lumina-gui`, `lumina-cli`, `lumina-mcp`) an **genau einer**
+Stelle stehen (`lumina-gui/src/tests/auto_tone_contract.rs`).
+
+**Zurückgenommene Behauptung (AUTO-TONE-CLI-6, 2026-09-30, `DoD.md` §9).**
+Zuerst stand in Code **und** `Cargo.toml`, die zweite Kopie mache *jedes*
+GUI-geschriebene Rezept dauerhaft stale, sodass der nächste Regenerationslauf
+es überschreibe. **Gemessen falsch:** ein Differenztest fährt beide Schreiber
+auf bitgleichen Frames, feld-für-feld verglichen — jedes der dreizehn Felder
+ist identisch, kein GUI-Rezept war je stale. Die Duplikation war funktional
+gleichwertig; das Risiko war latent, denn eine abweichende Algorithmus-Zeichenkette
+ist genau das, was `auto_tone_is_fresh` vergleicht.
 
 **Wiederverwenden ist alles-oder-nichts.** `apply_auto_tone_result` liest
 persistierte Werte **ausschließlich aus den Spiegeln** und nur dann, wenn

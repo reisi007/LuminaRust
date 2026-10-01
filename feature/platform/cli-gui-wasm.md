@@ -66,7 +66,7 @@ schreibt den **vollen Sechsersatz** — die sechs Regler `exposure`,
 `auto_features`-Spiegel `auto_exposure` … `auto_shadows` und den
 `analysis_fingerprint` — über **denselben** Schreibpfad wie `lumina regenerate
 --module auto-tone` (`apply_auto_tone_result` in
-`crates/lumina-cli/src/auto_tone_cli.rs`); es gibt keinen zweiten, schlankeren
+`crates/lumina-stages/src/auto_tone.rs`); es gibt keinen zweiten, schlankeren
 Kopierpfad. Ein damit geschriebenes Rezept ist danach **frisch**, `regenerate
 --module auto-tone` ohne `--force` meldet entsprechend `skipped`/`fresh`.
 Persistierte Auto-Werte werden nur dann wiederverwendet, wenn der Fingerprint
@@ -1639,7 +1639,7 @@ laut benannte Abwägung und keine stille Optimierung:
   (sechs Adjustments + sechs Spiegel + Fingerprint). **Erledigt seit
   AUTO-TONE-CLI-6 (2026-09-26):** `process --auto-tone` persistiert denselben
   vollen Vertrag über denselben Schreibpfad (`apply_auto_tone_result` in
-  `crates/lumina-cli/src/auto_tone_cli.rs`), sodass ein `process --auto-tone`-
+  `crates/lumina-stages/src/auto_tone.rs`), sodass ein `process --auto-tone`-
   Rezept nicht mehr als stale gilt. Wiederverwenden erfolgt nur bei passendem
   Fingerprint **und** vollständigem Sechsersatz, sonst werden alle sechs neu
   berechnet; ein gemischter 2-von-6-Zustand wird nicht persistiert. Details

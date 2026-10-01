@@ -15,11 +15,17 @@
 //!   mirror reader, so a second, slimmer copy cannot be introduced from
 //!   another file without first widening this module's private surface — and
 //!   the source scan in `lumina-cli/src/tests/auto_tone_writer.rs` fails before
-//!   that. **Scope, stated honestly:** that structural scan covers
-//!   `lumina-cli` and `lumina-stages` — **not** `lumina-gui`, which writes the
-//!   same mirrors and fingerprint from its own pre-existing path that
-//!   MCP-PARITY-B deliberately does not touch. The invariant is therefore "one
-//!   writer across the CLI and MCP paths", not "one writer in the workspace".
+//!   that. **Scope, corrected 2026-09-30 (AUTO-TONE-CLI-6 clause 1):** that
+//!   structural scan covers `lumina-cli` and `lumina-stages`. It does **not**
+//!   cover `lumina-gui`, but the GUI is no longer a second writer either —
+//!   `LuminaApp::auto_tone` calls [`apply_auto_tone_result`] like every other
+//!   front end. The wording this replaces said the GUI "writes the same mirrors
+//!   and fingerprint from its own pre-existing path"; that was true when
+//!   MCP-PARITY-B wrote it and stopped being true with clause (1). The GUI
+//!   side is pinned by its own check instead
+//!   (`lumina-gui/src/tests/auto_tone_contract.rs`): the fingerprint-algorithm
+//!   literal must occur exactly once across the four contract-writing crates.
+//!   The invariant is "one writer, workspace-wide".
 //! * **All six or none.** Persisted values are reused only when the analysis
 //!   fingerprint matches **and** all six mirrors are present; otherwise all
 //!   six are recomputed. A partial (e.g. 2-of-6) state can neither be created
