@@ -475,6 +475,21 @@ kittest-Stand ausdrücklich.
   statt ihn zu definieren. Normativ: `feature/quality/golden-references.md`
   §9 Punkt 7.
 
+### Produkt-Entscheide 2026-10-02 (Eigentümer)
+
+- **`AUTO-DOMAIN` — Auto-Tone rechnet nach SourceActions und nach Crop.** Der
+  Zuschnitt beeinflusst die Auto-Werte. Der Eigentümer hat die Domäne am
+  2026-10-02 so entschieden (wörtliche Anforderung „nach wegretuschieren UND
+  nach Zuschnitt"); Umsetzung in `AUTO-TONE-ANALYSIS-INPUT-8`.
+- **`JSON-ROUNDTRIP` — `serde_json` wird mit `float_roundtrip` gebaut.** Jeder
+  f64-Round-Trip ist damit exakt; die gemessenen 7,45 % 1-ULP-Verluste beim
+  Laden werden beseitigt. Kostet eine Neubewertung aller Sidecar-Bytes,
+  Rezept-Digests und Goldens; Umsetzung in `JSON-FLOAT-ROUNDTRIP`.
+- **`NAMING-F1 (2)` — der Anzeigename bleibt „Lumina".** Fenstertitel
+  (`crates/lumina-gui/src/main.rs:30`) und UI-Überschrift
+  (`crates/lumina-gui/src/lib.rs:11965`) bleiben unverändert; der
+  Formatbezeichner `.lumina.*` bleibt ohnehin (siehe `SIDECAR-SUFFIX-CONST`).
+
 ### Dreifache Verifikations-Niederlage ohne Modellwechsel (User-Regeln 2026-09-26/29)
 
 **Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
