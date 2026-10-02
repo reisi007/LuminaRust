@@ -418,6 +418,45 @@ Adjustments → Masks → Crop → Output`. Die in diesem Abschnitt genannten
 Unterstufen innerhalb von `Adjustments` beziehungsweise `Crop` sind verbindlich
 und ändern dieses Format-Tupel nicht.
 
+> **Offener Widerspruch zu dieser Reihenfolge (Eigentuemer-Entscheidung
+> 2026-10-02, noch nicht umgesetzt).** Der Eigentuemer hat entschieden, dass
+> **Crop in die Auto-Tone-Domäne gehört** (Lightroom-Verhalten: Auto rechnet auf
+> dem Bild, das der Nutzer sieht). **Gemessen:** Auto-Tone wertet heute
+> `self.original` aus, den dekodierten Quellframe **vor** SourceActions und vor
+> Crop — `LuminaApp::auto_tone` und `compute_auto_tone` lesen dieses Feld,
+> `set_crop_free` fasst es nicht an, und Retusche/Crop passieren erst im
+> Render-Hub (`prepare_source_base` → `apply_source_actions`, `apply_crop_stage`).
+> `suggest_auto_tone(frame, config)` in `lumina-core` hat **keinen**
+> SourceActions-Parameter. **Damit widerspricht der Ist-Zustand genau dieser
+> Reihenfolge:** sie schreibt SourceActions **vor** AutoAnalysis und Crop
+> **hinter** Adjustments. Dazu eine gemessene Asymmetrie: `match_total_exposure`
+> (F-041) misst auf `self.preview`, dem **gerenderten** Ergebnis, Auto-Tone auf
+> `self.original` — zwei Wege, dieselbe Bildaussage, verschiedene Domänen.
+> **Die F-085-Behauptung, die Auto-Tone-Messung sei „auf dem Post-Action-Frame"
+> belegt, wird dabei ausdrücklich NICHT übernommen:** sie steht als Faktum in
+> diesem Dokument, `grep` findet `suggest_auto_tone` in `lumina-core` nur im
+> `#[cfg(test)]`-Modul, und sie ist entweder zu belegen oder an ihrer Fundstelle
+> zurückzunehmen (`DoD.md` §9). **Der Soll-Text bleibt unangetastet** — er ist
+> der Zielzustand, den die offenen Tasks `AUTO-TONE-ANALYSIS-INPUT-8` (Messdomäne)
+> und `PIPELINE-CROP-EARLY-9` (Crop im Render weiter nach vorn) umsetzen; eine
+> Stufe vorzuziehen, bevor der Gewinn gemessen ist, wäre nach
+> `PIPELINE-ANNASSUNGEN-10` eine Umordnung auf Verdacht.
+>
+> **Zusätzlich gemessen, weil es die Gewichtung kippt:** die
+> Tonal-Stufe `apply_recipe_with_white_balance` ist **85 %** von `render_frame`
+> (3,39 / 14,02 / 56,39 ms gegen 3,98 / 16,36 / 65,76 ms bei 512 / 1024 / 2048,
+> aus `perf/baseline.json` ausgerechnet). Ein vor `Adjustments` gesetzter Crop
+> würde genau diese 85 % auf den Ausschnitt beschränken — **das ist der
+> Performance-Hebel, nicht die Geometrie-Kette** zwischen `Adjustments` und
+> `Crop`. **Harte Untergrenze für ein Vorgehen:** Crop muss **nach**
+> `GenerativeExpand` bleiben, weil die Crop-Koordinaten die **erweiterte
+> Leinwand** referenzieren (`render.rs`, `GEOMETRY_STAGE_ORDER`). **Und:** „Crop"
+> ist ein Sammelbegriff — der **Ausschnitt** ist eine reine Pixelauswahl und damit
+> byte-neutral, **Rotation und Spiegelung** sind eine Neuabtastung
+> (`apply_crop_stage` ruft `rotate_frame` **und** den Ausschnitt in einem Aufruf).
+> Ob Rotation in die Auto-Domäne gehört, folgt aus „Crop gehört dazu" **nicht**
+> und ist nicht entschieden.
+
 **Schema-Migration (Pre-MVP):** Das Upgrade von `recipe_schema_version` 1 auf 2
 ist erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
 `color_grading`, `presence`, `sharpening`, `noise_reduction`) oder neue
