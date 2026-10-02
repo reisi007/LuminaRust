@@ -13,6 +13,64 @@
 //! sechs Regler ueberschreibt (fasst Regler an, die niemand angefasst hat).
 
 use super::*;
+use crate::tests::support::{captured_logs, clear_captured_logs};
+
+/// `DoD.md` §7.4 for the two Auto-Tone user actions: every new user action
+/// carries a log level, with evidence.
+///
+/// **Why this test exists:** the third verification round passed the task, and
+/// the §7 checklist still had a hole. `apply_auto_endpoint` logs at `info!`
+/// (`lib.rs`) and `auto_tone` goes through `instrument_gui_action!`, but a
+/// `grep` over the test tree showed **15** references to
+/// `apply_auto_endpoint` and **none** of them in a log assertion — the level
+/// was asserted nowhere. A log line that nobody reads is not evidence that the
+/// action is traceable in `RUST_LOG=trace` runs, which is the F-103-N6
+/// obligation.
+///
+/// The end point is the interesting half: it is the action a user performs by
+/// hand, and it is the one whose state was recently changed. Its line names the
+/// key and the value, so a support session can tell which end point was used.
+#[test]
+fn g16_auto_tone_actions_log_their_level_and_the_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("photo.png");
+    save_png(&source);
+
+    // The end point: one `info!` line naming the key it wrote.
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+    clear_captured_logs();
+    app.apply_auto_endpoint(AutoEndpoint::White).unwrap();
+    let endpoint_lines = captured_logs()
+        .into_iter()
+        .filter(|line| line.contains("apply_auto_endpoint"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        endpoint_lines.len(),
+        1,
+        "the end point must log exactly one line, got {endpoint_lines:?}"
+    );
+    assert!(
+        endpoint_lines[0].starts_with("INFO"),
+        "the end point logs at INFO, got {}",
+        endpoint_lines[0]
+    );
+    assert!(
+        endpoint_lines[0].contains("whites"),
+        "the line names the key it wrote, got {}",
+        endpoint_lines[0]
+    );
+
+    // The full run: the instrumented action logs its own line. `AutoTone` is a
+    // `GuiAction`, so this is a different line shape than the end point's.
+    clear_captured_logs();
+    app.auto_tone().unwrap();
+    let auto_lines = captured_logs();
+    assert!(
+        auto_lines.iter().any(|line| line.contains("auto_tone")),
+        "the full Auto Tone run must be traceable, got {auto_lines:?}"
+    );
+}
 
 #[test]
 fn g16_apply_auto_endpoint_sets_only_its_field() {
