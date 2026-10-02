@@ -1870,27 +1870,32 @@ fi
 #     exemption that can never fire while still looking declared. These two
 #     check the DECLARATION rather than the pixels.
 #
-# The finding these six carry: the committed goldens still show the LibRaw
-# error banner (finding H1 of GOLDEN-FIXT-31, measured in
-# feature/quality/golden-fixtures.md §5.5 and §5.6). Re-recording them is
-# GOLDEN-BASELINE-32's one-shot task, and nothing in this file may pre-empt it:
-# no threshold is lowered, no golden is rewritten, no inventory or ledger row
-# is removed. Every listed golden keeps printing its measured numbers, here and
-# in the recap at the end of this section - a named exception that hides its
-# subject would defeat the purpose.
+# The finding these six carried (finding H1 of GOLDEN-FIXT-31: the committed
+# library_* goldens still showed the LibRaw error banner) is FIXED as of
+# 2026-10-02: GOLDEN-BASELINE-32 re-recorded all six with real CR3 decodes, so
+# the list below is now EMPTY. The mechanism stays - it is what makes a future
+# class-R golden that loses its render evidence a named finding (with an owning
+# task) instead of a permanently red gate. Nothing in this file may pre-empt
+# such a re-record: no threshold is lowered, no golden is rewritten, no
+# inventory or ledger row is removed.
 #
 # The list lives HERE and nowhere else. golden-fixtures.md §5.5 names the same
-# six in prose as the specification's account of the known limitation; that is
-# not a second copy a gate reads, so there is nothing that can drift. This
-# variable is the single place the check consults.
-GFC_KNOWN_RED="library_compare.png
-library_loupe.png
-library_rated_badges.png
-library_subfolder_badges.png
-library_survey.png
-library_stack_membership.png"
+# finding in prose as the specification's account; that is not a second copy a
+# gate reads, so there is nothing that can drift. This variable is the single
+# place the check consults.
+# EMPTY since GOLDEN-BASELINE-32 landed (2026-10-02). A name here must be an
+# exact class-R golden that currently FAILS the pixel check, plus the task that
+# owns the fix; the stale-entry assertion below removes it when the fix lands.
+GFC_KNOWN_RED=""
 GFC_KNOWN_RED_FILE="$SANDBOX/gfc_known_red.txt"
-printf '%s\n' "$GFC_KNOWN_RED" >"$GFC_KNOWN_RED_FILE"
+if [ -n "$GFC_KNOWN_RED" ]; then
+  printf '%s\n' "$GFC_KNOWN_RED" >"$GFC_KNOWN_RED_FILE"
+else
+  # An empty list must be a zero-byte file: `printf '%s\n' ""` would write one
+  # blank line, which the "no empty entry" assertion below would (correctly)
+  # flag as a malformed entry.
+  : >"$GFC_KNOWN_RED_FILE"
+fi
 # Non-empty entries, and the two shapes a malformed list can take. Both are
 # counted before the loop so the assertions below can name a number.
 GFC_LIST_N=$(grep -c . "$GFC_KNOWN_RED_FILE" || true)
@@ -1898,7 +1903,7 @@ GFC_LIST_BLANK=$(grep -c '^[[:space:]]*$' "$GFC_KNOWN_RED_FILE" || true)
 GFC_LIST_DUP=$(LC_ALL=C sort "$GFC_KNOWN_RED_FILE" | LC_ALL=C uniq -d | tr '\n' ' ')
 GFC_R_N=$(printf '%s\n' "$GFC_R_NAMES" | grep -c . || true)
 
-printf '\n== B2: class-R pixel evidence; %s of %s class-R rows are NAMED known-red, owned by GOLDEN-BASELINE-32\n' \
+printf '\n== B2: class-R pixel evidence; %s of %s class-R rows are NAMED known-red (list empty since GOLDEN-BASELINE-32 landed 2026-10-02)\n' \
   "$GFC_LIST_N" "$GFC_R_N"
 
 # Per-row verdicts, collected for the set-level assertions that follow the loop.
@@ -2082,7 +2087,7 @@ fi
 # that is still red, with the measurement, every run, in the open. If this
 # section ever comes out empty while entries are still on the list, the
 # assertions above have already said so.
-printf '\n== B2 known-red findings, tracked by GOLDEN-BASELINE-32 (still open, not fixed)\n'
+printf '\n== B2 known-red findings (list empty since GOLDEN-BASELINE-32 landed 2026-10-02)\n'
 if [ -n "$GFC_B2_REPORT" ]; then
   printf '%s' "$GFC_B2_REPORT"
   printf '  -> %s of %s class-R rows lack render evidence and are named above; the re-record belongs to GOLDEN-BASELINE-32.\n' \

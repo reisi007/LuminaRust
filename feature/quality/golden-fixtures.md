@@ -321,14 +321,12 @@ dass ein Zitat nur bestehen kann, wenn das Golden dort als `R` steht.
 **Zwei Eigenschaften, die getrennt zu lesen sind.** Ein Ledger-Eintrag durchläuft
 zwei unabhängige Prüfungen: (1) *Klassenprüfung* — das Zitat ist eine `R`-Zeile
 der Inventartabelle, und genau hier schlägt ein Chrome-Zitat an; (2)
-*Pixelprüfung* — das Golden trägt P1/P2 aus §2 Regel 7. **Die sechs
-`library_*`-Zeilen stehen im Ledger und fallen bei der Pixelprüfung durch.** Das
-ist der korrekte Zustand und kein Widerspruch: die Zitate sind klassenrichtig
-(alle sechs sind `R`), aber ihre Pixel tragen den alten Fehlerstand. Sie bleiben
-im Ledger, weil sie die Aussage beanspruchen — bis `GOLDEN-BASELINE-32` sie neu
-schreibt. Würde man sie jetzt herausnehmen, wäre das Ledger grün und die Abnahme
-geliefert, ohne dass ein einziger Byte besser geworden wäre; genau das verhindert
-die Pixelprüfung.
+*Pixelprüfung* — das Golden trägt P1/P2 aus §2 Regel 7. **Seit `GOLDEN-BASELINE-32`
+(2026-10-02) bestehen die sechs `library_*`-Zeilen beide Prüfungen:** sie wurden
+mit echten CR3-Decodes neu aufgenommen (kein LibRaw-Banner mehr), das Ledger ist
+damit durchgehend grün. Vorher fielen genau diese sechs bei der Pixelprüfung
+durch; sie blieben im Ledger, weil sie die Aussage beanspruchen — hätte man sie
+entfernt, wäre das Ledger grün gewesen, ohne dass ein Byte besser geworden wäre.
 
 ### 4.5 Was `scripts/golden_ref_test.sh` gegen dieses Dokument prüft
 
@@ -350,13 +348,14 @@ alle gegen die **committeten** Dateien, nicht gegen eine Kopie:
 | B3 | jedes Ledger-Zitat ist eine Inventarzeile der Klasse `R` | Regel 9, Verifikationsbefund H3 |
 
 **`GFC_KNOWN_RED`** (in `scripts/golden_ref_test.sh`, direkt über der B2-Schleife)
-ist die **einzige** maschinenlesbare Liste der sechs bekannten roten Goldens:
-`library_compare`, `library_loupe`, `library_rated_badges`,
-`library_subfolder_badges`, `library_survey`, `library_stack_membership`.
-Sie ist **keine Ausnahme**, sondern ein **benannter, selbstprüfender Befund**:
-B2a verlangt, dass die genannten Goldens weiterhin rot sind; B2b macht den
-Eintrag selbst überflüssig, sobald das Golden grün wird; B2c verhindert, dass
-ein Tippfehler eine Zeile still ausnimmt. Die Suite parst nur
+ist die **einzige** maschinenlesbare Liste der bekannten roten Goldens. **Seit
+`GOLDEN-BASELINE-32` (2026-10-02) ist sie leer:** die sechs `library_*`
+(`library_compare`, `library_loupe`, `library_rated_badges`,
+`library_subfolder_badges`, `library_survey`, `library_stack_membership`) wurden
+mit echten CR3-Decodes neu aufgenommen und bestehen P1/P2. Die Liste bleibt als
+**Mechanismus** erhalten: B2a verlangt, dass ein genannter Golden weiterhin rot
+ist; B2b macht den Eintrag überflüssig, sobald das Golden grün wird; B2c
+verhindert, dass ein Tippfehler eine Zeile still ausnimmt. Die Suite parst nur
 `golden-fixtures.md` — `golden-references.md` ist kein Gate-Eingabe und kann
 nicht in die Liste driften.
 
@@ -373,18 +372,22 @@ nicht in die Liste driften.
    belegen CPU/GPU-Parität der Pipeline, nicht den RAW-Decode.
 4. **`library_people_empty.png` hängt an einem Ordnerbaum-Zähler.** Eine spätere
    Fixture-Umbenennung ist dort eine sichtbare Änderung (kein stiller Drift).
-5. **Die Goldens sind vor dieser Änderung nicht neu geschrieben.** Die
-   Baseline-Erneuerung gehört `GOLDEN-BASELINE-32`; bis dahin sind die **sechs**
-   Library-Render-Invarianten (Korrektur 2026-09-26: es sind sechs, nicht fünf —
-   `library_compare`, `library_loupe`, `library_survey`,
-   `library_rated_badges`, `library_subfolder_badges`,
-   `library_stack_membership`; §1 derselben Datei nennt genau diese sechs)
-   und die von der Ordnerbaum-/Badge-Textänderung betroffenen
-   Chrome-Invarianten planmäßig rot.
+5. **BEHOBEN 2026-10-02 (`GOLDEN-BASELINE-32`).** Die Baseline-Erneuerung ist
+   gelandet: **13** Goldens wurden auf der gepinnten Referenzplattform neu
+   aufgenommen — die sechs Library-Render-Invarianten (`library_compare`,
+   `library_loupe`, `library_survey`, `library_rated_badges`,
+   `library_subfolder_badges`, `library_stack_membership`) jetzt mit echten
+   CR3-Decodes, plus sieben beabsichtigte UI-/Mask-Local-Änderungen
+   (`develop_basic`, `develop_overlay_mask`, `develop_overlay_pins`,
+   `develop_section_history`, `develop_section_masking`,
+   `develop_sections_expanded`, `mask_view_visibility`). `GFC_KNOWN_RED` ist
+   leer, `golden_ref.sh check` und `golden_ref_test.sh` sind grün.
+   (Vorher, bis 2026-09-25: die sechs Library-Goldens trugen den
+   LibRaw-Fehlerbanner als Soll — Korrektur: es waren sechs, nicht fünf.)
 6. **P1/P2 sind Schwellen, keine exakten Größen — und sie sind aus den Daten
    gesetzt, nicht aus dem Wunsch, heute grün zu sein.** §5.6 legt die Messung
-   offen. Der Gate ist heute für genau die sechs Zeilen **rot**, die den
-   Fehlerstand tragen; das ist der gewollte Zustand, keine Fehljustierung.
+   offen. Der Gate ist seit `GOLDEN-BASELINE-32` für **keine** `R`-Zeile mehr
+   rot; die Schwellen selbst wurden dabei **nicht** gesenkt.
 
 ### 5.6 Herleitung der Schwellen P1 und P2 (Messung 2026-09-26)
 
@@ -399,6 +402,12 @@ mit von Hand gezählten Literalwerten geprüft, siehe §5.7).
 | --- | --- | --- | --- |
 | Fehlerstand (Klasse R) | 6 | 570 – 1516 | schlechtester Fehlerstand `library_subfolder_badges` = **570** |
 | gesunder Render-Stand (Klasse R) | 8 | 88 426 – 104 756 | bester gesunder Stand = **88 426** |
+
+> **Nachtrag 2026-10-02 (`GOLDEN-BASELINE-32`):** die Population „Fehlerstand"
+> ist jetzt **0** — die sechs `library_*` wurden mit echten CR3-Decodes neu
+> aufgenommen und liegen im gesunden Bereich. Die Schwellen bleiben unverändert;
+> diese Herleitung ist der historische Beleg ihrer Kalibrierung, keine Aussage
+> über den heutigen Bestand.
 
 Die Lücke ist **Faktor 58** (1516 → 88 426). Die Schwelle **10 000** ist der
 **geometrische Mittelwert** der beiden beobachteten Extremwerte

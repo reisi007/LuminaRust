@@ -524,9 +524,17 @@ weiterhin „ok" meldet.
 
 ---
 
-### 4.2.3 Die sechs bekannten roten `R`-Zeilen: benannt, besessen, selbstkontrollierend
+### 4.2.3 Die sechs bekannten roten `R`-Zeilen: benannt, besessen, selbstkontrollierend — seit 2026-10-02 behoben
 
-**Die Ausgangslage, gemessen.** Sechs committete `R`-Zeilen tragen als
+**BEHOBEN am 2026-10-02 (`GOLDEN-BASELINE-32`).** Die sechs `library_*`-Goldens
+wurden auf der gepinnten Referenzplattform mit echten CR3-Decodes neu aufgenommen
+(kein LibRaw-Fehlerbanner mehr), zusammen mit sieben beabsichtigten UI-/Mask-
+Local-Änderungen — **13 Goldens** insgesamt. `GFC_KNOWN_RED` ist jetzt **leer**;
+`sh scripts/golden_ref.sh check` ist `MATCH` und `sh scripts/golden_ref_test.sh`
+ist grün (254 passed / 0 failed). Der folgende Mechanismus bleibt gültig — er ist
+der Grund, warum der Befund sichtbar war und nicht still verschwinden konnte.
+
+**Die Ausgangslage, gemessen (bis 2026-09-25).** Sechs committete `R`-Zeilen trugen als
 erwarteten Zustand das LibRaw-Fehlerbanner (Befund H1 aus `GOLDEN-FIXT-31`,
 Herleitung in `golden-fixtures.md` §5.5/§5.6: 570–1516 Farbwerte gegen
 88 426–104 756 im gesunden Stand). B2 prüft P1 und P2 gegen die **committierte
@@ -542,13 +550,15 @@ behalten Klasse `R` (kein Umdeklarieren als `R-F`, Regel 5/8 in
 Render-Evidenz-Ledger stehen. Jeder dieser Wege macht den Befund unsichtbar,
 statt ihn zu beheben.
 
-**Die Regelung.** Eine Liste der **exakten Namen**, die heute bekanntermaßen an
-B2 scheitern, steht in genau einer Stelle: `GFC_KNOWN_RED` in
-`scripts/golden_ref_test.sh`, unmittelbar neben der Prüfung, und mit dem
-besessenen Task (`GOLDEN-BASELINE-32`) im Kommentar darüber.
-`golden-fixtures.md` §5.5 nennt dieselben sechs im Prosatext als bekannte
-Grenze — das ist die Spezifikation, keine zweite Liste, aus der ein Gate liest;
-es kann also nichts auseinanderlaufen.
+**Die Regelung (Mechanismus, seit 2026-10-02 mit leerer Liste).** Eine Liste der
+**exakten Namen**, die bekanntermaßen an B2 scheitern, steht in genau einer
+Stelle: `GFC_KNOWN_RED` in `scripts/golden_ref_test.sh`, unmittelbar neben der
+Prüfung, und mit dem besessenen Task (`GOLDEN-BASELINE-32`) im Kommentar darüber.
+Nach dem Record ist die Liste **leer** — die sechs Einträge wurden entfernt, weil
+die Goldens jetzt P1/P2 bestehen; das war genau das im Mechanismus vorgesehene
+Signal. `golden-fixtures.md` §5.5 nennt dieselben sechs im Prosatext als
+behobenen Befund — das ist die Spezifikation, keine zweite Liste, aus der ein
+Gate liest; es kann also nichts auseinanderlaufen.
 
 Die Liste ist **keine Ausnahme**, sondern die Formulierung einer
 Erfüllungsbedingung:

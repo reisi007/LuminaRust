@@ -1,6 +1,6 @@
 # golden_ref.lock - gepinnter Golden-Referenz-Fingerabdruck (GOLDEN-REF-30).
 # Erzeugt von: sh scripts/golden_ref.sh record --confirm "<reason>"
-# Grund: GOLDEN-STALE-55: develop_section_rating auf den abgewarteten Render-Zustand neu aufgenommen (render_key=Some, Mask-Warnung sichtbar, Stale-Marke weg, golden-references.md 7.2); Maske der Fixture bleibt pending; os.macos 27.0->27.0.1 ist gemessener Drift dieser Maschine (sw_vers 27.0.1) und wird hiermit mitgepinnt
+# Grund: GOLDEN-BASELINE-32 2026-10-02: 13 Goldens auf Apple M5 Pro/Metal 4 neu aufgenommen (7 UI + 6 library_* mit echten CR3-Decodes), GFC_KNOWN_RED geleert
 #
 # Format: eine Zeile pro Schluessel als <key>=<value>, '#'-Zeilen sind
 # Kommentar, Schluesselreihenfolge ist Teil des Formats (kanonisch, von
@@ -28,4 +28,4 @@ libraw.version=0.22.2
 fixtures.count=4
 fixtures.digest=git:e949f6835ed1e4de980934547a995d96e122dba495f97e6a36e9a285226fea4a
 goldens.count=66
-goldens.digest=git:36db33fa1338d10b367feebc2efd6a62f00123982a702fb9f73cbeedb546610e
+goldens.digest=git:9cb231fe5c1457e49f882643aa4fc4d79b49f6ecdf6b55c88eaeb7f7ac3a7dcb

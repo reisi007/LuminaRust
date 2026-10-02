@@ -580,14 +580,24 @@ werden. Jede NEUE Delegation nutzt den `free`-Typ.
 - **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff
   (kein Metal-Compute), daher kann die CI den GPU-Pfad nur kompilieren
   (`cargo check -p lumina-gpu --features gpu`), nicht zur Laufzeit testen.
-  **Daher gilt die Regel:** Bei jeder Änderung an `lumina-gpu/**` oder am
-  GPU-Pfad anderer Crates MUSS parallel zur CI lokal
-  `cargo test -p lumina-gpu --features gpu` ausgeführt werden (Mac mit
-  Metal-Adapter). Das Testergebnis ist im Abschlussbericht zu dokumentieren.
-  Erstes lokales Ergebnis dient als Baseline für Regressionen. Ohne lokalen
-  Lauf bleibt der GPU-Pfad CI-seitig ungetestet — das ist bewusst in Kauf
-  genommen und als CI-Gap in `feature/platform/capability-matrix.md`
-  dokumentiert.
+  **Regel (User-Weisung 2026-10-02, verschärft):** Ein GPU-Thema gilt ohne
+  lokalen Lauf der **relevanten E2E-Tests** als **nicht getestet** — nicht als
+  „grün". Der Grund ist gemessen: die adapterabhängigen Integrationstests
+  (28 Tests in `crates/lumina-gpu/tests/`, u. a. `parity.rs`) tragen ohne das
+  Opt-in `gpu-adapter-tests` ein `#[ignore]`; ein `cargo test -p lumina-gpu
+  --features gpu` **überspringt** sie und liefert damit einen grünen Lauf ohne
+  Aussage. Bei jeder Änderung an `lumina-gpu/**`, am GPU-Pfad eines anderen
+  Crates oder an einem GUI-Thema, das eine GPU (den VRAM-/Present-/Masken-
+  Plane-Pfad oder ein `#[ignore]`tes wgpu-Golden) braucht, MÜSSEN **alle
+  relevanten E2E-Tests** lokal ausgeführt werden:
+  `cargo test -p lumina-gpu --features gpu-adapter-tests` (Mac mit
+  Metal-Adapter; `tests/support::require_adapter` macht einen fehlenden Adapter
+  zum harten Fehler, kein stiller Pass) sowie die betroffenen GUI-GPU-Tests.
+  Das Testergebnis ist im Abschlussbericht mit Kommando, Zahlen und
+  Fehlernamen zu dokumentieren. Erstes lokales Ergebnis dient als Baseline für
+  Regressionen. Ohne lokalen Lauf bleibt der GPU-Pfad CI-seitig ungetestet —
+  das ist bewusst in Kauf genommen und als CI-Gap in
+  `feature/platform/capability-matrix.md` dokumentiert.
 
 ## Definition of Done
 
