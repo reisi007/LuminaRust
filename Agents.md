@@ -489,6 +489,12 @@ kittest-Stand ausdrücklich.
   (`crates/lumina-gui/src/main.rs:30`) und UI-Überschrift
   (`crates/lumina-gui/src/lib.rs:11965`) bleiben unverändert; der
   Formatbezeichner `.lumina.*` bleibt ohnehin (siehe `SIDECAR-SUFFIX-CONST`).
+- **`GPU-CLEAR-TRANSITION` — der Masken-Plane-Clear läuft nur beim Übergang.**
+  Der Null-Plane-`write_texture` wird nur ausgeführt, wenn zuvor eine
+  Nicht-Null-Plane resident war, nicht bei jedem Render ohne Maskenebene.
+  Grund (gemessen, F-074-N10): 37 µs / 722 µs / 15,21 ms für
+  160×120 / 1280×853 / 6000×4000, ~13× ein Vollrender @24 MP; Umsetzung in
+  `GPU-MASKPLANE-CLEAR-PERF-51` (lumina-gui, mutationsbewiesen).
 
 ### Dreifache Verifikations-Niederlage ohne Modellwechsel (User-Regeln 2026-09-26/29)
 

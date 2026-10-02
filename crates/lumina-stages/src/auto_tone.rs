@@ -32,6 +32,15 @@
 //!   nor persisted.
 //! * **Reuse reads mirrors only.** `recipe.adjustments` is never a source in
 //!   the reuse branch, so a user value can never be adopted as an auto value.
+//! * **A mirror that does not document the slider marks a user claim, not a
+//!   partial contract** (AUTO-TONE-ENDPOINT-MIXED-7).
+//!   [`auto_tone_overrides`] is the single derivation that turns a missing
+//!   mirror (a key never auto-written) or a mirror that differs from the
+//!   effective value (a slider edited by hand after the auto write) into the
+//!   user values a repair run must keep. The writer still never *creates* a
+//!   partial set: every caller reaches this module through
+//!   `apply_auto_tone_result`, which always writes all six sliders and all six
+//!   mirrors.
 //! * **Freshness is presence-based, not value-based** ([`auto_tone_is_fresh`]).
 //!
 //! # Why it moved
@@ -148,6 +157,55 @@ fn mirrored_values(auto: &AutoFeatures) -> Option<SliderValues> {
         *auto.auto_highlights.as_ref()?,
         *auto.auto_shadows.as_ref()?,
     ])
+}
+
+/// The per-slider **user overrides** a recompute must preserve, derived from the
+/// recipe's own persisted state — no new field, no migration
+/// (AUTO-TONE-ENDPOINT-MIXED-7).
+///
+/// A tone key in [`AUTO_TONE_ADJUSTMENT_KEYS`] is an override exactly when its
+/// `auto_features` mirror does **not** document its effective value in
+/// `recipe.adjustments`:
+///
+/// * the mirror is **missing** (`None`) while the slider is present — the key
+///   was never auto-written (an end point on a fresh recipe, or a value that a
+///   stale-clear kept because it was a user override);
+/// * the mirror is present but records a **different** value — the slider was
+///   edited by hand after the auto write.
+///
+/// Where the mirror and the slider agree, the slider *is* the auto value and no
+/// override is produced. The result feeds the `preset_overrides` slot of
+/// [`apply_auto_tone_result`], which writes the effective value where an
+/// override exists and the **auto value** into the mirror either way — clause
+/// (4) of AUTO-TONE-CLI-6.
+///
+/// This is the single source of the override set for the two GUI callers: the
+/// G-16 end point (`LuminaApp::apply_auto_endpoint`) and the repair run
+/// (`regenerate_stale` → `LuminaApp::auto_tone`).
+pub fn auto_tone_overrides(recipe: &EditRecipe) -> BTreeMap<String, f64> {
+    let auto = &recipe.auto_features;
+    let mirrors = [
+        ("exposure", auto.auto_exposure),
+        ("contrast", auto.auto_contrast),
+        ("whites", auto.auto_whites),
+        ("blacks", auto.auto_blacks),
+        ("highlights", auto.auto_highlights),
+        ("shadows", auto.auto_shadows),
+    ];
+    let mut overrides = BTreeMap::new();
+    for (key, mirror) in mirrors {
+        let Some(value) = recipe.adjustments.get(key).copied() else {
+            continue;
+        };
+        let is_override = match mirror {
+            None => true,
+            Some(auto_value) => value != auto_value,
+        };
+        if is_override {
+            overrides.insert(key.to_string(), value);
+        }
+    }
+    overrides
 }
 
 /// The complete persisted set, or `None` for a missing mirror **or** a

@@ -85,6 +85,9 @@ mod draft_throttle;
 // GUI-REFACTOR-W1-20 S1.3: recipe invalidation (`mark_dirty`/`mark_recipe_dirty`)
 // and the single-adjustment default/reset path.
 mod dirty;
+// AUTO-TONE-ENDPOINT-MIXED-7: the G-16 auto tone end points, extracted from the
+// ratcheted crate root.
+mod auto_endpoint;
 // MASK-LOCAL-P1.1: capture lifecycle of the post-global/post-geometry stage that
 // the mask-local white-balance picker samples (store + paired invalidation).
 mod effective_source_stage;
@@ -3681,67 +3684,6 @@ impl LuminaApp {
         self.masking_preview.as_deref()
     }
 
-    /// Shared `suggest_auto_tone` evaluation over the loaded source frame
-    /// (G-16), used by [`Self::apply_auto_endpoint`] (one end point).
-    /// [`Self::auto_tone`] no longer comes here — it goes through the shared
-    /// writer, which evaluates and persists in one step. Loud without a loaded
-    /// image — never a silent no-op.
-    fn compute_auto_tone(&self) -> Result<AutoToneResult, GuiError> {
-        let Some(frame) = &self.original else {
-            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
-        };
-        let config = AutoToneConfig {
-            target_luminance: self.recipe.auto_features.target_luminance,
-            ..Default::default()
-        };
-        let result = suggest_auto_tone(frame, config)?;
-        Ok(result)
-    }
-
-    /// Apply one auto end point (G-16, `Shift`+double-click on the
-    /// `whites`/`blacks` label): evaluates the shared auto-tone path and
-    /// persists exactly that one field as a **user override** through the
-    /// normal save/render commit. Loud without a loaded image.
-    ///
-    /// AUTO-TONE-CLI-6 clause (2): the end point is NOT an auto-tone state — no
-    /// `enable_auto_tone`, no fingerprint, and it takes the mirror off its own
-    /// key (see the comment at the write). The value still comes from the shared
-    /// auto-tone path, so there is no second algorithm.
-    pub fn apply_auto_endpoint(&mut self, endpoint: AutoEndpoint) -> Result<(), GuiError> {
-        let result = self.compute_auto_tone()?;
-        let (key, value) = match endpoint {
-            AutoEndpoint::White => ("whites", result.whites),
-            AutoEndpoint::Black => ("blacks", result.blacks),
-        };
-        self.recipe.adjustments.insert(key.into(), value);
-        // The end point claims this one slider for the user, so the mirror an
-        // earlier Auto-Tone run left on exactly this key has to go — with it,
-        // `clear_stale_auto_tone` reads the value as auto-written and deletes it
-        // on the next stale fingerprint (red without this line, green with it:
-        // `g16_auto_endpoint_after_auto_tone_keeps_its_value_across_a_stale_clear`).
-        //
-        // This leaves 5 of 6 mirrors when a full run came first: a real mixed
-        // state. It is loud — `auto_tone_is_fresh` refuses it and `auto_tone_stale`
-        // below repairs it — but the repair is NOT free: it rewrites all six
-        // sliders and overwrites a manual value the user set after the end point
-        // (measured: -0.5 becomes 0.0287…, the auto value). Known defect, pinned
-        // by `g16_the_state_repair_overwrites_a_later_manual_value_known_defect`;
-        // closing it needs a per-slider override concept that does not exist yet
-        // and is NOT claimed here.
-        match endpoint {
-            AutoEndpoint::White => self.recipe.auto_features.auto_whites = None,
-            AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = None,
-        }
-        info!("GUI interaction: apply_auto_endpoint {key}={value}");
-        self.status = Str::AutoEndpointAppliedPattern.format_arg(key);
-        // Same commit discipline as `auto_tone` (GUI-AUTOTONE-SAVE-1 /
-        // GUI-SIDECAR-READ-1): record + synchronously persist (CAS, loud
-        // conflicts) instead of stranding the save on a later edit.
-        self.mark_recipe_dirty("auto_endpoint", value);
-        self.commit_pending_slider_save([0, 0]);
-        Ok(())
-    }
-
     /// Toggle lights-out (`L`, Welle 2). Display-only: hides the side panels
     /// and the filmstrip; header, module bar and preview stay so status and
     /// errors remain visible. Never mutates the recipe.
@@ -6367,21 +6309,20 @@ impl LuminaApp {
             }
             regenerated.push("masks");
         }
-        // Module `auto-tone`: stale = enabled, but the full AUTO-TONE-2
-        // six-mirror contract is not persisted (e.g. a stale fingerprint
-        // cleared it, or a historic two-slider `process --auto-tone` artifact
-        // is loaded). Mirrors are the marker of auto-written values, so an
-        // incomplete set means regenerate.
-        let auto_tone_stale = {
-            let auto = &self.recipe.auto_features;
-            auto.enable_auto_tone
-                && (auto.auto_exposure.is_none()
-                    || auto.auto_contrast.is_none()
-                    || auto.auto_whites.is_none()
-                    || auto.auto_blacks.is_none()
-                    || auto.auto_highlights.is_none()
-                    || auto.auto_shadows.is_none())
-        };
+        // Module `auto-tone`: stale = enabled and the shared freshness predicate
+        // (`auto_tone_is_fresh`) refuses the recipe. That predicate is exactly
+        // the one `lumina regenerate --module auto-tone` uses, so a GUI recipe
+        // the CLI would call fresh is not touched here, and a recipe with a
+        // non-matching fingerprint (e.g. a changed target luminance) IS
+        // repaired — the same trigger the CLI has. A historic two-slider
+        // artifact and a half-mirrored state are stale by the same rule.
+        let auto_tone_stale = self.recipe.auto_features.enable_auto_tone
+            && self.original.as_ref().is_none_or(|frame| {
+                let target = self.recipe.auto_features.target_luminance;
+                let fingerprint =
+                    lumina_stages::auto_tone::auto_tone_input_fingerprint(frame, target);
+                !lumina_stages::auto_tone::auto_tone_is_fresh(&self.recipe, &fingerprint)
+            });
         if auto_tone_stale {
             self.auto_tone()?;
             regenerated.push("auto-tone");
@@ -9397,16 +9338,30 @@ impl LuminaApp {
         // string is exactly what `auto_tone_is_fresh` compares.
         //
         // A user pressing Auto Tone is an explicit request, so it recomputes
-        // (`AlwaysRecompute`) — never the CLI's `ReuseIfComplete`. No preset
-        // layer here: the GUI applies presets separately, and the CLI's
-        // `preset_overrides` is what expresses "preset beats auto" on that path.
+        // (`AlwaysRecompute`) — never the CLI's `ReuseIfComplete`. The GUI has
+        // no preset layer; the override map below is not a preset — it carries
+        // the user's own overrides (a hand value that its mirror does not
+        // document).
         let target_luminance = self.recipe.auto_features.target_luminance;
+        // AUTO-TONE-ENDPOINT-MIXED-7: the ONE place that decides which sliders
+        // the user overrode is the shared `auto_tone_overrides`. It keeps every
+        // key whose mirror does not document its effective value — an end point
+        // value or a hand value set after the Auto-Tone run — so the collective
+        // repair (`regenerate_stale` -> here) preserves it instead of
+        // overwriting it, idempotently. Gated on an existing auto state so an
+        // explicit Auto Tone on a fresh recipe still computes all six values
+        // from the frame (a fresh recipe has no state to preserve).
+        let overrides = self
+            .recipe
+            .auto_features
+            .enable_auto_tone
+            .then(|| lumina_stages::auto_tone::auto_tone_overrides(&self.recipe));
         let outcome = lumina_stages::auto_tone::apply_auto_tone_result(
             &mut self.recipe,
             &frame,
             target_luminance,
             lumina_stages::auto_tone::PersistedAutoTone::AlwaysRecompute,
-            None,
+            overrides.as_ref(),
         )?;
         debug_assert_eq!(
             outcome.source,
@@ -11286,9 +11241,12 @@ fn crop_overlay_rect(
 // fails and the export aborts.
 
 fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
-    // AUTO-TONE-2: a present mirror marks the adjustment as auto-written, so
-    // a stale fingerprint removes exactly those values (adjustment + mirror).
-    // Manual edits carry no mirror and survive the clear.
+    // AUTO-TONE-2 / AUTO-TONE-ENDPOINT-MIXED-7: a stale fingerprint invalidates
+    // the AUTO values. A present mirror that equals its slider marks the value
+    // as auto-written, so it is removed together with the mirror. A slider that
+    // differs from its mirror (a hand edit after the auto write) or that has no
+    // mirror at all is a user value and survives — with it, a value the G-16 end
+    // point claimed (or a hand value set after it) is not deleted on load.
     for (key, mirror) in [
         ("exposure", recipe.auto_features.auto_exposure),
         ("contrast", recipe.auto_features.auto_contrast),
@@ -11297,8 +11255,10 @@ fn clear_stale_auto_tone(recipe: &mut EditRecipe) {
         ("highlights", recipe.auto_features.auto_highlights),
         ("shadows", recipe.auto_features.auto_shadows),
     ] {
-        if mirror.is_some() {
-            recipe.adjustments.remove(key);
+        if let Some(auto_value) = mirror {
+            if recipe.adjustments.get(key).copied() == Some(auto_value) {
+                recipe.adjustments.remove(key);
+            }
         }
     }
     recipe.auto_features.auto_exposure = None;
@@ -11932,6 +11892,9 @@ mod tests {
     // ratchet — the keyboard mappings stay there, the state the G-16 end point
     // leaves in the recipe is its own concern.
     mod g16_auto_endpoint;
+    // AUTO-TONE-ENDPOINT-MIXED-7: the order-sensitive acceptance sequences
+    // (frisch/voller Lauf/zweimal Endpunkt, repair, load-path stale clear).
+    mod g16_auto_endpoint_sequences;
     mod g16_shortcuts;
     mod generative_expand;
     mod generative_render;

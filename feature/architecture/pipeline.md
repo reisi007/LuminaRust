@@ -1520,60 +1520,62 @@ Satz erzeugen. Weil der Wiederverwenzungszweig nur Spiegel liest, kann ein
 **Benutzerwert nie zum Auto-Wert werden** — `recipe.adjustments` ist dort
 keine Quelle.
 
-**Der G-16-Endpunkt ist keine Auto-Tone, sondern eine Nutzerüberschreibung.**
+**Der G-16-Endpunkt ist eine Nutzerüberschreibung auf dem Sechsersatz
+(AUTO-TONE-ENDPOINT-MIXED-7).**
 `LuminaApp::apply_auto_endpoint` (`Shift`+Doppelklick auf `whites`/`blacks`)
-schreibt **genau einen** Regler — ohne Spiegel, ohne `enable_auto_tone`, ohne
-Fingerprint. Der Wert wird von derselben `suggest_auto_tone`-Auswertung
-berechnet wie der Sechser-Pfad; es gibt keine zweite Algorithmus-Implementierung.
-Der Endpunkt bleibt ein Endpunkt (genau ein Feld), nicht „setze alle sechs".
+setzt seinen Regler auf den Wert, den dieselbe `suggest_auto_tone`-Auswertung
+liefert wie der Sechser-Pfad; es gibt keine zweite Algorithmus-Implementierung.
+Auf einem **frischen** Rezept bleibt er eine reine Nutzerüberschreibung ohne
+Auto-Tone-Zustand (0 von 6 Spiegeln = „kein Auto-Tone", kein gemischter
+Zustand). Auf einem **bestehenden** Auto-Tone-Zustand vervollständigt er den
+Sechsersatz über **denselben** Writer: er trägt sich selbst als Override ein,
+der Writer setzt alle sechs `adjustments` (Override, wo einer gilt, sonst der
+recomputete Auto-Wert), alle sechs Spiegel (immer der **Auto**-Wert) und den
+Fingerprint. Damit entsteht **kein** gemischter Zustand mehr: nach einem vollen
+Auto-Tone-Lauf hinterlässt ein Endpunkt **6 von 6** Spiegeln, die Freshness
+bleibt wahr. Die frühere Lesart (Endpunkt nimmt seinem Regler den Spiegel,
+übrig bleiben 5 von 6) ist damit **ersetzt**, nicht ergänzt; der frühere
+Reparatur-Datenverlust (`-0.5` → `0.0287…`) ist damit behoben.
 
-Daraus folgen zwei Fälle, und beide sind **gemessen**, nicht angenommen
-(AUTO-TONE-CLI-6, Klausel (2)):
+**Der Override-Träger und der gemeinsame Helfer.** Ein neues persistiertes Feld
+gibt es nicht; die Override-Menge wird aus dem Rezept selbst abgeleitet
+(`lumina_stages::auto_tone::auto_tone_overrides`). Ein Tone-Schlüssel ist genau
+dann ein Override, wenn sein Spiegel den effektiven Wert **nicht** dokumentiert:
+der Spiegel **fehlt** (der Schlüssel wurde nie auto-geschrieben — ein Endpunkt
+auf einem frischen Rezept oder der Zustand nach einem Stale-Clear), oder der
+Spiegel trägt einen **anderen** Auto-Wert (der Regler wurde nach dem Auto-Lauf
+von Hand verändert). Wo Spiegel und Regler übereinstimmen, *ist* der Regler der
+Auto-Wert. **Beide** Aufrufer nutzen denselben Helfer: der Endpunkt beim Klick
+und der Reparaturlauf (`regenerate_stale` → `auto_tone`). Der
+`preset_overrides`-Parameter von `write_auto_tone_state` ist derselbe Träger,
+der Klausel (4) schon trug — deshalb **kein Schema, keine Migration**. Die
+Abgrenzung „außerhalb des Slices wegen Schema und Migration" (2026-10-02) war
+gemessen falsch und ist **zurückgenommen**.
 
-- **Auf einem frischen Rezept** (kein Auto-Tone vorhanden) entsteht kein
-  Auto-Tone-Zustand: 0 von 6 gespiegelt ist der Zustand „kein Auto-Tone", kein
-  gemischter Zustand. `clear_stale_auto_tone` erkennt den Wert nie als
-  auto-written (kein Spiegel ⇒ nie im Clear-Pfad), er überlebt einen
-  Stale-Fingerprint-Clear wie jeder andere Handwert.
-- **Nach einem vollen Auto-Tone-Lauf** (6 von 6 gespiegelt) nimmt der Endpunkt
-  seinem Regler den Spiegel, denn sonst würde der Nutzerwert beim nächsten
-  Stale-Clear als auto-written gelöscht. Übrig bleiben **5 von 6** Spiegel —
-  ein gemischter Zustand, und der wird hier **nicht** weggeredet. Er ist
-  **laut**: `auto_tone_is_fresh` verweigert die Freshness, sodass kein
-  `regenerate` den Nutzerwert als Auto-Wert adoptiert, und die Sammelaktion
-  erkennt die unvollständige Spiegelmenge als `auto_tone_stale`.
-  **Was der Reparaturlauf kostet — gemessen, nicht behauptet:** er schreibt
-  alle sechs Regler neu und **überschreibt damit auch einen Handwert**, den der
-  Nutzer nach dem Endpunkt-Klick selbst gesetzt hat. Gemessen: Auto-Tone-Lauf
-  → Endpunkt auf `blacks` → Nutzer setzt `blacks` auf `-0.5` →
-  `regenerate_stale()` hinterlässt `0.0287…`, den Auto-Wert. Dieser Preis ist
-  bekannt und **nicht** als gelöst zu führen; die nötige Abhilfe (ein
-  Override-Konzept je Regler) existiert im Workspace noch nicht.
+**Der Stale-Clear erhält Überschreibungen.** `clear_stale_auto_tone` entfernt
+bei einem nicht mehr passenden Fingerprint genau die Regler, deren Wert
+**gleich** ihrem Spiegel ist (der Auto-Wert), und lässt Werte stehen, die von
+ihrem Spiegel abweichen (eine Nutzerüberschreibung). Die sechs Spiegel und den
+Auto-Tone-Zustand setzt er in jedem Fall zurück. Dadurch überlebt ein
+Überschreibungswert den Stale-Clear auf dem **Produktionspfad** (Load) und wird
+vom nächsten Reparaturlauf idempotent wieder in den Sechsersatz eingebettet.
+**Bekannte, bewusste Grenze:** Regler und Spiegel sind beim reinen
+Endpunkt-Klick numerisch **gleich** (derselbe `suggest_auto_tone`-Wert), also
+ohne persistiertes Feld nicht unterscheidbar — der Clear entfernt einen solchen
+Wert wie einen Auto-Wert. Beobachtbar überlebt der **abweichende** Nutzerwert
+(der Handwert); das ist die Eigenschaft, die Klausel (4) braucht, und sie ist
+über den Load-Pfad und den Reparaturlauf gepinnt.
 
-**Warum nicht die Alternative.** Ein Endpunkt, der alle sechs Regler und
-Spiegel schriebe, hielte Klausel (2) ebenfalls ein — überschriebe aber fünf
-Regler, die der Nutzer nicht angefasst hat, und machte aus einer Geste einen
-vollen Auto-Tone-Lauf. Ein Endpunkt ohne jeden Auto-Zustand **und** mit
-erhaltenem Alt-Spiegel verliert den Nutzerwert beim nächsten Stale-Clear. Die
-hier festgeschriebene Lesart ist damit die günstigste der drei, **nicht** eine
-Erfüllung — der Preis (5 von 6 Spiegel) bleibt eine Klausel-(2)-Lücke und ist
-als Task `AUTO-TONE-ENDPOINT-MIXED-7` offen.
-
-**Zurückgenommene Abgrenzung (2026-10-02, `DoD.md` §9).** Zuerst stand hier,
-die vollständige Lösung brauche ein „Override-Konzept je Regler" und damit
-**Schema und Migration**, weshalb sie außerhalb des Slices liege. **Das ist
-gemessen falsch:** der Overrides-Träger **existiert bereits** — es ist genau
-der `preset_overrides`-Parameter von `write_auto_tone_state`, derselbe, der
-Klausel (4) überhaupt trägt. Eine Sonde (wieder entfernt) fährt den
-Reparaturlauf mit diesem Träger und liefert **alle vier** Properties zugleich:
-`adjustments["blacks"] = -0.5` bleibt `-0.5` (kein Datenverlust), **6 von 6**
-Spiegel (kein gemischter Zustand, Klausel (2) erfüllt), `auto_tone_is_fresh`
-wahr, und der `auto_blacks`-Spiegel trägt den **Auto**-Wert `0.0287…`, während
-`adjustments` den Nutzerwert `-0.5` trägt (Klausel (4) erfüllt). **Es ist
-also kein neues persistiertes Feld nötig und keine Migration.** Die
-Abgrenzung „außerhalb des Slices" entfällt; die offene Produktfrage ist nur noch,
-ob der Endpunkt die Override-Menge beim Klick setzt oder der Reparaturlauf sie
-aus den fehlenden Spiegeln ableitet.
+**Der GUI-Reparaturlauf benutzt dasselbe Freshness-Prädikat wie die CLI.**
+`LuminaApp::regenerate_stale` stufte den `auto-tone`-Modul bisher nur dann als
+veraltet ein, wenn ein **Spiegel fehlte**. Seit AUTO-TONE-ENDPOINT-MIXED-7
+entscheidet dasselbe `auto_tone_is_fresh` wie in `lumina regenerate --module
+auto-tone`: enabled **und** das Prädikat verweigert (fehlender Spiegel/Regler
+oder **nicht passender Fingerprint**, etwa nach geändertem `--target-luminance`).
+Damit repariert die GUI dieselben Zustände wie die CLI, und eine 6-von-6-Menge
+mit passendem Fingerprint ist korrekt ein No-Op. Ein fehlender Regler/Spiegel
+ist weiterhin stale; das Verhalten der historischen Zwei-Regler-Artefakte ist
+unverändert.
 
 **Vorrangordnung (Raster-MVP).** Für jedes der sechs Regler gilt
 **Auto-Tone → Preset → explizite CLI-Angabe**, danach erst das Exposure

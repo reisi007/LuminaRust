@@ -13,7 +13,9 @@ use crate::copy::{copy_mut, copy_ref, resolve_copy};
 use crate::decode::{decode_input, is_raw_path, source_identity, timestamp};
 use crate::report::Persist;
 use crate::spot::{run as run_spot, SpotRequest};
-use lumina_sidecar::{load_sidecar, save_sidecar, sidecar_path_for, SidecarDocument};
+use lumina_sidecar::{
+    load_sidecar, save_sidecar, sidecar_path_for, AutoFeatures, EditRecipe, SidecarDocument,
+};
 use std::path::PathBuf;
 
 fn png_bytes(width: u32, height: u32) -> Vec<u8> {
@@ -44,6 +46,88 @@ fn fixture(dir: &std::path::Path) -> PathBuf {
     )
     .unwrap();
     input
+}
+
+// ----------------------------------------------------- auto-tone override map
+
+/// AUTO-TONE-ENDPOINT-MIXED-7: the derivation is the single place that decides
+/// which sliders a recompute must keep. A key is an override iff its mirror does
+/// **not** document its effective value: the mirror is missing (never
+/// auto-written), or it is present with a different value (edited by hand after
+/// the auto write). A present, matching mirror is the auto value, not an
+/// override.
+#[test]
+fn auto_tone_overrides_is_the_disjoint_missing_or_mismatched_set() {
+    use crate::auto_tone::auto_tone_overrides;
+
+    let mut recipe = EditRecipe::default();
+    // A full six-mirror state whose sliders equal their mirrors: no override.
+    //
+    // The mirrors are set through the JSON contract of `AutoFeatures` — the very
+    // shape the sidecar persists — instead of six literal `auto_<field> = Some(`
+    // assignments. That keeps this fixture green under the "exactly one write
+    // path" source scan in `lumina-cli/src/tests/auto_tone_writer.rs`, which (by
+    // design) flags that literal anywhere outside `lumina-stages/src/auto_tone.rs`:
+    // the scan cannot tell a second writer from a test fixture, so the fixture
+    // must not spell the writer's assignment form. The values stay literal and
+    // byte-identical to what the writer would persist.
+    let mirrors: AutoFeatures = serde_json::from_value(serde_json::json!({
+        "auto_exposure": 0.1,
+        "auto_contrast": 0.2,
+        "auto_whites": 0.3,
+        "auto_blacks": -0.3,
+        "auto_highlights": 0.25,
+        "auto_shadows": 0.15,
+    }))
+    .expect("the six mirrors are a valid AutoFeatures document");
+    recipe.auto_features = mirrors;
+    for (key, value) in [
+        ("exposure", 0.1),
+        ("contrast", 0.2),
+        ("whites", 0.3),
+        ("blacks", -0.3),
+        ("highlights", 0.25),
+        ("shadows", 0.15),
+    ] {
+        recipe.adjustments.insert(key.into(), value);
+    }
+    assert!(
+        auto_tone_overrides(&recipe).is_empty(),
+        "matching mirrors are the auto value, never an override"
+    );
+
+    // A hand edit after the auto write: the mirror still documents the auto
+    // value, the slider carries the user value -> override.
+    recipe.adjustments.insert("blacks".into(), -0.5);
+    // A missing mirror with a slider: never auto-written -> override. Cleared
+    // through the same JSON round trip as above (`None`, omitted), not with a
+    // literal `auto_whites = None` assignment — see the comment on the mirror
+    // fixture: the scan also recognises the `auto_<field> = None` form.
+    let cleared: AutoFeatures = serde_json::from_value(serde_json::json!({
+        "auto_exposure": 0.1,
+        "auto_contrast": 0.2,
+        "auto_blacks": -0.3,
+        "auto_highlights": 0.25,
+        "auto_shadows": 0.15,
+    }))
+    .expect("a five-mirror AutoFeatures document is valid; auto_whites stays absent");
+    recipe.auto_features = cleared;
+
+    let overrides = auto_tone_overrides(&recipe);
+    assert_eq!(overrides.get("blacks").copied(), Some(-0.5));
+    assert_eq!(overrides.get("whites").copied(), Some(0.3));
+    assert_eq!(
+        overrides.len(),
+        2,
+        "exactly the two changed keys: {overrides:?}"
+    );
+
+    // A missing mirror without an `adjustments` value is not an override (there
+    // is no user value to preserve).
+    recipe.adjustments.remove("whites");
+    let overrides = auto_tone_overrides(&recipe);
+    assert_eq!(overrides.get("whites"), None);
+    assert_eq!(overrides.get("blacks").copied(), Some(-0.5));
 }
 
 // ------------------------------------------------------------ copy resolution
