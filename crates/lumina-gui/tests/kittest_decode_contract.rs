@@ -275,6 +275,23 @@ fn the_bound_only_wait_reaches_a_state_the_settled_exit_cannot_decide() {
         }),
         SETTLE_DEADLINE,
     );
+    // The decode wait above ends when the *decode* settles; the source
+    // folder's scan is a later async source and may still be in flight then
+    // (CI measured `entries().len() == 0` with `scan_pending()` at the premise
+    // below: the 4x3 decode settling before the scan worker delivers). Wait
+    // the source listing out with the bound-only wait — a `Ready`, never a
+    // settled exit — so the premise holds on every machine, not just fast
+    // ones. Durable because `begin_scan` never touches `entries` (only a
+    // later frame's `poll_scan`/`apply_listing` can) and no frame runs between
+    // this return and `set_directory` below.
+    pump(
+        &mut harness,
+        source_dir.path(),
+        Ready::new("entries().len() == 1", |app: &LuminaApp| {
+            app.entries().len() == 1
+        }),
+        SETTLE_DEADLINE,
+    );
     // A navigation with **no frame pumped yet**: the decode is terminal and the
     // scan worker is armed, so this is the window in which a settled exit would
     // fire and report the listing as unreachable.
