@@ -44,6 +44,19 @@ name = "core"
 harness = false
 path = "bench/core.rs"
 
+# PIPELINE-ANNASSUNGEN-10: `render_frame` **with** a crop rectangle, over three
+# remaining-area sizes plus a full-frame control. `perf/baseline.json` has no
+# crop benchmark at all (A3), so the saving a `PIPELINE-CROP-EARLY-9` reorder
+# would remove has to be produced before that reorder may be built.
+#
+# Registered here and not left implicit on purpose: an unregistered bench file
+# is never compiled by cargo and reads like live measurement — the exact defect
+# `TEST-ORPHAN-97` documents for tests.
+[[bench]]
+name = "crop_pipeline"
+harness = false
+path = "bench/crop_pipeline.rs"
+
 # GPU render-path benchmarks (F-074-N6). Gated behind the `gpu` feature so a
 # GPU-free build (`--no-default-features`) does not try to compile/link wgpu.
 [[bench]]
