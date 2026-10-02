@@ -698,6 +698,85 @@ eingeschalteter Stufe, nicht der Preis einer inerten Stufe. (2) Der
 Vorher/Nachher-Gewinn einer **umgestellten** Pipeline ist hier **nicht**
 messbar; gemessen ist ausschließlich der unveränderte Ist-Zustand.
 
+### F-074-N10 — Masken-Plane-Clear: Queue-Seite gemessen (`GPU-MASKPLANE-CLEAR-PERF-51`, 2026-10-02)
+
+Der Sync `sync_mask_plane_to_vram` in `lumina-gui` schreibt bei einem Render
+**ohne** Maskenebene eine Null-Plane über die aktive VRAM-`R16Uint`-Maske
+(`crates/lumina-gui/src/present_mask_plane.rs`, `clear_active_vram_mask_plane`),
+in Bändern der vollen Breite (`zero_band_rows(width, 1 MiB)`) über
+`upload_mask_tile` → `shaders::write_mask_tile` → `queue.write_texture`. Bis
+hierhin war nur die **Host-Seite** gemessen (0,004 ms, auflösungsunabhängig);
+genau deshalb war die **Queue-Seite** offen. Diese Messung schließt sie.
+
+Implementiert in `crates/lumina-gpu/benches/mask_plane_clear.rs`
+(`harness = false`, eigenes `[[bench]]`-Target **dieses** Crates). Der Bench
+liegt bewusst **nicht** in `lumina-bench`: die Produktionsnaht
+(`upload_mask_tile`) und die Bandzerlegung (GUI) sind getrennt, und
+`lumina-gpu` darf nicht von `lumina-gui` abhängen (Architekturgrenze). Die
+Bandformel ist als wörtliche Kopie (`zero_band_rows` / `ZERO_BAND_BYTES`)
+enthalten; die Gegenprobe unten bestätigt die Bandrechnung des Tasks.
+
+Kommando:
+`cargo bench -p lumina-gpu --bench mask_plane_clear`
+
+**Erfassung 2026-10-02 auf der Referenzmaschine (`MacBook-Pro-von-Florian.local`,
+Darwin/arm64, Apple M5 Pro, Metal-Adapter, rustc 1.98.0), 100 Samples je
+Bench.** Die Maschine stand **unter Fremdlast** (Spielprozess
+`TransportFever3`, ~140–270 % CPU, Load Average 5–18) — die Absolutzahlen sind
+dadurch **nach oben verzerrt** (dieselben Benches lagen bei Load ≈ 17 rund
+40–50 % höher als bei Load ≈ 5). Eine quieszente Maschine war nicht verfügbar;
+das ist eine benannte Grenze, keine stille.
+
+| Benchmark-ID | Median | p95 | Bytes | Bänder |
+| --- | ---: | ---: | ---: | ---: |
+| `gpu/mask_plane_clear__160x120` | 37,4 µs | 46,8 µs | 38 400 | 1 |
+| `gpu/mask_plane_clear__1280x853` | 722 µs | 845 µs | 2 183 680 | 3 |
+| `gpu/mask_plane_clear__6000x4000` | 15,21 ms | 19,73 ms | 48 000 000 | 46 |
+
+**Kontrolle (ein Aufruf statt Bänder):** `mask_plane_clear_singlewrite__*`
+schreibt dasselbe Null-Volumen in **einem** `write_texture` (Naht
+`upload_mask_plane`, GPU-STAGE-1): 39,2 µs / 620 µs / 12,98 ms. Die Bänderung
+kostet also nur **~10–20 %** Aufschlag — die Kosten sind **volumengetrieben**
+(Host→Staging-Kopie + GPU-Submit der Bytes), nicht bandzahlgetrieben. Damit ist
+die Kostenzuordnung belegt: wer sparen will, muss **Bytes** sparen, nicht
+Aufrufe.
+
+**Befund:** Der Clear ist **nicht billig**. Bei voller Kameraauflösung
+(6000×4000, ~24 MP) kostet er **~15 ms pro Render ohne Maskenebene** — rund
+**13×** ein vollständiger `gpu/render_with_gpu__2048` (Baseline 1,08 ms). Auch
+bei 1280×853 (~0,7 ms) liegt er in der Größenordnung eines 2048er
+GPU-Vollrenders. Der Betrag fällt bei **jedem** Render ohne Evaluierte-Ebene
+an, also im häufigen Fall „Bild ohne aktive Maske, Regler bewegt".
+
+**Entscheidung (offen, an den Projekteigentümer):** Die naheliegende Abhilfe —
+Clear nur beim **Übergang** „Ebene resident → keine Ebene" statt bei jedem
+Render — lebt in `crates/lumina-gui/src/present_mask_plane.rs` und ist damit
+**außerhalb des Umfangs** dieses Mess-Agenten (nur `crates/lumina-gpu/**`).
+Zwei Gründe machen sie zur echten Entscheidung, nicht zum Selbstläufer:
+(1) `present_mask_plane.rs` hat die Residenz-Buchführung **bewusst verworfen**
+(„there is no residency bookkeeping that can drift") — der Übergangspfad
+führt genau diese Buchführung ein und muss mit `live_brush_plane_stale`,
+`KeepLiveBrush` und dem Pool-LRU zusammenspielen; (2) ein GPU-seitiges
+`clear_texture` wäre die zweite Abhilfe, ist aber **kein Drop-in**: das Gerät
+wird mit `Features::empty()` angefordert (`lumina-gpu/src/lib.rs:4741`),
+`CommandEncoder::clear_texture` verlangt die `CLEAR_TEXTURE`-Erweiterung und
+würde ohne Feature-Aushandlung paniken — bei geteiltem eframe-Gerät ist das
+ein breiterer Eingriff. Die Messung liefert die **Obergrenze der Ersparnis**
+(die vollen 15 ms @24 MP pro betroffenem Render); sie wird hier **nicht**
+implementiert.
+
+**Budgets:** keine. Die IDs werden **nicht** in `perf/baseline.json` /
+`perf/budgets.json` registriert und von `scripts/perf/compare.mjs` **nicht**
+eingelesen — wie die F-074-N9-Crop-Klasse eine einmalige Entscheidungsmessung,
+kein Regressions-Gate.
+
+**Bekannte Grenzen:** (1) **Fremdlast** (Spielprozess) — Absolutzahlen
+nach oben verzerrt, deshalb zusätzlich die Wiederholung bei niedrigerer Last
+als Stabilitätskontrolle; (2) gemessen ist die **Queue-Seite des Ist-Zustands**,
+nicht der Gewinn einer umgestellten Clear-Strategie; (3) die Zahl ist an den
+M5-Pro-Metal-Adapter gebunden („keine absoluten Vergleiche über Maschinen
+hinweg").
+
 ### Bekannte Grenzen / Limitationen (F-074-N3 / N5)
 
 - **Decode-Gating:** Die Decode-Benchmarks hängen von LibRaw und den

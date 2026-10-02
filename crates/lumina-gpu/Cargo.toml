@@ -30,6 +30,22 @@ wgpu = { version = "30", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 pollster = { version = "1.0", optional = true }
 
+# GPU-MASKPLANE-CLEAR-PERF-51: one-off, adapter-side measurement of the VRAM
+# mask-plane clear's *queue* side (the host side was already measured at
+# 0.004 ms). It benchmarks the production seam `upload_mask_tile` with the GUI's
+# exact zero-band split, for the three resolutions named in the task
+# (160×120, 1280×853, 6000×4000). Explicitly registered: an unregistered bench
+# file is never compiled and reads like a live measurement.
+#
+# Deliberately NOT in `perf/baseline.json` / `perf/budgets.json` and NOT read by
+# `scripts/perf/compare.mjs` — like the F-074-N9 crop class, it answers a one-off
+# decision. It lives in `lumina-gpu` (not `lumina-bench`) because the production
+# seam is here and the crate must not depend on `lumina-gui` (arch boundary).
+[[bench]]
+name = "mask_plane_clear"
+harness = false
+required-features = ["gpu"]
+
 [features]
 # Primary GPU path for native desktop (Metal on Apple Silicon, Vulkan/DX12
 # elsewhere). Enabled by default so a plain `cargo build -p lumina-gpu` pulls
@@ -54,3 +70,8 @@ gpu-adapter-tests = ["gpu"]
 # of the CPU and GPU render outputs. Already resolved in the workspace lockfile
 # (consumed by lumina-core/cli/gui), so this adds no new transitive dependency.
 blake3 = "1"
+# GPU-MASKPLANE-CLEAR-PERF-51: the one-off mask-plane-clear bench
+# (`benches/mask_plane_clear.rs`) uses the F-074 harness (Criterion, ADR 0003).
+# Not a gate class — the number answers a single decision. Already in the
+# workspace lockfile via `lumina-bench`.
+criterion = { version = "0.8", default-features = false }
