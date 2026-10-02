@@ -1500,12 +1500,16 @@ Daraus folgen zwei Fälle, und beide sind **gemessen**, nicht angenommen
   seinem Regler den Spiegel, denn sonst würde der Nutzerwert beim nächsten
   Stale-Clear als auto-written gelöscht. Übrig bleiben **5 von 6** Spiegel —
   ein gemischter Zustand, und der wird hier **nicht** weggeredet. Er ist
-  laut und selbstheilend: `enable_auto_tone` bleibt gesetzt und die fünf
-  übrigen Regler behalten ihre Werte (kein Datenverlust, Bild unverändert), die
-  Sammelaktion erkennt die unvollständige Spiegelmenge als `auto_tone_stale`
-  und repariert sie mit **einem** vollen `auto_tone()`-Lauf, und
-  `auto_tone_is_fresh` verweigert zwischenzeitlich die Freshness, sodass kein
-  `regenerate` den Nutzerwert als Auto-Wert adoptiert.
+  **laut**: `auto_tone_is_fresh` verweigert die Freshness, sodass kein
+  `regenerate` den Nutzerwert als Auto-Wert adoptiert, und die Sammelaktion
+  erkennt die unvollständige Spiegelmenge als `auto_tone_stale`.
+  **Was der Reparaturlauf kostet — gemessen, nicht behauptet:** er schreibt
+  alle sechs Regler neu und **überschreibt damit auch einen Handwert**, den der
+  Nutzer nach dem Endpunkt-Klick selbst gesetzt hat. Gemessen: Auto-Tone-Lauf
+  → Endpunkt auf `blacks` → Nutzer setzt `blacks` auf `-0.5` →
+  `regenerate_stale()` hinterlässt `0.0287…`, den Auto-Wert. Dieser Preis ist
+  bekannt und **nicht** als gelöst zu führen; die nötige Abhilfe (ein
+  Override-Konzept je Regler) existiert im Workspace noch nicht.
 
 **Warum nicht die Alternative.** Ein Endpunkt, der alle sechs Regler und
 Spiegel schriebe, hielte Klausel (2) ebenfalls ein — überschriebe aber fünf

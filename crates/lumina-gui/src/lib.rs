@@ -3703,10 +3703,10 @@ impl LuminaApp {
     /// persists exactly that one field as a **user override** through the
     /// normal save/render commit. Loud without a loaded image.
     ///
-    /// AUTO-TONE-CLI-6 clause (2): the end point is NOT an auto-tone state. It
-    /// writes no `enable_auto_tone` and no fingerprint, and it takes the mirror
-    /// off its own key — see the comment at the write below. The value still
-    /// comes from the shared auto-tone path, so there is no second algorithm.
+    /// AUTO-TONE-CLI-6 clause (2): the end point is NOT an auto-tone state — no
+    /// `enable_auto_tone`, no fingerprint, and it takes the mirror off its own
+    /// key (see the comment at the write). The value still comes from the shared
+    /// auto-tone path, so there is no second algorithm.
     pub fn apply_auto_endpoint(&mut self, endpoint: AutoEndpoint) -> Result<(), GuiError> {
         let result = self.compute_auto_tone()?;
         let (key, value) = match endpoint {
@@ -3717,16 +3717,17 @@ impl LuminaApp {
         // The end point claims this one slider for the user, so the mirror an
         // earlier Auto-Tone run left on exactly this key has to go — with it,
         // `clear_stale_auto_tone` reads the value as auto-written and deletes it
-        // on the next stale fingerprint. Measured: the test
-        // `g16_auto_endpoint_after_auto_tone_keeps_its_value_across_a_stale_clear`
-        // was red without this line and green with it.
+        // on the next stale fingerprint (red without this line, green with it:
+        // `g16_auto_endpoint_after_auto_tone_keeps_its_value_across_a_stale_clear`).
         //
-        // This leaves 5 of 6 mirrors when a full run came first — a real mixed
-        // state, and not one to wish away. It is loud and self-healing:
-        // `auto_tone_stale` below repairs it with one full run, and
-        // `auto_tone_is_fresh` refuses it meanwhile, so no regenerate adopts the
-        // user's value as an auto value. Pinned by
-        // `g16_apply_auto_endpoint_after_auto_tone_marks_the_state_stale_not_lost`.
+        // This leaves 5 of 6 mirrors when a full run came first: a real mixed
+        // state. It is loud — `auto_tone_is_fresh` refuses it and `auto_tone_stale`
+        // below repairs it — but the repair is NOT free: it rewrites all six
+        // sliders and overwrites a manual value the user set after the end point
+        // (measured: -0.5 becomes 0.0287…, the auto value). Known defect, pinned
+        // by `g16_the_state_repair_overwrites_a_later_manual_value_known_defect`;
+        // closing it needs a per-slider override concept that does not exist yet
+        // and is NOT claimed here.
         match endpoint {
             AutoEndpoint::White => self.recipe.auto_features.auto_whites = None,
             AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = None,

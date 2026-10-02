@@ -123,10 +123,15 @@ fn g16_apply_auto_black_endpoint_sets_only_blacks() {
 }
 
 #[test]
-fn g16_apply_auto_endpoint_never_creates_mixed_auto_tone_state() {
-    // AUTO-TONE-CLI-6 clause (2): a mixed state (some mirrored, some not)
-    // must never arise and never be persisted. After an end-point click the
-    // state is either full (6/6) or no auto-tone at all (0/6).
+fn g16_apply_auto_endpoint_leaves_either_no_mirrors_or_an_announced_partial_set() {
+    // AUTO-TONE-CLI-6 clause (2). The first version of this test asserted
+    // "never a mixed state" and that was WRONG — branch 2 produces 5 of 6, and
+    // the measurement (left: 5, right: 6) is what corrected it. The contract is
+    // narrower and is what is pinned here: the end point never invents a
+    // partial set out of nothing. On a fresh recipe it writes 0 of 6 — the
+    // state "no auto-tone", not a mixed one. On a complete auto-tone state it
+    // withdraws exactly its own key, leaving 5 of 6 — a partial set that
+    // already existed as a complete one, and that the next test pins as loud.
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("photo.png");
     save_png(&source);
@@ -273,6 +278,50 @@ fn g16_apply_auto_endpoint_preserves_other_manual_values() {
         app2.recipe().adjustments["blacks"],
         -0.31,
         "manual blacks survives a whites end-point click"
+    );
+}
+
+/// The price of the repair, pinned as a **known defect** rather than as a
+/// feature (AUTO-TONE-CLI-6, independent verification 2026-10-02).
+///
+/// The first version of the accompanying commit called this state "loud and
+/// self-healing" and added "no data loss" in the same breath. Measured, the
+/// second half is false: the repair runs a full `auto_tone()`, which rewrites
+/// all six sliders, so a value the user has set by hand **after** the end-point
+/// click is overwritten. Sequence and numbers: auto-tone run -> end point on
+/// blacks -> user sets blacks to -0.5 -> `regenerate_stale()` leaves
+/// 0.0287…, the auto value.
+///
+/// This test asserts the **measured present behaviour**, deliberately. It is a
+/// canary: when the per-slider override concept lands and the repair starts
+/// preserving manual values, this test goes red and has to be rewritten into
+/// the assertion that the value survives. A test that asserted the wishful
+/// behaviour would sit red forever or, worse, be quietly weakened.
+#[test]
+fn g16_the_state_repair_overwrites_a_later_manual_value_known_defect() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("photo.png");
+    save_png(&source);
+    let mut app = new_app();
+    open_and_decode(&mut app, source.display().to_string());
+
+    app.auto_tone().unwrap();
+    app.apply_auto_endpoint(AutoEndpoint::Black).unwrap();
+    // The user's own edit, after the end point.
+    app.set_adjustment("blacks", -0.5);
+    let manual = app.recipe().adjustments["blacks"];
+
+    app.regenerate_stale().expect("the repair runs");
+
+    // KNOWN DEFECT, measured: the manual value does NOT survive. If a future
+    // change makes it survive, this assertion fails and the fix is documented
+    // here rather than lost.
+    assert_ne!(
+        app.recipe().adjustments["blacks"],
+        manual,
+        "KNOWN DEFECT (AUTO-TONE-CLI-6): the repair overwrites a manual value \
+         set after the end point. If this now fails, the repair preserves manual \
+         values — update this test and pipeline.md to the fixed behaviour."
     );
 }
 
