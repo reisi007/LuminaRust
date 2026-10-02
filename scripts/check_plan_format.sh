@@ -22,6 +22,27 @@
 #      Tabelle schreibt -- die Form waende, nicht die Regel.
 #   2. kein "Erledigt"/"Done"/"Verifiziert"-Sammelabschnitt, in den
 #      abgeschlossene Tasks verschoben werden
+#   4. keine **Waise** -- ein Absatz ohne Task-Eigentuemer, der direkt zwischen
+#      zwei `- [ ] `-Zeilen klemmt (PLAN-ORPHAN-1, 2026-10-02).
+#
+# Zur Form 4, weil ihre Signatur der ganze Punkt ist: jeder `- [ ] `-Block
+# **endet** mit einer Leerzeile, bevor die naechste Task-Zeile folgt; ein
+# eingerückter Fortsetzungsabsatz einer Task ist damit legal (er wird durch die
+# Leerzeile abgeschlossen). Verboten ist nur der Absatz, der **direkt** zwischen
+# zwei Task-Zeilen klemmt, ohne dass eine der beiden Seiten durch eine Leerzeile
+# abgegrenzt ist -- er gehoert zu keinem Task und wird von keinem gepinnt.
+# **Die erste, naive Fassung war falsch und ist hier korrigiert:** "eine nicht-
+# leere Zeile direkt nach `- [ ] `" trifft am HEAD **14** Stellen, und **alle 14
+# sind legal** (12 direkt aufeinanderfolgende Task-Zeilen plus die mehrzeiligen
+# Task-Fortsetzungen `NAMING-F1`, `F-103-N6`, die jeweils mit einer Leerzeile
+# enden). Die tragende Signatur ist daher nicht
+# "keine Leerzeile davor", sondern "der Absatz laeuft direkt in die naechste
+# `- [ ] `-Zeile": Task-Zeile -> Folgeabsatz(e) -> Task-Zeile, ohne Leerzeile
+# dazwischen. Gemessen am HEAD: genau **2** Treffer, beide echte Waisen.
+# **Grenze der Regel (bewusst benannt, damit sie nicht als vollstaendig gilt):**
+# sie erkennt nur den eingeklemmten Absatz zwischen zwei `- [ ] `-Zeilen. Ein
+# Waise am Dateiende, vor einem `##`-Abschnitt oder nach einer Tabelle wird
+# **nicht** erfasst; dafuer braucht es eine andere Sorte Pruefung.
 set -eu
 
 plan="Agents.todo.md"
@@ -69,6 +90,40 @@ if [ "$done_cells" -ne 0 ]; then
     echo "  Zustand lebt in der Git-Historie und in den feature/-Dokumenten." >&2
     echo "  Zurueckgezogene Ansätze gehoeren in den Abschnitt 'Verworfen'." >&2
     grep -nE '^\|.*\|[[:space:]*_`]*(umgesetzt|erledigt|abgeschlossen)[*_`]*[[:space:]]*\|$' "$plan" | cut -c1-100 >&2
+    status=1
+fi
+
+# (4) Waise: ein Absatz ohne Task-Eigentuemer, der direkt zwischen zwei
+# `- [ ] `-Zeilen klemmt. Erkannt wird das Muster
+#   `- [ ] `-Zeile -> mindestens eine nicht-leere, nicht-Task-Zeile -> `- [ ] `-Zeile
+# ohne Leerzeile an einer der beiden Seiten. Eine mehrzeilige Task-Fortsetzung
+# wird von der **Leerzeile** am Blockende geschuetzt und daher nicht gemeldet
+# (gemessen: `NAMING-F1`, `F-103-N6`); genau darin liegt der Unterschied zur
+# naiven Signatur, die am HEAD 14 Treffer hatte, alle 14 legal.
+orphans=$(awk '
+    { line[NR] = $0 }
+    END {
+        n = NR
+        for (i = 1; i <= n; i++) {
+            if (line[i] !~ /^- \[ \] /) continue
+            j = i + 1
+            if (j > n) continue
+            if (line[j] == "" || line[j] ~ /^- \[ \] /) continue
+            k = j
+            while (k <= n && line[k] != "" && line[k] !~ /^- \[ \] /) k++
+            if (k <= n && line[k] ~ /^- \[ \] /) {
+                printf "%d: %s\n", j, substr(line[j], 1, 100)
+            }
+        }
+    }
+' "$plan")
+if [ -n "$orphans" ]; then
+    count=$(printf '%s\n' "$orphans" | grep -c . || true)
+    echo "plan_format FEHLER: $count Absatz/Absaetze ohne Task-Eigentuemer in $plan" >&2
+    echo "  Ein Absatz klemmt direkt zwischen zwei '- [ ] '-Zeilen und wird von" >&2
+    echo "  keinem Task gepinnt. Er gehoert eingerueckt unter eine Task-Zeile" >&2
+    echo "  oder als zurueckgezogener Ansatz in den Abschnitt 'Verworfen'." >&2
+    printf '%s\n' "$orphans" >&2
     status=1
 fi
 

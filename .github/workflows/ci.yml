@@ -155,6 +155,19 @@ jobs:
       - name: Check GPU feature compiles
         run: cargo check -p lumina-gpu --features gpu
 
+      # CLI-FEATURE-BUILD-GATE (CLI-GPU-BUILD-1, Release 1.0): each feature
+      # DECLARED in crates/lumina-cli/Cargo.toml must compile ON ITS OWN. The
+      # GPU check above only covers `lumina-gpu`; it never compiled the CLI's
+      # own `gpu` feature, which is exactly how the 2026-10-02 break stayed
+      # invisible: a stray `#[cfg(feature = "lensfun")]` stacked onto
+      # `#[cfg(feature = "gpu")] use lumina_gpu::{…}` and `--features gpu`
+      # alone died with 6 errors while `--features gpu,lensfun` was green.
+      # Feature list is read from the manifest, so a newly declared feature is
+      # covered automatically. Mutation-proven (re-adding the orphan attribute
+      # turns this step red on `gpu` and leaves `lensfun` green).
+      - name: Check every CLI feature compiles on its own
+        run: sh scripts/check_cli_features.sh
+
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
 

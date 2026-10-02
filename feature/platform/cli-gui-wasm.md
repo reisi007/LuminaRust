@@ -140,6 +140,51 @@ Masken-Neuberechnung und Render-Cache werden explizit angeboten.
   generierten, BiRefNet-kompatiblen Crafted-ONNX-Modell grün (keine
   Downloads, keine committeten Gewichte).
 
+### CLI-Feature-Kompilierbarkeit (`CLI-GPU-BUILD-1`, Release 1.0)
+
+Normativer CLI-SOLL: **Jedes in `crates/lumina-cli/Cargo.toml` deklarierte
+Feature muss einzeln kompilieren** — nicht nur in der Kombination, die ein
+Entwickler gerade benutzt. Diese Aussage war am 2026-10-02 verletzt und ist
+hier dokumentiert, damit dieselbe Klasse nicht zurückkehrt.
+
+- **Gemessener Defekt:** In `crates/lumina-cli/src/main.rs` stand ein
+  **verwaistes** `#[cfg(feature = "lensfun")]` direkt über dem
+  `#[cfg(feature = "gpu")] use lumina_gpu::{…}`. Zwei unabhängige
+  `#[cfg]`-Attribute auf einem Item werden **UND-verknüpft**; der GPU-Import war
+  damit nur unter `lensfun` **und** `gpu` aktiv. `cargo check -p lumina-cli
+  --features gpu,lensfun` und `--features lensfun` kompilierten,
+  `--features gpu` allein brach mit 6 Fehlern
+  (`cannot find type GpuContext/Frame`, `unsupported_gpu_stages_with_context`).
+  Die echten Lensfun-Importe liegen separat (`main.rs`, `#[cfg(feature =
+  "lensfun")] mod lensfun_cli;` / `use lensfun_cli::build_lensfun_corrector;`)
+  und waren nie betroffen — das Attribut hatte **keinen Besitzer** und wurde
+  entfernt. Die Lensfun-Prüfung ist dadurch **nicht** abgeschwächt: die
+  `lensfun`-Suite (`cargo test … -p lumina-cli --features lensfun`, CI-Schritt
+  „Run Lensfun feature tests") lädt weiterhin die native Bibliothek und ist
+  unverändert.
+- **Warum relevant:** Die GPU-first-CLI-Route (`init_render_backend` /
+  `render_backend` in `main.rs`) hängt an genau diesem Feature; ein Build mit
+  `--features gpu` erhielt einen Compile-Bruch statt GPU-Rendering. Die CI
+  prüfte nur `cargo check -p lumina-gpu --features gpu`, nie das CLI-Feature.
+- **Gate (CI + Skript):** `scripts/check_cli_features.sh` liest die
+  Feature-Liste **aus der `[features]`-Tabelle des Manifests** (ein neu
+  deklariertes Feature wird automatisch mitgeprüft) und führt
+  `cargo check -p lumina-cli --features <F>` für jedes Feature F einzeln aus,
+  dazu `cargo check -p lumina-cli` (default) und `--no-default-features`. Der
+  CI-Schritt „Check every CLI feature compiles on its own" (`rust-fast`) ruft
+  es auf. **Mutationsbeleg:** das erneute Anhängen des verwaisten Attributs
+  macht `--features gpu` rot (Gate exit 1, `FAIL lumina-cli --features gpu`),
+  während `--features lensfun` grün bleibt — genau die Asymmetrie des
+  ursprünglichen Defekts und der Grund, warum ein kombinations-only-Gate nicht
+  reicht.
+- **Benannte Grenze:** Geprüft wird **einzeln** plus die zwei Enden des
+  Feature-Raums, nicht die Potenzmenge. Eine Paarung `--features gpu,lensfun`
+  wird in der CLI nicht erneut gebaut (sie ist für additive Features durch die
+  Einzelprüfungen abgedeckt; die CI-Test-Shard baut `lumina-cli --features
+  lensfun`). Ein Defekt, der **nur kombiniert** auftritt, wäre so nicht
+  erfasst — das wäre eine eigene Aufgabe, falls je gemessen. Geprüft wird
+  `cargo check`, nicht `cargo test`.
+
 **Umgesetzter Stand (Review-R2-CLI-Fixes, 2026-08-26):**
 
 - **RAW-Erkennung single-source (R2-CLI-01):** Die 18 RAW-Extensions aus der

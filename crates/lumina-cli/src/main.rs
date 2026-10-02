@@ -36,9 +36,6 @@ use lumina_onnx::{
     FaceClusteringParams, FaceInferenceOptions, FaceModelSuite, FaceOnnxEngine,
 };
 use lumina_raw::RawError;
-// F-098-N2: the Lensfun corrector types are only available under the `lensfun`
-// feature (the `native` FFI bindings and `liblensfun` linkage are active then).
-#[cfg(feature = "lensfun")]
 // GPU-first rendering path (wgpu/Metal). Optional capability: when the `gpu`
 // feature is on, render/export/batch prefer the GPU adapter and fall back to the
 // CPU pipeline when no adapter is present. Never compiled unless the feature is
