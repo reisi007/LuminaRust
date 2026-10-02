@@ -17,6 +17,8 @@ pub(crate) mod detail_stages;
 pub(crate) use curve_math::monotone_curve;
 pub mod denoise;
 pub mod generative;
+pub mod geometry_stage_api;
+use geometry_stage_api::{validate_lens, validate_perspective};
 pub mod histogram;
 pub mod lens_blur;
 pub mod lensfun_map;
@@ -1260,46 +1262,6 @@ fn apply_channel_lut_adjustments(pixels: &mut [u8], params: &ChannelLutParams) {
     });
 }
 
-fn validate_lens(l: &lumina_sidecar::LensCorrection) -> Result<(), CoreError> {
-    if l.version != 1 {
-        return Err(CoreError::InvalidAdjustment {
-            name: "lens_correction.version".into(),
-            value: l.version as f64,
-            minimum: 1.0,
-            maximum: 1.0,
-        });
-    }
-    if let Some(profile) = l.profile.as_deref() {
-        if !matches!(profile, "wide-light" | "tele-light" | "standard-neutral") {
-            return Err(CoreError::UnsupportedAdjustment {
-                key: format!("lens profile `{profile}`"),
-            });
-        }
-    }
-    for (name, v, lo, hi) in [
-        ("distortion_k1", l.distortion_k1, -1., 1.),
-        ("distortion_k2", l.distortion_k2, -1., 1.),
-        ("distortion_k3", l.distortion_k3, -1., 1.),
-        ("vignette_c0", l.vignette_c0, -1., 1.),
-        ("vignette_c1", l.vignette_c1, -1., 1.),
-        ("vignette_c2", l.vignette_c2, -1., 1.),
-        ("ca_red", l.ca_red, -0.05, 0.05),
-        ("ca_blue", l.ca_blue, -0.05, 0.05),
-    ]
-    .into_iter()
-    .filter_map(|(name, value, lo, hi)| value.map(|v| (name, v, lo, hi)))
-    {
-        if !v.is_finite() || !(lo..=hi).contains(&v) {
-            return Err(CoreError::InvalidAdjustment {
-                name: name.into(),
-                value: v as f64,
-                minimum: lo as f64,
-                maximum: hi as f64,
-            });
-        }
-    }
-    Ok(())
-}
 fn validate_generative_edit(g: &lumina_sidecar::GenerativeEdit) -> Result<(), CoreError> {
     // GEN-PIPELINE-DECOUPLE: structural validation of the GenerativeEdit
     // recipe stage (mirrors the sidecar rules). Any violation is
@@ -1401,36 +1363,6 @@ pub fn validate_upright(u: &lumina_sidecar::Upright) -> Result<(), CoreError> {
                     key: format!("upright fingerprint {field} must not be empty"),
                 });
             }
-        }
-    }
-    Ok(())
-}
-
-fn validate_perspective(p: &lumina_sidecar::Perspective) -> Result<(), CoreError> {
-    if p.version != 1 {
-        return Err(CoreError::InvalidAdjustment {
-            name: "perspective.version".into(),
-            value: p.version as f64,
-            minimum: 1.,
-            maximum: 1.,
-        });
-    }
-    for (name, v, lo, hi) in [
-        ("vertical", p.vertical, -1., 1.),
-        ("horizontal", p.horizontal, -1., 1.),
-        ("rotation", p.rotation, -1., 1.),
-        ("shift_x", p.shift_x, -1., 1.),
-        ("shift_y", p.shift_y, -1., 1.),
-        ("scale", p.scale, 0.1, 10.),
-        ("aspect_ratio", p.aspect_ratio, 0.1, 10.),
-    ] {
-        if !v.is_finite() || !(lo..=hi).contains(&v) {
-            return Err(CoreError::InvalidAdjustment {
-                name: name.into(),
-                value: v as f64,
-                minimum: lo as f64,
-                maximum: hi as f64,
-            });
         }
     }
     Ok(())

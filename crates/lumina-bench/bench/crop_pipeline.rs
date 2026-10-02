@@ -201,28 +201,22 @@ fn perspective_fixture() -> Perspective {
 }
 
 // `apply_lens_stage`/`apply_perspective_stage` carry a `lensfun` parameter only
-// when the feature is on (Cargo feature unification with `lumina-core`). The
-// helpers keep the benchmark body identical for both builds.
-#[cfg(feature = "lensfun")]
+// when `lumina-core`'s feature is on — which an outside caller cannot observe
+// (in a unified workspace build `lumina-gui`'s default `lensfun` turns it on
+// while this crate's own `lensfun` feature stays off). The core-side wrappers
+// are cfg-free for the caller and use the manual model, which is what an
+// isolated stage cost must measure.
 fn run_lens(frame: &mut ImageFrame, lens: &LensCorrection) {
-    frame.apply_lens_stage(Some(lens), None).unwrap();
-}
-#[cfg(not(feature = "lensfun"))]
-fn run_lens(frame: &mut ImageFrame, lens: &LensCorrection) {
-    frame.apply_lens_stage(Some(lens)).unwrap();
+    lumina_core::geometry_stage_api::apply_lens_stage_standalone(frame, Some(lens)).unwrap();
 }
 
-#[cfg(feature = "lensfun")]
 fn run_perspective(frame: &mut ImageFrame, perspective: &Perspective) {
-    frame
-        .apply_perspective_stage(None, Some(perspective), None)
-        .unwrap();
-}
-#[cfg(not(feature = "lensfun"))]
-fn run_perspective(frame: &mut ImageFrame, perspective: &Perspective) {
-    frame
-        .apply_perspective_stage(None, Some(perspective))
-        .unwrap();
+    lumina_core::geometry_stage_api::apply_perspective_stage_standalone(
+        frame,
+        None,
+        Some(perspective),
+    )
+    .unwrap();
 }
 
 /// A frame with a transparent border (alpha 0), so `composite_auto_fill`
