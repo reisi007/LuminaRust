@@ -11,7 +11,62 @@ on:
     paths-ignore:
       - 'docker/**'
       - '.github/workflows/ci-libraw-image.yml'
+      # Documentation that NO check consumes as an input. Derive per
+      # file, never by convention — a blanket '**/*.md' is WRONG here and
+      # would delete real gate coverage, because two checks read markdown as
+      # an actual input:
+      #   * scripts/check_plan_format.sh parses Agents.todo.md (content);
+      #   * the `docs` job asserts 13 planning paths with `test -f`;
+      #   * scripts/golden_ref_test.sh derives its two class-R pixel
+      #     thresholds from feature/quality/golden-fixtures.md.
+      # Those, plus feature/** and docs/adr/** as a whole, are therefore
+      # deliberately absent below.
+      #
+      # `paths-ignore` (subtract), not `paths` (include-list): GitHub's AND
+      # semantics mean a commit touching one of these AND a .rs file still
+      # runs everything, so docs+code can never be silently skipped. A
+      # too-narrow ignore list costs one redundant run; a too-narrow include
+      # list costs silent, permanent loss of coverage.
+      #
+      # Tag pushes are not path-filtered by GitHub (its behaviour, not a bug).
+      - 'docs/plans/**'
+      - 'docs/reviews/**'
+      - 'docs/skills/**'
+      - 'docs/*.md'
+      - 'licenses/**'
+      - 'agent-harness/**'
+      - 'crates/**/*.md'
+      - 'vendor/**/*.md'
+      - 'scripts/**/*.md'
+      - 'sample-data/**/*.md'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'review.notes.md'
+      - 'Agents.headless.md'
+      - 'Agents.batches.md'
+      - 'README.md'
   pull_request:
+    # Same list, same reason: filtering only `push` would leave docs-only
+    # PRs running the full pipeline. No `branches:` filter here — there was
+    # none before, and adding one would silently stop CI on PRs against
+    # other branches.
+    paths-ignore:
+      - 'docker/**'
+      - '.github/workflows/ci-libraw-image.yml'
+      - 'docs/plans/**'
+      - 'docs/reviews/**'
+      - 'docs/skills/**'
+      - 'docs/*.md'
+      - 'licenses/**'
+      - 'agent-harness/**'
+      - 'crates/**/*.md'
+      - 'vendor/**/*.md'
+      - 'scripts/**/*.md'
+      - 'sample-data/**/*.md'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'review.notes.md'
+      - 'Agents.headless.md'
+      - 'Agents.batches.md'
+      - 'README.md'
   workflow_dispatch:
 
 permissions:
