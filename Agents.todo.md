@@ -243,7 +243,6 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | 1.0 | F-103-N6 | alle G | visueller User-Test |
 | 1.0 | F-103-N6-GUI-COVERAGE-27 | alle G | vollständige manuelle GUI-/Persistenz-Checks |
 | 1.0 | FIXTURE-ENV-1 | alle G | Env-gegateter Fixture-Test panickt unter `--ignored` |
-| 1.0 | GPU-PARITY-HW-28 | alle G | Hardware-GPU-Parität |
 | 1.0 | GPU-RENDER-PREVIEW-19 | alle G | GPU-Preview |
 | 1.0 | GPU-RENDER-EXPORT-19 | alle G | GPU-Export |
 | 1.0 | GPU-RENDER-MASK-19 | alle G | Masken-Pixelpass |
@@ -470,7 +469,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
-- [ ] **[PRIO: mittel] GPU-PARITY-HW-28 (User-Order 2026-09-23; Welle-2-Gate)** Bestehende GPU-Parity-Laufzeitprüfung auf einer echten Hardware-Lösung (Metal/Vulkan) mit renderbaren `R32Float`-Render-Targets wiederholen. Der lokale `llvmpipe`-/GL-Softwareadapter ist keine zulässige Paritätsreferenz und erzeugte die reproduzierten `detail_stage_stack`-/Sharpening-Fehler; keine Toleranzen, Ignores oder CI-Skips als Ersatz. Abnahme: Hardware-Run mit `cargo test -p lumina-gpu --features gpu-adapter-tests --test parity`, Protokoll und unabhängige Verifizierung. **Kommando korrigiert 2026-10-02 (`GPU-E2E`):** `--features gpu` allein ist ein Schein-Pass (5 passed / 22 ignored, gemessen); das E2E-Gate ist `--features gpu-adapter-tests` (27 passed / 0 ignored auf Metal 4). **Stand 2026-09-25 (Build-Agent):** Die benötigte Hardware ist auf der Arbeitsmaschine **vorhanden** — Apple M5 Pro, `Metal Support: Metal 4` — und der headless-wgpu-Adapter ist als funktionsfähig nachgewiesen (die `kittest_snapshots` rendern und erzeugen Diff-Bilder, statt an einem Adapter zu scheitern). Dieser Task ist damit **kein Hardware-Blocker, sondern ein Ausführungstask** und sollte vor `GOLDEN-BASELINE-32` laufen, weil sein Protokoll die Referenzumgebung für Welle 1/2 mitbelegt.
 
 ### PRIO: niedrig
 
