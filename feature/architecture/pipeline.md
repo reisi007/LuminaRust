@@ -1481,6 +1481,40 @@ Satz erzeugen. Weil der Wiederverwenzungszweig nur Spiegel liest, kann ein
 **Benutzerwert nie zum Auto-Wert werden** — `recipe.adjustments` ist dort
 keine Quelle.
 
+**Der G-16-Endpunkt ist keine Auto-Tone, sondern eine Nutzerüberschreibung.**
+`LuminaApp::apply_auto_endpoint` (`Shift`+Doppelklick auf `whites`/`blacks`)
+schreibt **genau einen** Regler — ohne Spiegel, ohne `enable_auto_tone`, ohne
+Fingerprint. Der Wert wird von derselben `suggest_auto_tone`-Auswertung
+berechnet wie der Sechser-Pfad; es gibt keine zweite Algorithmus-Implementierung.
+Der Endpunkt bleibt ein Endpunkt (genau ein Feld), nicht „setze alle sechs".
+
+Daraus folgen zwei Fälle, und beide sind **gemessen**, nicht angenommen
+(AUTO-TONE-CLI-6, Klausel (2)):
+
+- **Auf einem frischen Rezept** (kein Auto-Tone vorhanden) entsteht kein
+  Auto-Tone-Zustand: 0 von 6 gespiegelt ist der Zustand „kein Auto-Tone", kein
+  gemischter Zustand. `clear_stale_auto_tone` erkennt den Wert nie als
+  auto-written (kein Spiegel ⇒ nie im Clear-Pfad), er überlebt einen
+  Stale-Fingerprint-Clear wie jeder andere Handwert.
+- **Nach einem vollen Auto-Tone-Lauf** (6 von 6 gespiegelt) nimmt der Endpunkt
+  seinem Regler den Spiegel, denn sonst würde der Nutzerwert beim nächsten
+  Stale-Clear als auto-written gelöscht. Übrig bleiben **5 von 6** Spiegel —
+  ein gemischter Zustand, und der wird hier **nicht** weggeredet. Er ist
+  laut und selbstheilend: `enable_auto_tone` bleibt gesetzt und die fünf
+  übrigen Regler behalten ihre Werte (kein Datenverlust, Bild unverändert), die
+  Sammelaktion erkennt die unvollständige Spiegelmenge als `auto_tone_stale`
+  und repariert sie mit **einem** vollen `auto_tone()`-Lauf, und
+  `auto_tone_is_fresh` verweigert zwischenzeitlich die Freshness, sodass kein
+  `regenerate` den Nutzerwert als Auto-Wert adoptiert.
+
+**Warum nicht die Alternative.** Ein Endpunkt, der alle sechs Regler und
+Spiegel schriebe, hielte Klausel (2) ebenfalls ein — überschriebe aber fünf
+Regler, die der Nutzer nicht angefasst hat, und machte aus einer Geste einen
+vollen Auto-Tone-Lauf. Ein Endpunkt ohne jeden Auto-Zustand **und** mit
+erhaltenem Alt-Spiegel verliert den Nutzerwert beim nächsten Stale-Clear. Die
+hier festgeschriebene Lesart ist die einzige der drei, die weder Daten verliert
+noch fremde Regler überschreibt.
+
 **Vorrangordnung (Raster-MVP).** Für jedes der sechs Regler gilt
 **Auto-Tone → Preset → explizite CLI-Angabe**, danach erst das Exposure
 Matching:

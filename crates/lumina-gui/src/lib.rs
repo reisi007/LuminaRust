@@ -3682,11 +3682,11 @@ impl LuminaApp {
     }
 
     /// Shared `suggest_auto_tone` evaluation over the loaded source frame
-    /// (G-16): the single auto-tone path used by both [`Self::auto_tone`]
-    /// (all six sliders) and [`Self::apply_auto_endpoint`] (one end point).
-    /// Returns the result plus the analysis input fingerprint. Loud without a
-    /// loaded image — never a silent no-op.
-    fn compute_auto_tone(&self) -> Result<(AutoToneResult, String), GuiError> {
+    /// (G-16), used by [`Self::apply_auto_endpoint`] (one end point).
+    /// [`Self::auto_tone`] no longer comes here — it goes through the shared
+    /// writer, which evaluates and persists in one step. Loud without a loaded
+    /// image — never a silent no-op.
+    fn compute_auto_tone(&self) -> Result<AutoToneResult, GuiError> {
         let Some(frame) = &self.original else {
             return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
         };
@@ -3695,36 +3695,42 @@ impl LuminaApp {
             ..Default::default()
         };
         let result = suggest_auto_tone(frame, config)?;
-        Ok((result, tone_fingerprint(frame, config)))
+        Ok(result)
     }
 
     /// Apply one auto end point (G-16, `Shift`+double-click on the
     /// `whites`/`blacks` label): evaluates the shared auto-tone path and
-    /// persists exactly that field (value + auto mirror + analysis
-    /// fingerprint) through the normal save/render commit. Loud without a
-    /// loaded image.
+    /// persists exactly that one field as a **user override** through the
+    /// normal save/render commit. Loud without a loaded image.
+    ///
+    /// AUTO-TONE-CLI-6 clause (2): the end point is NOT an auto-tone state. It
+    /// writes no `enable_auto_tone` and no fingerprint, and it takes the mirror
+    /// off its own key — see the comment at the write below. The value still
+    /// comes from the shared auto-tone path, so there is no second algorithm.
     pub fn apply_auto_endpoint(&mut self, endpoint: AutoEndpoint) -> Result<(), GuiError> {
-        let (result, input_fingerprint) = self.compute_auto_tone()?;
+        let result = self.compute_auto_tone()?;
         let (key, value) = match endpoint {
             AutoEndpoint::White => ("whites", result.whites),
             AutoEndpoint::Black => ("blacks", result.blacks),
         };
         self.recipe.adjustments.insert(key.into(), value);
-        self.recipe.auto_features.enable_auto_tone = true;
+        // The end point claims this one slider for the user, so the mirror an
+        // earlier Auto-Tone run left on exactly this key has to go — with it,
+        // `clear_stale_auto_tone` reads the value as auto-written and deletes it
+        // on the next stale fingerprint. Measured: the test
+        // `g16_auto_endpoint_after_auto_tone_keeps_its_value_across_a_stale_clear`
+        // was red without this line and green with it.
+        //
+        // This leaves 5 of 6 mirrors when a full run came first — a real mixed
+        // state, and not one to wish away. It is loud and self-healing:
+        // `auto_tone_stale` below repairs it with one full run, and
+        // `auto_tone_is_fresh` refuses it meanwhile, so no regenerate adopts the
+        // user's value as an auto value. Pinned by
+        // `g16_apply_auto_endpoint_after_auto_tone_marks_the_state_stale_not_lost`.
         match endpoint {
-            AutoEndpoint::White => self.recipe.auto_features.auto_whites = Some(value),
-            AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = Some(value),
+            AutoEndpoint::White => self.recipe.auto_features.auto_whites = None,
+            AutoEndpoint::Black => self.recipe.auto_features.auto_blacks = None,
         }
-        self.recipe.auto_features.analysis_fingerprint = Some(AnalysisFingerprint {
-            // AUTO-TONE-CLI-6: the identity constants are the shared ones. A
-            // literal here would be a second definition of "which algorithm
-            // produced this", and the freshness predicate compares the string —
-            // a typo would make every endpoint-written recipe permanently stale.
-            algorithm: lumina_stages::auto_tone::FINGERPRINT_ALGORITHM.into(),
-            version: lumina_stages::auto_tone::FINGERPRINT_VERSION.into(),
-            input_fingerprint,
-            extras: BTreeMap::new(),
-        });
         info!("GUI interaction: apply_auto_endpoint {key}={value}");
         self.status = Str::AutoEndpointAppliedPattern.format_arg(key);
         // Same commit discipline as `auto_tone` (GUI-AUTOTONE-SAVE-1 /
@@ -11921,6 +11927,10 @@ mod tests {
     // auto-tone contract. Differential (GUI vs. the shared writer) plus the
     // structural guard that a second hand-copied algorithm literal cannot return.
     mod auto_tone_contract;
+    // AUTO-TONE-CLI-6 clause (2): split out of `g16_shortcuts` for the 500-line
+    // ratchet — the keyboard mappings stay there, the state the G-16 end point
+    // leaves in the recipe is its own concern.
+    mod g16_auto_endpoint;
     mod g16_shortcuts;
     mod generative_expand;
     mod generative_render;
