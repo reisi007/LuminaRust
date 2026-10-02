@@ -1516,8 +1516,25 @@ Spiegel schriebe, hielte Klausel (2) ebenfalls ein — überschriebe aber fünf
 Regler, die der Nutzer nicht angefasst hat, und machte aus einer Geste einen
 vollen Auto-Tone-Lauf. Ein Endpunkt ohne jeden Auto-Zustand **und** mit
 erhaltenem Alt-Spiegel verliert den Nutzerwert beim nächsten Stale-Clear. Die
-hier festgeschriebene Lesart ist die einzige der drei, die weder Daten verliert
-noch fremde Regler überschreibt.
+hier festgeschriebene Lesart ist damit die günstigste der drei, **nicht** eine
+Erfüllung — der Preis (5 von 6 Spiegel) bleibt eine Klausel-(2)-Lücke und ist
+als Task `AUTO-TONE-ENDPOINT-MIXED-7` offen.
+
+**Zurückgenommene Abgrenzung (2026-10-02, `DoD.md` §9).** Zuerst stand hier,
+die vollständige Lösung brauche ein „Override-Konzept je Regler" und damit
+**Schema und Migration**, weshalb sie außerhalb des Slices liege. **Das ist
+gemessen falsch:** der Overrides-Träger **existiert bereits** — es ist genau
+der `preset_overrides`-Parameter von `write_auto_tone_state`, derselbe, der
+Klausel (4) überhaupt trägt. Eine Sonde (wieder entfernt) fährt den
+Reparaturlauf mit diesem Träger und liefert **alle vier** Properties zugleich:
+`adjustments["blacks"] = -0.5` bleibt `-0.5` (kein Datenverlust), **6 von 6**
+Spiegel (kein gemischter Zustand, Klausel (2) erfüllt), `auto_tone_is_fresh`
+wahr, und der `auto_blacks`-Spiegel trägt den **Auto**-Wert `0.0287…`, während
+`adjustments` den Nutzerwert `-0.5` trägt (Klausel (4) erfüllt). **Es ist
+also kein neues persistiertes Feld nötig und keine Migration.** Die
+Abgrenzung „außerhalb des Slices" entfällt; die offene Produktfrage ist nur noch,
+ob der Endpunkt die Override-Menge beim Klick setzt oder der Reparaturlauf sie
+aus den fehlenden Spiegeln ableitet.
 
 **Vorrangordnung (Raster-MVP).** Für jedes der sechs Regler gilt
 **Auto-Tone → Preset → explizite CLI-Angabe**, danach erst das Exposure
