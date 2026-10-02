@@ -133,17 +133,22 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 
 ### Build-Agent
 
-Der Build-Agent ist der verantwortliche Orchestrator. Er:
+Der Build-Agent ist der verantwortliche Orchestrator. **Der Build-/Verify-Flow
+steht nicht hier, sondern im Skill `build-verify`** (agents-skills), dessen
+always-on Kernel `.agents/rules/build-verify.md` in jeder Session im Kontext ist:
+Rollentrennung, `nach-verify`-Modus je Lauf, Commit nach **jedem** Verdict,
+Amend-Regel, Push + CI. Diese Datei nennt nur, was in **diesem** Repo wann grün
+sein muss — siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md).
+
+Er:
 
 - liest vor jeder Aufgabe `Agents.md`, `Agents.todo.md`,
   `feature/README.md` und das betroffene Feature-Dokument;
-- zerlegt Arbeit in kleine, unabhängig prüfbare Aufgaben;
-- delegiert Implementierung, Recherche und Tests an passende Subagenten;
-- verhindert parallele Änderungen an gemeinsam genutzten APIs und Schemas;
-- führt die Integrationsschritte in der richtigen Reihenfolge aus;
-- beauftragt nach jeder Implementierung einen anderen, unabhängigen
-  Verifizierungs-Subagenten;
-- übernimmt eine Aufgabe erst nach erfolgreicher Verifizierung und aktualisiert
+- zerlegt Arbeit in kleine, unabhängig prüfbare Aufgaben und delegiert sie an
+  passende Subagenten;
+- verhindert parallele Änderungen an gemeinsam genutzten APIs und Schemas (siehe
+  „Parallele Delegation und Konfliktvermeidung");
+- übernimmt eine Aufgabe erst nach bestandener Verifizierung und aktualisiert
   danach Plan und Feature-Dokument.
 
 ### Parallele Delegation und Konfliktvermeidung
@@ -173,8 +178,7 @@ kommen, gilt:
   Implementierungs- wie Verifizierungs-Agenten und verhindert
   Kontext-Drift über lange Rework-Ketten.
 - **Kein Commit durch Subagenten.** Implementierungs-Agenten committen nicht;
-  der Build-Agent führt den Commit nach bestandener Verifizierung gebündelt
-  aus.
+  der Build-Agent committet (wie und wann: Skill `build-verify`).
 
 ### Direkte Änderungen des Build-Agenten
 
@@ -190,8 +194,8 @@ dafür einen Implementierungs-Agenten zu delegieren. Dazu gehören insbesondere:
 Auch bei direkten Änderungen prüft der Build-Agent die betroffenen Dateien
 selbst. Sobald eine Änderung Codeverhalten, Datenformat, Migration,
 Persistenz, Pipeline, Sicherheitsverhalten oder Tests betrifft, muss sie wie
-eine normale Implementierungsaufgabe delegiert und durch einen anderen
-Subagenten verifiziert werden.
+eine normale Implementierungsaufgabe delegiert und **unabhängig verifiziert**
+werden (Flow: Skill `build-verify`, Pointer oben).
 
 ### Implementierungs-Agent
 
@@ -205,24 +209,24 @@ Der Implementierungs-Agent:
 
 ### Verifizierungs-Agent
 
-Der Verifizierungs-Agent muss in einem anderen Subagentenlauf als der
-Implementierungs-Agent arbeiten. Er:
+Der Verifikations-Lauf folgt dem Skill `build-verify` (Pointer oben); hier steht
+nur der repo-spezifische Teil. Er:
 
-- liest die Anforderung unabhängig und prüft die tatsächliche Änderung gegen
-  `feature/README.md` und das betroffene Feature-Dokument;
+- prüft die tatsächliche Änderung gegen `feature/README.md` und das betroffene
+  Feature-Dokument;
 - prüft fachliche Korrektheit, Fehlerfälle, Rückwärtskompatibilität und
   Persistenzfolgen;
-- führt relevante Tests, Clippy, Formatprüfung und gegebenenfalls Builds aus;
+- führt die einschlägigen Kommandos aus „Verifizierung und Tests" aus
+  (`cargo fmt`, Clippy, Tests, Builds) — ein nicht gelaufenes Gate gilt als
+  **nicht geprüft**, nicht als grün;
 - prüft ausdrücklich, ob die Tests die neue Funktion tatsächlich abdecken;
 - prüft ausdrücklich die Dateigrößen-Regel (Anti-Gaming): `sh scripts/check_file_sizes.sh`
   grün, neue Logik in neuen/kohärenten Dateien (kein Wachstum in >500-Zeilen-Dateien),
   keine Kommentar-/Doku-/Test-Löschung zur Kompensation (Diff-Prüfung);
-- darf eine Aufgabe als nicht bestanden zurückweisen;
+- darf eine Aufgabe als **nicht bestanden** zurückweisen;
 - liefert einen kurzen Prüfbericht mit bestanden/nicht bestanden, Befunden,
-  Testkommandos und verbleibenden Risiken.
-
-Ein Implementierungs-Agent darf nicht zugleich als alleiniger Verifizierungs-
-Agent derselben Änderung gelten.
+  Testkommandos und verbleibenden Risiken (Verdict-Format und Schweregrade
+  `critical`/`high`/`medium`/`low`: Skill `build-verify`).
 
 ## Branch- und Merge-Konvention (User-Regel 2026-09-26)
 
@@ -367,7 +371,10 @@ der reproduzierbare Verifikationslauf (`target/verify_cpu_tasks.sh`).
 
 ## Verifizierung und Tests
 
-Je nach Änderung sind mindestens diese Prüfungen zu verwenden:
+Der generische Build-/Verify-Flow steht im Skill `build-verify` (agents-skills,
+always-on Kernel `.agents/rules/build-verify.md`, Pointer in „Rollen und
+Delegation"). Alles Folgende ist der **repo-spezifische** Teil — je nach Änderung
+sind mindestens diese Prüfungen zu verwenden:
 
 - Formatierung und Clippy für Rust-Code
 - Unit-Tests für mathematische und serielle Logik
