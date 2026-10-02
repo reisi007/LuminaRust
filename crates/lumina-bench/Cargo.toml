@@ -45,9 +45,15 @@ harness = false
 path = "bench/core.rs"
 
 # PIPELINE-ANNASSUNGEN-10: `render_frame` **with** a crop rectangle, over three
-# remaining-area sizes plus a full-frame control. `perf/baseline.json` has no
-# crop benchmark at all (A3), so the saving a `PIPELINE-CROP-EARLY-9` reorder
-# would remove has to be produced before that reorder may be built.
+# remaining-area sizes plus a full-frame control, **plus** the individual
+# geometry stages (lens / perspective / auto-fill / expand) and the cache
+# miss/hit pair. `perf/baseline.json` has no crop benchmark at all (A3), and it
+# does not isolate the geometry chain either, so the three prerequisites of
+# `PIPELINE-CROP-EARLY-9` (stage cost, crop cost, cache behaviour) have to be
+# produced by a run before that reorder may be built. The numbers are a
+# one-off decision measurement and are deliberately **not** written into
+# `perf/baseline.json` / `perf/budgets.json` (those stay the calibrated
+# gate/budget stores of the reference machine).
 #
 # Registered here and not left implicit on purpose: an unregistered bench file
 # is never compiled by cargo and reads like live measurement — the exact defect

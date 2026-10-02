@@ -38,6 +38,14 @@ Beispiele:
 | `denoise/assemble_tiles__2048` | nahtlose Kachel-Assembly (512/32-Overlap) |
 | `denoise/render_ready__2048` | `render_frame_with_denoise` mit `ready`-Artefakt |
 | `denoise/status_resolve__ready` | §6-Statusklassifikation |
+| `core/render_frame_cropped__512__10pct` | vollständiges `render_frame` mit `Crop::Free`, 10 % Restfläche |
+| `core/render_frame_cropped_full__512` | Crop-Kontrolle über das volle Rect |
+| `core/lens_stage__512` | Lens-Stufe direkt (Newton-Distortion + Vignette) |
+| `core/perspective_stage__512` | Perspective-Stufe direkt (inverse Neuabtastung) |
+| `core/autofill_stage__512` | AutoFill-Artifact-Compositing (`clone`) |
+| `core/expand_stage__512` | Expand-Artifact-Compositing (`clone`) |
+| `core/prepare_source_base__512` | Cache-Miss/Basis-Aufbau |
+| `core/stage_cache_hit__512` | `StageFrameCache::get` (Hit) |
 | `cull/analyze__2048` | vollständige Stufe-1-Heuristik |
 | `cull/noise_sigma__2048` | Immerkaer-Rauschkernel (dokumentierter Hotspot) |
 | `cull/similarity_signature__2048` | dHash/Histogramm-Signatur |
@@ -50,6 +58,9 @@ Regeln:
   zu erfassen (`perf/baseline.json`).
 - Jede ID ist ausschließlich in den Stores registriert
   (`perf/baseline.json`, `perf/budgets.json`); keine ID existiert nur im Code.
+  **Ausnahme:** einmalige **Entscheidungsmessungen** ohne Regressions-Gate
+  (z. B. die Crop-/Geometrie-Klasse aus F-074-N9) sind bewusst **store-los**;
+  ihre Rohaufzeichnung liegt als eigene JSON-Datei vor, nicht in den Stores.
 
 ## Fixture-Regeln
 
@@ -72,7 +83,9 @@ Neue Benchmarks werden so angelegt:
 2. Benchmark-Funktion als Criterion-Group implementieren
    (`criterion_group!`/`criterion_main!` bzw. `Criterion::bench_function`).
 3. Benchmark-ID gemäß ID-Schema vergeben und in `perf/budgets.json`
-   registrieren (mit `gate`-Flag und begründender Notiz).
+   registrieren (mit `gate`-Flag und begründender Notiz). Ausnahme: einmalige
+   Entscheidungsmessungen ohne Gate (z. B. F-074-N9) werden **nicht** dort
+   registriert, sondern als eigene Rohaufzeichnungs-Datei geführt.
 4. Baseline nachziehen: Messung erfassen und in `perf/baseline.json`
    eintragen (`environment` inklusive `recorded_at` ausfüllen).
 
@@ -113,6 +126,17 @@ Registrierte Benchmark-IDs (jede in `perf/baseline.json` und
 | Merge (F-074-N7) | `merge/hdr_weighted__<512\|1024\|2048>`, `merge/pano_blend__<512\|1024\|2048>`, `merge/encode_dng__<512\|1024\|2048>`, `merge/align_hdr__512` |
 | Denoise (F-074-N8) | `denoise/blend__<512\|1024\|2048>`, `denoise/assemble_tiles__<512\|1024\|2048>`, `denoise/render_ready__<512\|1024\|2048>`, `denoise/status_resolve__ready` |
 | Culling (F-074-N8) | `cull/analyze__<512\|1024\|2048>`, `cull/noise_sigma__<512\|1024\|2048>`, `cull/similarity_signature__<512\|1024\|2048>`, `cull/analyze_selection__4x512`, `cull/status_evaluate__valid` |
+
+**Nicht in den Stores (einmalige Entscheidungsmessung):** die
+Crop-/Geometrie-Klasse (`bench/crop_pipeline.rs`, `core/*`-IDs mit den Namen
+`render_frame_cropped*`, `lens_stage__*`, `perspective_stage__*`,
+`autofill_stage__*`, `expand_stage__*`, `prepare_source_base__*`,
+`stage_cache_hit__*`). Sie beantwortet die Vorbedingungen von
+`PIPELINE-CROP-EARLY-9` und ist bewusst **nicht** in `perf/baseline.json`
+oder `perf/budgets.json` registriert; die Zahlen stehen in
+`feature/quality/performance-benchmarks.md` (F-074-N9) und in
+`Agents.todo.md`. Die IDs tragen bewusst die `core/`-Gruppe (dieselbe
+Criterion-Group), sind aber keine Baseline-IDs.
 
 Die tatsächlich gemessenen Mediane/P95 stehen in `perf/baseline.json`. Die
 Erfassung vom 2026-09-17 (Umgebung: rustc 1.98.0, gleiche Maschine) hat alle

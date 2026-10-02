@@ -625,6 +625,79 @@ ist konservativ sicher (lehnt eher ab, als OOM zuzulassen). Defaults sind
 Großschätzungen für Desktop-Nutzung, keine harten Obergrenzen für
 Mobile/Eingebettet.
 
+### F-074-N9 — Crop-/Geometrie-Klasse (`PIPELINE-ANNASSUNGEN-10`, 2026-10-02)
+
+Für die Vorbedingungsmessung zu `PIPELINE-CROP-EARLY-9` entsteht eine eigene
+Benchmark-Klasse in `crates/lumina-bench/bench/crop_pipeline.rs` (Gruppe
+`core`, `harness = false`, explizit als `[[bench]]` registriert). Sie ist
+bewusst **kein** Ersatz für die Baseline-IDs und wird **nicht** in
+`perf/baseline.json` eingetragen: die Bestands-IDs der Referenzmaschine bleiben
+der kalibrierte Gate-/Budget-Store, diese Rohmessung beantwortet eine
+einmalige Umbau-Entscheidung.
+
+Drei Messgruppen:
+
+- **Crop-Kosten heute (b):** `render_frame` mit `Crop::Free`, Restfläche
+  50 / 25 / 10 %, plus eine **Kontrolle** über das volle Rect. Die Kontrolle
+  enthält den Crop-Aufruf, entfernt aber kein Pixel; ohne sie wäre „der Crop
+  ist billig" nicht von „die Umordnung wäre billig" unterscheidbar.
+- **Geometrie-Einzelstufen (a):** `lens_stage__*`, `perspective_stage__*`,
+  `autofill_stage__*`, `expand_stage__*` — jede Stufe **direkt** aufgerufen,
+  statt sie durch Subtraktion zweier End-to-End-Zahlen zu schätzen. AutoFill
+  und Expand messen ausschließlich den Artifact-`clone` des Renderpfads
+  (GEN-ONNX-1); die seit GEN-ONNX-1 nicht mehr im Renderpfad liegende
+  heuristische BFS wird **nicht** gemessen.
+- **Cache (c):** `prepare_source_base__*` (Miss/Basis-Aufbau) und
+  `stage_cache_hit__*` (`StageFrameCache::get`) getrennt. Beide sind
+  recipe-blind und daher vom Crop-Rechteck unabhängig.
+
+Erfassung 2026-10-02 auf der Referenzmaschine (`MacBook-Pro-von-Florian.local`,
+Darwin/arm64, Apple M5 Pro, rustc 1.98.0), 50 Samples je Bench, Kommando
+`cargo bench -p lumina-bench --bench crop_pipeline -- --sample-size 50
+--warm-up-time 2 --measurement-time 5`. Median / p95 in ms:
+
+| Benchmark-ID | 512 | 1024 | 2048 |
+| --- | --- | --- | --- |
+| `render_frame_cropped_full__*` (Kontrolle) | 4,62 / 4,72 | 19,51 / 19,66 | 78,21 / 79,29 |
+| `render_frame_cropped__*__50pct` | 4,42 / 4,50 | 18,15 / 18,27 | 74,74 / 75,21 |
+| `render_frame_cropped__*__25pct` | 4,20 / 4,25 | 17,51 / 17,99 | 72,26 / 72,73 |
+| `render_frame_cropped__*__10pct` | 4,21 / 4,25 | 17,58 / 17,64 | 70,58 / 71,31 |
+| `lens_stage__*` | 11,39 / 11,43 | 44,36 / 44,44 | 177,38 / 177,88 |
+| `perspective_stage__*` | 3,46 / 3,48 | 13,43 / 13,58 | 53,80 / 53,85 |
+| `autofill_stage__*` | 0,012 | 0,052 | 0,247 |
+| `expand_stage__*` | 0,019 | 0,072 | 0,282 |
+| `prepare_source_base__*` (Cache-Miss) | 0,012 | 0,051 | 0,220 |
+| `stage_cache_hit__*` (Cache-Hit) | 0,012 | 0,050 | 0,227 |
+
+**Kostenverteilung (informativ):** die **heutige** Crop-Ersparnis ist klein
+(≈ 9 % bei 10 % Restfläche) — der Crop steht hinter der Tonal-Stufe und hinter
+der Geometrie-Kette. Bei **eingeschalteter** Linsenkorrektur dominiert
+`lens_stage` (177 ms @2048, mehr als das Gesamt-`render_frame__2048` der
+Baseline, weil die manuelle Korrektur eine 8-stufige Newton-Iteration pro
+Pixel ausführt); `perspective_stage` ist die zweitteuerste Geometrie-Stufe
+(inverse Neuabtastung). AutoFill/Expand sind reine Artifact-`clone` und
+praktisch gratis. Der Cache (Hit wie Miss) ist vernachlässigbar und vom
+Crop-Rechteck unabhängig.
+
+**Budgets:** keine. Die IDs werden **nicht** in `perf/budgets.json`
+registriert — die Klasse ist eine einmalige Entscheidungsmessung, kein
+Regressions-Gate. Eine spätere Aufnahme in die Stores wäre ein eigener,
+begründeter Schritt. Die Rohmessung liegt maschinenlesbar in
+`perf/crop_pipeline_measurement.json` (Struktur wie `perf/baseline.json`:
+`schema_version` / `environment` / `benchmarks`); sie ist ausdrücklich **kein**
+Baseline-Store und wird von `compare.mjs` nicht eingelesen (das Skript liest
+nur die festen Pfade `perf/baseline.json` und `perf/budgets.json`). Die
+Rohaufzeichnung führt `median_ns` und `p95_ns` und steht **bewusst nicht** in
+`perf/baseline.json` — der bleibt der kalibrierte Gate-/Budget-Store der
+Referenzmaschine.
+
+**Bekannte Grenzen:** (1) die Geometrie-Einzelstufen wurden mit **aktiven**
+Fixture-Parametern gemessen (Lens: `distortion_k1 = 0,15`, Vignette `0,2`;
+Perspective: `vertical = 0,1`, `rotation = 0,05`) — das ist der Preis bei
+eingeschalteter Stufe, nicht der Preis einer inerten Stufe. (2) Der
+Vorher/Nachher-Gewinn einer **umgestellten** Pipeline ist hier **nicht**
+messbar; gemessen ist ausschließlich der unveränderte Ist-Zustand.
+
 ### Bekannte Grenzen / Limitationen (F-074-N3 / N5)
 
 - **Decode-Gating:** Die Decode-Benchmarks hängen von LibRaw und den

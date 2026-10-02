@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "environment": {
+    "host": "MacBook-Pro-von-Florian.local",
+    "os": "Darwin",
+    "arch": "arm64",
+    "rustc": "1.98.0",
+    "libraw": "0.22.2",
+    "recorded_at": "2026-10-02T19:27:42Z",
+    "note": "PIPELINE-ANNASSUNGEN-10 one-off decision measurement. NOT a baseline/budget store; see Agents.todo.md and feature/quality/performance-benchmarks.md F-074-N9."
+  },
+  "benchmarks": [
+    {
+      "id": "core/autofill_stage__1024",
+      "median_ns": 52278,
+      "p95_ns": 59358,
+      "unit": "ns"
+    },
+    {
+      "id": "core/autofill_stage__2048",
+      "median_ns": 247431,
+      "p95_ns": 267002,
+      "unit": "ns"
+    },
+    {
+      "id": "core/autofill_stage__512",
+      "median_ns": 11693,
+      "p95_ns": 11746,
+      "unit": "ns"
+    },
+    {
+      "id": "core/expand_stage__1024",
+      "median_ns": 72284,
+      "p95_ns": 79730,
+      "unit": "ns"
+    },
+    {
+      "id": "core/expand_stage__2048",
+      "median_ns": 281709,
+      "p95_ns": 301035,
+      "unit": "ns"
+    },
+    {
+      "id": "core/expand_stage__512",
+      "median_ns": 19212,
+      "p95_ns": 19617,
+      "unit": "ns"
+    },
+    {
+      "id": "core/lens_stage__1024",
+      "median_ns": 44363451,
+      "p95_ns": 44440488,
+      "unit": "ns"
+    },
+    {
+      "id": "core/lens_stage__2048",
+      "median_ns": 177381020,
+      "p95_ns": 177884358,
+      "unit": "ns"
+    },
+    {
+      "id": "core/lens_stage__512",
+      "median_ns": 11387324,
+      "p95_ns": 11431062,
+      "unit": "ns"
+    },
+    {
+      "id": "core/perspective_stage__1024",
+      "median_ns": 13431542,
+      "p95_ns": 13582889,
+      "unit": "ns"
+    },
+    {
+      "id": "core/perspective_stage__2048",
+      "median_ns": 53796458,
+      "p95_ns": 53845639,
+      "unit": "ns"
+    },
+    {
+      "id": "core/perspective_stage__512",
+      "median_ns": 3456715,
+      "p95_ns": 3475505,
+      "unit": "ns"
+    },
+    {
+      "id": "core/prepare_source_base__1024",
+      "median_ns": 51132,
+      "p95_ns": 51445,
+      "unit": "ns"
+    },
+    {
+      "id": "core/prepare_source_base__2048",
+      "median_ns": 220319,
+      "p95_ns": 225240,
+      "unit": "ns"
+    },
+    {
+      "id": "core/prepare_source_base__512",
+      "median_ns": 11646,
+      "p95_ns": 11678,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__1024__10pct",
+      "median_ns": 17575583,
+      "p95_ns": 17636743,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__1024__25pct",
+      "median_ns": 17507156,
+      "p95_ns": 17987344,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__1024__50pct",
+      "median_ns": 18144642,
+      "p95_ns": 18271468,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__2048__10pct",
+      "median_ns": 70581354,
+      "p95_ns": 71304723,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__2048__25pct",
+      "median_ns": 72257573,
+      "p95_ns": 72724234,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__2048__50pct",
+      "median_ns": 74736438,
+      "p95_ns": 75208821,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__512__10pct",
+      "median_ns": 4208103,
+      "p95_ns": 4252694,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__512__25pct",
+      "median_ns": 4194603,
+      "p95_ns": 4245387,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped__512__50pct",
+      "median_ns": 4415096,
+      "p95_ns": 4503927,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped_full__1024",
+      "median_ns": 19509767,
+      "p95_ns": 19656181,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped_full__2048",
+      "median_ns": 78206198,
+      "p95_ns": 79290493,
+      "unit": "ns"
+    },
+    {
+      "id": "core/render_frame_cropped_full__512",
+      "median_ns": 4621825,
+      "p95_ns": 4716811,
+      "unit": "ns"
+    },
+    {
+      "id": "core/stage_cache_hit__1024",
+      "median_ns": 50398,
+      "p95_ns": 51231,
+      "unit": "ns"
+    },
+    {
+      "id": "core/stage_cache_hit__2048",
+      "median_ns": 227021,
+      "p95_ns": 234774,
+      "unit": "ns"
+    },
+    {
+      "id": "core/stage_cache_hit__512",
+      "median_ns": 11538,
+      "p95_ns": 11654,
+      "unit": "ns"
+    }
+  ]
+}
