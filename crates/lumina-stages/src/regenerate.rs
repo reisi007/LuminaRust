@@ -41,7 +41,8 @@
 //! configuration the byte-identity test measures.
 
 use crate::auto_tone::{
-    apply_auto_tone_result, auto_tone_input_fingerprint, auto_tone_is_fresh, PersistedAutoTone,
+    apply_auto_tone_result, auto_analysis_frame, auto_tone_input_fingerprint, auto_tone_is_fresh,
+    PersistedAutoTone,
 };
 use crate::decode::{decode_input, source_identity};
 use crate::error::StageError;
@@ -297,6 +298,16 @@ pub fn run<S: CorrectorSource, R: MatchingRender + ?Sized>(
     // ---- Module `auto-tone` ----
     if wants(RegenerateModule::AutoTone) {
         let current = &document.virtual_copies[copy_index].recipe.auto_features;
+        // AUTO-TONE-ANALYSIS-INPUT-8: the freshness decision AND the write must
+        // both be made against the **analysis domain** (post SourceActions + post
+        // Crop, without Adjustments), not the raw decode — otherwise a recipe
+        // written by `process --auto-tone` (which already measures that domain)
+        // would look stale here and be regenerated from a different frame. Same
+        // production seam as the GUI and the CLI, so all three agree.
+        let persisted_recipe = &document.virtual_copies[copy_index].recipe;
+        let zdata_path = zdata_path_for(input);
+        let source_actions = resolve_source_actions(persisted_recipe, &zdata_path)?;
+        let analysis_frame = auto_analysis_frame(&frame, persisted_recipe, &source_actions)?;
         // Fresh = enabled AND the *full* AUTO-TONE-2 contract is persisted:
         // all six sliders, all six `auto_features` mirrors and the analysis
         // fingerprint. AUTO-TONE-CLI-6: the predicate is the shared
@@ -305,8 +316,8 @@ pub fn run<S: CorrectorSource, R: MatchingRender + ?Sized>(
         // overwritten here. An incomplete contract (the historic two-slider
         // `exposure`/`contrast` subset, a missing mirror or slider, or a
         // non-matching fingerprint) is stale and regenerated.
-        let fingerprint = auto_tone_input_fingerprint(&frame, request.target_luminance);
-        let fresh = auto_tone_is_fresh(&document.virtual_copies[copy_index].recipe, &fingerprint);
+        let fingerprint = auto_tone_input_fingerprint(&analysis_frame, request.target_luminance);
+        let fresh = auto_tone_is_fresh(persisted_recipe, &fingerprint);
         if fresh && !forced(RegenerateModule::AutoTone) {
             report.push(json!({
                 "module": RegenerateModule::AutoTone.as_str(),
@@ -322,12 +333,12 @@ pub fn run<S: CorrectorSource, R: MatchingRender + ?Sized>(
                 "reason": "not-enabled",
             }));
         } else {
-            let mut recipe = document.virtual_copies[copy_index].recipe.clone();
+            let mut recipe = persisted_recipe.clone();
             // Always recompute: an explicit regeneration must derive the values
-            // from the frame again, never reproduce a persisted one.
+            // from the analysis frame again, never reproduce a persisted one.
             apply_auto_tone_result(
                 &mut recipe,
-                &frame,
+                &analysis_frame,
                 request.target_luminance,
                 PersistedAutoTone::AlwaysRecompute,
                 None,

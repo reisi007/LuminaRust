@@ -323,7 +323,9 @@ fn active_preview_applies_action_and_matches_core_cli_context() {
     let preview = app.preview().expect("preview after open");
     assert_eq!(first_pixel(preview), [201, 0, 0, 255]);
 
-    let resolved = app.resolve_current_source_actions(&fixture.frame).unwrap();
+    let resolved = app
+        .resolve_current_source_actions(&app.recipe, &fixture.frame)
+        .unwrap();
     let direct = render_frame(
         &fixture.frame,
         &RenderContext {

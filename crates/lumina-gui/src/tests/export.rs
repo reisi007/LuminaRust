@@ -115,7 +115,9 @@ fn gui_source_action_export_is_byte_identical_to_cli_shared_path() {
     open_and_decode(&mut app, fixture.source.display().to_string());
     assert!(app.error().is_none());
     let recipe = app.recipe().clone();
-    let resolved = app.resolve_current_source_actions(&fixture.frame).unwrap();
+    let resolved = app
+        .resolve_current_source_actions(&app.recipe, &fixture.frame)
+        .unwrap();
     let options = ExportOptions {
         format: ImageFileFormat::Png,
         quality: 90,

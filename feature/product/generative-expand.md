@@ -533,6 +533,13 @@ Decode → SourceActions → GenerativeEdit → AutoAnalysis → Adjustments →
   (generische Einordnung; für Geometrie siehe unten differenziert)
 ```
 
+Zur Rolle von `AutoAnalysis`: die Auto-Tone-**Messdomäne** ist seit
+`AUTO-DOMAIN` (2026-10-02) post SourceActions **und** post Crop, ohne
+Adjustments — die Liste beschreibt den Rechenpfad, die Analyse-Domäne ist in
+`feature/architecture/pipeline.md` § Auto-Tone definiert. Ein generativer
+Expand ist damit **nicht** Teil der Auto-Messdomäne (Modell-Artefakt, und die
+Crop-Koordinaten referenzieren die erweiterte Leinwand).
+
 Begründung: Die Stufe ändert (a) Pixelinhalte wie eine Source-Action und (b)
 die **Canvas-Geometrie** (Ausgabegröße und Platzierung der Quelle), sodass
 alle nachgelagerten Geometrie- und Messbezüge (Masken-Koordinaten, Crop,

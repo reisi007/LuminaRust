@@ -115,11 +115,94 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use lumina_core::{ImageFrame, SourceActionArtifact};
 use lumina_sidecar::{EditRecipe, Preset};
 
+use lumina_stages::pipeline::resolve_source_actions;
+
 use crate::{io_error, CliError, ProcessArgs};
+
+/// AUTO-TONE-ANALYSIS-INPUT-8: the CLI's Auto-Tone **measurement domain**.
+///
+/// `process --auto-tone` must measure the frame after SourceActions and after
+/// Crop (without Adjustments) — the image the user is actually editing, per the
+/// owner decision `AUTO-DOMAIN` (2026-10-02), not the raw decode. This type
+/// resolves the recipe's source actions **once** and hands out both the bundle
+/// path and the analysis frame, so the Auto-Tone measurement and the render
+/// below it can never see different artifacts.
+///
+/// `recipe.source_actions` is replaced **wholesale** by the preset layer
+/// (`apply_preset_layer`: `*recipe = preset.recipe`), so the resolution is
+/// deliberately taken **after** it and before the auto layer. The auto layer and
+/// the explicit-slider layer touch only `adjustments`/`auto_features`, never
+/// `source_actions`, so one resolution there is valid for the analysis frame
+/// *and* for the render context below.
+///
+/// **MEASURED 2026-10-02, both directions** (a wrong position here is silent in
+/// one direction and a hard failure in the other):
+///
+/// * source action in the **sidecar**, preset without one — resolving before
+///   the preset aborts `process --auto-tone --preset` with exit 1 even though
+///   the effective recipe carries no retouche at all;
+/// * source action in the **preset**, sidecar without one — resolving before the
+///   preset returns an empty artifact list, renders the un-retouched decode
+///   with exit 0 and still persists the preset's `source_actions`, i.e. a
+///   silent drop (F-042-N1: "reported loudly, never silently dropped").
+///
+/// Pinned by `auto_tone_with_a_preset_without_source_actions_does_not_fail_on_the_sidecars_retouche`
+/// and `auto_tone_with_a_preset_carrying_source_actions_reports_the_missing_bundle_loudly`
+/// in `tests/source_action_cli_e2e.rs`.
+///
+/// It lives here, next to the preset/explicit layers of the same `process`
+/// ordering, because it is the *input* of the auto layer — the same reason
+/// `apply_preset_layer` and `apply_explicit_slider_values` are here (all three
+/// were extracted from `process_selected` for the file-size ratchet).
+pub(crate) struct AutoToneDomain {
+    zdata_path: PathBuf,
+    source_actions: Vec<SourceActionArtifact>,
+}
+
+impl AutoToneDomain {
+    /// Resolves the source actions for `recipe`. Loud on a missing, corrupt or
+    /// checksum-mismatched bundle: the render that would have used it must not
+    /// silently continue on the un-retouched decode.
+    pub(crate) fn resolve(input: &Path, recipe: &EditRecipe) -> Result<Self, CliError> {
+        let zdata_path = lumina_sidecar::zdata_path_for(input);
+        let source_actions = resolve_source_actions(recipe, &zdata_path)?;
+        Ok(Self {
+            zdata_path,
+            source_actions,
+        })
+    }
+
+    /// The `.lumina.zdata` bundle path of the loaded source (mask planes and
+    /// source actions share it).
+    pub(crate) fn zdata_path(&self) -> &Path {
+        &self.zdata_path
+    }
+
+    /// The resolved source-action artifacts for the render context.
+    pub(crate) fn source_actions(&self) -> &[SourceActionArtifact] {
+        &self.source_actions
+    }
+
+    /// The Auto-Tone analysis input frame for `recipe` — the documented
+    /// production path (post SourceActions + spot heals + crop, no Adjustments),
+    /// shared verbatim with the GUI and `regenerate`.
+    pub(crate) fn analysis_frame(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+    ) -> Result<ImageFrame, CliError> {
+        Ok(lumina_stages::auto_tone::auto_analysis_frame(
+            frame,
+            recipe,
+            &self.source_actions,
+        )?)
+    }
+}
 
 /// The second layer of the `process` slider ordering: the `--preset` recipe
 /// replaces the whole recipe, and its own slider values are returned so the

@@ -79,6 +79,10 @@ pub mod report;
 pub mod smart_collections;
 pub mod spot;
 pub mod spot_ops;
+// AUTO-TONE-ANALYSIS-INPUT-8: the measured domain contract of the Auto-Tone
+// analysis input (SourceActions + Crop in, Adjustments and Masks out).
+#[cfg(test)]
+mod auto_analysis_tests;
 #[cfg(test)]
 mod tests;
 pub mod upright;

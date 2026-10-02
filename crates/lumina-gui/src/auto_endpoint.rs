@@ -14,20 +14,55 @@
 use super::*;
 
 impl LuminaApp {
-    /// Shared `suggest_auto_tone` evaluation over the loaded source frame
+    /// The Auto-Tone analysis input for the **active** recipe (post SourceActions
+    /// + post Crop, without Adjustments).
+    ///
+    /// AUTO-TONE-ANALYSIS-INPUT-8: built from the shared production seam
+    /// (`lumina_stages::auto_tone::auto_analysis_frame`) that the CLI and
+    /// `regenerate` use, so the GUI and the CLI cannot measure different
+    /// domains. Loud without a loaded image.
+    pub(crate) fn auto_analysis_frame(&self) -> Result<ImageFrame, GuiError> {
+        self.auto_analysis_frame_for(&self.recipe)
+    }
+
+    /// [`Self::auto_analysis_frame`] for an **explicit** recipe — the reload
+    /// path validates a *candidate* recipe that is not adopted yet, so binding to
+    /// `self.recipe` would measure the wrong domain.
+    ///
+    /// The source actions come from [`Self::resolve_current_source_actions`],
+    /// which takes the recipe as a parameter. There is deliberately **no**
+    /// second resolver here: a copy of its four guards would be a second
+    /// implementation whose bundle-loading branch no test reaches, while the
+    /// original's is covered (`src/tests/source_actions.rs`).
+    pub(crate) fn auto_analysis_frame_for(
+        &self,
+        recipe: &EditRecipe,
+    ) -> Result<ImageFrame, GuiError> {
+        let Some(source) = &self.original else {
+            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
+        };
+        let resolved = self
+            .resolve_current_source_actions(recipe, source)
+            .map_err(|error| GuiError::Io(error.to_string()))?;
+        Ok(lumina_stages::auto_tone::auto_analysis_frame(
+            source,
+            recipe,
+            resolved.artifacts(),
+        )?)
+    }
+
+    /// Shared `suggest_auto_tone` evaluation over the Auto-Tone analysis frame
     /// (G-16), used by [`Self::apply_auto_endpoint`] (one end point).
     /// [`Self::auto_tone`] no longer comes here — it goes through the shared
     /// writer, which evaluates and persists in one step. Loud without a loaded
     /// image — never a silent no-op.
     fn compute_auto_tone(&self) -> Result<AutoToneResult, GuiError> {
-        let Some(frame) = &self.original else {
-            return Err(GuiError::Io(Str::NoImageLoaded.t().to_string()));
-        };
+        let frame = self.auto_analysis_frame()?;
         let config = AutoToneConfig {
             target_luminance: self.recipe.auto_features.target_luminance,
             ..Default::default()
         };
-        Ok(suggest_auto_tone(frame, config)?)
+        Ok(suggest_auto_tone(&frame, config)?)
     }
 
     /// Apply one auto end point (G-16, `Shift`+double-click on the
@@ -75,10 +110,7 @@ impl LuminaApp {
     /// the recomputed auto values, so the state is 6 of 6 and stays fresh — no
     /// mixed state. Caller guarantees `enable_auto_tone` and a decoded frame.
     fn complete_auto_tone_after_override(&mut self) -> Result<(), GuiError> {
-        let frame = self
-            .original
-            .clone()
-            .expect("compute_auto_tone decoded a frame");
+        let frame = self.auto_analysis_frame()?;
         let target_luminance = self.recipe.auto_features.target_luminance;
         let overrides = lumina_stages::auto_tone::auto_tone_overrides(&self.recipe);
         lumina_stages::auto_tone::apply_auto_tone_result(

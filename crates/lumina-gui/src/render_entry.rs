@@ -61,7 +61,7 @@ impl LuminaApp {
         // validate them before changing any preview/session state; any missing,
         // stale, corrupt, or invalid record restores the original frame and
         // aborts loudly rather than rendering a recipe-only approximation.
-        let source_actions = match self.resolve_current_source_actions(&original) {
+        let source_actions = match self.resolve_current_source_actions(&self.recipe, &original) {
             Ok(actions) => actions,
             Err(error) => {
                 self.invalidate_source_action_preview();

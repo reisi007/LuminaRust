@@ -287,8 +287,17 @@ impl LuminaApp {
         lumina_sidecar::sidecar_path_for(Path::new(&self.path)).exists()
     }
 
+    /// Resolves `recipe`'s source-action artifacts against the loaded source.
+    ///
+    /// `recipe` is an explicit parameter (AUTO-TONE-ANALYSIS-INPUT-8), not
+    /// `self.recipe`: the Auto-Tone **analysis domain** validates a *candidate*
+    /// recipe that is not adopted yet, and binding to `self.recipe` there would
+    /// measure the wrong domain. Every caller that means the current recipe
+    /// passes `&self.recipe`, so there is exactly **one** implementation of the
+    /// guards below and no second copy that can drift away from their tests.
     pub(crate) fn resolve_current_source_actions(
         &self,
+        recipe: &EditRecipe,
         source: &ImageFrame,
     ) -> Result<ResolvedSourceActions, SourceActionResolveError> {
         if self.sidecar_resolution_pending() {
@@ -298,7 +307,7 @@ impl LuminaApp {
                 sidecar.display()
             )));
         }
-        if self.recipe.source_actions.is_empty() {
+        if recipe.source_actions.is_empty() {
             return Ok(ResolvedSourceActions::default());
         }
         if self.path.trim().is_empty() {
@@ -308,7 +317,7 @@ impl LuminaApp {
             )));
         }
         let zdata_path = lumina_sidecar::zdata_path_for(Path::new(&self.path));
-        resolve_source_actions(&self.recipe, &zdata_path, source)
+        resolve_source_actions(recipe, &zdata_path, source)
     }
 
     pub(crate) fn invalidate_source_action_preview(&mut self) {

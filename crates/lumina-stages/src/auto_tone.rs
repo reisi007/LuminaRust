@@ -52,10 +52,70 @@
 
 use crate::error::StageError;
 use lumina_core::{
-    suggest_auto_tone, tone_fingerprint, AutoToneConfig, AutoToneResult, ImageFrame,
+    apply_spot_heals_from_recipe, prepare_source_base, suggest_auto_tone, tone_fingerprint,
+    AutoToneConfig, AutoToneResult, ImageFrame, SourceActionArtifact, StageWork,
 };
 use lumina_sidecar::{AnalysisFingerprint, AutoFeatures, EditRecipe};
 use std::collections::BTreeMap;
+
+/// AUTO-TONE-ANALYSIS-INPUT-8: the **analysis input frame** of Auto-Tone.
+///
+/// The owner's decision (`AUTO-DOMAIN`, 2026-10-02) fixes the domain Auto-Tone
+/// measures: the frame **after SourceActions and after Crop**, *without*
+/// Adjustments — the image the user is actually editing. This is the single
+/// production seam that builds it, so the GUI (`LuminaApp`), the CLI
+/// (`process --auto-tone`, `regenerate --module auto-tone`) and the MCP server
+/// all measure the **same** pixels.
+///
+/// # Why this exact domain
+///
+/// The owner's wording is „nach wegretuschieren UND nach Zuschnitt": the retouch
+/// (artifact `SourceActions` plus the recipe's spot heals) and the framing
+/// (crop/rotation/mirror) are part of the edited image, so both must influence
+/// the Auto values. Adjustments are deliberately **excluded** — Auto-Tone writes
+/// the very exposure/contrast/… sliders that Adjustments applies, so measuring a
+/// frame that already carries them would feed the previous Auto result back into
+/// the next (a feedback loop, not a measurement).
+///
+/// # The chosen production path
+///
+/// ```text
+/// source
+///   -> prepare_source_base          (artifact SourceActions, strict)
+///   -> apply_spot_heals_from_recipe (recipe spot_removals = "wegretuschieren")
+///   -> apply_crop_stage             (recipe.geometry: crop/rotation/mirror)
+/// ```
+///
+/// It reuses the **runtime render stages verbatim** — no second crop or heal
+/// implementation — and stops exactly where Adjustments would begin. The result
+/// is what `apply_auto_tone_result` below is measured on, and its fingerprint
+/// (`auto_tone_input_fingerprint`) therefore identifies this domain by content.
+///
+/// # Named boundary
+///
+/// The lens (F-098) and perspective (F-099) stages stay **out** of the analysis
+/// domain (the owner named retouch and crop; those two are resampling stages
+/// with their own artifact inputs). The crop stage consequently runs with
+/// `use_content_default = false`: the maximum-content default rect is defined on
+/// the lens/perspective-corrected canvas and would be wrong on this un-corrected
+/// frame. An **explicit** `recipe.geometry.crop` is applied, rotation and
+/// mirroring too; only the implicit content default is out of scope. Generative
+/// expand and auto-fill are out for the same reason (model-produced canvases).
+///
+/// Loud, never a silent fallback: an invalid source action or a spot-heal mode
+/// the portable core cannot apply is a [`StageError`], exactly as on the render
+/// path.
+pub fn auto_analysis_frame(
+    source: &ImageFrame,
+    recipe: &EditRecipe,
+    source_actions: &[SourceActionArtifact],
+) -> Result<ImageFrame, StageError> {
+    let mut work = StageWork::default();
+    let mut frame = prepare_source_base(source, source_actions, &mut work)?;
+    apply_spot_heals_from_recipe(&mut frame, recipe)?;
+    frame.apply_crop_stage(recipe.geometry.as_ref(), false)?;
+    Ok(frame)
+}
 
 /// The six AUTO-TONE-2 slider keys, in their normative order
 /// (`feature/architecture/pipeline.md` § Auto-Tone, `AUTO_TONE_ADJUSTMENT_KEYS`).

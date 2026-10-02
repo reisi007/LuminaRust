@@ -46,6 +46,13 @@ sRGB-Encoding erfolgen; im aktuellen Raster-MVP werden die bestehenden Regler
 deterministisch im sRGB-Arbeitsraum angewandt und behalten ihre bisherige
 Clipping-Semantik.
 
+**AutoAnalysis und Crop (AUTO-DOMAIN, Eigentümer-Entscheidung 2026-10-02).**
+`AutoAnalysis` ist **keine** Renderstufe dieser Kette: Sie ist der
+**Analyse-Input** von Auto-Tone und bewertet post SourceActions + **post Crop**,
+ohne Adjustments. Die Stufenliste beschreibt weiterhin den Rechenpfad; die
+Messdomäne ist bewusst **nicht** der Frameschnittpunkt zwischen
+`Adjustments` und `Crop`. Vollständig in § „Auto-Tone" beschrieben.
+
 Innerhalb von `Adjustments` gilt verbindlich: `exposure → contrast →
 shadows → highlights → whites → blacks` (mit WB vor diesen Tonwerten). Exposure
 und Kontrast setzen den globalen Pegel und die Spreizung; Highlights/Shadows
@@ -313,6 +320,16 @@ Einstiegspunkt wendet das (ggf. auto-getonte) Rezept an. GUI und CLI verwenden
 denselben Einstiegspunkt (SOLL: „GUI und CLI verwenden dieselbe
 Renderpipeline").
 
+**Die Analyse-Domäne ist ein eigener, geteilter Pfad (AUTO-DOMAIN,
+2026-10-02).** Auto-Tone ist **keine** Stufe von `render_frame`: es ist eine
+Messung *vorher*. Ihre Domäne wird von `auto_analysis_frame`
+(`crates/lumina-stages/src/auto_tone.rs`) gebaut, das `prepare_source_base` →
+`apply_spot_heals_from_recipe` → `apply_crop_stage` aufruft — also exakt die
+Laufzeitstufen des Renderpfads, aber **ohne** Adjustments. GUI, `process
+--auto-tone` und `regenerate --module auto-tone` teilen sich diese Funktion;
+dadurch kann die CLI nicht von der GUI abweichen. Details und die bewusste
+Abweichung zum Exposure Matching in § Auto-Tone.
+
 **Status (F-042):** Implementiert sind der gemeinsame Einstiegspunkt, der
 Source-Action-Mechanismus (Kontext-Artefakt, Kompositing mit 50 %-Schwellwert),
 die Masken-Evaluierung und -Validierung mit `MaskPolicy`, die
@@ -392,8 +409,8 @@ Offen bleiben die Persistenz der Re-Inferenz-Ergebnisse ins zdata-Bundle
 **Status (F-085, behaviorale Tests):** Behaviorale Tests decken die
 Wechselwirkung von Source-Actions mit Auto-WB, Auto-Tone und Exposure Matching
 ab: Die Reihenfolge SourceActions → Adjustments ist über differenzielle
-Ausgaben belegt (ersetztes vs. nicht ersetztes Pixel unter WB; Auto-Tone- und
-Matching-Messung auf dem Post-Action-Frame), ebenso die
+Ausgaben belegt (ersetztes vs. nicht ersetztes Pixel unter WB; die
+**Matching**-Messung auf dem Post-Action-Frame), ebenso die
 Schwellwert-Grenzfälle (32768/32767, 0, u16::MAX), Nicht-Destruktion von Frame
 und Artefakten, Determinismus und History-Reproduzierbarkeit (ein
 Rezept-Snapshot rendert byte-identisch erneut) sowie das CLI-Zusammenspiel aus
@@ -401,6 +418,30 @@ History-Eintrag und gültiger Maske mit `--match-total-exposure`. Die
 CLI-Durchreichung von Source-Actions ist mit F-042-N1 geschlossen: `process`
 sowie `render`/`export` lösen `recipe.source_actions` beim Rendern aus dem
 `.lumina.zdata`-Bundle auf und reichen sie an `render_frame`.
+
+> **Korrektur einer unbelegten Behauptung an dieser Stelle
+> (AUTO-TONE-ANALYSIS-INPUT-8, `DoD.md` §9).** Dieser Absatz behauptete
+> zuvor wörtlich, die „Auto-Tone- **und** Matching-Messung" sei „auf dem
+> Post-Action-Frame" belegt. Das war **falsch und unbelegt**: gemessen am
+> Stand vor dieser Entscheidung las `LuminaApp::auto_tone` und
+> `compute_auto_tone` `self.original`, den **dekodierten Quellframe vor allen
+> SourceActions und vor Crop** — eine Auto-Tone-Messung auf dem Post-Action-Frame
+> fand nicht statt, und `grep` fand `suggest_auto_tone` in `lumina-core` nur
+> als Aufruf im `#[cfg(test)]`-Modul. Die Behauptung wird hiermit **an ihrer
+> Fundstelle zurückgenommen** und durch den gemessenen Stand ersetzt.
+>
+> **Neu belegt (AUTO-TONE-ANALYSIS-INPUT-8):** Auto-Tone misst heute auf dem
+> Post-Action-Frame **plus Crop** — `auto_analysis_frame`
+> (`crates/lumina-stages/src/auto_tone.rs`) führt `prepare_source_base` →
+> `apply_spot_heals_from_recipe` → `apply_crop_stage` aus, und GUI, CLI und
+> `regenerate` rufen **diese** Funktion. Der Nachweis ist **nicht** die
+> Behauptung, sondern die Zahlen in
+> `crates/lumina-gui/src/tests/auto_tone_analysis_domain.rs`: unbeschnitten
+> `[0.34894830882107136, −0.08977777777777773, …]`, dunkle Hälfte
+> `[1.850252880495318, 0.8499332443257677, …]`, helle Hälfte
+> `[−0.5545888516776374, 0.7579262213359921, …]` — drei verschiedene
+> Auto-Werte-Sätze aus derselben Quelle, nur durch den Zuschnitt
+> unterschieden, mit **monoton** steigender Exposure von hell nach dunkel.
 
 ## Bearbeitungsregler
 
@@ -418,44 +459,68 @@ Adjustments → Masks → Crop → Output`. Die in diesem Abschnitt genannten
 Unterstufen innerhalb von `Adjustments` beziehungsweise `Crop` sind verbindlich
 und ändern dieses Format-Tupel nicht.
 
-> **Offener Widerspruch zu dieser Reihenfolge (Eigentuemer-Entscheidung
-> 2026-10-02, noch nicht umgesetzt).** Der Eigentuemer hat entschieden, dass
-> **Crop in die Auto-Tone-Domäne gehört** (Lightroom-Verhalten: Auto rechnet auf
-> dem Bild, das der Nutzer sieht). **Gemessen:** Auto-Tone wertet heute
-> `self.original` aus, den dekodierten Quellframe **vor** SourceActions und vor
-> Crop — `LuminaApp::auto_tone` und `compute_auto_tone` lesen dieses Feld,
-> `set_crop_free` fasst es nicht an, und Retusche/Crop passieren erst im
-> Render-Hub (`prepare_source_base` → `apply_source_actions`, `apply_crop_stage`).
-> `suggest_auto_tone(frame, config)` in `lumina-core` hat **keinen**
-> SourceActions-Parameter. **Damit widerspricht der Ist-Zustand genau dieser
-> Reihenfolge:** sie schreibt SourceActions **vor** AutoAnalysis und Crop
-> **hinter** Adjustments. Dazu eine gemessene Asymmetrie: `match_total_exposure`
-> (F-041) misst auf `self.preview`, dem **gerenderten** Ergebnis, Auto-Tone auf
-> `self.original` — zwei Wege, dieselbe Bildaussage, verschiedene Domänen.
-> **Die F-085-Behauptung, die Auto-Tone-Messung sei „auf dem Post-Action-Frame"
-> belegt, wird dabei ausdrücklich NICHT übernommen:** sie steht als Faktum in
-> diesem Dokument, `grep` findet `suggest_auto_tone` in `lumina-core` nur im
-> `#[cfg(test)]`-Modul, und sie ist entweder zu belegen oder an ihrer Fundstelle
-> zurückzunehmen (`DoD.md` §9). **Der Soll-Text bleibt unangetastet** — er ist
-> der Zielzustand, den die offenen Tasks `AUTO-TONE-ANALYSIS-INPUT-8` (Messdomäne)
-> und `PIPELINE-CROP-EARLY-9` (Crop im Render weiter nach vorn) umsetzen; eine
-> Stufe vorzuziehen, bevor der Gewinn gemessen ist, wäre nach
-> `PIPELINE-ANNASSUNGEN-10` eine Umordnung auf Verdacht.
+**Zur Reihenfolge von `AutoAnalysis` und `Crop` (AUTO-DOMAIN, 2026-10-02).** Die
+Liste beschreibt den **Rechenpfad**. `AutoAnalysis` ist **keine** Renderstufe
+dieser Kette, sondern der **Analyse-Input** von Auto-Tone, und er bewertet
+**post SourceActions + post Crop, ohne Adjustments** — er steht deshalb in der
+Liste *vor* `Adjustments`, misst aber den Frame *nach* `Crop`. Das ist kein
+Widerspruch der Liste, sondern die Trennung von Rechen- und Messpfad; die
+verbindliche Definition der Domäne samt Produktionspfad steht in § Auto-Tone
+(„Die Analyse-Domäne") und wird dort über Zahlen belegt.
+
+> **Crop in die Auto-Tone-Domäne (Eigentuemer-Entscheidung 2026-10-02,
+> umgesetzt in `AUTO-TONE-ANALYSIS-INPUT-8`).** Der Eigentuemer hat entschieden,
+> dass **Auto-Tone nach SourceActions UND nach Crop rechnet** (Lightroom-Verhalten:
+> Auto rechnet auf dem Bild, das der Nutzer sieht). **Gemessener Vor-Zustand:**
+> Auto-Tone wertete `self.original` aus, den dekodierten Quellframe **vor**
+> SourceActions und vor Crop — `LuminaApp::auto_tone` und `compute_auto_tone`
+> lasen dieses Feld, `set_crop_free` fasste es nicht an, und
+> `suggest_auto_tone(frame, config)` in `lumina-core` hatte **keinen**
+> SourceActions-Parameter.
 >
-> **Zusätzlich gemessen, weil es die Gewichtung kippt:** die
-> Tonal-Stufe `apply_recipe_with_white_balance` ist **85 %** von `render_frame`
-> (3,39 / 14,02 / 56,39 ms gegen 3,98 / 16,36 / 65,76 ms bei 512 / 1024 / 2048,
-> aus `perf/baseline.json` ausgerechnet). Ein vor `Adjustments` gesetzter Crop
-> würde genau diese 85 % auf den Ausschnitt beschränken — **das ist der
-> Performance-Hebel, nicht die Geometrie-Kette** zwischen `Adjustments` und
-> `Crop`. **Harte Untergrenze für ein Vorgehen:** Crop muss **nach**
-> `GenerativeExpand` bleiben, weil die Crop-Koordinaten die **erweiterte
-> Leinwand** referenzieren (`render.rs`, `GEOMETRY_STAGE_ORDER`). **Und:** „Crop"
-> ist ein Sammelbegriff — der **Ausschnitt** ist eine reine Pixelauswahl und damit
-> byte-neutral, **Rotation und Spiegelung** sind eine Neuabtastung
-> (`apply_crop_stage` ruft `rotate_frame` **und** den Ausschnitt in einem Aufruf).
-> Ob Rotation in die Auto-Domäne gehört, folgt aus „Crop gehört dazu" **nicht**
-> und ist nicht entschieden.
+> **Geltende Regel (ab hier):** Die Analyse-Domäne ist die Funktion
+> `auto_analysis_frame` in `crates/lumina-stages/src/auto_tone.rs`:
+> `prepare_source_base` → `apply_spot_heals_from_recipe` → `apply_crop_stage`,
+> **ohne** Adjustments und **ohne** Masken. GUI
+> (`LuminaApp::auto_analysis_frame`), `process --auto-tone` (`AutoToneDomain`
+> in `crates/lumina-cli/src/auto_tone_cli.rs`) und `regenerate --module
+> auto-tone` rufen **diese eine** Funktion; eine zweite Domänenbildung ist nicht
+> vorgesehen. Die Reihenfolge der Stufenliste `Decode → SourceActions →
+> AutoAnalysis → Adjustments → Masks → Crop → Output` beschreibt den
+> **Rechenpfad**; `AutoAnalysis` ist der **Analyse-Input** und liegt deshalb
+> nicht als Renderstufe zwischen `Adjustments` und `Crop`. Die Anmerkung im
+> Abschnitt „Farbmanagement/Regler" oben und dieser Abschnitt sind dieselbe
+> Aussage an zwei Stellen des Dokuments.
+>
+> **Warum ohne Adjustments:** Auto-Tone schreibt genau die Exposure-/Contrast-/
+> …-Regler, die `Adjustments` anwendet. Ein Frame, der sie bereits trägt, würde
+> das Ergebnis des letzten Auto-Laufs in den nächsten zurückspeisen — eine
+> Rückkopplung, keine Messung.
+>
+> **Abweichung zum Exposure Matching — bewusst, dokumentiert.** `match_total_exposure`
+> (F-041) misst weiterhin auf `self.preview` bzw. `render_output.frame`, also dem
+> **gerenderten** Ergebnis nach Adjustments/Crop/Masken. Das ist **kein**
+> Versehen: Das Matching addiert ein Delta auf die wirksame Exposure und ist
+> gerade deshalb auf dem Endzustand richtig; Auto-Tone legt die Regler fest und
+> würde in seiner eigenen Domäne von ihnen abhängen. Beide Wege treffen
+> dieselbe Bildaussage, aber auf **verschiedenen, je dokumentierten**
+> Domänen.
+>
+> **Named boundary:** Lens (F-098) und Perspective (F-099) gehören **nicht** zur
+> Analyse-Domäne — der Eigentuemer nannte Retusche und Zuschnitt, und beides
+> sind Neuabtastungsstufen mit eigenen Artefakt-Eingängen. Die Crop-Stufe läuft
+> deshalb mit `use_content_default = false`: das Rechteck „maximaler Inhalt" ist
+> auf der lens-/perspective-korrigierten Leinwand definiert und wäre auf diesem
+> unkorrigierten Frame falsch. Ein **expliziter** `recipe.geometry.crop` wird
+> angewandt, Rotation und Spiegelung ebenfalls; nur der implizite
+> Inhalts-Default ist nicht Teil der Domäne. Generative Expand und Auto-Fill
+> bleiben aus demselben Grund außen vor (Modell-Artefakte).
+>
+> **Nicht Teil dieser Entscheidung:** `PIPELINE-CROP-EARLY-9` (ob Crop im
+> *Render* weiter nach vorn wandert, ein Performance-Thema) bleibt offen und wird
+> **nicht** durch diese Analyse-Domäne entschieden. Die dort gemessene
+> Gewichtung — die Tonal-Stufe `apply_recipe_with_white_balance` ist 85 % von
+> `render_frame` — bleibt gültig.
 
 **Schema-Migration (Pre-MVP):** Das Upgrade von `recipe_schema_version` 1 auf 2
 ist erforderlich, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`,
@@ -1377,6 +1442,129 @@ beispielsweise eine reine Ausgabegrößenänderung den Decode-Cache nicht
 invalidiert, wohl aber Preview und Export.
 
 ## Auto-Tone
+
+### Die Analyse-Domäne (AUTO-DOMAIN, Eigentuemer-Entscheidung 2026-10-02)
+
+**Normativ:** Auto-Tone bewertet den Frame **nach SourceActions und nach Crop**,
+**ohne Adjustments** — „nach wegretuschieren UND nach Zuschnitt". Die Messung ist
+eine Funktion des Rezepts (Retusche, Spot-Heals, Crop/Rotation/Spiegelung), nicht
+des unbearbeiteten Quellbilds.
+
+**Produktionspfad (genau eine Funktion):**
+
+```text
+source
+  -> prepare_source_base          (Artefakt-SourceActions, strikt)
+  -> apply_spot_heals_from_recipe (recipe.spot_removals = "wegretuschieren")
+  -> apply_crop_stage             (recipe.geometry: Ausschnitt/Rotation/Spiegel)
+```
+
+Das ist `auto_analysis_frame` in `crates/lumina-stages/src/auto_tone.rs`. Sie
+verwendet die **Laufzeitstufen des Renderpfads unverändert** — keine zweite
+Crop- oder Heal-Implementierung — und endet genau dort, wo `Adjustments`
+beginnen würden. Aufrufer:
+
+| Aufrufer | Weg |
+| --- | --- |
+| GUI Auto-Knopf | `LuminaApp::auto_tone` → `LuminaApp::auto_analysis_frame` (`crates/lumina-gui/src/auto_endpoint.rs`) |
+| GUI Endpunkt / Reparaturlauf | `compute_auto_tone`, `complete_auto_tone_after_override` — dieselbe Funktion |
+| `lumina process --auto-tone` | `AutoToneDomain::analysis_frame` (`crates/lumina-cli/src/auto_tone_cli.rs`) |
+| `lumina regenerate --module auto-tone` / MCP | `crates/lumina-stages/src/regenerate.rs` |
+
+**Die GUI loest ihre SourceActions ueber den EINEN Resolver
+(AUTO-TONE-ANALYSIS-INPUT-8, Korrekturrunde 2026-10-02).**
+`LuminaApp::auto_analysis_frame_for` ruft `resolve_current_source_actions(recipe,
+source)`. Dessen Rezept ist ein **Parameter**, nicht `self.recipe`: der
+Reload-Pfad prueft ein *Kandidaten*-Rezept, das noch nicht uebernommen ist. Eine
+zweite, an das eigene `recipe` gebundene Kopie der vier Waechter (Sidecar
+unaufgeloest, leere Liste, kein Dateipfad, Bundle-Lesen) war **kurzzeitig**
+entstanden und ist wieder entfernt — sie waere eine zweite Implementierung
+gewesen, deren Bundle-Zweig **kein** Test erreicht, waehrend der des Originals
+ueber den Produktionspfad belegt ist. **Gilt fuer alle Aufrufer des
+GUI-Resolver** (Preview-Render, Export, Navigator, Thumbnails, Auto-Analyse):
+ein Rezept ohne `source_actions` ist eine leere Artefaktliste, ein Rezept **mit**
+SourceActions ohne aufloesbares Bundle ist ein **lauter** Fehler — nie eine
+Messung auf dem un-retouchierten Decode.
+
+**Die Source-Action-Auflösung der CLI liegt NACH der Preset-Ebene
+(AUTO-TONE-ANALYSIS-INPUT-8, Korrekturrunde 2026-10-02).** `process` löst die
+`source_actions` **einmal** auf und teilt das Ergebnis zwischen Analyse-Domäne
+und Render-Kontext. Diese Auflösung liegt **hinter** `apply_preset_layer` und
+**vor** der Auto-Ebene. Grund: `apply_preset_layer` ersetzt das **ganze** Rezept
+(`*recipe = preset.recipe`), also auch `source_actions`. **Vor** dieser Ebene
+aufzulösen war messbar falsch, in **beiden** Richtungen (Tabelle unten). Die
+Auto- und die Explizit-Ebene berühren `source_actions` nicht, deshalb genügt
+eine Auflösung an dieser Stelle für Analyse **und** Render.
+
+Die beiden anderen Aufrufstellen von `resolve_source_actions` in der CLI
+(`main.rs`: der Headless-Render von `dust-removal`, der Render von
+`denoise --render`) haben **keine** Preset- und keine Auto-Ebene; sie lesen
+bereits das wirksame Rezept. Die Anforderung, dass Analyse- und Render-Aufruf
+dieselbe Quelle sehen, ist damit erfüllt — sie waren aber nie der Fundort des
+Fehlers, und sie werden hier nur der Vollständigkeit halber genannt.
+
+**Gemessen an der echten Binary (`process --auto-tone --preset`):**
+
+| Fall | Auflösung **vor** der Preset-Ebene | Auflösung **danach** (= Verhalten wie HEAD) |
+| --- | --- | --- |
+| Source-Action nur im **Sidecar**, Preset ohne | exit **1**, `out.png` fehlt — harter Fehler an einer Retusche, die gar nicht in Kraft ist | exit **0**, gerendert, Rezept ist das Preset-Rezept |
+| Source-Action nur im **Preset**, Sidecar ohne | exit **0**, `out.png` gerendert, `source_actions` trotzdem persistiert — **stiller Drop** (F-042-N1) | exit **1**, Bundle-Nennung auf stderr, keine Ausgabe, Sidecar unangetastet |
+
+Pinned in `crates/lumina-cli/tests/source_action_cli_e2e.rs`
+(`auto_tone_with_a_preset_without_source_actions_does_not_fail_on_the_sidecars_retouche`,
+`auto_tone_with_a_preset_carrying_source_actions_reports_the_missing_bundle_loudly`).
+Mit zurückgesetzter Auflösung werden **beide** rot, während `cargo test -p
+lumina-cli --bins` (150) und `--test auto_tone_e2e` (7) **grün** bleiben — die
+Lücke war real und ist jetzt nur noch von diesen beiden Tests bewacht.
+
+**Warum ohne Adjustments:** Auto-Tone schreibt genau die Regler, die
+`Adjustments` anwendet. Ein Frame, der sie bereits trägt, würde das Ergebnis des
+vorigen Auto-Laufs in den nächsten zurückspeisen — Rückkopplung statt Messung.
+
+**Nachweis (Zahlen, nicht Reihenfolge im Code).** Dieselbe Quelle
+(`10|60|140|235`-Bänder, Target-Luminance 0.5) liefert drei verschiedene
+Auto-Wert-Sätze, die sich **allein** durch den Zuschnitt unterscheiden, mit
+monoton fallender Exposure von hell nach dunkel:
+
+| Domäne | exposure | contrast | whites | blacks | highlights | shadows |
+| --- | --- | --- | --- | --- | --- | --- |
+| unbeschnitten | `0.34894830882107136` | `-0.08977777777777773` | `0.030078124999999956` | `-0.008984375000000003` | `-0.12734374999999998` | `0.04843750000000002` |
+| dunkle Hälfte | `1.850252880495318` | `0.8499332443257677` | `0.6370464672183322` | `-0.008984375000000003` | `0.30234375` | `0.30234375` |
+| helle Hälfte | `-0.5545888516776374` | `0.7579262213359921` | `0.030078124999999956` | `0.498828125` | `0.21445312500000002` | `0.21445312500000002` |
+
+Die SourceActions-Hälfte ist getrennt belegt
+(`crates/lumina-stages/src/auto_analysis_tests.rs`): eine Reparatur-Region im
+rechten Bildhälften-Drittel senkt p99 messbar und den Median von `0.392578125`
+auf `0.294921875`, und die Crop-Stufe läuft **nach** den SourceActions
+(nachgewiesen dadurch, dass eine Rechts-Hälften-Reparatur den gehaltenen
+Ausschnitt nicht erreicht).
+
+**Abweichung zum Exposure Matching, bewusst (F-041).** `match_total_exposure`
+misst auf dem **gerenderten** Ergebnis (`render_output.frame` in der CLI,
+`self.preview` in der GUI) — nach Adjustments, Crop und Masken, gewichtet mit den
+effektiven Masken-Ebenen. Das ist **kein** Versehen und wird hier als
+Entscheidung festgehalten: Das Matching addiert ein Delta auf die *wirksame*
+Exposure und ist auf dem Endzustand korrekt; Auto-Tone legt die Regler fest und
+würde in einer Domäne, die diese Regler enthält, von ihnen abhängen. Beide
+Wege treffen dieselbe Bildaussage, aber auf **verschiedenen, je dokumentierten**
+Domänen. Wer sie zusammenführen will, muss das als eigene Entscheidung mit
+Preis (die Rückkopplung) begründen.
+
+**Named boundary.** Lens (F-098) und Perspective (F-099) gehören **nicht** zur
+Analyse-Domäne. Die Crop-Stufe läuft deshalb mit `use_content_default = false`:
+das „maximaler Inhalt"-Rechteck ist auf der lens-/perspective-korrigierten
+Leinwand definiert und wäre auf diesem unkorrigierten Frame falsch — ein
+Rezept mit Linsenkorrektur **ohne** expliziten Crop misst daher das volle Bild,
+während der Render das Inhalts-Rechteck anwendet. Expliziter Crop, Rotation und
+Spiegelung sind in der Domäne; Generative Expand und Auto-Fill nicht
+(Modell-Artefakte).
+
+**Fingerprint.** `analysis_fingerprint` ist der blake3 über genau diese
+Analyse-Domäne zuzüglich Target-Luminance. Ein Rezept, das vor dieser Änderung
+auf dem unbearbeiteten Quellframe geschrieben wurde, gilt deshalb als **veraltet**
+und wird neu berechnet — kein stilles Weiterverwenden.
+
+### Die Messung
 
 Im Raster-MVP werden die RGBA8-RGB-Kanäle als sRGB-codierte Werte auf 0..=1
 normalisiert und mit Rec.709 (0.2126/0.7152/0.0722) gewichtet. Alpha wird

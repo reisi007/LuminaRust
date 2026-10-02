@@ -84,7 +84,7 @@ impl LuminaApp {
         // Resolve and apply repair regions at full source geometry before the
         // overview downscale; resolver/composite errors are logged and yield
         // the existing visible `Not current` state, never a raw approximation.
-        let source_actions = match self.resolve_current_source_actions(source) {
+        let source_actions = match self.resolve_current_source_actions(&self.recipe, source) {
             Ok(actions) => actions,
             Err(error) => {
                 warn!("navigator source-action resolution failed: {error}");

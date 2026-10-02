@@ -107,7 +107,7 @@ use lensfun_cli::build_lensfun_corrector;
 // `process_selected` for the file-size ratchet; the normative contract is
 // `feature/architecture/pipeline.md` § Auto-Tone.
 mod auto_tone_cli;
-use auto_tone_cli::{apply_explicit_slider_values, apply_preset_layer};
+use auto_tone_cli::{apply_explicit_slider_values, apply_preset_layer, AutoToneDomain};
 // MCP-PARITY-B: the Auto-Tone **write path** and the `regenerate` freshness
 // predicate moved to `crates/lumina-stages/src/auto_tone.rs`, because
 // `lumina-mcp` now reaches them through `lumina_regenerate op="auto_tone"` and
@@ -5998,10 +5998,18 @@ fn process_selected(
     if let Some(path) = args.preset.as_ref() {
         preset_sliders = apply_preset_layer(&mut recipe, path, auto_requested)?;
     }
+    // AUTO-TONE-ANALYSIS-INPUT-8: one source-action resolution shared by the
+    // analysis frame and the render below. AFTER the preset layer, which
+    // replaces `source_actions` wholesale — see `AutoToneDomain`.
+    let auto_domain = AutoToneDomain::resolve(&args.input, &recipe)?;
     if auto_requested {
+        // AUTO-TONE-ANALYSIS-INPUT-8: measure post SourceActions + post Crop
+        // (without Adjustments), not the raw decode — the same production seam
+        // the GUI uses, so CLI and GUI cannot drift onto different domains.
+        let analysis_frame = auto_domain.analysis_frame(&frame, &recipe)?;
         apply_auto_tone_result(
             &mut recipe,
-            &frame,
+            &analysis_frame,
             args.target_luminance,
             PersistedAutoTone::ReuseIfComplete,
             Some(&preset_sliders),
@@ -6014,11 +6022,8 @@ fn process_selected(
     // validates identity and decides whether to use it, re-infer, or fail.
     // R2-CLI-05: a corrupt bundle surfaces as an explicit warning through the
     // same channel as the other mask warnings instead of being silent.
-    let (zdata_path, loaded_planes) = {
-        let zdata_path = lumina_sidecar::zdata_path_for(&args.input);
-        let loaded_planes = load_persisted_mask_planes(&document, &zdata_path, mask_warnings_out);
-        (zdata_path, loaded_planes)
-    };
+    let loaded_planes =
+        load_persisted_mask_planes(&document, auto_domain.zdata_path(), mask_warnings_out);
 
     // F-082-FOLLOWUP: wire the ONNX inference engine into the F-048/F-051
     // decision layer. Default builds wire the deterministic StubBackend; with
@@ -6056,10 +6061,8 @@ fn process_selected(
         &frame,
     )?;
     // Main render via the shared entry point (SourceActions → Adjustments →
-    // Masks).  F-042-N1: the recipe's persisted source actions are resolved
-    // from the `.lumina.zdata` bundle (missing or checksum-mismatched artifacts
-    // are reported loudly, never silently dropped).
-    let source_actions = resolve_source_actions(&recipe, &zdata_path)?;
+    // Masks).  F-042-N1: the recipe's persisted source actions were resolved
+    // above (shared with the Auto-Tone analysis frame).
     let active_copy = document.virtual_copies[copy_index].clone();
     // `resolved.planes` is owned by `MaskContext`, so clone once and reuse it for
     // both the warning render and the final shared encode render below.
@@ -6067,7 +6070,7 @@ fn process_selected(
     let render_ctx = RenderContext {
         recipe: &recipe,
         camera_white_balance: wb,
-        source_actions: &source_actions,
+        source_actions: auto_domain.source_actions(),
         masks: Some(MaskContext {
             copies: &resolved.copies,
             active_copy_id: &active_copy.id,
@@ -6095,8 +6098,8 @@ fn process_selected(
         &frame,
         &recipe,
         wb,
-        &source_actions,
-        &zdata_path,
+        auto_domain.source_actions(),
+        auto_domain.zdata_path(),
         #[cfg(feature = "lensfun")]
         lensfun_corrector.as_ref().map(LensfunCorrectorRef),
         #[cfg(not(feature = "lensfun"))]
@@ -6161,7 +6164,7 @@ fn process_selected(
             &RenderContext {
                 recipe: &recipe,
                 camera_white_balance: wb,
-                source_actions: &source_actions,
+                source_actions: auto_domain.source_actions(),
                 masks: Some(MaskContext {
                     copies: &resolved.copies,
                     active_copy_id: &active_copy.id,

@@ -7124,7 +7124,7 @@ impl LuminaApp {
         }
         // GUI-SRCACC-1: generative inputs are downstream of SourceActions and
         // must observe the same repaired pixels as preview/export.
-        let source_actions = match self.resolve_current_source_actions(&frame) {
+        let source_actions = match self.resolve_current_source_actions(&self.recipe, &frame) {
             Ok(actions) => actions,
             Err(error) => {
                 self.invalidate_source_action_preview();
@@ -9325,9 +9325,17 @@ impl LuminaApp {
 
     pub fn auto_tone(&mut self) -> Result<(), GuiError> {
         instrument_gui_action!(self, GuiAction::AutoTone);
-        let Some(frame) = self.original.clone() else {
+        // Preserve the historic contract of this entry: the Auto button without a
+        // loaded image is a silent no-op, not an error (the button is disabled in
+        // that state anyway).
+        if self.original.is_none() {
             return Ok(());
-        };
+        }
+        // AUTO-TONE-ANALYSIS-INPUT-8: measure the ANALYSIS DOMAIN (post
+        // SourceActions + post Crop, without Adjustments), not the raw decode.
+        // `auto_analysis_frame` is the shared production seam the CLI and
+        // `regenerate` use, so both front ends measure the same pixels.
+        let frame = self.auto_analysis_frame()?;
         // AUTO-TONE-CLI-6 clause (1): THIS IS THE SHARED WRITER. The GUI used to
         // carry its own copy of the six sliders, the six mirrors and the fingerprint,
         // with the algorithm as a hand-copied string literal. WITHDRAWN, because this
@@ -10011,13 +10019,28 @@ impl LuminaApp {
                             target_luminance: candidate.auto_features.target_luminance,
                             ..Default::default()
                         };
-                        let fingerprint =
-                            tone_fingerprint(self.original.as_ref().expect("loaded frame"), config);
-                        let valid = candidate
-                            .auto_features
-                            .analysis_fingerprint
-                            .as_ref()
-                            .is_some_and(|stored| is_current_tone_analysis(stored, &fingerprint));
+                        // AUTO-TONE-ANALYSIS-INPUT-8: the freshness check must
+                        // measure the SAME analysis domain the writer did (post
+                        // SourceActions + post Crop), against the CANDIDATE
+                        // recipe — otherwise a freshly auto-toned sidecar would
+                        // look stale on every reload. An analysis frame that
+                        // cannot be built proves nothing, so the state counts as
+                        // not-fresh (the conservative direction: the values are
+                        // recomputed) and the authoritative render below still
+                        // reports the underlying bundle problem loudly.
+                        let fingerprint = self
+                            .auto_analysis_frame_for(&candidate)
+                            .ok()
+                            .map(|frame| tone_fingerprint(&frame, config));
+                        let valid = fingerprint.is_some_and(|fingerprint| {
+                            candidate
+                                .auto_features
+                                .analysis_fingerprint
+                                .as_ref()
+                                .is_some_and(|stored| {
+                                    is_current_tone_analysis(stored, &fingerprint)
+                                })
+                        });
                         self.recipe = candidate;
                         // LRPAR-G01-BASIC: the persisted recipe is the new
                         // Previous baseline (panel-Previous = last saved state).
@@ -10531,7 +10554,7 @@ impl LuminaApp {
                 .original
                 .as_ref()
                 .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
-            match self.resolve_current_source_actions(original) {
+            match self.resolve_current_source_actions(&self.recipe, original) {
                 Ok(actions) => actions,
                 Err(error) => {
                     self.invalidate_source_action_preview();
@@ -11888,6 +11911,13 @@ mod tests {
     // auto-tone contract. Differential (GUI vs. the shared writer) plus the
     // structural guard that a second hand-copied algorithm literal cannot return.
     mod auto_tone_contract;
+    // AUTO-TONE-ANALYSIS-INPUT-8: the Auto-Tone measurement domain (post
+    // SourceActions + post Crop, without Adjustments) proven with numbers
+    // through the real `auto_tone` entry point.
+    mod auto_tone_analysis_domain;
+    // AUTO-TONE-ANALYSIS-INPUT-8: the SourceActions half of that domain (the
+    // retouched measurement) plus the reload behaviour when it cannot be built.
+    mod auto_tone_analysis_source_actions;
     // AUTO-TONE-CLI-6 clause (2): split out of `g16_shortcuts` for the 500-line
     // ratchet — the keyboard mappings stay there, the state the G-16 end point
     // leaves in the recipe is its own concern.
