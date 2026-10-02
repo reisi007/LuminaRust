@@ -16,8 +16,14 @@
 //!   report a success for a canvas that could not be produced or resolved;
 //! * **silent-degrade** (the bug class MCP-PARITY-A found twice) — a write op
 //!   that names no value must be a refusal, never a successful read. Each such
-//!   case names the guard it exercises, and
-//!   [`deleting_the_value_guard_makes_the_test_fail`] documents the mutation.
+//!   case names the guard it exercises. The **mutation recipe** is: deleting the
+//!   `require_value(...)?` call in the tool (e.g. `collections.rs` or
+//!   `generative.rs`) turns the call into a successful read; the guard itself is
+//!   pinned end-to-end by
+//!   `library_parity_errors_artefact.rs::a_write_op_without_its_value_is_refused_rather_than_a_no_op`
+//!   and by `library_tools.rs`/`library_tools_gate.rs`. **Measured (2026-10-02):**
+//!   removing that call makes those tests red, so the guard is mutation-proven
+//!   on the production path and not merely asserted.
 
 // Each parity test binary uses a part of the shared harness, so the module is
 // declared with `dead_code` allowed: an unused helper here is a helper another

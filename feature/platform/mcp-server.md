@@ -1115,6 +1115,30 @@ generativer Rolle", ein Test je Write-op-ohne-Wert, ein Registry-Test über
 Schema-Tests (unbekanntes Feld abgewiesen, Pflichtfelder erzwungen,
 `image_id` **nicht** erforderlich) und `cargo test -p lumina-mcp --all-targets`.
 
+**Mutationsnachweise (2026-10-02, am laufenden Test nachgemessen, nicht
+behauptet):**
+
+- **Registry/`dispatch_tool`.** Der Registry-Test
+  (`crates/lumina-mcp/tests/library_tools.rs::all_five_library_tools_are_registered_in_both_paths`)
+  prüft den Dispatch am **Ergebnis**, nicht nur am Fehlen eines
+  Transport-Fehlers. Ein gelistetes Tool ohne Dispatch-Arm läuft an
+  `is_known_tool` vorbei (also **kein** JSON-RPC-`error`-Objekt) und kommt als
+  Tool-Ausführungsfehler mit `structuredContent.error == "MethodNotFound"`
+  zurück; der **einzige** Konstruktor dieser Variante ist der
+  `dispatch_tool`-Fallthrough. Entfernt man den `relocate`-Arm
+  (`relocate::NAME => relocate::run(server, args)`), wird der Test **rot**; die
+  frühere, schwächere Fassung (nur `response.get("error").is_none()`) blieb
+  dabei **grün** und war damit für einen toten, aber gelisteten Tool-Pfad
+  blind. `is_known_tool` und `tools/list` werden weiterhin in beiden
+  Richtungen gepinnt.
+- **Wert-Guard („kein stiller No-op").** Das Entfernen von
+  `require_value(...)?` in `collections.rs` (Membership/Id) bzw.
+  `generative.rs` (Canvas/aktive Rolle) macht
+  `crates/lumina-cli/tests/library_parity_errors_artefact.rs::a_write_op_without_its_value_is_refused_rather_than_a_no_op`
+  und `crates/lumina-mcp/tests/library_tools.rs::a_refused_library_call_never_writes` (Z. 248)
+  **rot**. Der Guard ist also am Produktionspfad mutationsbewiesen, nicht bloß
+  zugesichert.
+
 ### Metadaten-Schnittstelle (LRPAR-G15-IPTC — umgesetzt, S7 BESTANDEN)
 
 Der MCP-Server erhält fünf **pfadbasierte** Metadaten-Tools (Muster der

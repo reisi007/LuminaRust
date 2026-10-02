@@ -30,6 +30,20 @@ use support::*;
 
 /// Every tool is in `list_tool_definitions` **and** in `dispatch_tool`, and
 /// `is_known_tool` agrees with both.
+///
+/// The `dispatch_tool` half must be asserted on the **result**, not only on the
+/// absence of a transport error. A name that is listed but whose `dispatch_tool`
+/// arm was deleted is still accepted by `is_known_tool`, so `handle_message`
+/// produces **no** JSON-RPC `error` object; the missing arm surfaces as a tool
+/// *execution* error inside the result with `structuredContent.error ==
+/// "MethodNotFound"` (the sole constructor of that variant is the
+/// `dispatch_tool` fall-through at `tools/mod.rs`). A check that only reads
+/// `response.get("error").is_none()` therefore stays green on a dead tool.
+///
+/// **Measured mutation (2026-10-02):** deleting
+/// `relocate::NAME => relocate::run(server, args)` from `dispatch_tool` left the
+/// weaker form green and makes this test red — which is exactly why the
+/// `MethodNotFound` sentinel is named explicitly below.
 #[test]
 fn all_five_library_tools_are_registered_in_both_paths() {
     let definitions = list_tool_definitions();
@@ -60,6 +74,18 @@ fn all_five_library_tools_are_registered_in_both_paths() {
         assert!(
             response.get("error").is_none(),
             "{name} is listed but dispatch_tool does not know it: {response}"
+        );
+        // A registered tool whose dispatch arm was deleted is not answerable on
+        // the protocol either: `is_known_tool` lets the call through and the
+        // missing arm yields `MethodNotFound` inside the *result*. Naming that
+        // sentinel is what makes a deleted arm fail this test — the
+        // `response.get("error").is_none()` check above cannot, because a tool
+        // execution error is a result, not a transport error.
+        assert_ne!(
+            response["result"]["structuredContent"]["error"],
+            json!("MethodNotFound"),
+            "{name} is in list_tool_definitions but has no dispatch_tool arm \
+             (a listed-but-dead tool): {response}"
         );
     }
 }

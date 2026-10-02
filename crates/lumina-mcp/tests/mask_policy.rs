@@ -279,7 +279,7 @@ fn spawn_server(preview_dir: &Path) -> (Child, BufReader<ChildStdout>) {
 }
 
 #[test]
-fn preview_renders_without_masks_even_when_the_sidecar_carries_a_valid_one() {
+fn preview_applies_the_persisted_mask_that_the_cli_applies() {
     let root = tempfile::tempdir().unwrap();
     let (frame, document, zdata_path) = fixture(root.path());
     let no_mask = no_mask_oracle(&frame, &document);
