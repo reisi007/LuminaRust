@@ -1868,15 +1868,29 @@ die der Workspace linkt:**
 | kanonische Form + blake3-Digest dieser 43 Dokumente | — | **unverändert** (0 von 43) |
 | 40-Mitglieder-Fixture-Familie, 240 Auto-Tone-Literale, Läufe 1→2→3 | 44 Drift in Lauf 1→2 | **0 Drift** in beiden Übergängen |
 
-**Warum kein committetes Byte betroffen war.** Der Verlust trat nur auf, wenn
-die kürzeste Dezimaldarstellung eines Werts **mindestens 17 signifikante
-Stellen** braucht — dann ist der `u64`-Signifikant größer als 2^53 und wird als
-`f64` nicht exakt gehalten (`serde_json/src/de.rs:638`,
-`#[cfg(not(feature = "float_roundtrip"))] f64_from_parts`); ebenso ab einem
-Skalierfaktor `10^|exp|` oberhalb von 22. Kurzstellige Reglerliterale
-(≤ 16 signifikante Stellen) überlebten den Round-Trip auch ohne das Feature.
-Verloren gehen konnte daher nur **berechnetes** `f64` — weshalb die
-Auto-Tone-Spiegel rund 2,5× so oft betroffen waren wie ein gleichverteilter Zug.
+**Warum kein committetes Byte betroffen war.** Der Verlust tritt auf, wenn der
+`u64`-Signifikant **größer als 2^53** ist und deshalb als `f64` nicht mehr exakt
+gehalten wird (`serde_json/src/de.rs:638`,
+`#[cfg(not(feature = "float_roundtrip"))] f64_from_parts`), oder wenn der
+Skalierfaktor `10^|exp|` in `f64` nicht exakt ist (`|exp| > 22`). **Nicht** die
+Stellenzahl ist die Bedingung: die Fassung dieses Absatzes, die „mindestens 17
+signifikante Stellen" als Grenze nannte, ist an der Fundstelle zurückgenommen
+(DoD §9) — eine Nachmessung über 2.000.000 Samples desselben splitmix64-Zugs
+(`[−10, 10]`) gegen einen echten Feature-aus-Build von `serde_json` 1.0.151 hat
+sie widerlegt: ≤ 15 signifikante Stellen **nie** verlustbehaftet (0 von
+180.915); **16-stellige Signifikanten oberhalb 2^53** (oberhalb
+`9007199254740992`) verloren ebenfalls — 63.278 von 1.302.251 = **4,86 %**;
+17-stellige verloren mit 93.658 von 516.833 = **18,12 %** am häufigsten. 17
+Stellen **implizieren** die Klasse (≥ 10^16 > 2^53), sie sind nicht ihre
+Grenze. Die Wachen `significant_digits(..) >= 17` in
+`crates/lumina-cli/src/tests/auto_tone_float.rs` bilden eine **echte
+Teilmenge** der Klasse und können deshalb nur unterzählen — fail-safe in die
+konservative Richtung. Kurzstellige Reglerliterale überlebten den Round-Trip
+ohne das Feature nur, solange ihr Signifikant **≤ 2^53** blieb. Was für die
+committeten Dateien zählt, ist die Messung — **0** verlustbehaftete von 5.236
+Literalen —, nicht die Stellenzahl. Die Auto-Tone-Spiegel blieben mit 18,3 %
+rund 2,5× so oft betroffen wie ein gleichverteilter Zug (7,9 %); auch das ist
+Messung, nicht Regel.
 
 **Was damit neu gilt.** Die Reuse-Branch von `apply_auto_tone_result` liefert
 für alle sechs Spiegel bitidentisch das, was der Algorithmus berechnet hat; zwei

@@ -13,8 +13,15 @@
 //!   (7.90 %)** lossy by exactly 1 ULP with the feature off, **0** with it on
 //!   (throwaway harness, same `serde_json` 1.0.151 the tests link),
 //! * 43 tracked JSON documents in the workspace (5236 float literals) —
-//!   **0** lossy before and after, because a hand-set slider literal has ≤ 16
-//!   significant digits and that class never lost a bit.
+//!   **0** lossy before and after. The reason quoted here first ("a hand-set
+//!   slider literal has ≤ 16 significant digits and that class never lost a
+//!   bit") is **withdrawn** (verification round 2026-10-12): the true loss
+//!   condition is a `u64` **significand above 2^53** (or `10^|exp|` inexact,
+//!   `|exp| > 22`), and 16-digit significands above 2^53 lost a bit as well —
+//!   63,278 of 1,302,251 = 4.86 % over 2,000,000 samples of the same draw
+//!   (0 of 180,915 at ≤ 15 digits; 93,658 of 516,833 = 18.12 % at 17 digits).
+//!   What stands is the measurement: none of the 5,236 literals lost a bit,
+//!   in either build.
 //!
 //! **History, kept on purpose.** The previous build (feature off, measured
 //! 2026-09-26) lost 1 ULP on 7.45 % (linear grid, 200,000 samples) / 7.90 %
@@ -129,8 +136,12 @@ fn no_value_in_the_slider_domain_loses_a_bit() {
 /// picked up by the reuse path and comes back bit-identical — the other five
 /// mirrors and the fingerprint are untouched too, and the recipe still fresh
 /// afterwards. This is the case the byte-golden fixture deliberately avoids:
-/// the value cannot be written with fewer than 17 significant digits, which is
-/// the class that lost a bit in the feature-off build.
+/// the value cannot be written with fewer than 17 significant digits, which
+/// **implies** the loss condition (`u64` significand > 2^53) — a member of
+/// the class, not the class itself: 16-digit significands above 2^53 lost a
+/// bit as well (63,278 of 1,302,251 = 4.86 % of 2,000,000 samples of the
+/// same draw; 17-digit ones 93,658 of 516,833 = 18.12 %), so the guards that
+/// read `>= 17` are a **narrower** set and can only undercount the class.
 #[test]
 fn a_seventeen_digit_mirror_is_reused_bit_identically() {
     let directory = tempfile::tempdir().unwrap();
@@ -199,9 +210,14 @@ fn three_runs(k: u32) -> (Vec<Vec<u8>>, [[String; 6]; 3]) {
 }
 
 /// How many significant decimal digits a literal carries. A value whose
-/// shortest representation needs **17** of them cannot have its significand
-/// held exactly in `f64` (`u64` significand > 2^53), which is precisely the
-/// class that lost a bit in the feature-off build — so this is a cheap,
+/// shortest representation needs **17** of them carries a `u64` significand
+/// above 2^53 (≥ 10^16), so it sits **inside** the true loss class — the class
+/// is wider, though: a 16-digit significand above 2^53 lost a bit too (63,278
+/// of 1,302,251 = 4.86 % over 2,000,000 samples of the same draw, against
+/// 93,658 of 516,833 = 18.12 % at 17 digits; the condition itself is
+/// significand > 2^53, or `10^|exp|` inexact for `|exp| > 22`). A `>= 17`
+/// guard is a **narrower** set than the class, so it can only undercount,
+/// fail-safe in the conservative direction. The measure stays a cheap,
 /// independent witness that the family still sits on the boundary and the
 /// assertion below is not passing over a fixture that left it.
 fn significant_digits(literal: &str) -> usize {
@@ -216,8 +232,9 @@ fn significant_digits(literal: &str) -> usize {
 /// slider values).
 ///
 /// The test is **not vacuous**: it also asserts that the family still contains
-/// literals from the lossy class (≥ 17 significant digits), so "no drift"
-/// cannot pass by never exercising the boundary.
+/// literals from inside the loss class, witnessed by the sufficient ≥ 17
+/// significant digits (`u64` significand > 2^53) — the class is wider than
+/// the guard, so "no drift" cannot pass by never exercising the boundary.
 #[test]
 fn three_runs_write_the_same_literals() {
     let mut values = 0u32;

@@ -19,14 +19,30 @@
 //! but the count that was quoted to show it was **wrong** and is corrected
 //! here instead of quietly dropped: five of the six literals need ≤ 16
 //! significant digits, the highlights value `0.16386718750000007` needs
-//! **17**. That does not move the conclusion, because 17 significant digits is
-//! the *necessary* condition for the 1-ULP loss (a `u64` significand above
-//! 2^53), never the sufficient one — all six literals round-trip exactly in
-//! **both** builds, in memory and after a `save`/`load` round trip, so the
-//! pinned goldens were never at risk. That is now an observation, not a
-//! requirement the test depends on. The boundary itself is pinned in
-//! `auto_tone_float.rs`, which also carries the values that *did* lose a bit
-//! before 2026-10-02.
+//! **17**. That does not move the conclusion — and the **loss rule that was
+//! quoted to justify it is itself wrong and is corrected here** (verification
+//! round, same day, reopened at the finding site): the 1-ULP loss happens
+//! once the **decimal significand exceeds 2^53** (a `u64` significand `f64`
+//! cannot hold exactly) or once `10^|exp|` stops being exact (`|exp| > 22`) —
+//! **not** once a value needs 17 significant digits. Measured over 2,000,000
+//! samples of this same splitmix64 draw against a real feature-off build of
+//! `serde_json` 1.0.151: at ≤ 15 significant digits **nothing** lost (0 of
+//! 180,915); 16-digit significands above 2^53 lost as well (63,278 of
+//! 1,302,251 = 4.86 %, e.g. `-9.936999806814127` → `-9.936999806814129`);
+//! 17-digit ones lost most (93,658 of 516,833 = 18.12 %). 17 significant
+//! digits therefore **implies** the loss class (≥ 10^16 > 2^53), it is not
+//! its boundary. Every guard this workspace reads
+//! (`significant_digits(..) >= 17`) is a **narrower** set than the true loss
+//! class: it can only undercount, i.e. it is fail-safe in the conservative
+//! direction — exactly why no test depends on the digit count being the
+//! boundary. The two 16-digit literals of this fixture were never at risk
+//! anyway: their significands (`8810589272764926`, `6533260183788233`) are
+//! **below** 2^53, so they sit outside the class — and all six literals
+//! round-trip exactly in **both** builds, in memory and after a
+//! `save`/`load` round trip, so the pinned goldens were never at risk. That
+//! is now an observation, not a requirement the test depends on. The boundary
+//! itself is pinned in `auto_tone_float.rs`, which also carries the values
+//! that *did* lose a bit before 2026-10-02.
 //!
 //! The six auto values of this fixture at `target_luminance = 0.5` are
 //! `0.8810589272764926`, `0.6533260183788233`, `0.4423828125`,

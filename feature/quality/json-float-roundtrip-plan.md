@@ -84,12 +84,26 @@ eintritt, wenn
   `9007199254740992`), **oder**
 * der Skalierfaktor `10^|exp|` in `f64` nicht exakt ist (`|exp| > 22`).
 
-Kurze Dezimalliterale mit ≤ 16 signifikanten Stellen — und genau solche schreibt
-der Serialisierer für einen **von Hand gesetzten Reglerwert** — überstehen den
-Round-Trip auch ohne das Feature. Verloren gehen nur **berechnete** `f64`, deren
-kürzeste Darstellung ≥ 17 signifikante Stellen hat. Das ist auch der Grund,
-warum die Auto-Tone-Spiegel (berechnet) mit 18,3 % betroffen sind, ein
-Slider-Domain-Zug aber nur mit ~7,9 %.
+Die Bedingung steht in den beiden Zeilen davor — Signifikant > 2^53 bzw.
+inexaktes `10^|exp|` — und **nicht** die Stellenzahl; die Fassung an dieser
+Stelle („kurze Dezimalliterale mit ≤ 16 signifikanten Stellen … überstehen den
+Round-Trip", „verloren gehen nur berechnete `f64`, deren kürzeste Darstellung
+≥ 17 signifikante Stellen hat") widerspricht den eigenen Zeilen davor und ist
+an der Fundstelle zurückgenommen (DoD §9). Nachgemessen über 2.000.000 Samples
+desselben splitmix64-Zugs (`[−10, 10]`) gegen einen echten Feature-aus-Build
+von `serde_json` 1.0.151: ≤ 15 signifikante Stellen **nie** verlustbehaftet (0
+von 180.915); **16-stellige Signifikanten oberhalb 2^53** (oberhalb
+`9007199254740992`) verloren ebenfalls — 63.278 von 1.302.251 = **4,86 %**
+(z. B. `0.9126441839803001` → `0.9126441839803`); 17-stellige verloren mit
+93.658 von 516.833 = **18,12 %** am häufigsten. 17 Stellen **implizieren** die
+Klasse (≥ 10^16 > 2^53), sie sind nicht ihre Grenze; die Wachen
+`significant_digits(..) >= 17` in `auto_tone_float.rs` sind eine **echte
+Teilmenge** der Klasse und unterzählen sie deshalb nur — fail-safe in die
+konservative Richtung. Dass die 43 committeten Dokumente (5.236 Literale)
+**kein** verlustbehaftetes Literal enthielten, ist damit Messung
+(`FLOAT_SUMMARY lost=0`), keine Folge der Stellenzahl. Die Auto-Tone-Spiegel
+(berechnet) blieben mit 18,3 % rund 2,5× so häufig betroffen wie ein
+gleichverteilter Zug (~7,9 %) — ebenfalls Messung, nicht Regel.
 
 ### 2.2 Reproduktion des Verlusts (rot vor dem Fix)
 
@@ -126,7 +140,7 @@ entscheidend — entscheidend ist, dass der Verlust **vorher vorhanden** und
 | Goldens PNG (`testdata/matrix/golden/`, 22 Dateien) | Render-Ergebnis | **keine** — `git status --porcelain` nach dem Flip zeigt das Verzeichnis unverändert; die Matrix-Suite ist grün. Nachgezählt in der Verifikationsrunde (2026-10-12): das Verzeichnis hält **22** PNGs, der ganze Workspace **114** getrackte PNGs (`git ls-files '*.png'`) — keines davon ist nach dem Flip verändert |
 | kittest-Goldens / `scripts/golden_ref.lock` | 66 Goldens, lokales macOS-Gate | **nicht ausführbar hier** — `golden_ref.sh check` exit **1**, gemeldete Abweichung „this machine is not the pinned golden reference platform" (`os.name=Linux` vs. `macOS`, `gpu.adapter=unavailable` vs. `Apple M5 Pro`). Benanntes Gate, siehe §5 |
 | Digest-Literale im Code | `grep -rn "blake3:[0-9a-f]\{16,\}" --include=*.rs crates/` → **0** | **keine** einzutragende Neuerwartung |
-| zur Laufzeit geschriebene Sidecars (`.lumina.json`, gitignored) | nicht committet | betroffen sind ausschließlich Auto-Tone-Spiegel und berechnete Mask-Lokal-Skalare, deren kürzeste Form ≥ 17 signifikante Stellen hat. Das ist eine **Eigenschaft der Datei auf der Anwender-Platte**, nicht des Repositorys |
+| zur Laufzeit geschriebene Sidecars (`.lumina.json`, gitignored) | nicht committet | betroffen sind ausschließlich berechnete Werte (Auto-Tone-Spiegel, berechnete Mask-Lokal-Skalare), deren kürzeste Form einen `u64`-Signifikanten **> 2^53** hat — bei 16 Stellen oberhalb `9007199254740992`, nicht erst ab 17 Stellen. Das ist eine **Eigenschaft der Datei auf der Anwender-Platte**, nicht des Repositorys |
 
 **Ergebnis 2: das Repository hat keinen einzigen neuen Golden aufzunehmen.**
 Die einzigen Dateien, die sich ändern, sind die Test-Module, die den **Verlust
@@ -213,10 +227,15 @@ Digest  cc665d46f5d072f34e6d92ad52a9356e9d4e8f2745934341f5a85baad6c6d7da
 ```
 
 Auffällig und ehrlich festgehalten: die **übrigen** 17-stelligen Literale des
-Dokuments verloren keinen Bit. 17 signifikante Stellen sind die **notwendige**
-Bedingung für den Verlust, nicht die hinreichende. Die beiden Werte mit
-Provenienz (gemessen verlustbehaftet am 2026-09-26) sind deshalb Korpus, nicht
-Statistik.
+Dokuments verloren keinen Bit — in der Verlustklasse zu sein heißt nicht, zu
+verlieren. Die Fassung, 17 signifikante Stellen seien die **notwendige**
+Bedingung, ist zurückgenommen (DoD §9): die Klasse ist der `u64`-Signifikant
+> 2^53 (bzw. inexaktes `10^|exp|`), und 16-stellige Signifikanten oberhalb 2^53
+verloren ebenfalls — 63.278 von 1.302.251 = **4,86 %** über 2.000.000 Samples
+desselben Zugs, gegen 93.658 von 516.833 = **18,12 %** bei 17 Stellen. 17
+Stellen **implizieren** die Bedingung, sie sind nicht ihre Grenze. Die beiden
+Werte mit Provenienz (gemessen verlustbehaftet am 2026-09-26) sind deshalb
+Korpus, nicht Statistik.
 
 ---
 
@@ -247,9 +266,10 @@ Zwei neue Wächter gegen Vakuosität, weil „alles drei Läufe gleich" sonst au
 einem Fixture bestehen könnte, das die Grenze verlassen hat:
 
 * `three_runs_write_the_same_literals` zählt, wie viele der 240 Literale
-  **mindestens 17 signifikante Dezimalstellen** brauchen, und besteht auf
-  `> 0`. Ohne diesen Zweig könnte die Familie degenerieren und der Test würde
-  weiterhin grün bleiben.
+  **mindestens 17 signifikante Dezimalstellen** brauchen (der hinreichende
+  Zeuge der Verlustklasse: Signifikant > 2^53; die Klasse selbst ist weiter,
+  die Wachen unterzählen sie nur), und besteht auf `> 0`. Ohne diesen Zweig
+  könnte die Familie degenerieren und der Test würde weiterhin grün bleiben.
 * `the_rendered_output_stays_byte_stable_...` besteht ebenfalls darauf, dass
   mindestens ein Familienmitglied ein Literal aus der Verlustklasse trägt.
 
@@ -297,7 +317,11 @@ Literal wurde von Hand gesetzt. Die frühere Fassung behauptete, **kein** Litera
 sei von Hand geraten; diese Aussage ist zurückgenommen, nicht stillschweigend
 ersetzt. Was das Korpus trägt, ist die geprüfte Klasseneigenschaft: alle 20
 Literale sind der Text, den serde_json eigener Serialisierer schreibt, und
-brauchen **genau** 17 signifikante Stellen.
+brauchen **genau** 17 signifikante Stellen — was die Verlustbedingung
+(`u64`-Signifikant > 2^53) **impliziert**, ohne ihre Grenze zu sein: die
+Klasse ist weiter (16 Stellen oberhalb 2^53 verlieren ebenfalls, gemessen
+63.278 von 1.302.251 = 4,86 %), und die `>= 17`-Wachen sind eine echte
+Teilmenge, unterzählen also nur — fail-safe in die konservative Richtung.
 
 **Eine Korrektur an meiner eigenen ersten Fassung:** die erste Version dieses
 Tests enthielt handgesetzte Literale. Clippy wies zwei davon zurück

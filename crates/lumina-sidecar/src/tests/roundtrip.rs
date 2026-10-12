@@ -217,14 +217,24 @@ fn auto_features_roundtrip_with_result_and_fingerprint() {
 // every persisted `f64` survives a `save` -> `load` -> `save` cycle
 // bit-identically, and no digest over the serialized bytes moves.
 //
-// The values are pinned as **literals** on purpose: the only class that
-// ever lost a bit is one whose shortest decimal representation needs
-// **17 significant digits** (a `u64` significand above 2^53 cannot be
-// held exactly in `f64`, and `10^|exp|` stops being exact beyond 22).
-// A literal that needs fewer digits would pass even without the
-// feature — that is what made the class invisible for so long. The
-// two marked `measured lossy 2026-09-26` are the very values the
-// feature-off build dropped 1 ULP on, carried over from
+// The values are pinned as **literals** on purpose, at the measured boundary
+// and no further: the 1-ULP loss happens once the `u64` significand exceeds
+// 2^53 (a significand `f64` cannot hold exactly) or once `10^|exp|` stops
+// being exact (`|exp| > 22`) — **not** once a literal needs 17 significant
+// digits. Measured over 2,000,000 samples of this same splitmix64 draw
+// against a real feature-off build of `serde_json` 1.0.151: at ≤ 15
+// significant digits **nothing** lost (0 of 180,915); 16-digit significands
+// above 2^53 lost as well (63,278 of 1,302,251 = 4.86 %, e.g.
+// `0.9126441839803001` → `0.9126441839803`); 17-digit ones lost most (93,658
+// of 516,833 = 18.12 %). 17 significant digits therefore **implies** the loss
+// class (≥ 10^16 > 2^53), it does not define it. These six mirrors and the
+// corpus further down need exactly 17 significant digits, so each of them
+// sits inside the class by the sufficient witness; the guards in
+// `auto_tone_float.rs` (`significant_digits(..) >= 17`) read a **narrower**
+// set than the true class and can only undercount it — fail-safe in the
+// conservative direction, which is why no assertion here stands on the digit
+// count being the boundary. The two marked `measured lossy 2026-09-26` are
+// the very values the feature-off build dropped 1 ULP on, carried over from
 // `crates/lumina-cli/src/tests/auto_tone_float.rs`.
 // =====================================================================
 
@@ -259,7 +269,14 @@ const MIRROR_LOSS_VALUES: [(&str, f64); 6] = [
 /// corpus actually rests on, and what is verified, is the class property:
 /// every one of the 20 literals is the text `serde_json`'s own serializer
 /// writes (the shortest round-tripping form) and needs exactly 17 significant
-/// digits — the class that lost a bit.
+/// digits — which **implies** the loss condition (`u64` significand > 2^53, or
+/// `10^|exp|` inexact for `|exp| > 22`) without being that condition: the
+/// true loss class is wider, 16-digit significands above 2^53 lost a bit too
+/// (measured 63,278 of 1,302,251 = 4.86 %, against 93,658 of 516,833 =
+/// 18.12 % at 17 digits, over 2,000,000 samples of the same splitmix64 draw).
+/// The `>= 17` guards are therefore a **narrower** set than the class they
+/// witness: they can only undercount it, i.e. they fail safe in the
+/// conservative direction, and nothing here may lean on them as the boundary.
 const LOCAL_LOSS_VALUES: [(&str, f64); 8] = [
     ("exposure", -0.20253906249999998), // measured lossy 2026-09-26
     ("contrast", 0.013476562499999997), // measured lossy 2026-09-26
