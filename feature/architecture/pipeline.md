@@ -1883,9 +1883,16 @@ sie widerlegt: ≤ 15 signifikante Stellen **nie** verlustbehaftet (0 von
 17-stellige verloren mit 93.658 von 516.833 = **18,12 %** am häufigsten. 17
 Stellen **implizieren** die Klasse (≥ 10^16 > 2^53), sie sind nicht ihre
 Grenze. Die Wachen `significant_digits(..) >= 17` in
-`crates/lumina-cli/src/tests/auto_tone_float.rs` bilden eine **echte
-Teilmenge** der Klasse und können deshalb nur unterzählen — fail-safe in die
-konservative Richtung. Kurzstellige Reglerliterale überlebten den Round-Trip
+`crates/lumina-cli/src/tests/auto_tone_float.rs` zählen **alle** ASCII-Ziffern
+einschließlich der des Exponenten; sie sind deshalb nur für Literale in
+reiner Dezimalschreibweise (ohne Exponent) eine **echte Teilmenge** der Klasse
+— und nur solche schreibt der Serialisierer für die hier gepinnten Werte (per
+Grep belegt: kein gepinntes Literal nutzt Exponentialschreibweise). In
+Exponentialschreibweise könnten sie weiter zählen als die Klasse ist
+(`1234567890123456e-1` → Zähler 17, Signifikant 16 Stellen unterhalb 2^53
+— ein Wert außerhalb der Klasse). Wo sie eingesetzt
+werden, unterzählen sie die Klasse deshalb nur — fail-safe in die konservative
+Richtung. Kurzstellige Reglerliterale überlebten den Round-Trip
 ohne das Feature nur, solange ihr Signifikant **≤ 2^53** blieb. Was für die
 committeten Dateien zählt, ist die Messung — **0** verlustbehaftete von 5.236
 Literalen —, nicht die Stellenzahl. Die Auto-Tone-Spiegel blieben mit 18,3 %

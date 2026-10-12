@@ -230,8 +230,13 @@ fn auto_features_roundtrip_with_result_and_fingerprint() {
 // class (≥ 10^16 > 2^53), it does not define it. These six mirrors and the
 // corpus further down need exactly 17 significant digits, so each of them
 // sits inside the class by the sufficient witness; the guards in
-// `auto_tone_float.rs` (`significant_digits(..) >= 17`) read a **narrower**
-// set than the true class and can only undercount it — fail-safe in the
+// `auto_tone_float.rs` (`significant_digits(..) >= 17`) count all ASCII
+// digits (exponent digits included), so they are a subset of the class only
+// for plain-notation literals — the only notation these corpora use
+// (grep-verified; in exponent notation they could count wider, e.g.
+// `1234567890123456e-1` counts 17 on a 16-digit significand below 2^53,
+// i.e. outside the class). Where they
+// are used they therefore only undercount the class — fail-safe in the
 // conservative direction, which is why no assertion here stands on the digit
 // count being the boundary. The two marked `measured lossy 2026-09-26` are
 // the very values the feature-off build dropped 1 ULP on, carried over from
@@ -274,9 +279,14 @@ const MIRROR_LOSS_VALUES: [(&str, f64); 6] = [
 /// true loss class is wider, 16-digit significands above 2^53 lost a bit too
 /// (measured 63,278 of 1,302,251 = 4.86 %, against 93,658 of 516,833 =
 /// 18.12 % at 17 digits, over 2,000,000 samples of the same splitmix64 draw).
-/// The `>= 17` guards are therefore a **narrower** set than the class they
-/// witness: they can only undercount it, i.e. they fail safe in the
-/// conservative direction, and nothing here may lean on them as the boundary.
+/// The `>= 17` guards count all ASCII digits (exponent digits included), so
+/// they are a subset of the class they witness only for plain-notation
+/// literals — the only notation this corpus uses (grep-verified); in
+/// exponent notation they could count wider (`1234567890123456e-1` counts
+/// 17 on a 16-digit significand below 2^53, i.e. outside the class). Where
+/// they are used they therefore only
+/// undercount the class, i.e. they fail safe in the conservative
+/// direction, and nothing here may lean on them as the boundary.
 const LOCAL_LOSS_VALUES: [(&str, f64); 8] = [
     ("exposure", -0.20253906249999998), // measured lossy 2026-09-26
     ("contrast", 0.013476562499999997), // measured lossy 2026-09-26

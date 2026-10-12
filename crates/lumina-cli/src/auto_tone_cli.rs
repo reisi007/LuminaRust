@@ -53,12 +53,24 @@
 //! | maximum deviation in that run | exactly 1 ULP | — |
 //! | 43 tracked JSON documents, 5236 float literals | 0 lossy | **0** |
 //!
-//! Re-measured in this slice: the loss only ever hit values whose shortest
-//! representation needs **≥ 17 significant digits** (a `u64` significand above
-//! 2^53 cannot be held exactly in `f64`, and `10^\|exp\|` stops being exact
-//! beyond 22) — i.e. **computed** values, never a hand-set slider literal. That
-//! is why the auto-tone mirrors were hit ~2.5× as often as a uniform draw, and
-//! why no committed fixture lost a single byte even before the flip.
+//! Re-measured in this slice — and the rule quoted here is **withdrawn at
+//! the source (DoD §9)**, because the verification round refuted both of
+//! its halves. The 1-ULP loss hits a `u64` **significand above 2^53** (or
+//! an inexact `10^|exp|` for `|exp| > 22`), **not** only values whose
+//! shortest representation needs ≥ 17 significant digits. Over 2,000,000
+//! samples of the same splitmix64 draw against a real feature-off build of
+//! `serde_json` 1.0.151: at ≤ 15 significant digits **nothing** lost (0 of
+//! 180,915); **16-digit significands above 2^53 lost as well** (63,278 of
+//! 1,302,251 = 4.86 % in the pinned draw, 34.25 % in the verification
+//! draw); 17-digit ones lost most (93,658 of 516,833 = 18.12 %). And a
+//! **hand-set** literal can sit inside the class: `-9.936999806814127`
+//! (16 digits, significand above 2^53) lost a bit. What survives of this
+//! paragraph is the measured part: the computed auto-tone mirrors were hit
+//! ~2.5× as often as a uniform draw (18.3 % vs 7.9 %), and none of the
+//! 5,236 literals in the 43 tracked documents lost a bit in either build.
+//! That zero is an observation about those files, not a consequence of
+//! "hand-set" or "≤ 16 digits" — the boundary is pinned in
+//! `src/tests/auto_tone_float.rs`.
 //!
 //! **Corrections to the earlier text, withdrawn at the source (DoD §9):**
 //! the serializer is no longer `ryu` but `zmij` (`ser.rs:1716`

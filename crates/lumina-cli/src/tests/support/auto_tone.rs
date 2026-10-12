@@ -32,10 +32,16 @@
 //! 17-digit ones lost most (93,658 of 516,833 = 18.12 %). 17 significant
 //! digits therefore **implies** the loss class (≥ 10^16 > 2^53), it is not
 //! its boundary. Every guard this workspace reads
-//! (`significant_digits(..) >= 17`) is a **narrower** set than the true loss
-//! class: it can only undercount, i.e. it is fail-safe in the conservative
-//! direction — exactly why no test depends on the digit count being the
-//! boundary. The two 16-digit literals of this fixture were never at risk
+//! (`significant_digits(..) >= 17`) counts all ASCII digits, exponent digits
+//! included, so it is a subset of the class only for plain-notation
+//! literals — the only notation the serializer writes for the values pinned
+//! here (grep-verified); in exponent notation it could count wider
+//! (`1234567890123456e-1` counts 17 on a 16-digit significand below 2^53,
+//! i.e. on a value outside the class). For every
+//! literal these tests measure it therefore only undercounts the class,
+//! i.e. it is fail-safe in the conservative direction — exactly why no
+//! test depends on the digit count being the boundary. The two 16-digit
+//! literals of this fixture were never at risk
 //! anyway: their significands (`8810589272764926`, `6533260183788233`) are
 //! **below** 2^53, so they sit outside the class — and all six literals
 //! round-trip exactly in **both** builds, in memory and after a

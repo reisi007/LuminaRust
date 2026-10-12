@@ -1747,11 +1747,17 @@ laut benannte Abwägung und keine stille Optimierung:
   Laden und Speichern bitidentisch. Der frühere Zusatz „der
   serde_json-Load/Save-Roundtrip kann fremde Float-Felder um 1 ULP
   verschieben (ohne `float_roundtrip`, vorbestehend)" ist damit
-  **zurückgenommen** — Widerlegungsgrund: die gemessene Restunschärfe war auf
-  Werte mit ≥ 17 signifikanten Dezimalstellen beschränkt und wird durch das
-  Feature auf 0 gesenkt; gemessen über 200.000 Werte im Reglerbereich und die
-  40-Mitglieder-Fixture-Familie (`feature/quality/
-  json-float-roundtrip-plan.md`). Exakter Byte-Roundtrip war damit **keine**
+  **zurückgenommen** — Widerlegungsgrund: die gemessene Restunschärfe wird
+  durch das Feature auf 0 gesenkt; gemessen über 200.000 Werte im
+  Reglerbereich und die 40-Mitglieder-Fixture-Familie (`feature/quality/
+  json-float-roundtrip-plan.md`). Die hier zuerst genannte Grenze („auf Werte
+  mit ≥ 17 signifikanten Dezimalstellen beschränkt") ist an der Fundstelle
+  zurückgenommen (DoD §9): die Verlustbedingung ist ein `u64`-Signifikant
+  **> 2^53** (bzw. `10^|exp|` inexakt für `|exp| > 22`), und **16-stellige
+  Signifikanten oberhalb 2^53** (oberhalb `9007199254740992`) verlieren
+  ebenfalls — gemessen 63.278 von 1.302.251 = **4,86 %** über 2.000.000
+  Samples desselben splitmix64-Zugs (0 von 180.915 bei ≤ 15 Stellen; 93.658
+  von 516.833 = **18,12 %** bei 17 Stellen). Exakter Byte-Roundtrip war damit **keine**
   offene Folgeentscheid mehr, sondern mit `JSON-FLOAT-ROUNDTRIP` entschieden.
 - **Stand 2026-09-17 (GUI-GEN-GRANULAR-10, Verifizierung BESTANDEN):**
   `lumina regenerate` (CLI, je Modul + Sammel-Default), GUI-Sammel-Button +

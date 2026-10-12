@@ -97,9 +97,15 @@ von 180.915); **16-stellige Signifikanten oberhalb 2^53** (oberhalb
 (z. B. `0.9126441839803001` → `0.9126441839803`); 17-stellige verloren mit
 93.658 von 516.833 = **18,12 %** am häufigsten. 17 Stellen **implizieren** die
 Klasse (≥ 10^16 > 2^53), sie sind nicht ihre Grenze; die Wachen
-`significant_digits(..) >= 17` in `auto_tone_float.rs` sind eine **echte
-Teilmenge** der Klasse und unterzählen sie deshalb nur — fail-safe in die
-konservative Richtung. Dass die 43 committeten Dokumente (5.236 Literale)
+`significant_digits(..) >= 17` in `auto_tone_float.rs` zählen **alle**
+ASCII-Ziffern einschließlich der des Exponenten — sie sind deshalb nur für
+Literale in reiner Dezimalschreibweise (ohne Exponent) eine **echte
+Teilmenge** der Klasse, und nur solche schreibt der Serialisierer für die
+gepinnten Werte (per Grep belegt). In Exponentialschreibweise könnten sie
+weiter zählen als die Klasse ist (`1234567890123456e-1` → Zähler 17,
+Signifikant 16 Stellen unterhalb 2^53 — ein Wert außerhalb der Klasse). Wo
+sie eingesetzt werden, unterzählen sie die Klasse
+nur — fail-safe in die konservative Richtung. Dass die 43 committeten Dokumente (5.236 Literale)
 **kein** verlustbehaftetes Literal enthielten, ist damit Messung
 (`FLOAT_SUMMARY lost=0`), keine Folge der Stellenzahl. Die Auto-Tone-Spiegel
 (berechnet) blieben mit 18,3 % rund 2,5× so häufig betroffen wie ein
@@ -268,8 +274,10 @@ einem Fixture bestehen könnte, das die Grenze verlassen hat:
 * `three_runs_write_the_same_literals` zählt, wie viele der 240 Literale
   **mindestens 17 signifikante Dezimalstellen** brauchen (der hinreichende
   Zeuge der Verlustklasse: Signifikant > 2^53; die Klasse selbst ist weiter,
-  die Wachen unterzählen sie nur), und besteht auf `> 0`. Ohne diesen Zweig
-  könnte die Familie degenerieren und der Test würde weiterhin grün bleiben.
+  und die Wachen unterzählen sie für die einzige hier gepinnte Schreibweise —
+  reine Dezimalliterale ohne Exponent), und besteht auf `> 0`. Ohne diesen
+  Zweig könnte die Familie degenerieren und der Test würde weiterhin grün
+  bleiben.
 * `the_rendered_output_stays_byte_stable_...` besteht ebenfalls darauf, dass
   mindestens ein Familienmitglied ein Literal aus der Verlustklasse trägt.
 
@@ -320,8 +328,13 @@ Literale sind der Text, den serde_json eigener Serialisierer schreibt, und
 brauchen **genau** 17 signifikante Stellen — was die Verlustbedingung
 (`u64`-Signifikant > 2^53) **impliziert**, ohne ihre Grenze zu sein: die
 Klasse ist weiter (16 Stellen oberhalb 2^53 verlieren ebenfalls, gemessen
-63.278 von 1.302.251 = 4,86 %), und die `>= 17`-Wachen sind eine echte
-Teilmenge, unterzählen also nur — fail-safe in die konservative Richtung.
+63.278 von 1.302.251 = 4,86 %), und die `>= 17`-Wachen zählen alle
+ASCII-Ziffern (Exponent eingeschlossen) — für reine Dezimalliterale ohne
+Exponent, der einzigen hier gepinnten Schreibweise (per Grep belegt), sind
+sie eine echte Teilmenge und unterzählen also nur (fail-safe); in
+Exponentialschreibweise könnten sie weiter zählen
+(`1234567890123456e-1` → Zähler 17, Signifikant 16 Stellen unterhalb 2^53
+— ein Wert außerhalb der Klasse).
 
 **Eine Korrektur an meiner eigenen ersten Fassung:** die erste Version dieses
 Tests enthielt handgesetzte Literale. Clippy wies zwei davon zurück

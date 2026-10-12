@@ -83,12 +83,13 @@ fn the_emitted_text_and_the_parser_agree_bit_for_bit() {
 /// size the 2026-09-26 measurement used, so the two runs are directly
 /// comparable.
 ///
-/// **Not vacuous** (DoD §10): a draw that had left the lossy class could never
-/// fail this test, so the count below keeps the class inside the sample. It is
-/// taken over the text `serde_json` itself writes for the value, with the same
-/// [`significant_digits`] measure the two family tests use, so "the lossy class
-/// is in the sample" means the same thing in all three places. Measured on this
-/// draw: 12,871 of the 50,000 values need at least 17 significant digits.
+/// **Not vacuous** (DoD §10): a draw that had left the loss class could never
+/// fail this test, so the count below keeps a sufficient witness of the class
+/// inside the sample. It is taken over the text `serde_json` itself writes for
+/// the value, with the same [`significant_digits`] measure the two family
+/// tests use, so "a sufficient witness is in the sample" means the same thing
+/// in all three places. Measured on this draw: 12,871 of the 50,000 values
+/// need at least 17 significant digits.
 ///
 /// The 1-ULP bound survived as **evidence inside the failure message** instead
 /// of a second `assert!`: with the feature on, `lossy` is 0, so `worst` is 0 and
@@ -123,12 +124,15 @@ fn no_value_in_the_slider_domain_loses_a_bit() {
     assert_eq!(
         lossy, 0,
         "the round-trip must be exact for all {checked} samples (measured {lossy} lossy, worst \
-          {worst} ULP) — the feature-off build measured 7.90 % on this same draw"
+          {worst} ULP) — the feature-off build lost 3,966 of these 50,000 samples (7.93 %, exact \
+          rerun of this same draw); 7.90 % belongs to the 200,000-sample draw of the module doc \
+          (15,801 of 200,000)"
     );
     assert!(
         lossy_class > 0,
         "no sample of the draw needs 17 significant digits, so \"no loss\" would prove nothing \
-          ({lossy_class} of {checked}) — the lossy class has to stay in the sample"
+          ({lossy_class} of {checked}) — a value carrying the sufficient witness has to stay in \
+          the sample"
     );
 }
 
@@ -141,7 +145,9 @@ fn no_value_in_the_slider_domain_loses_a_bit() {
 /// the class, not the class itself: 16-digit significands above 2^53 lost a
 /// bit as well (63,278 of 1,302,251 = 4.86 % of 2,000,000 samples of the
 /// same draw; 17-digit ones 93,658 of 516,833 = 18.12 %), so the guards that
-/// read `>= 17` are a **narrower** set and can only undercount the class.
+/// read `>= 17` undercount the class for every plain-notation literal they
+/// measure — they would only read wider in exponent notation, which no
+/// pinned literal uses (see [`significant_digits`]).
 #[test]
 fn a_seventeen_digit_mirror_is_reused_bit_identically() {
     let directory = tempfile::tempdir().unwrap();
@@ -211,15 +217,22 @@ fn three_runs(k: u32) -> (Vec<Vec<u8>>, [[String; 6]; 3]) {
 
 /// How many significant decimal digits a literal carries. A value whose
 /// shortest representation needs **17** of them carries a `u64` significand
-/// above 2^53 (≥ 10^16), so it sits **inside** the true loss class — the class
-/// is wider, though: a 16-digit significand above 2^53 lost a bit too (63,278
-/// of 1,302,251 = 4.86 % over 2,000,000 samples of the same draw, against
-/// 93,658 of 516,833 = 18.12 % at 17 digits; the condition itself is
-/// significand > 2^53, or `10^|exp|` inexact for `|exp| > 22`). A `>= 17`
-/// guard is a **narrower** set than the class, so it can only undercount,
-/// fail-safe in the conservative direction. The measure stays a cheap,
-/// independent witness that the family still sits on the boundary and the
-/// assertion below is not passing over a fixture that left it.
+/// above 2^53 (≥ 10^16), so it sits **inside** the true loss class — the
+/// class is wider, though: a 16-digit significand above 2^53 lost a bit
+/// too (63,278 of 1,302,251 = 4.86 % over 2,000,000 samples of the same
+/// draw, against 93,658 of 516,833 = 18.12 % at 17 digits; the condition
+/// itself is significand > 2^53, or `10^|exp|` inexact for `|exp| > 22`).
+/// This counter filters **all** ASCII digits, exponent digits included, so
+/// the `>= 17` guard is a subset of the class only for literals in plain
+/// (non-exponent) notation — the only notation the serializer writes for
+/// the values pinned here (grep: no pinned literal carries an exponent).
+/// In exponent notation the guard can read wider than the class
+/// (`1234567890123456e-1` counts 17 on a 16-digit significand below 2^53,
+/// i.e. on a value outside it). For every literal this module measures it
+/// therefore only undercounts the class, i.e. it stays fail-safe in the
+/// conservative direction. The measure stays
+/// a cheap, independent witness that the family still sits on the boundary
+/// and the assertion below is not passing over a fixture that left it.
 fn significant_digits(literal: &str) -> usize {
     let trimmed = literal.trim().trim_start_matches('-');
     let digits: String = trimmed.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -326,8 +339,8 @@ fn the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move() 
     );
     assert!(
         lossy_class > 0,
-        "no member carries a literal from the lossy class, so the render-stability half would be \
-         vacuous here"
+        "no member carries a literal from the loss class's sufficient witness (>= 17 digits), so \
+         the render-stability half would be vacuous here"
     );
     assert_eq!(
         stable_first, members,
