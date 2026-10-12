@@ -23,7 +23,7 @@ Verlinkte Version: `serde_json` 1.0.151 (`Cargo.lock:3720`).
 
 | Behauptung | Prüfung | Ergebnis |
 |---|---|---|
-| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext | 23 Treffer, **alle** in `src/de.rs` und `src/value/de.rs`; `src/ser.rs` und `src/ser/` enthalten **0** Treffer |
+| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext | **22** Treffer: 19 in `src/de.rs`, 2 in `src/value/de.rs`, 1 in `src/lib.rs:435` (die `mod lexical;`-Deklaration des Feature-eigenen Parsers). `src/ser.rs` enthält **0** Treffer; ein Verzeichnis `src/ser/` existiert nicht. Berührt ist also nur die Parser-Seite |
 | Feature ist abhängigkeitsfrei | `[features]` in `serde_json/Cargo.toml` | `float_roundtrip = []` — keine Kraten, also keine `Cargo.lock`-Änderung |
 | Float-Parser im Feature ist korrekt gerundet | `src/de.rs:674` `parse_long_integer` speist die Ganzzahl- und Bruchstellen an `crate::lexical` | eigenes, im Krat gepacktes `lexical` (`src/lexical/`, 20 Dateien) — kein `ryu` mehr (0 Treffer für `ryu` im ganzen Krat) |
 | Serialisierer schreibt kürzeste exakte Form | `src/ser.rs:1716` `write_f64` → `zmij::Buffer::format_finite` | unabhängig vom Feature; `zmij` wird vom Serialisierer in **beiden** Builds benutzt |
@@ -123,7 +123,7 @@ entscheidend — entscheidend ist, dass der Verlust **vorher vorhanden** und
 | Klasse | Umfang | Änderung durch das Feature |
 |---|---|---|
 | committete JSON-Fixtures (`testdata/matrix/recipe-set.v1.json`, `agent-harness/artifacts/**`, `perf/**`) | 43 Dateien, 5236 Float-Literale | **keine** (§2.1) |
-| Goldens PNG (`testdata/matrix/golden/`, 23 Dateien) | Render-Ergebnis | **keine** — `git status --porcelain` nach dem Flip zeigt das Verzeichnis unverändert; die Matrix-Suite ist grün |
+| Goldens PNG (`testdata/matrix/golden/`, 22 Dateien) | Render-Ergebnis | **keine** — `git status --porcelain` nach dem Flip zeigt das Verzeichnis unverändert; die Matrix-Suite ist grün. Nachgezählt in der Verifikationsrunde (2026-10-12): das Verzeichnis hält **22** PNGs, der ganze Workspace **114** getrackte PNGs (`git ls-files '*.png'`) — keines davon ist nach dem Flip verändert |
 | kittest-Goldens / `scripts/golden_ref.lock` | 66 Goldens, lokales macOS-Gate | **nicht ausführbar hier** — `golden_ref.sh check` exit **1**, gemeldete Abweichung „this machine is not the pinned golden reference platform" (`os.name=Linux` vs. `macOS`, `gpu.adapter=unavailable` vs. `Apple M5 Pro`). Benanntes Gate, siehe §5 |
 | Digest-Literale im Code | `grep -rn "blake3:[0-9a-f]\{16,\}" --include=*.rs crates/` → **0** | **keine** einzutragende Neuerwartung |
 | zur Laufzeit geschriebene Sidecars (`.lumina.json`, gitignored) | nicht committet | betroffen sind ausschließlich Auto-Tone-Spiegel und berechnete Mask-Lokal-Skalare, deren kürzeste Form ≥ 17 signifikante Stellen hat. Das ist eine **Eigenschaft der Datei auf der Anwender-Platte**, nicht des Repositorys |
@@ -188,8 +188,8 @@ kürzeste Form **dieses** Werts. Der Digest über diese Bytes ist nachher der
 | # | Aussage | Beleg | Kategorie |
 |---|---|---|---|
 | D1 | Kein committeter Rezept-/Sidecar-Digest ändert sich | `diff` der 43-Datei-Messung vor/nach dem Flip: **leer**; `FLOAT_SUMMARY lost=0` in beiden Läufen | gemessen |
-| D2 | Kein committeter Golden (PNG, 23) ändert sich | `git status --porcelain` nach dem Flip: `testdata/matrix/golden/` unverändert; Matrix- und GUI-Suiten grün (989 / 0) | gemessen |
-| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: `src/ser.rs`/`src/ser/` enthalten 0 Treffer auf `float_roundtrip`; `write_f64` (`ser.rs:1716`) hat kein `#[cfg]` | gemessen am Quelltext |
+| D2 | Kein committeter Golden (PNG) ändert sich | `git status --porcelain` nach dem Flip: `testdata/matrix/golden/` unverändert (22 PNGs); nachgezählt 2026-10-12: **alle 114 getrackten PNGs** des Workspace unverändert; Matrix- und GUI-Suiten grün (989 / 0) | gemessen |
+| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: 22 Treffer auf `float_roundtrip`, keiner davon in `src/ser.rs` (0 Treffer); `write_f64` (`ser.rs:1716`) hat kein `#[cfg]` | gemessen am Quelltext |
 | D4 | Ein geladen-→-gespeichert-Zyklus ist nun bitstabil | neuer Test `every_persisted_f64_survives_a_save_load_save_cycle_bit_identically`, grün mit 284 / 0 in `lumina-sidecar`; rot unter Mutation M1 | gemessen (Test gelaufen) |
 | D5 | Ein im Speicher gebautes Rezept hat vorher und nachher denselben Digest | neuer Test `a_recipe_built_in_memory_keeps_its_digest_across_the_boundary`; außerdem die `RenderKey`-Digest-Tests der `lumina-core`-Suite (562 / 0, unverändert) | gemessen |
 | D6 | Die 44-von-240-Auto-Tone-Drift ist auf 0 gefallen | umgestellter Test `three_runs_write_the_same_literals` über dieselbe 40-Mitglieder-Familie, 240 Werte, grün | gemessen |
@@ -283,12 +283,21 @@ Absichtserklärung):
    `MaskStateSnapshot::digest` gegen ein frisch gebautes Vergleichsobjekt.
    Beleg für D5. Die Form ist bewusst **nicht** selbstbezüglich (siehe §6, M3).
 
-**Herkunft der Werte, gemessen statt erfunden:** zwei Literale sind die am
-2026-09-26 als verlustbehaftet gemessenen, aus der CLI-Seite übernommen. Alle
-übrigen wurden aus demselben deterministischen splitmix64-Zug wie die
-200.000-Sample-Domänenmessung gezogen, behalten nur, wenn der Text, den
-serde_json selbst dafür schreibt, **genau** 17 signifikante Stellen braucht, und
-so in den Manifesten abgelegt. Kein Literal wurde von Hand geraten.
+**Herkunft der Werte, gemessen statt erfunden — in der Verifikationsrunde
+2026-10-12 nachgezählt und an der Fundstelle korrigiert (DoD §9):** zwei
+Literale sind die am 2026-09-26 als verlustbehaftet gemessenen, aus der
+CLI-Seite übernommen (im Korpus je zweimal belegt). 15 der 20 Einträge sind
+Mitglieder desselben deterministischen splitmix64-Zugs (Seed
+`0x243f6a8885a308d3`, `unit = (z >> 11) / 2^53`) — 13 davon als `unit * 2 - 1`,
+`exposure` (`1.5695229505050552`) als `unit * 20 - 10` und `temperature_delta_k`
+(`-2328.6878550005117`) als `unit * 10000 - 5000`: derselbe Zug, je Feld eine
+andere lineare Abbildung. Ausgenommen ist `wb_temperature = 10415.777975832698`,
+das unter keiner linearen Abbildung ein Mitglied des Zugs ist — dieses eine
+Literal wurde von Hand gesetzt. Die frühere Fassung behauptete, **kein** Literal
+sei von Hand geraten; diese Aussage ist zurückgenommen, nicht stillschweigend
+ersetzt. Was das Korpus trägt, ist die geprüfte Klasseneigenschaft: alle 20
+Literale sind der Text, den serde_json eigener Serialisierer schreibt, und
+brauchen **genau** 17 signifikante Stellen.
 
 **Eine Korrektur an meiner eigenen ersten Fassung:** die erste Version dieses
 Tests enthielt handgesetzte Literale. Clippy wies zwei davon zurück
@@ -338,13 +347,41 @@ Deshalb: in jedem Manifest, mit derselben Zeile und demselben Kommentar.
 
 | Gate | Gemessen | Folge für den nächsten Lauf |
 |---|---|---|
-| `sh scripts/golden_ref.sh check` | **exit 1**. Gemeldete Abweichung: „this machine is not the pinned golden reference platform". Ursache: `os.name=Linux` vs. gepinnt `macOS`, `gpu.adapter=unavailable` vs. `Apple M5 Pro`, `gpu.metal=unavailable` vs. `Metal 4`, `libraw.version=unavailable` vs. `0.22.2` | auf dem Mac mit Adapter laufen lassen. Erwartung: **grün ohne Neuaufnahme**, weil kein Render-Pfad und kein committeter Byte geändert wird (D2/D3). Sollte es rot sein, ist das ein **Befund**, kein Flake |
+| `sh scripts/golden_ref.sh check` | **exit 1**, Eintrag in der Verifikationsrunde 2026-10-12 vollständig korrigiert: es sind **9** Abweichungen, nicht 4 (Aufzählung unten). **Verwertbares Teilergebnis:** `goldens.count=66` ist gleich dem Pin, `fixtures.count=4` ebenfalls, und `goldens.digest` wie `fixtures.digest` sind gleich den Zeilen in `scripts/golden_ref.lock` — die Inventare sind unverändert, abweichend ist ausschließlich der Host | auf dem Mac mit Adapter laufen lassen. Erwartung: **grün ohne Neuaufnahme**, weil kein Render-Pfad und kein committeter Byte geändert wird (D2/D3). Sollte es rot sein, ist das ein **Befund**, kein Flake |
 | `LUMINA_MATRIX=1 cargo test -p lumina-gui --lib -- --ignored real_matrix_headless` | nicht gelaufen — `expected_route: gpu` ist in `testdata/matrix/recipe-set.v1.json` fest verdrahtet, es gibt keinen Adapter | CPU-Parität des GPU-Pfads ist hier nicht beweisbar (`Agents.headless.md` §3) |
 | `LUMINA_MATRIX=1 cargo test -p lumina-cli ... real_matrix_against_committed_goldens` | nicht gelaufen, dito | dito |
 | CPU↔GPU-Byte-Parität (`--features gpu-adapter-tests`) | **kompiliert** (`cargo check -p lumina-gpu --features gpu-adapter-tests`, exit 0), **nicht ausgeführt** | Läufe mit Adapter |
 | `#[cfg(feature = "gpu")]`-Pfade | **kompiliert** (`cargo check -p lumina-gui --features gpu`, exit 0) | „Kompiliert" gilt als ungeprüft (`Agents.headless.md` §2.1) |
 | „kein Anwender-Sidecar auf der Platte ändert sein Digest bei bloßem Laden" | Anwenderdateien sind gitignored und hier nicht vorhanden | Beweislastumkehr: das Feature macht den Round-Trip exakt, ein Load-Save-Zyklus kann kein Digest mehr bewegen. Das ist Test 4.3(1) |
 | CI auf diesem Stand | **nicht gelaufen** — der Auftrag verbietet `git add/commit/push`, also existiert kein CI-Ergebnis | benanntes Restrisiko (`DoD.md` §12). Der nächste Arbeitsstrom muss nach dem Push das CI-Ergebnis prüfen |
+
+**Die 9 Abweichungen des `golden_ref.sh check`-Laufes, nachgezählt am
+2026-10-12** (der Eintrag oben hatte vier benannt; die restlichen fünf fehlten).
+Alle neun sind Host-Fakten, keine Golden-Fakten:
+
+| # | Schlüssel | gepinnt | hier gemessen |
+|---|---|---|---|
+| 1 | `os.name` | `macOS` | `Linux` |
+| 2 | `os.macos` | `27.0.1` | `unavailable` (`sw_vers` existiert nicht) |
+| 3 | `os.arch` | `arm64` | `x86_64` |
+| 4 | `os.cpu` | `Apple M5 Pro` | `unavailable` (`sysctl` existiert nicht) |
+| 5 | `toolchain.rustc` | `1.98.0` | `unavailable` (kein `rustc` auf dem `PATH` der aufrufenden Shell — der Werkzeugkasten liegt hinter `target/headless_env.sh`) |
+| 6 | `wgpu.backend` | `all->metal` | `all` (nicht Darwin) |
+| 7 | `gpu.adapter` | `Apple M5 Pro` | `unavailable` (`system_profiler` existiert nicht) |
+| 8 | `gpu.metal` | `Metal 4` | `unavailable` |
+| 9 | `libraw.version` | `0.22.2` | `unavailable` — einzige Abweichung, die **keine** Plattform-Abweichung ist: mit der `PKG_CONFIG_PATH` aus `target/headless_env.sh` meldet derselbe Host `0.22.2`, also genau den Pin. Das Skript wurde ohne diese Umgebung aufgerufen |
+
+Abweichungen 1–8 sind echte Host-Fakten (Linux/x86_64, kein macOS-Werkzeugkasten,
+kein Metal). Abweichung 9 ist ein Umgebungsartefakt des Aufrufs — festgehalten,
+damit der Mac-Lauf nicht nach einer LibRaw-Differenz sucht, die es nicht gibt.
+
+Gleich dem Pin und damit das verwertbare Teilergebnis: `fixtures.count=4`,
+`fixtures.digest=git:e949f6835ed1e4de980934547a995d96e122dba495f97e6a36e9a285226fea4a`,
+`goldens.count=66`,
+`goldens.digest=git:9cb231fe5c1457e49f882643aa4fc4d79b49f6ecdf6b55c88eaeb7f7ac3a7dcb`
+— identisch zu den Zeilen in `scripts/golden_ref.lock`. Das Gate scheitert also
+an der Plattform, nicht am Inhalt — genau die Erwartung aus D2/D3, nur steht der
+Nachweis dafür jetzt im Plan statt in der Annahme.
 
 ---
 
@@ -379,10 +416,12 @@ Fehler.
    keine Datei im Tree hängt daran.
 2. **Der Auftrag erwartete „betroffene Goldens neu aufnehmen"**. Gemessen gibt
    es **keine** betroffenen Goldens im Repository (§2.3): 0 von 5236
-   Float-Literalen der committeten JSON-Dateien, 0 von 23 PNG-Goldens, 0
-   Digest-Literale im Code. Neu aufgenommen wurde deshalb nichts. Die einzigen
-   Umstellungen sind die fünf Test-Erwartungen, die den **Verlust** gepinnt
-   hatten (§4.1) — jede davon einzeln begründet und unter M1 rot geworden.
+   Float-Literalen der committeten JSON-Dateien, 0 von 22 PNG-Goldens im
+   Verzeichnis `testdata/matrix/golden/` (nachgezählt: 0 von allen 114
+   getrackten PNGs des Workspace), 0 Digest-Literale im Code. Neu aufgenommen
+   wurde deshalb nichts. Die einzigen Umstellungen sind die fünf
+   Test-Erwartungen, die den **Verlust** gepinnt hatten (§4.1) — jede davon
+   einzeln begründet und unter M1 rot geworden.
 3. **Die Auto-Tone-Spiegel der Anwender sind die tatsächlich betroffene
    Klasse**, und sie liegen nicht im Repository (`.lumina.json` ist gitignored).
    Ihr Schutz ist Test 4.3(1), der genau diese Felder über den

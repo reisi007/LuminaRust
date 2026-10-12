@@ -1847,8 +1847,12 @@ zurückgenommen** (DoD §9), weil sie beim Nachschlagen in die Irre führen:
    Lock-Änderung im Task-Formular ist damit zurückgenommen.
 
 **Was das Feature nicht tut:** es berührt ausschließlich den **Parser**
-(`grep -rn float_roundtrip src/` → 23 Treffer, alle in `src/de.rs` und
-`src/value/de.rs`, null in `src/ser.rs`). Der Serialisierer ist in beiden Builds
+(`grep -rn float_roundtrip src/` → 22 Treffer, korrigiert in der
+Verifikationsrunde 2026-10-12 von „23, alle in `src/de.rs` und
+`src/value/de.rs`": 19 Treffer in `src/de.rs`, 2 in `src/value/de.rs`, einer in
+`src/lib.rs:435` — die Deklaration `mod lexical;` des Feature-eigenen,
+korrekt gerundeten Parsers. `src/ser.rs` enthält **null**, ein Verzeichnis
+`src/ser/` existiert nicht). Der Serialisierer ist in beiden Builds
 derselbe. Ein Digest über serialisierte Bytes kann sich deshalb nur ändern, wenn
 ein Wert **vorher geparst** wurde — also nur über einen Ladevorgang, und dort ist
 die Änderung der Zweck des Features.

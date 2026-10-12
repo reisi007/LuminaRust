@@ -71,15 +71,29 @@ fn the_emitted_text_and_the_parser_agree_bit_for_bit() {
 }
 
 /// Over the sliders' domain there is now **no** value that loses a bit. This
-/// asserts the *band* (exactly zero) and the 1-ULP bound (never more) rather
-/// than a rate, so it cannot turn into a sampling-sensitive flake. The sample
-/// is the same splitmix64 draw, seed and size the 2026-09-26 measurement used,
-/// so the two runs are directly comparable.
+/// asserts the *band* (exactly zero) rather than a rate, so it cannot turn into
+/// a sampling-sensitive flake. The sample is the same splitmix64 draw, seed and
+/// size the 2026-09-26 measurement used, so the two runs are directly
+/// comparable.
+///
+/// **Not vacuous** (DoD §10): a draw that had left the lossy class could never
+/// fail this test, so the count below keeps the class inside the sample. It is
+/// taken over the text `serde_json` itself writes for the value, with the same
+/// [`significant_digits`] measure the two family tests use, so "the lossy class
+/// is in the sample" means the same thing in all three places. Measured on this
+/// draw: 12,871 of the 50,000 values need at least 17 significant digits.
+///
+/// The 1-ULP bound survived as **evidence inside the failure message** instead
+/// of a second `assert!`: with the feature on, `lossy` is 0, so `worst` is 0 and
+/// a following `assert!(worst <= 1)` could never fail — an assertion that cannot
+/// fail is not a bound. If a loss ever reappears, `lossy` stops being 0 and the
+/// message carries the measured ULP distance with it.
 #[test]
 fn no_value_in_the_slider_domain_loses_a_bit() {
     let mut state = 0x243F_6A88_85A3_08D3u64; // splitmix64, as in the out-of-tree run
     let mut checked = 0u32;
     let mut lossy = 0u32;
+    let mut lossy_class = 0u32;
     let mut worst = 0i64;
     for _ in 0..50_000u32 {
         state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -91,6 +105,9 @@ fn no_value_in_the_slider_domain_loses_a_bit() {
         let value = unit * 10.0;
         let back = serde_json_round_trip(value);
         checked += 1;
+        if significant_digits(&serde_json::to_string(&value).unwrap()) >= 17 {
+            lossy_class += 1;
+        }
         if back.to_bits() != value.to_bits() {
             lossy += 1;
             worst = worst.max(ulp_distance(back, value).abs());
@@ -99,11 +116,12 @@ fn no_value_in_the_slider_domain_loses_a_bit() {
     assert_eq!(
         lossy, 0,
         "the round-trip must be exact for all {checked} samples (measured {lossy} lossy, worst \
-         {worst} ULP) — the feature-off build measured 7.90 % on this same draw"
+          {worst} ULP) — the feature-off build measured 7.90 % on this same draw"
     );
     assert!(
-        worst <= 1,
-        "a loss may never exceed 1 ULP even if one ever reappears (worst measured {worst})"
+        lossy_class > 0,
+        "no sample of the draw needs 17 significant digits, so \"no loss\" would prove nothing \
+          ({lossy_class} of {checked}) — the lossy class has to stay in the sample"
     );
 }
 

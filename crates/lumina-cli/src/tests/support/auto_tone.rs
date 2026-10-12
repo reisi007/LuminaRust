@@ -8,18 +8,25 @@
 //! and not gray, so all six AUTO-TONE-2 sliders get non-trivial values and
 //! the render is a real (non-identity) pixel result.
 //!
-//! **Corrected in place (JSON-FLOAT-ROUNDTRIP, 2026-10-12).** The first version
-//! of this paragraph said the fixture was chosen so that all six values are
-//! "exactly representable in the sidecar JSON" because a value like
+//! **Corrected in place (JSON-FLOAT-ROUNDTRIP, 2026-10-12; the digit count in
+//! it was corrected again in the verification round of the same day).** The
+//! first version of this paragraph said the fixture was chosen so that all six
+//! values are "exactly representable in the sidecar JSON" because a value like
 //! `0.44062500000000004` would come back one ULP lower. That reason is
 //! **withdrawn, not silently replaced**: since the workspace builds
 //! `serde_json` with `float_roundtrip`, every `f64` round-trips exactly and
-//! that constraint no longer exists. The fixture still holds the property
-//! (measured: all six of its literals need ≤ 16 significant digits), so the
-//! pinned goldens remain the same in memory and after a `save`/`load` round
-//! trip — but that is now an observation, not a requirement the test depends
-//! on. The boundary itself is pinned in `auto_tone_float.rs`, which also
-//! carries the values that *did* lose a bit before 2026-10-02.
+//! that constraint no longer exists. The fixture still holds the property,
+//! but the count that was quoted to show it was **wrong** and is corrected
+//! here instead of quietly dropped: five of the six literals need ≤ 16
+//! significant digits, the highlights value `0.16386718750000007` needs
+//! **17**. That does not move the conclusion, because 17 significant digits is
+//! the *necessary* condition for the 1-ULP loss (a `u64` significand above
+//! 2^53), never the sufficient one — all six literals round-trip exactly in
+//! **both** builds, in memory and after a `save`/`load` round trip, so the
+//! pinned goldens were never at risk. That is now an observation, not a
+//! requirement the test depends on. The boundary itself is pinned in
+//! `auto_tone_float.rs`, which also carries the values that *did* lose a bit
+//! before 2026-10-02.
 //!
 //! The six auto values of this fixture at `target_luminance = 0.5` are
 //! `0.8810589272764926`, `0.6533260183788233`, `0.4423828125`,

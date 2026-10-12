@@ -241,12 +241,25 @@ const MIRROR_LOSS_VALUES: [(&str, f64); 6] = [
 /// The mask-local scalars, in `LOCAL_ADJUSTMENT_RANGES` order. The two marked
 /// literals are the ones the feature-off build of 2026-09-26 dropped 1 ULP on
 /// (carried over verbatim from the CLI side so the corpus provenance stays
-/// auditable); the rest are drawn from the same deterministic splitmix64
-/// sequence as the 200,000-sample domain measurement (seed
-/// 0x243f6a8885a308d3), keeping only values whose serde_json text needs
-/// exactly 17 significant digits — the class that lost a bit. No literal here
-/// was invented by hand: every one of them is the text serde_json's own
-/// serializer writes.
+/// auditable); the unmarked ones are members of the splitmix64 stream named
+/// below.
+///
+/// **Provenance of the whole 20-literal corpus, corrected in the verification
+/// round of 2026-10-12 (DoD §9).** The previous note claimed every remaining
+/// literal is a member of the same splitmix64 draw as the 200,000-sample
+/// domain measurement and that none was invented by hand. Recounted against
+/// the stream itself (seed `0x243f6a8885a308d3`, `unit = (z >> 11) / 2^53`):
+/// that holds for **19 of the 20** entries — 4 entries are the two
+/// `measured lossy 2026-09-26` values (each used twice), and 15 are stream
+/// members: 13 of them as `unit * 2 - 1`, `exposure` (`1.5695229505050552`) as
+/// `unit * 20 - 10` and `temperature_delta_k` (`-2328.6878550005117`) as
+/// `unit * 10000 - 5000` — the same stream, a different linear map per field.
+/// It does **not** hold for `wb_temperature = 10415.777975832698`, which is a
+/// member under no linear map: that one literal was placed by hand. What this
+/// corpus actually rests on, and what is verified, is the class property:
+/// every one of the 20 literals is the text `serde_json`'s own serializer
+/// writes (the shortest round-tripping form) and needs exactly 17 significant
+/// digits — the class that lost a bit.
 const LOCAL_LOSS_VALUES: [(&str, f64); 8] = [
     ("exposure", -0.20253906249999998), // measured lossy 2026-09-26
     ("contrast", 0.013476562499999997), // measured lossy 2026-09-26
