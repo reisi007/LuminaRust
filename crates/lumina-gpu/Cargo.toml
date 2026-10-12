@@ -23,7 +23,7 @@ log = "0.4"
 # GPU entry (validate.rs), parsed with the same `serde_json::Value` type the
 # sidecar recipe stores it in. Already a `lumina-sidecar` dependency resolved in
 # the workspace lockfile.
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
 # GPU backend dependencies. Optional + feature-gated so a
 # `--no-default-features` build stays dependency-light for headless CI.
 wgpu = { version = "30", optional = true }

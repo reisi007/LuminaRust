@@ -36,71 +36,38 @@
 //!
 //! # The `f64` JSON round-trip boundary (AUTO-TONE-CLI-6, clause 9)
 //!
-//! This workspace builds `serde_json` 1.0.151 **without** `float_roundtrip`.
-//! The feature governs only the **parser**; the serializer (ryu) always writes
-//! the shortest exactly-re-readable decimal, so the text in a sidecar is
-//! *always* correct — the **parser** loses the last bit. The loss therefore
-//! happens on **load**, and the file on disk looks innocent. The two halves are
-//! pinned separately in `src/tests/auto_tone_float.rs` so the diagnosis points
-//! at the parser and not at the serializer.
+//! **Exact since `JSON-FLOAT-ROUNDTRIP` (owner decision `JSON-ROUNDTRIP`,
+//! 2026-10-02, variant (a)).** This workspace now builds `serde_json` 1.0.151
+//! **with** `float_roundtrip`. Every `f64` the serializer writes is read back
+//! bit-identically, so [`apply_auto_tone_result`]'s reuse branch takes values
+//! that are identical to what the algorithm computed — no 1-ULP drift, no
+//! re-serialisation of a shifted value, no byte change between two runs over
+//! the same sidecar.
 //!
-//! Measured over the six sliders' domain `[-10, 10]` (2026-09-26):
+//! The mechanism was re-measured in this slice, not carried over from the
+//! 2026-09-26 numbers:
 //!
-//! | measurement | result |
-//! |---|---|
-//! | 200,000 `f64` on a linear grid (step 1e-4), `[-10, 10]` | **14,900 (7.45 %)** do not survive the round trip |
-//! | 200,000 `f64` from a deterministic 64-bit LCG, `[-10, 10]` | 15,804 (7.90 %) — the rate is sampling-dependent |
-//! | **240 real auto-tone values** from 40 deterministic fixtures | **44 (18.33 %)** are lossy |
-//! | maximum deviation in every measurement | **exactly 1 ULP** |
+//! | measurement | feature **off** | feature **on** |
+//! |---|---|---|
+//! | 200,000 `f64` splitmix64 draw in `[-10, 10]` | 15,801 lossy (**7.90 %**) | **0** |
+//! | maximum deviation in that run | exactly 1 ULP | — |
+//! | 43 tracked JSON documents, 5236 float literals | 0 lossy | **0** |
 //!
-//! Real auto-tone values are ~2.5x more often affected than a uniform draw
-//! because they land almost on a binary fraction plus a tiny remainder. Two
-//! verified single cases: `-0.20253906249999998` reads back as
-//! `-0.2025390625`, `0.013476562499999997` as `0.013476562499999995`.
+//! Re-measured in this slice: the loss only ever hit values whose shortest
+//! representation needs **≥ 17 significant digits** (a `u64` significand above
+//! 2^53 cannot be held exactly in `f64`, and `10^\|exp\|` stops being exact
+//! beyond 22) — i.e. **computed** values, never a hand-set slider literal. That
+//! is why the auto-tone mirrors were hit ~2.5× as often as a uniform draw, and
+//! why no committed fixture lost a single byte even before the flip.
 //!
-//! **Consequence for [`apply_auto_tone_result`]:** the reuse branch takes the
-//! persisted values *from the loaded sidecar*, so for those values the reused
-//! number is not bit-identical to what the algorithm computed. This is the
-//! documented, measured state — the completeness contract (six sliders, six
-//! mirrors, fingerprint, presence-based freshness) is unaffected; only the last
-//! decimal bit can differ.
-//!
-//! **It converges and does not accumulate** (measured over 40 fixtures × 3
-//! runs on the same sidecar): run 1 → run 2 drifted **44 of 240** slider values
-//! by at most 1 ULP; run 2 → run 3 drifted **0 of 240**. Run 1 writes the exact
-//! text, run 2 reads it (1 ULP off) and writes the shortest representation of
-//! *that* value, and from run 2 on the persisted text is a fixed point of the
-//! parser. Freshness already holds from run 1, so `regenerate` never overwrites
-//! it.
-//!
-//! **Rendered bytes:** over the same 40 fixtures the rendered PNG was
-//! byte-identical between runs 1 and 2 and between runs 2 and 3 in **40 of 40**
-//! cases. That is an **observation over 40 fixtures, not a proof** — a 1-ULP
-//! exposure difference can in principle move a `u8` sample. The Auto-Tone byte
-//! goldens in `src/tests/` therefore use a fixture whose six values survive the
-//! round trip *exactly*, so the golden stays an independent quantity; the real
-//! case is pinned separately in `src/tests/auto_tone_float.rs`.
-//!
-//! **Measured side effect at the byte level:** because run 2 writes the shorter
-//! text of the 1-ULP-shifted value, the sidecar **bytes** change between runs 1
-//! and 2 for the 27 of 40 family members that drift (44 of 240 slider
-//! literals). Any digest formed over the serialized bytes (blake3, e.g.
-//! `LocalAdjustments::digest`, `mask_layers_digest`) is therefore affected as
-//! soon as a loaded document is re-serialized. A digest change on a real mask
-//! layer was **not** measured here — the Auto-Tone fixtures carry no mask and
-//! this slice does not touch `lumina-sidecar`; the point is recorded as a
-//! measured byte change because it is what weighs the `JSON-FLOAT-ROUNDTRIP`
-//! decision, whose acceptance explicitly demands proof that no recipe digest
-//! changes unintentionally.
-//!
-//! **Why this is not fixed here:** enabling `float_roundtrip` would change
-//! **every** existing persisted sidecar byte — all recipe digests,
-//! `mask_layers_digest`, render identities and goldens would have to be
-//! re-verified, and every already-written file would yield different `f64`
-//! values on the next load. That is a separate, deliberately open decision
-//! (task `JSON-FLOAT-ROUNDTRIP`, Release 1.5: enable vs. deliberately keep,
-//! with a migration/golden plan). The contract this slice freezes is the
-//! measured boundary itself.
+//! **Corrections to the earlier text, withdrawn at the source (DoD §9):**
+//! the serializer is no longer `ryu` but `zmij` (`ser.rs:1716`
+//! `write_f64` → `zmij::Buffer::format_finite`); and the feature is
+//! dependency-free (`float_roundtrip = []`), so **`Cargo.lock` did not change**.
+//! Migration plan with all measured bytes: `feature/quality/
+//! json-float-roundtrip-plan.md`; the pinned boundary lives in
+//! `src/tests/auto_tone_float.rs`, which still carries the two values that
+//! lost a bit in the feature-off build.
 //!
 //! # MCP-PARITY-B: what moved and what stayed
 //!

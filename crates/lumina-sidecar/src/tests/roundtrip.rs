@@ -211,3 +211,243 @@ fn auto_features_roundtrip_with_result_and_fingerprint() {
     assert_eq!(d, SidecarDocument::from_json(&json).unwrap());
     assert!(d.validate().is_ok());
 }
+
+// =====================================================================
+// JSON-FLOAT-ROUNDTRIP (owner decision `JSON-ROUNDTRIP`, 2026-10-02):
+// every persisted `f64` survives a `save` -> `load` -> `save` cycle
+// bit-identically, and no digest over the serialized bytes moves.
+//
+// The values are pinned as **literals** on purpose: the only class that
+// ever lost a bit is one whose shortest decimal representation needs
+// **17 significant digits** (a `u64` significand above 2^53 cannot be
+// held exactly in `f64`, and `10^|exp|` stops being exact beyond 22).
+// A literal that needs fewer digits would pass even without the
+// feature — that is what made the class invisible for so long. The
+// two marked `measured lossy 2026-09-26` are the very values the
+// feature-off build dropped 1 ULP on, carried over from
+// `crates/lumina-cli/src/tests/auto_tone_float.rs`.
+// =====================================================================
+
+/// The auto-tone mirror values, in `AutoFeatures` field order.
+const MIRROR_LOSS_VALUES: [(&str, f64); 6] = [
+    ("auto_exposure", -0.20253906249999998), // measured lossy 2026-09-26
+    ("auto_contrast", 0.013476562499999997), // measured lossy 2026-09-26
+    ("auto_whites", 0.16653084324880307),
+    ("auto_blacks", 0.13614329540558123),
+    ("auto_highlights", -0.29034012055496694),
+    ("auto_shadows", -0.14210602365280334),
+];
+
+/// The mask-local scalars, in `LOCAL_ADJUSTMENT_RANGES` order. The two marked
+/// literals are the ones the feature-off build of 2026-09-26 dropped 1 ULP on
+/// (carried over verbatim from the CLI side so the corpus provenance stays
+/// auditable); the rest are drawn from the same deterministic splitmix64
+/// sequence as the 200,000-sample domain measurement (seed
+/// 0x243f6a8885a308d3), keeping only values whose serde_json text needs
+/// exactly 17 significant digits — the class that lost a bit. No literal here
+/// was invented by hand: every one of them is the text serde_json's own
+/// serializer writes.
+const LOCAL_LOSS_VALUES: [(&str, f64); 8] = [
+    ("exposure", -0.20253906249999998), // measured lossy 2026-09-26
+    ("contrast", 0.013476562499999997), // measured lossy 2026-09-26
+    ("highlights", -0.40265701370987705),
+    ("shadows", 0.30660334957630253),
+    ("temperature_delta_k", -2328.6878550005117),
+    ("tint_delta", -0.18431407904044672),
+    ("vibrance", 0.46295146649924623),
+    ("saturation", -0.12930242027940353),
+];
+
+/// A document carrying a 17-significant-digit `f64` in **every** persisted
+/// `f64` field the task names: the six `auto_features` mirrors,
+/// `matched_exposure`, `target_luminance`, `EditRecipe::adjustments`, and the
+/// eight mask-local scalars of `LocalAdjustments`.
+fn lossy_value_document() -> SidecarDocument {
+    let mut document = SidecarDocument::new(source(), "pipeline-1");
+    let recipe = &mut document.virtual_copies[0].recipe;
+
+    let features = &mut recipe.auto_features;
+    features.enable_auto_tone = true;
+    features.match_total_exposure = true;
+    features.target_luminance = 0.050431953687194664;
+    features.auto_exposure = Some(MIRROR_LOSS_VALUES[0].1);
+    features.auto_contrast = Some(MIRROR_LOSS_VALUES[1].1);
+    features.auto_whites = Some(MIRROR_LOSS_VALUES[2].1);
+    features.auto_blacks = Some(MIRROR_LOSS_VALUES[3].1);
+    features.auto_highlights = Some(MIRROR_LOSS_VALUES[4].1);
+    features.auto_shadows = Some(MIRROR_LOSS_VALUES[5].1);
+    features.matched_exposure = Some(0.10705782901764338);
+    features.analysis_fingerprint = Some(AnalysisFingerprint {
+        algorithm: "tone-rgba8-rec709".into(),
+        version: "1".into(),
+        input_fingerprint: "tone-rgba8-rec709:scheme".into(),
+        extras: Extras::new(),
+    });
+
+    recipe
+        .adjustments
+        .insert("exposure".into(), 1.5695229505050552);
+    recipe
+        .adjustments
+        .insert("contrast".into(), -0.15769134665636964);
+    recipe
+        .adjustments
+        .insert("wb_temperature".into(), 10415.777975832698);
+    recipe
+        .adjustments
+        .insert("vibrance".into(), 0.45078177482447446);
+
+    let mut local = LocalAdjustments::default();
+    for (key, value) in LOCAL_LOSS_VALUES {
+        local.set_value(key, value).expect("in-range loss value");
+    }
+    document.virtual_copies[0].mask_library.push(mask("a"));
+    document.virtual_copies[0].mask_layers.push(MaskLayer {
+        id: "layer-loss".into(),
+        mask: MaskReference {
+            copy_id: "vc-original".into(),
+            mask_id: "a".into(),
+            extras: Extras::new(),
+        },
+        inverted: false,
+        feather: 0.0,
+        blur: 0.0,
+        density: 1.0,
+        extras: Extras::new(),
+        visible: true,
+        local_adjustments: Some(local),
+    });
+
+    document
+        .validate()
+        .expect("the lossy-value document must be a valid sidecar");
+    document
+}
+
+/// Every persisted `f64` survives a `save` -> `load` -> `save` cycle
+/// bit-identically. This is the class statement, not a single example: the
+/// document carries a 17-significant-digit value in each of the six
+/// `auto_features` mirrors, in `matched_exposure`, `target_luminance`, in
+/// `EditRecipe::adjustments` and in all eight mask-local scalars.
+///
+/// **Not vacuous** (DoD §10): with `float_roundtrip` removed from the
+/// manifests the emitted text of at least one of these values denotes a
+/// different `f64`, and this test goes **red**. Measured in the mutation run.
+#[test]
+fn every_persisted_f64_survives_a_save_load_save_cycle_bit_identically() {
+    let document = lossy_value_document();
+    let first = document.to_json().unwrap();
+
+    let loaded = SidecarDocument::from_json(&first).unwrap();
+    assert_eq!(
+        document, loaded,
+        "a loaded document must equal the written one bit-for-bit (f64 Eq is bit-exact for \
+         non-NaN)"
+    );
+
+    let second = loaded.to_json().unwrap();
+    assert_eq!(
+        first, second,
+        "re-serializing a loaded document must rewrite the identical bytes; a difference here \
+         means the parser lost a bit and the serializer reshaped it"
+    );
+
+    // The mask-local scalars must survive the typed layer path too, not only
+    // the free-form `adjustments` map.
+    let layer = &loaded.virtual_copies[0].mask_layers[0];
+    let local = layer
+        .effective_local_adjustments()
+        .unwrap()
+        .expect("typed local recipe");
+    for (key, _) in LOCAL_LOSS_VALUES {
+        assert_eq!(
+            local.value(key),
+            Some(lossy_value(key)),
+            "local scalar `{key}` must come back bit-identically"
+        );
+    }
+}
+
+/// A recipe built **in memory** keeps its digest across the boundary. All the
+/// workspace digests (`RenderKey::recipe_hash`, `mask_layers_digest`,
+/// `LocalAdjustments::digest`, `MaskStateSnapshot::digest`) are blake3 over
+/// serialized bytes, and the serializer is unaffected by the feature — so a
+/// digest can only move through a value that was **parsed** first. This test
+/// pins that half of the statement: the same values, serialized, hash the same
+/// no matter how often they crossed the boundary.
+///
+/// **Not vacuous**: the expectation is a literal-independent comparison of two
+/// hashes taken from the production serializer, not a value derived from the
+/// function under test. Reverting the feature stops changing these hashes as
+/// well, which is exactly why the load-side test above is the one that guards
+/// the class.
+#[test]
+fn a_recipe_built_in_memory_keeps_its_digest_across_the_boundary() {
+    let document = lossy_value_document();
+    let layer = document.virtual_copies[0].mask_layers[0].clone();
+
+    let digest_of_document = |doc: &SidecarDocument| -> String {
+        let bytes = serde_json::to_vec(doc).expect("SidecarDocument is serializable");
+        blake3::hash(&bytes).to_hex().to_string()
+    };
+
+    let before = digest_of_document(&document);
+    let reloaded = SidecarDocument::from_json(&document.to_json().unwrap()).unwrap();
+    assert_eq!(
+        before,
+        digest_of_document(&reloaded),
+        "the document digest must be stable across a save/load cycle"
+    );
+    // ... and still stable after another full round trip, so a rewrite running
+    // twice over the same file cannot move an identity.
+    let again = SidecarDocument::from_json(&reloaded.to_json().unwrap()).unwrap();
+    assert_eq!(before, digest_of_document(&again));
+
+    // The typed local object and the layer/mask-state digests agree with the
+    // free-form map: they are all blake3 over serialized bytes, and the local
+    // scalars are the ones that used to drift.
+    let local = layer
+        .effective_local_adjustments()
+        .unwrap()
+        .expect("typed local recipe");
+    assert_eq!(local, lossy_value_local());
+    let layer_digest = layer
+        .local_adjustments
+        .as_ref()
+        .expect("typed local recipe")
+        .digest();
+    assert_eq!(
+        layer_digest,
+        lossy_value_local().digest(),
+        "the typed local digest must be a function of the value, not of the parse history"
+    );
+    assert_eq!(
+        mask_layers_digest(std::slice::from_ref(&layer)),
+        mask_layers_digest(&[lossy_value_layer()])
+    );
+    assert_eq!(
+        MaskStateSnapshot::new(vec![layer]).digest(),
+        MaskStateSnapshot::new(vec![lossy_value_layer()]).digest()
+    );
+}
+
+fn lossy_value(key: &str) -> f64 {
+    LOCAL_LOSS_VALUES
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, value)| *value)
+        .unwrap_or_else(|| panic!("unknown local adjustment `{key}`"))
+}
+
+fn lossy_value_local() -> LocalAdjustments {
+    let mut local = LocalAdjustments::default();
+    for (key, value) in LOCAL_LOSS_VALUES {
+        local.set_value(key, value).expect("in-range loss value");
+    }
+    local
+}
+
+fn lossy_value_layer() -> MaskLayer {
+    let mut document = lossy_value_document();
+    document.virtual_copies[0].mask_layers.remove(0)
+}

@@ -8,7 +8,7 @@ description = "HDR/panorama merge: alignment, linear merge, shared CLI/GUI orche
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 blake3 = "1"
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
 thiserror = "2"
 # MERGE-IMPL-15 (F6): the shared bundle orchestration logs the same
 # informational step trace the CLI/GUI emitted before the dedup.

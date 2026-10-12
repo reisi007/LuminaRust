@@ -1740,16 +1740,24 @@ laut benannte Abwägung und keine stille Optimierung:
   konsumiert sie und verweigert ohne Engine laut. Es wird **kein**
   Stub-Ergebnis als gültiges Artefakt persistiert. Sobald F-082 geschlossen
   ist, wird die Matte direkt persistiert, ohne die Aktionsfläche zu ändern.
-- **Byte-Identität (bekannte Grenze, 2026-09-17):** „Unangetastet" gilt
-  strukturell (kein Modul schreibt fremde Felder), nicht streng byteweise:
-  der serde_json-Load/Save-Roundtrip kann fremde Float-Felder um 1 ULP
-  verschieben (ohne `float_roundtrip`, vorbestehend). Exakter Byte-Roundtrip
-  ist ein eigener Folgeentscheid.
+- **Byte-Identität (Stand 2026-10-12):** „Unangetastet" gilt strukturell
+  (kein Modul schreibt fremde Felder) **und byteweise für den
+  serde_json-Load/Save-Roundtrip**: seit `JSON-FLOAT-ROUNDTRIP` baut der
+  Workspace `serde_json` mit `float_roundtrip`, jeder `f64`-Wert überlebt
+  Laden und Speichern bitidentisch. Der frühere Zusatz „der
+  serde_json-Load/Save-Roundtrip kann fremde Float-Felder um 1 ULP
+  verschieben (ohne `float_roundtrip`, vorbestehend)" ist damit
+  **zurückgenommen** — Widerlegungsgrund: die gemessene Restunschärfe war auf
+  Werte mit ≥ 17 signifikanten Dezimalstellen beschränkt und wird durch das
+  Feature auf 0 gesenkt; gemessen über 200.000 Werte im Reglerbereich und die
+  40-Mitglieder-Fixture-Familie (`feature/quality/
+  json-float-roundtrip-plan.md`). Exakter Byte-Roundtrip war damit **keine**
+  offene Folgeentscheid mehr, sondern mit `JSON-FLOAT-ROUNDTRIP` entschieden.
 - **Stand 2026-09-17 (GUI-GEN-GRANULAR-10, Verifizierung BESTANDEN):**
   `lumina regenerate` (CLI, je Modul + Sammel-Default), GUI-Sammel-Button +
   Modulaktionen, laute Render-Re-Inferenz, `info!`-Logs; 9 CLI-E2E + GUI-/Core-
-  Tests grün. Offen: F-048-Revision, `process`-Vereinheitlichung, Byte-Roundtrip
-  (s. o.), Auto-WB-Aktion bei Implementierung.
+  Tests grün. Offen: F-048-Revision, `process`-Vereinheitlichung,
+  Auto-WB-Aktion bei Implementierung. Erledigt: Byte-Roundtrip (s. o.).
 - **Abgrenzung: Rote-Augen-Erkennung (LRPAR-G14-REDEYE-AUTO-15, 2.0)** ist
   bewusst **kein** `regenerate`-Modul. `regenerate` regeneriert veraltete oder
   fehlende *aktivierte* analysierbare Größen; die rote-Augen-Erkennung ist eine

@@ -1826,87 +1826,72 @@ finalen Pixel-Pass in `recipe.adjustments` zurückgefaltet.
 `false`, und ihre Ausgabebytes sind unverändert. Ein stilles Nachschreiben von
 `analysis_fingerprint` ohne Auto-Tone gibt es nicht.
 
-### Die JSON-Round-Trip-Grenze der `f64`-Felder (normativ, AUTO-TONE-CLI-6 Klausel 9)
+### Der `f64`-JSON-Round-Trip ist exakt (normativ, AUTO-TONE-CLI-6 Klausel 9)
 
-**Der Workspace baut `serde_json` (1.0.151) ohne das Feature `float_roundtrip`.**
-Das Feature steuert nur den **Parser**; der Serialisierer (ryu) schreibt
-unabhängig davon immer die **kürzeste, exakt zurücklesbare** Dezimaldarstellung.
-Die Textzeile im Sidecar ist daher **immer korrekt** — der **Parser** verliert
-aber das letzte Bit: er findet nicht in allen Fällen diejenige `f64`, die der
-Text darstellt. Der Verlust passiert also beim **Laden**, nicht beim Schreiben,
-und die Datei auf der Platte sieht unverdächtig aus. Genau diese Asymmetrie ist
-in `auto_tone_float.rs` getrennt gepinnt (emittierter Text exakt, Parser genau
-1 ULP daneben), damit die Diagnose nicht auf den falschen Verdächtigen zeigt.
+**Der Workspace baut `serde_json` (1.0.151) seit `JSON-FLOAT-ROUNDTRIP` mit dem
+Feature `float_roundtrip`** (Eigentümerentscheid `JSON-ROUNDTRIP`, 2026-10-02,
+Variante (a)). Jeder `f64`-Wert, den der Serialisierer schreibt, wird vom Parser
+bitidentisch zurückgelesen — der 1-ULP-Verlust beim Laden, den dieser Abschnitt
+zuvor als gemessene Grenze festgeschrieben hatte, ist **entfallen**.
 
-**Gemessen (2026-09-26, `serde_json` 1.0.151 ohne `float_roundtrip`, gegen den
-Wert-domänen-Bereich der sechs Regler `[-10, 10]`):**
+**Zwei Korrekturen an der bisherigen Formulierung, an der Fundstelle
+zurückgenommen** (DoD §9), weil sie beim Nachschlagen in die Irre führen:
 
-| Messung | Ergebnis |
-|---|---|
-| 200.000 `f64` auf einem linearen Raster (Schrittweite 1e-4) in `[-10, 10]` | **14.900 (7,45 %)** überleben den Round-Trip nicht |
-| 200.000 `f64` aus einem deterministischen 64-Bit-LCG in `[-10, 10]` | 15.804 (7,90 %) — die Quote ist stichprobenabhängig, 7,45 % ist der rasterbegünstigte Wert |
-| **240 echte Auto-Tone-Werte** aus 40 deterministischen Fixtures (je 6 Regler) | **44 (18,33 %)** verlustbehaftet |
-| maximale Abweichung in **allen** Messungen | **exakt 1 ULP** |
+1. Der Serialisierer ist seit `serde_json` 1.0.151 **nicht mehr `ryu`, sondern
+   `zmij`** (`src/ser.rs:1716`, `write_f64` → `zmij::Buffer::format_finite`).
+   `grep -rn ryu src/ Cargo.toml` im verlinkten Krat liefert **0 Treffer**. Für
+   die Eigenschaft unerheblich (beide schreiben die kürzeste
+   exakt-wiederlesbare Form), für die Fehlerdiagnose nicht.
+2. Das Feature ist **abhängigkeitsfrei** (`float_roundtrip = []`). `Cargo.lock`
+   hat sich durch die Aktivierung **nicht** geändert — die Erwartung einer
+   Lock-Änderung im Task-Formular ist damit zurückgenommen.
 
-Die echten Auto-Tone-Werte sind also rund **2,5-mal** so häufig betroffen wie ein
-gleichverteilter Zug, weil sie fast immer nahe an einem binären Bruch landen
-(z. B. `k/1024` plus einem winzigen Rest). Zwei verifizierte Einzelfälle:
-`-0.20253906249999998` wird als `-0.2025390625` zurückgelesen,
-`0.013476562499999997` als `0.013476562499999995` (je 1 ULP).
+**Was das Feature nicht tut:** es berührt ausschließlich den **Parser**
+(`grep -rn float_roundtrip src/` → 23 Treffer, alle in `src/de.rs` und
+`src/value/de.rs`, null in `src/ser.rs`). Der Serialisierer ist in beiden Builds
+derselbe. Ein Digest über serialisierte Bytes kann sich deshalb nur ändern, wenn
+ein Wert **vorher geparst** wurde — also nur über einen Ladevorgang, und dort ist
+die Änderung der Zweck des Features.
 
-**Konsequenz für den Wiederverwenzungszweig:** weil dieser die persistierten
-Werte **aus dem geladenen Sidecar** übernimmt, sind die wiederverwendeten Werte
-für diese 18 % der Fälle **nicht bitidentisch** mit dem, was der Algorithmus
-berechnet hat. Genau das ist der dokumentierte, gemessene Zustand — und er ist
-**kein Fehler des Wiederverwenzungspfads**: die Freshness (präsenzbasiert) und
-der Sechsersatz bleiben vollständig, nur der letzte Dezimalbit kann abweichen.
+**Gemessen in diesem Slice (2026-10-12), gegen dieselbe `serde_json`-Version,
+die der Workspace linkt:**
 
-**Der Verlauf konvergiert und akkumuliert nicht** (gemessen, 40 Fixtures × 3
-Läufe über denselben Sidecar):
-
-| Übergang | gedriftete Reglerwerte | maximale Abweichung |
+| Messung | Feature **aus** | Feature **an** |
 |---|---|---|
-| Lauf 1 → Lauf 2 (Wiederverwenzung) | 44 von 240 | 1 ULP |
-| Lauf 2 → Lauf 3 | **0 von 240** | 0 |
+| 200.000 `f64` (splitmix64, Seed `0x243f6a8885a308d3`) in `[-10, 10]` | 15.801 verlustbehaftet (**7,90 %**) | **0** |
+| maximale Abweichung in diesem Lauf | **exakt 1 ULP** | — |
+| 43 committete JSON-Dokumente des Workspace (5236 Float-Literale) | **0** verlustbehaftet | **0** |
+| kanonische Form + blake3-Digest dieser 43 Dokumente | — | **unverändert** (0 von 43) |
+| 40-Mitglieder-Fixture-Familie, 240 Auto-Tone-Literale, Läufe 1→2→3 | 44 Drift in Lauf 1→2 | **0 Drift** in beiden Übergängen |
 
-Der Drift ist also **einmalig**: Lauf 1 schreibt den exakten Text, Lauf 2 liest
-ihn (1 ULP daneben) und schreibt die kürzeste Darstellung *dieses* Wertes, und
-ab Lauf 2 ist der persistierte Text bereits ein Fixpunkt des Parsers. Die
-Freshness ist ab Lauf 1 erfüllt, `regenerate` überschreibt also nichts.
+**Warum kein committetes Byte betroffen war.** Der Verlust trat nur auf, wenn
+die kürzeste Dezimaldarstellung eines Werts **mindestens 17 signifikante
+Stellen** braucht — dann ist der `u64`-Signifikant größer als 2^53 und wird als
+`f64` nicht exakt gehalten (`serde_json/src/de.rs:638`,
+`#[cfg(not(feature = "float_roundtrip"))] f64_from_parts`); ebenso ab einem
+Skalierfaktor `10^|exp|` oberhalb von 22. Kurzstellige Reglerliterale
+(≤ 16 signifikante Stellen) überlebten den Round-Trip auch ohne das Feature.
+Verloren gehen konnte daher nur **berechnetes** `f64` — weshalb die
+Auto-Tone-Spiegel rund 2,5× so oft betroffen waren wie ein gleichverteilter Zug.
 
-**Ausgabe-Bytes.** Über dieselben 40 Fixtures war das gerenderte PNG in
-**40 von 40** Fällen zwischen Lauf 1 und Lauf 2 bytegleich und ebenso zwischen
-Lauf 2 und Lauf 3. Das ist eine **Beobachtung an 40 Fixtures, kein Beweis**:
-ein 1-ULP-Unterschied im Exposure kann die u8-Ausgabe prinzipiell verschieben.
-Die Auto-Tone-Goldens in `crates/lumina-cli/src/tests/` sind deshalb bewusst auf
-ein Fixture gelegt, dessen sechs Werte den Round-Trip **exakt** überstehen —
-nicht, um die Grenze zu verstecken, sondern damit der Byte-Golden eine
-unabhängige Größe bleibt. Der reale Fall ist separat gepinnt
-(`auto_tone_float.rs`: Verlust bei genau 1 ULP, Konvergenz nach einem Lauf,
-Byte-Stabilität über viele Fixtures).
+**Was damit neu gilt.** Die Reuse-Branch von `apply_auto_tone_result` liefert
+für alle sechs Spiegel bitidentisch das, was der Algorithmus berechnet hat; zwei
+Läufe über denselben Sidecar schreiben dieselben Bytes; und jede Datei, die
+geladen und wieder gespeichert wird, behält ihr Digest. Der Abschnitt
+**„Warum das hier nicht behoben wird"** sowie die **„Gemessene Nebenwirkung auf
+Byte-Ebene"** (27 der 40 Familienmitglieder, 44 von 240 Literale) sind mit dieser
+Entscheidung **zurückgenommen** — sie beschreiben den Zustand vor der
+Aktivierung. Ihre Zahlen bleiben hier als Kontext stehen, weil sie die Herkunft
+des Regressionskorpus in `auto_tone_float.rs` belegen.
 
-**Warum das hier nicht behoben wird.** `float_roundtrip` zu aktivieren würde
-jedes **bestehende** persistierte Sidecar-Byte verändern — alle Rezept-Digests,
-`mask_layers_digest`, Render-Identitäten und Goldens wären neu zu prüfen, und
-jede bereits geschriebene Datei würde beim nächsten Laden andere `f64`-Werte
-liefern. Das ist weit außerhalb dieses Slices und eine **eigene, offene
-Entscheidung** (Task `JSON-FLOAT-ROUNDTRIP`, Release 1.5: aktivieren vs.
-bewusst lassen, mit Migrations-/Golden-Plan). Der Vertrag, den dieser Slice
-stattdessen festschreibt, ist die **gemessene Grenze selbst**: sie ist benannt,
-quantifiziert und getestet, statt weggerechnet.
+**Was unverändert gilt.** Byte-Stabilität des gerenderten PNGs ist weiter eine
+Beobachtung über 40 Fixtures, **kein Beweis**: ein 1-ULP-Unterschied in der
+Belichtung kann ein `u8`-Sample prinzipiell verschieben. Dass dies heute nicht
+mehr auftreten *kann*, ist gerade die Folge des Features — deshalb vergleichen
+die Tests nun zusätzlich die persistierten Literale, nicht nur die Pixel.
 
-**Gemessene Nebenwirkung auf Byte-Ebene.** Weil Lauf 2 den kürzeren Text des
-1-ULP-versetzten Wertes schreibt, **ändern sich die Sidecar-Bytes** zwischen
-Lauf 1 und Lauf 2 für die 27 der 40 Familienmitglieder mit Drift (44 von 240
-Reglerliteralen). Jeder über die serialisierten Bytes gebildete Digest
-(blake3, z. B. `LocalAdjustments::digest`, `mask_layers_digest`) ist damit
-ebenfalls betroffen, sobald nach einem Laden neu serialisiert wird. **Nicht
-gemessen** wurde in diesem Slice ein tatsächlicher Digest-Wechsel an einer
-Maske: die Auto-Tone-Fixtures tragen keine Maske, und AUTO-TONE-CLI-6 fasst
-`lumina-sidecar` nicht an. Der Punkt ist hier nur als **gemessene
-Byte-Änderung** festgehalten, weil er die Entscheidung von
-`JSON-FLOAT-ROUNDTRIP` gewichtet — deren Abnahme verlangt ohnehin „einen
-Beweis, dass kein Rezept-Digest sich unbeabsichtigt ändert".
+Migrations- und Golden-Plan mit allen gemessenen Bytes und den benannten Gates:
+`feature/quality/json-float-roundtrip-plan.md`.
 
 ## Exposure Matching
 
