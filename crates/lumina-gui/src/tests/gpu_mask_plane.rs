@@ -24,7 +24,9 @@
 #![cfg(feature = "gpu")]
 
 use super::*;
-use crate::present_mask_plane::{zero_band_rows, MaskPlaneIntent, ZERO_BAND_BYTES};
+use crate::present_mask_plane::{
+    zero_band_rows, MaskPlaneIntent, VramMaskPlaneResidency, ZERO_BAND_BYTES,
+};
 
 /// A loaded source with one brushed mask whose prompt is evaluated into the
 /// render. The caller then removes or keeps the coverage.
@@ -74,8 +76,14 @@ fn a_frame_without_coverage_clears_the_plane_instead_of_skipping() {
          (measured maxAbsDiff=67 over 127707 of 603904 presented photo bytes)"
     );
 
-    // The same holds for the shipped default state, which never had a mask:
-    // the clear is not conditional on a mask having existed.
+    // The same *intent* holds for the shipped default state, which never had a
+    // mask: the frame carries no coverage, so the sync asks for `Clear`. The
+    // **write** behind that intent is what GPU-CLEAR-TRANSITION
+    // (`GPU-MASKPLANE-CLEAR-PERF-51`) narrowed — without a prior non-zero plane
+    // this state performs no zero write at all, pinned by
+    // `a_maskless_render_without_a_prior_plane_clears_nothing` below. So the
+    // clear is not conditional on a mask having existed; the *number of writes*
+    // is.
     let mut fresh = new_app();
     fresh
         .load_bytes(png(), "gpu-mask-plane-default.png")
@@ -219,5 +227,246 @@ fn zero_bands_cover_every_row_of_the_active_entry() {
         zero_band_rows(64, 1),
         1,
         "a budget below one row still yields one row"
+    );
+}
+
+// ===========================================================================
+// GPU-MASKPLANE-CLEAR-PERF-51 / `GPU-CLEAR-TRANSITION`: the zero write runs
+// only on the transition "non-null plane resident → no layer".
+//
+// What is *not* pinned here: the bytes on the device. Half of the condition
+// (reading the active pool entry key) and the write itself need an adapter, so
+// the numbers below count decisions and runs of the clear routine — the device
+// half is the `GPU-E2E` gate (`--features gpu-adapter-tests` plus the affected
+// GUI-GPU tests).
+
+/// An app in the state a live brush drag leaves behind: the gesture is running,
+/// and the present path composites the plane it uploads into.
+fn app_with_resident_live_brush_plane() -> LuminaApp {
+    let mut app = new_app();
+    app.load_bytes(png(), "gpu-mask-plane-transition.png")
+        .unwrap();
+    app.render().unwrap();
+    app.set_section_open(SECTION_MASKING, true);
+    app.set_mask_tool(MaskTool::Brush);
+    app.drawing = true;
+    app.sync_mask_plane_to_vram();
+    assert_eq!(
+        app.vram_mask_plane_clear.residency,
+        VramMaskPlaneResidency::NonZero,
+        "the live-brush arm must mark the composited plane as coverage — it is \
+         what makes the maskless render after the gesture write zeros once"
+    );
+    app
+}
+
+/// (b) The transition writes zeros **exactly once**: the render that drops the
+/// last coverage, and no render after it.
+#[test]
+fn a_maskless_render_after_coverage_clears_exactly_once() {
+    let mut app = app_with_resident_live_brush_plane();
+
+    // The gesture ends, so the frame carries no coverage any more while the
+    // plane still holds what the brush wrote.
+    app.drawing = false;
+    assert_eq!(app.vram_mask_plane_intent(), MaskPlaneIntent::Clear);
+    assert!(
+        app.vram_mask_plane_needs_zero_write(),
+        "the transition 'non-null plane resident → no layer' must write zeros"
+    );
+    let writes_before = app.vram_mask_plane_clear.zero_writes;
+    app.sync_mask_plane_to_vram();
+    assert_eq!(
+        app.vram_mask_plane_clear.zero_writes,
+        writes_before + 1,
+        "the transition render performs the zero write"
+    );
+
+    // Every further maskless render sees a plane that reads zero. Before
+    // `GPU-CLEAR-TRANSITION` each of these paid the write again — 37 µs / 722 µs
+    // / 15,21 ms at 160×120 / 1280×853 / 6000×4000 (F-074-N10).
+    for frame in 1..=4 {
+        assert_eq!(
+            app.vram_mask_plane_intent(),
+            MaskPlaneIntent::Clear,
+            "frame {frame} still carries no coverage"
+        );
+        assert!(
+            !app.vram_mask_plane_needs_zero_write(),
+            "frame {frame} must not rewrite a plane that reads zero"
+        );
+        app.sync_mask_plane_to_vram();
+        assert_eq!(
+            app.vram_mask_plane_clear.zero_writes,
+            writes_before + 1,
+            "frame {frame} must not add a second zero write"
+        );
+    }
+}
+
+/// (c) A maskless render with **no** non-null plane behind it writes nothing —
+/// not once, and not on any later frame. This is the shipped default state: a
+/// session that never painted a mask.
+#[test]
+fn a_maskless_render_without_a_prior_plane_clears_nothing() {
+    let mut app = new_app();
+    app.load_bytes(png(), "gpu-mask-plane-cold.png").unwrap();
+    app.render().unwrap();
+    assert!(
+        app.render_mask_layers.is_empty(),
+        "precondition: no evaluated layer"
+    );
+    assert_eq!(app.vram_mask_plane_intent(), MaskPlaneIntent::Clear);
+    assert_eq!(
+        app.vram_mask_plane_clear.residency,
+        VramMaskPlaneResidency::Zero,
+        "nothing has been written in this session, and every pooled entry is \
+         created with a zeroed mask texture"
+    );
+
+    for frame in 1..=4 {
+        assert!(
+            !app.vram_mask_plane_needs_zero_write(),
+            "frame {frame} has no plane to zero"
+        );
+        app.sync_mask_plane_to_vram();
+    }
+    assert_eq!(
+        app.vram_mask_plane_clear.zero_writes, 0,
+        "a session without coverage never writes zeros"
+    );
+}
+
+/// The zero verdict is bound to the entry it was made in. The pool keys entries
+/// by dimensions and re-points its active entry on every `ensure_vram` without
+/// clearing a reactivated entry, so a zeroed entry that is no longer the active
+/// one carries no verdict at all — and a verdict that *did* carry over would
+/// present a reactivated entry's old coverage.
+#[test]
+fn a_zeroed_entry_that_is_no_longer_active_arms_the_next_write() {
+    let mut app = new_app();
+    app.load_bytes(png(), "gpu-mask-plane-entry.png").unwrap();
+    let zeroed = (1280u32, 853u32);
+    app.vram_mask_plane_clear.residency = VramMaskPlaneResidency::ZeroedIn(zeroed);
+
+    // Same entry: the verdict holds.
+    assert!(!app.vram_mask_plane_clear.needs_zero_write(Some(zeroed)));
+    // Source or resolution switch: a different entry is active now. It may hold
+    // an old plane, so the conservative answer is to write it.
+    assert!(app
+        .vram_mask_plane_clear
+        .needs_zero_write(Some((6000, 4000))));
+}
+
+/// A zero write that stopped part-way leaves coverage behind (the bands it did
+/// write are zero, the rest is not), so the verdict must stay non-zero and keep
+/// asking for the write. This pins the **state** the failure leaves, which is
+/// what the next render's decision reads.
+///
+/// What is **not** tested, stated plainly rather than covered by a claim: the
+/// failure itself. Reaching `ZeroWriteOutcome::Incomplete`
+/// (`present_mask_plane.rs`, the `Incomplete` arm of
+/// `clear_active_vram_mask_plane`) needs an adapter whose `upload_mask_tile`
+/// fails, and no test in this tree drives it — measured by name:
+/// `ZeroWriteOutcome` occurs only in `present_mask_plane.rs`, in no test file,
+/// and the tests that attach a real `GpuContext` never make an upload fail. So
+/// the earlier wording "is part of the `GPU-E2E` gate" is withdrawn: an adapter
+/// run alone does not exercise this arm, it needs a device that refuses a write.
+/// The band geometry it walks is pinned by
+/// `zero_bands_cover_every_row_of_the_active_entry`; the *bytes* of a failed
+/// clear are a named open gate.
+#[test]
+fn a_partial_zero_write_keeps_asking_for_the_write() {
+    let mut app = new_app();
+    app.load_bytes(png(), "gpu-mask-plane-partial.png").unwrap();
+    app.vram_mask_plane_clear.residency = VramMaskPlaneResidency::NonZero;
+    assert!(
+        app.vram_mask_plane_needs_zero_write(),
+        "a plane that is only partly zero still holds coverage"
+    );
+}
+
+/// The device half of the transition, so it is not carried by reasoning alone:
+/// on a machine with a usable adapter the maskless render after a mask render
+/// leaves a plane that reads back as **zero**, and the maskless render after
+/// *that* performs no write at all. The decision tests above pin the same
+/// property without an adapter; this one measures the bytes. Without one it
+/// skips loudly rather than passing silently (`Agents.headless.md` §1/§3) — a
+/// test that does not run is neither green nor red.
+///
+/// FIXTURE-SKIP-VISIBLE-2: the skip reason goes to the **real** stderr through
+/// `lumina_testskip`, because libtest discards the captured output of a
+/// *passing* test. The plain `eprintln!` this replaces was measured invisible:
+/// `cargo test -p lumina-gui --lib -- --test-threads=1 a_maskless_render_zeroes`
+/// reported `ok` with **0** hits for the reason (`grep -c "no GPU adapter"` and
+/// `grep -c "skipping the adapter half"` both 0; the second grep is the arm a
+/// headless host actually takes — `GpuContext::new()` succeeds, `is_available()`
+/// does not). This is not an `#[ignore]` gate — the test runs in the normal
+/// suite and exits early when the adapter is absent — so
+/// `check_env_gate_reasons.sh` does not cover it and the reporter is used
+/// directly.
+#[test]
+#[cfg(feature = "gpu")]
+fn a_maskless_render_zeroes_the_plane_once_on_a_real_adapter() {
+    let (mut app, id) = app_with_evaluated_mask();
+    let Some(gpu) = lumina_gpu::GpuContext::new().ok() else {
+        lumina_testskip::report_env_skip(
+            "a_maskless_render_zeroes_the_plane_once_on_a_real_adapter",
+            "no GPU adapter; skipping the adapter half of the transition test",
+        );
+        return;
+    };
+    if !gpu.is_available() {
+        lumina_testskip::report_env_skip(
+            "a_maskless_render_zeroes_the_plane_once_on_a_real_adapter",
+            "GPU unavailable; skipping the adapter half of the transition test",
+        );
+        return;
+    }
+    app.gpu = Some(gpu);
+
+    // Baseline: an unwritten pool. Nothing has been written in this session and
+    // no entry exists yet, so there is nothing to zero.
+    app.render().unwrap();
+    assert!(
+        !app.vram_mask_plane_needs_zero_write(),
+        "criterion (c) on the device: nothing resident, no write"
+    );
+    assert_eq!(app.vram_mask_plane_clear.zero_writes, 0);
+
+    // Real coverage: the evaluated layer is combined and pushed into the entry
+    // the present path composites.
+    app.render().unwrap();
+    assert_eq!(app.vram_mask_plane_intent(), MaskPlaneIntent::Push);
+    assert!(
+        app.vram_mask_is_evaluated,
+        "the combined plane must have been written"
+    );
+
+    // The transition: deleting the last mask empties the layer list, so this
+    // render writes zeros — once — and the plane must read back as zero.
+    app.delete_mask(&id).unwrap();
+    app.render().unwrap();
+    assert_eq!(
+        app.vram_mask_plane_clear.zero_writes, 1,
+        "the transition render is the one that writes zeros"
+    );
+    let (width, height, values) = app
+        .gpu
+        .as_ref()
+        .expect("adapter attached above")
+        .readback_mask_plane()
+        .expect("mask plane readback");
+    assert!(
+        values.iter().all(|&value| value == 0),
+        "the cleared {width}x{height} plane must read zero"
+    );
+
+    // The frame after it: same maskless state, no write. This is the half that
+    // removes 37 µs / 722 µs / 15,21 ms per maskless render (F-074-N10).
+    app.sync_mask_plane_to_vram();
+    assert_eq!(
+        app.vram_mask_plane_clear.zero_writes, 1,
+        "a second maskless render must not rewrite a zero plane"
     );
 }

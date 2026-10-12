@@ -127,9 +127,33 @@ impl LuminaApp {
     /// returns early when no adapter is bound, so an adapter-less machine can
     /// never reach its failure branches and therefore could not observe the
     /// error path at all. This recorder is what the headless test drives.
+    ///
+    /// Its `written` arm is also a witness for GPU-CLEAR-TRANSITION
+    /// (`GPU-MASKPLANE-CLEAR-PERF-51`): a plane that was written holds coverage,
+    /// so the maskless render that follows the gesture has to zero it once.
+    /// **Measured, not argued:** the headless test drives this pure recorder
+    /// and asserts the residency it leaves, and deleting only the
+    /// `if written { self.note_vram_mask_plane_coverage(); }` arm turns
+    /// `crates/lumina-gui/src/tests/gpu_mask_plane_brush.rs` red. A failure
+    /// writes nothing and therefore says nothing about what is resident — the
+    /// previous verdict still describes the plane exactly (also asserted).
+    ///
+    /// The **second** brush witness — the `wrote_tile` bookkeeping at the tail
+    /// of [`Self::gpu_upload_brush_tile`] — is deliberately **not** carried as a
+    /// tested claim here, and the earlier round-1 wording that did so was
+    /// measured false: deleting it left the whole suite green, because that
+    /// function returns before any upload when no adapter is bound
+    /// (`!self.gpu.is_some_and(is_available)`), so headless no execution reaches
+    /// the arm at all. It is therefore **carried by reasoning, not by a test**,
+    /// and the site that *is* measured is the `KeepLiveBrush` arm of
+    /// `sync_mask_plane_to_vram` (`present_mask_plane.rs`), which marks the
+    /// composited live plane as coverage on every live-brush frame.
     #[cfg(feature = "gpu")]
     pub(crate) fn note_live_brush_upload_outcome(&mut self, written: bool) {
         self.live_brush_plane_stale = !written;
+        if written {
+            self.note_vram_mask_plane_coverage();
+        }
     }
 
     /// Rebuild (when needed) and stamp one live mark into the selected mask's
@@ -208,6 +232,7 @@ impl LuminaApp {
             }
             return;
         }
+        let mut wrote_tile = false;
         for tile in tiles {
             let x0 = tile.tx * lumina_gpu::tiling::TILE_SIZE;
             let y0 = tile.ty * lumina_gpu::tiling::TILE_SIZE;
@@ -241,11 +266,33 @@ impl LuminaApp {
                     "brush tile upload failed at tile ({x0},{y0}) ({tile_width}x{tile_height}): {error}"
                 );
             } else {
+                // GPU-CLEAR-TRANSITION: a written tile is coverage. The tile
+                // path is the one that never touched `live_brush_plane_stale`
+                // (the failure arm above deliberately keeps it armed), so
+                // without this witness a gesture that paints only in tiles —
+                // the normal case after the first dab — could leave the plane
+                // marked "reads zero" and present the stroke as current
+                // coverage.
+                //
+                // CARRIED BY REASONING, NOT BY A TEST — and the earlier wording
+                // here read as if it were proven. It is not: this function
+                // returns above when no adapter is bound, so headless no run
+                // reaches this arm, and deleting the whole bookkeeping below
+                // left `cargo test -p lumina-gui --lib` green (measured,
+                // round-1 verification). The measured, tested counterpart is the
+                // `KeepLiveBrush` arm of `sync_mask_plane_to_vram`
+                // (`present_mask_plane.rs`), which marks the composited live
+                // plane as coverage on every live-brush frame. Recorded after
+                // the loop rather than per tile because `gpu` borrows `self`.
+                wrote_tile = true;
                 log::trace!(
                     "gpu_upload_brush_tile stamped ({nx:.3},{ny:.3}) r={:.3} -> tile ({x0},{y0}) {tile_width}x{tile_height}",
                     mark.radius
                 );
             }
+        }
+        if wrote_tile {
+            self.note_vram_mask_plane_coverage();
         }
     }
 }

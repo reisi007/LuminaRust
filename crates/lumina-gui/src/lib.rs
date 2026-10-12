@@ -1817,6 +1817,10 @@ pub struct LuminaApp {
     /// then the shader overlay already shows what the CPU overlay would paint.
     #[cfg(feature = "gpu")]
     vram_mask_is_evaluated: bool,
+    /// GPU-MASKPLANE-CLEAR-PERF-51 (`GPU-CLEAR-TRANSITION`), see
+    /// `present_mask_plane.rs`.
+    #[cfg(feature = "gpu")]
+    vram_mask_plane_clear: crate::present_mask_plane::VramMaskPlaneClear,
     /// The egui user-texture id + size of the GPU-presented preview for THIS
     /// frame (recomputed in `update_texture`, consumed in `draw_preview`).
     #[cfg(feature = "gpu")]
@@ -2569,6 +2573,8 @@ impl LuminaApp {
             gpu_stage_gate: None,
             #[cfg(feature = "gpu")]
             vram_mask_is_evaluated: false,
+            #[cfg(feature = "gpu")]
+            vram_mask_plane_clear: crate::present_mask_plane::VramMaskPlaneClear::default(),
             #[cfg(feature = "gpu")]
             gpu_present_frame: None,
             #[cfg(feature = "gpu")]

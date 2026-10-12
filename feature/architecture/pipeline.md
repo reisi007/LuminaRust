@@ -2169,17 +2169,40 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
      `maxAbsDiff=67 differingBytes=127707 of 603904`; Gegenprobe mit
      `return false;` statt der Relaxation: `0 / 0`. Die Erreichbarkeit ist neu
      durch diese Änderung, der Poolzustand nicht.
-     **Erreichter Stand (2026-09-27, Verifikations-Runde 3):** Die dritte
-     Bedingung ist jetzt **per Konstruktion** erfüllt und nicht überwacht:
-     `src/present_mask_plane.rs` schreibt am Ende **jedes** Renders Nullen über
-     den *aktiven* Pool-Eintrag, sobald der Frame keine Coverage trägt
-     (`MaskPlaneIntent::Clear`, Zeilenbänder mit 1-MiB-Budget über
-     `upload_mask_tile`, damit die transiente Puffergröße unabhängig von der
-     Auflösung begrenzt bleibt). Damit braucht es kein Residency-Flag, das
-     driften kann — das Leeren der Ebenenliste und das Leeren der Plane fallen
-     auf demselben Render zusammen. Bewusst **kein** `lumina-gpu`-Eingriff: der
-     Pool wird nur gelesen (`vram_dimensions`), nie re-pointiert, damit der Sync
-     nicht den Eintrag wechseln kann, aus dem der Present liest. Ausgenommen ist
+     **Erreichter Stand (2026-09-27, Verifikations-Runde 3) — seit 2026-10-02
+     überholt, der geltende Stand steht daneben:** Die dritte Bedingung ist
+     **per Konstruktion** erfüllbar: `src/present_mask_plane.rs` schrieb am Ende
+     **jedes** Renders Nullen über den *aktiven* Pool-Eintrag, sobald der Frame
+     keine Coverage trug (`MaskPlaneIntent::Clear`, Zeilenbänder mit
+     1-MiB-Budget über `upload_mask_tile`, damit die transiente Puffergröße
+     unabhängig von der Auflösung begrenzt bleibt). **Diese Fassung ist
+     zurückgenommen** — und der Widerlegungsgrund steht hier, damit sie beim
+     nächsten Anfassen nicht wiederholt wird: der Satz „Damit braucht es kein
+     Residency-Flag, das driften kann" war eine Begründung **gegen** ein Flag,
+     und genau dieses Flag existiert heute. Am Adapter gemessen (F-074-N10,
+     Metal M5 Pro) kostet der Clear **37 µs / 722 µs / 15,21 ms** (160×120 /
+     1280×853 / 6000×4000), volumengetrieben, ~13× ein Vollrender @24 MP — und
+     er fiel dafür bei **jedem** maskenlosen Render an, auch wenn die Plane
+     längst null liest.
+     **Geltender Stand (Eigentümerentscheid 2026-10-02,
+     `GPU-CLEAR-TRANSITION`):** der Null-Write läuft nur noch beim **Übergang**
+     „Nicht-Null-Plane resident → keine Ebene". Gefragt wird nicht der Intent,
+     sondern die Residency des *aktiven* Pool-Eintrags
+     (`VramMaskPlaneResidency`, abgefragt über
+     `VramMaskPlaneClear::needs_zero_write(active_entry_key)`): solange der
+     Eintrag Coverage halten **kann** (`NonZero` — etwa ein früherer Clear, der
+     auf halbem Weg abbrach — oder `ZeroedIn` mit **anderer** Auflösung), wird
+     geschrieben; liest er null (`Zero`, oder `ZeroedIn` mit genau diesem
+     Schlüssel), bleibt der Write aus. Jeder Write der Plane wird einzeln
+     bezeugt (`note_vram_mask_plane_coverage`: die gepuschte kombinierte Ebene,
+     ein gelungener Brush-Upload), und ein Eintrag, den nie ein Zeuge
+     beschrieben hat, wurde von `lumina-gpu`'s `create_vram_state` genullt
+     angelegt — deshalb ist `Zero` für **jeden** Eintrag ein soundes Urteil. Das
+     Leeren der Ebenenliste und das Leeren der Plane fallen damit wieder
+     zusammen, aber nur auf dem **Übergangsrender**, nicht auf jedem. Bewusst
+     **kein** `lumina-gpu`-Eingriff: der Pool wird nur gelesen
+     (`vram_dimensions`), nie re-pointiert, damit der Sync nicht den Eintrag
+     wechseln kann, aus dem der Present liest. Ausgenommen ist
      nur die eine Coverage, die der VRAM-Pfad tatsächlich compositen darf: eine
      laufende **Brush**-Geste (Fallback-Arm `KeepLiveBrush`, dieselbe Bedingung
      wie der `drawing`-Zweig des Gates); ein abgebrochener Live-Gesture löscht
