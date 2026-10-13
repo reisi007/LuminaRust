@@ -41,6 +41,14 @@
 #     `#[cfg(feature = "lensfun")] mod lensfun_diagnostics;`, so a lean
 #     `--no-default-features` build makes it absent from dep-info. The sentinel
 #     below turns that case into exit 2 rather than a false orphan finding.
+#   * Feature-gated test files are DERIVED from the code, never hand-listed:
+#     every `*.rs` under `src/tests/` (a nested submodule file declares its own
+#     children, e.g. `geometry.rs` -> `crop_session`) plus the crate-root
+#     `mod tests { ... }` block. `lumina-gui` declares its whole test tree
+#     INLINE in `src/lib.rs` and has no `src/tests/mod.rs` at all, so a
+#     tests-tree-only scan is inert for it. Only a file whose gated `mod` name
+#     matches it exactly is ignored, so a typo'd declaration still leaves an
+#     ORPHAN. The OK line names how many files that is.
 #   * A stale artifact from a DIFFERENT feature set can still list an orphan
 #     and mask it. The freshness filter drops every dep-info older than the
 #     sources it was built from, which covers the common case; it cannot
@@ -92,24 +100,108 @@ fi
 # ------------------------------------------- 1b. feature-gated test files
 # Files that are only reachable under a `#[cfg(feature = ...)]` mod declaration
 # are legitimately absent from a lean build and must not look like orphans. The
-# list is derived, so a newly gated test module lands here without a script edit.
+# list is derived from the code, so a newly gated test module lands here
+# without a script edit - but only if the derivation reads EVERY declaration
+# site of the test tree. Two of them carry file-module declarations, and both
+# are read:
+#
+#   (1) every `*.rs` under $TESTS_DIR. A nested submodule file declares its
+#       own children (`src/tests/geometry.rs` -> `mod crop_session;`), and a
+#       gated `mod.rs` hides files that a root-only scan never sees.
+#   (2) the crate-root `mod tests { ... }` block, brace-matched so production
+#       `mod`s in the same file cannot leak in. `lumina-gui` declares its
+#       whole test tree INLINE in `src/lib.rs` (there is no `src/tests/mod.rs`
+#       at all), so a tests-tree-only scan is inert for it - MEASURED at
+#       ff4e071: one extra gated module made the gate report a false ORPHAN
+#       (TEST-ORPHAN-SCOPE-60 F1). The root file is found by grep, not
+#       hardcoded, so the derivation follows the code if the tree moves.
+#
+# The parser accepts the writing styles a gated declaration comes in
+# (one-liner, `pub mod`, indentation, multi-line attribute, all/any/not
+# compositions); a missed style would itself be a false ORPHAN (F2). Only a
+# file whose gated `mod` name matches it EXACTLY is ignored, so a typo'd
+# declaration keeps its file under comparison and stays red.
 : > "$WORK/ignore"
-find "$TESTS_DIR" -name 'mod.rs' | while IFS= read -r manifest; do
-    awk '
-        { lines[NR] = $0 }
-        END {
-            for (i = 1; i < NR; i++) {
-                if (lines[i] ~ /^#\[cfg\(feature/ && lines[i+1] ~ /^mod /) {
-                    m = lines[i+1]
-                    sub(/^mod /, "", m)
-                    sub(/;.*/, "", m)
-                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", m)
-                    if (m != "") print m
-                }
+cat > "$WORK/gated.awk" <<'AWK'
+# Prints the NAME of every file-module declaration (`mod NAME;`) that is
+# gated behind a `#[cfg(... feature ...)]` attribute, in any writing style.
+function handle_code(rest,    name) {
+    if (pending && rest ~ /^[[:space:]]*(pub[[:space:]]*(\([^)]*\))?[[:space:]]+)?mod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*;/) {
+        name = rest
+        sub(/^[[:space:]]+/, "", name)
+        sub(/^pub[[:space:]]*(\([^)]*\))?[[:space:]]+/, "", name)
+        sub(/^mod[[:space:]]+/, "", name)
+        sub(/[^A-Za-z0-9_].*$/, "", name)
+        print name
+        pending = 0
+        return
+    }
+    pending = 0
+}
+BEGIN { pending = 0; in_attr = 0; in_block = 0; attr = "" }
+{
+    line = $0
+    if (in_block) {                       # inside a /* ... */ comment
+        if (line ~ /\*\//) { sub(/^.*\*\//, "", line); in_block = 0 } else next
+    }
+    while (length(line) > 0) {
+        rest = line
+        sub(/^[[:space:]]+/, "", rest)
+        if (rest == "") break
+        if (in_attr) {                    # continuation of a multi-line #[..]
+            attr = attr " " rest
+            if (rest ~ /\]/) {
+                sub(/^[^]]*\][[:space:]]*/, "", line)
+                in_attr = 0
+                if (attr ~ /cfg\(/ && attr ~ /feature[[:space:]]*=/) pending = 1
+                continue
             }
+            break
         }
-    ' "$manifest" | while IFS= read -r modname; do
-        base=$(dirname "$manifest")
+        if (rest ~ /^#\[/) {
+            if (rest ~ /\]/) {            # whole attribute on one line
+                if (rest ~ /cfg\(/ && rest ~ /feature[[:space:]]*=/) pending = 1
+                sub(/^[^]]*\][[:space:]]*/, "", line)
+                continue
+            }
+            attr = rest                   # attribute continues on the next line
+            in_attr = 1
+            break
+        }
+        if (rest ~ /^\/\//) break         # comment between attribute and mod
+        if (rest ~ /^\/\*/) {
+            if (line ~ /\*\//) { sub(/^[[:space:]]*\/\*.*\*\//, "", line); continue }
+            in_block = 1
+            break
+        }
+        handle_code(rest)
+        break
+    }
+}
+AWK
+cat > "$WORK/tests_block.awk" <<'AWK'
+# Prints the `mod tests { ... }` block of a crate-root file and nothing else,
+# so the derivation above cannot pick up production `mod`s from the same file.
+BEGIN { inblk = 0; depth = 0 }
+{
+    line = $0
+    sub(/[[:space:]]*\/\/.*$/, "", line)
+    if (inblk == 0 && line ~ /^[[:space:]]*mod[[:space:]]+tests[[:space:]]*\{/) {
+        inblk = 1
+    } else if (inblk == 0) {
+        next
+    }
+    print line
+    n = gsub(/\{/, "", line); depth += n
+    m = gsub(/\}/, "", line); depth -= m
+    if (depth <= 0) inblk = 0
+}
+AWK
+
+# (1) the tests tree: a gated child resolves next to the declaring file.
+find "$TESTS_DIR" -name '*.rs' | LC_ALL=C sort | while IFS= read -r manifest; do
+    base=$(dirname "$manifest")
+    awk -f "$WORK/gated.awk" "$manifest" | while IFS= read -r modname; do
         for cand in "$base/$modname.rs" "$base/$modname/mod.rs"; do
             if [ -f "$cand" ]; then
                 printf '%s\n' "$cand" >> "$WORK/ignore"
@@ -118,8 +210,30 @@ find "$TESTS_DIR" -name 'mod.rs' | while IFS= read -r manifest; do
     done
 done
 
-# Rebuild on_disk without the ignored feature-gated files.
+# (2) the crate-root `mod tests { ... }` block: its children live in the tests
+# tree, whichever file carries the block.
+for root in "$CRATE_DIR"/src/*.rs; do
+    [ -f "$root" ] || continue
+    grep -q 'mod tests' "$root" || continue
+    awk -f "$WORK/tests_block.awk" "$root" > "$WORK/tests_block"
+    [ -s "$WORK/tests_block" ] || continue
+    awk -f "$WORK/gated.awk" "$WORK/tests_block" | while IFS= read -r modname; do
+        for cand in "$TESTS_DIR/$modname.rs" "$TESTS_DIR/$modname/mod.rs"; do
+            if [ -f "$cand" ]; then
+                printf '%s\n' "$cand" >> "$WORK/ignore"
+            fi
+        done
+    done
+done
+
+# Rebuild on_disk without the ignored feature-gated files. The list is
+# deduplicated (a file reachable through two declaration sites is ignored once)
+# and counted for the OK line - "all files read by rustc" silently skipping
+# ignored files was itself part of the defect (F3).
+ignored=0
 if [ -s "$WORK/ignore" ]; then
+    LC_ALL=C sort -u "$WORK/ignore" -o "$WORK/ignore"
+    ignored=$(wc -l < "$WORK/ignore" | tr -d ' ')
     grep -Fxv -f "$WORK/ignore" "$WORK/on_disk" > "$WORK/on_disk_filtered" || true
     mv "$WORK/on_disk_filtered" "$WORK/on_disk"
 fi
@@ -183,15 +297,17 @@ if [ -n "$SENTINEL" ]; then
     # is present; a lean build of those is the caller's responsibility.
     if ! grep -Fxq "$SENTINEL" "$WORK/deps_norm"; then
         echo "cannot conclude: $SENTINEL is not in any current dep-info" >&2
-        echo "  that module is only reached with the default \`lensfun\` feature, so the" >&2
-        echo "  artifacts above were built with a different feature set. Re-run with" >&2
-        echo "  \`cargo test -p $CRATE\` (default features) instead of concluding falsely." >&2
+        echo "  that module is only reached under the feature set it was gated for," >&2
+        echo "  so the artifacts above were built with a different feature set." >&2
+        echo "  Re-run \`cargo test -p $CRATE\` (default features) instead of" >&2
+        echo "  concluding falsely." >&2
         exit 2
     fi
 fi
 
 # ------------------------------------------------------------- 3. the comparison itself
 orphans=0
+compared=$((seen - ignored))
 while IFS= read -r f; do
     rel="${f#$ROOT/}"
     stem=$(basename "$rel" .rs)
@@ -209,4 +325,4 @@ if [ "$orphans" -ne 0 ]; then
     exit 1
 fi
 
-echo "test_orphans OK ($seen files under ${TESTS_DIR#$ROOT/}, all $seen read by rustc through $fresh_count current dep-info unit(s), $stale_count stale unit(s) ignored)"
+echo "test_orphans OK ($seen files under ${TESTS_DIR#$ROOT/}: $compared compared, $ignored feature-gated ignored - all $compared read by rustc through $fresh_count current dep-info unit(s), $stale_count stale unit(s) ignored)"
