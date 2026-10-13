@@ -5,6 +5,23 @@ Variante (a)) und Task `JSON-FLOAT-ROUNDTRIP` in `Agents.todo.md`. Abnahme:
 Feature im Workspace aktivieren, **vor** der Aktivierung diesen Plan aufstellen,
 **danach** nachweisen, dass kein Rezept-Digest sich unbeabsichtigt ändert.
 
+**Chronologie-Hinweis (benannte Abweichung, geschlossen — nicht repariert):**
+Dieser Plan wurde **atomar mit dem Flip** committet.
+`git log --diff-filter=A -- feature/quality/json-float-roundtrip-plan.md` zeigt
+genau einen Eintrag, `78c21c9` (2026-10-12, „feat(sidecar): build serde_json
+with float_roundtrip", 19 Dateien, Plan +395), und dieser Commit **ist** die
+Aktivierung selbst. Ein Commit „Plan ohne Feature vor dem Flip" existiert
+also **nicht**; die geforderte Reihenfolge ist aus der History nicht belegbar,
+und eine Umschreibung der History kommt nicht in Frage. Die **Substanz** der
+Vorab-Analyse liegt dessenungeachtet vollständig vor: die Messung in §2 wurde
+mit einem Throwaway-Werkzeug **außerhalb** des Workspace auf beiden
+Parser-Ständen (Feature aus / Feature an) gefahren und steht hier mit
+Werkzeug, Kommando und Ergebnis; die Betroffenheits-Analyse reicht bis auf den
+Task-Text vom **2026-09-26** zurück. Abnahme (2) — Migrations-/Golden-Plan
+**vor** der Aktivierung — ist damit dem **Gehalt** nach erfüllt; die
+chronologische Belegform bleibt als benannte Abweichung stehen — hier
+festgehalten, nicht durch History-Umschreibung geheilt.
+
 Alle Zahlen unten sind in diesem Arbeitsstrom **selbst gemessen** (Werkzeug,
 Kommando und Ergebnis stehen daneben). Wo eine Zahl aus der Vergangenheit
 übernommen wird, ist sie als solche markiert.
