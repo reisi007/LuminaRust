@@ -347,14 +347,18 @@ fn legacy_extras_still_accept_only_the_four_p0_keys() {
 }
 
 /// The local tone curve itself is still addressed only through the typed
-/// `curves` block: a curve is not a scalar key, and the P1.2b colour controls
-/// are not curve controls. The detail/optics stages stay disabled. (Local
-/// presence is a P1.2c *typed block*, not a scalar key, so `presence` is still
-/// rejected here — for the same reason `curves` is.)
+/// `curves` block: a curve is not a scalar key. Local presence, the detail
+/// stages and optics are no curve controls either, but their refusal is pinned
+/// canonically by `disabled_local_presence_detail_denoise_and_optics_stay_rejected`
+/// (`local_adjustments_color_digest.rs`), which asserts them — together with
+/// the rest of the disabled stages — against the same fail mechanism, so
+/// cloning them here would add no statement.
 #[test]
 fn curves_are_not_a_scalar_key_and_detail_stages_stay_rejected() {
     let mut local = LocalAdjustments::default();
-    for key in ["curves", "curve_points", "presence", "detail", "optics"] {
+    // The curve namespace is pinned *here* and nowhere else: no other test
+    // refuses it through the scalar setter, so this loop is the repo-wide pin.
+    for key in ["curves", "curve_points"] {
         assert!(
             local.set_value(key, 0.1).is_err(),
             "{key} must not be a local adjustment key"
