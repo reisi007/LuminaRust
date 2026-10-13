@@ -30,8 +30,10 @@
 # Scope and named limits (DoD §9 — a claim without its limit is not a claim):
 #   * Default scope is `crates/lumina-gui`, the acceptance's subject. Five more
 #     crates carry `src/tests/` (`lumina-cli`, `lumina-core`, `lumina-gpu`,
-#     `lumina-lensfun`, `lumina-sidecar`) and are NOT covered. Pass the crate
-#     name as `$1` to check one of them.
+#     `lumina-lensfun`, `lumina-sidecar`) and are covered ONLY MANUALLY: pass
+#     the crate name as `$1`. Only `lumina-gui` has a default-feature sentinel
+#     (see below); the other crates need current default-feature artifacts, and
+#     the gate cannot tell a lean build from a full one for them.
 #   * The gate can only read what was built. It needs artifacts from a
 #     **default-feature build that includes the test target**; without them it
 #     exits 2 instead of guessing.
@@ -57,9 +59,15 @@ TESTS_DIR="$CRATE_DIR/src/tests"
 DEP_INFO_DIR="${LUMINA_DEP_INFO_DIR:-$ROOT/target/debug/deps}"
 # rustc turns `lumina-gui` into the unit prefix `lumina_gui-<hash>.d`.
 PREFIX=$(printf '%s' "$CRATE" | tr '-' '_')
-# A module that only a default-feature build reaches. Its absence means the
-# artifacts were built lean, and this gate refuses to conclude on that.
-SENTINEL="crates/$CRATE/src/tests/lensfun_diagnostics.rs"
+# Sentinels and feature sensitivity: only lumina-gui carries a test module that
+# is only reached with default features; for all other supported crates the
+# dependent units get checked without a per-crate sentinel.
+SENTINEL=""
+case "$CRATE" in
+    lumina-gui)
+        SENTINEL="crates/lumina-gui/src/tests/lensfun_diagnostics.rs"
+        ;;
+esac
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/check_test_orphans.XXXXXX") || exit 1
 cleanup() { rm -rf "$WORK"; }
@@ -79,6 +87,41 @@ if [ "$seen" -eq 0 ]; then
     # A gate that finds nothing to check is a gate that cannot fail (DoD §10).
     echo "FAIL  no *.rs under ${TESTS_DIR#$ROOT/} - nothing to check, so a green result would be vacuous" >&2
     exit 2
+fi
+
+# ------------------------------------------- 1b. feature-gated test files
+# Files that are only reachable under a `#[cfg(feature = ...)]` mod declaration
+# are legitimately absent from a lean build and must not look like orphans. The
+# list is derived, so a newly gated test module lands here without a script edit.
+: > "$WORK/ignore"
+find "$TESTS_DIR" -name 'mod.rs' | while IFS= read -r manifest; do
+    awk '
+        { lines[NR] = $0 }
+        END {
+            for (i = 1; i < NR; i++) {
+                if (lines[i] ~ /^#\[cfg\(feature/ && lines[i+1] ~ /^mod /) {
+                    m = lines[i+1]
+                    sub(/^mod /, "", m)
+                    sub(/;.*/, "", m)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", m)
+                    if (m != "") print m
+                }
+            }
+        }
+    ' "$manifest" | while IFS= read -r modname; do
+        base=$(dirname "$manifest")
+        for cand in "$base/$modname.rs" "$base/$modname/mod.rs"; do
+            if [ -f "$cand" ]; then
+                printf '%s\n' "$cand" >> "$WORK/ignore"
+            fi
+        done
+    done
+done
+
+# Rebuild on_disk without the ignored feature-gated files.
+if [ -s "$WORK/ignore" ]; then
+    grep -Fxv -f "$WORK/ignore" "$WORK/on_disk" > "$WORK/on_disk_filtered" || true
+    mv "$WORK/on_disk_filtered" "$WORK/on_disk"
 fi
 
 # ------------------------------------------------- 2. which artifacts describe the tree
@@ -134,12 +177,17 @@ if [ "$in_deps" -eq 0 ]; then
     exit 2
 fi
 
-if ! grep -Fxq "$SENTINEL" "$WORK/deps_norm"; then
-    echo "cannot conclude: $SENTINEL is not in any current dep-info" >&2
-    echo "  that module is only reached with the default \`lensfun\` feature, so the" >&2
-    echo "  artifacts above were built with a different feature set. Re-run with" >&2
-    echo "  \`cargo test -p $CRATE\` (default features) instead of concluding falsely." >&2
-    exit 2
+if [ -n "$SENTINEL" ]; then
+    # Only crates with a feature-gated test module (lumina-gui today) carry a
+    # per-crate sentinel.  Others are checked on whatever default-feature build
+    # is present; a lean build of those is the caller's responsibility.
+    if ! grep -Fxq "$SENTINEL" "$WORK/deps_norm"; then
+        echo "cannot conclude: $SENTINEL is not in any current dep-info" >&2
+        echo "  that module is only reached with the default \`lensfun\` feature, so the" >&2
+        echo "  artifacts above were built with a different feature set. Re-run with" >&2
+        echo "  \`cargo test -p $CRATE\` (default features) instead of concluding falsely." >&2
+        exit 2
+    fi
 fi
 
 # ------------------------------------------------------------- 3. the comparison itself
