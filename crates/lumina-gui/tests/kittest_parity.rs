@@ -289,7 +289,20 @@ fn run_cpu_gpu_path_parity_matrix(harness: &mut Harness<'_, LuminaApp>) -> Matri
 #[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
 fn cpu_gpu_path_parity_matrix() {
     let mut harness = parity_harness();
-    let _ = run_cpu_gpu_path_parity_matrix(&mut harness);
+    let available = harness.state().gpu_adapter_available();
+    let outcome = run_cpu_gpu_path_parity_matrix(&mut harness);
+    if available {
+        assert_eq!(
+            outcome,
+            MatrixOutcome::Ran,
+            "recipe matrix must execute when an adapter is available, not skip silently"
+        );
+    } else {
+        assert!(
+            matches!(outcome, MatrixOutcome::Skipped(_)),
+            "without an adapter the matrix must return the loud SKIP verdict"
+        );
+    }
 }
 
 /// PARITY-PATHS-2: exercise the adapterless SKIP branch for real on this
