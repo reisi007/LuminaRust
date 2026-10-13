@@ -75,7 +75,7 @@ pub fn pumps(file: &str, code: &str) -> Vec<(WaitLoop, PumpForm)> {
             || exits_the_loop(&walk, candidate.body_brace, body_end, body_index);
         let form = if exits_on_app_state {
             PumpForm::Wait
-        } else if candidate.kind == "for" && candidate.condition.starts_with("_ in 0..") {
+        } else if candidate.kind == "for" && zero_start_range(&candidate.condition) {
             PumpForm::FrameBudget
         } else {
             // A collection iteration that steps the harness once per member.
@@ -126,6 +126,20 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Whether a `for`-loop header iterates a range that begins at zero, e.g.
+/// `for _ in 0..N` or `for _i in 0..N`. Such a header is a blind frame budget
+/// rather than a collection iteration, regardless of the (often decorative)
+/// loop binding, so the `_i` variant cannot evade the pin.
+pub fn zero_start_range(condition: &str) -> bool {
+    let tokens: Vec<&str> = condition.split_whitespace().collect();
+    for pair in tokens.windows(2) {
+        if pair[0] == "in" && pair[1].starts_with("0..") {
+            return true;
+        }
+    }
+    false
 }
 
 /// `path` relative to `root`, with `/` separators.
