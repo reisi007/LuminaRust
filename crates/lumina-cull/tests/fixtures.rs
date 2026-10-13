@@ -53,6 +53,12 @@ fn fixtures() -> Vec<Fixture> {
         }
     });
 
+    // Polaritätsgrenze CULL-POLARITY-63 (dokumentiert, kein Defekt):
+    // `checkerboard` mit vertauschter `dark`/`light`-Polarität wurde gemessen
+    // und ändert auch nicht eine der erwarteten Klassifikationen – die Heuristik
+    // ist auf der Schachbrettstruktur polaritätsinvariant. Umgekehrte
+    // Schachbretter tragen deshalb keine eigene Aussage und sind kein eigenes
+    // Fixture. Eine echte Polaritäts-Anker-Aussage existed before nicht.
     vec![
         Fixture {
             name: "checker_8",
