@@ -4,12 +4,15 @@
 //! SOLL: `feature/decisions/LRPAR-G13-MERGE-15.md` (§Pipeline-Einordnung,
 //! §Persistenz, §Abnahme CLI) and `feature/platform/cli-gui-wasm.md`
 //! (§ „HDR-/Panorama-Merge (G-13, Release 1.5: CLI)"). This module is the
-//! **CLI wiring only**: it decodes the sources (via `lumina-raw`/core, like
-//! every other CLI command), resolves the `--exposure-times/--isos/
-//! --f-numbers` policy and hands both to the shared orchestration
+//! **CLI wiring only**: it maps the clap flags onto the shared orchestration
 //! [`lumina_merge::bundle::run_merge`], which the GUI actions call with the
-//! same step sequence (F6 dedup). There is no second image-processing
-//! implementation and neither the sidecar schema nor the merge math changes.
+//! same step sequence (F6 dedup), and hands it the **shared** decode +
+//! exposure adapter [`lumina_stages::merge`] — the MCP tools
+//! (`lumina_merge_hdr`/`lumina_merge_pano`, MCP-PARITY-C) will call the very
+//! same adapter, so there is exactly one implementation of the decode
+//! context, the exposure policy and their error texts. There is no second
+//! image-processing implementation and neither the sidecar schema nor the
+//! merge math changes.
 //!
 //! Failure policy (Agents.md, no silent fallback): every deviation is loud
 //! on stderr with exit code 1 — `merge missing:` (a source, the DNG or the
@@ -21,18 +24,12 @@
 use clap::Args;
 use log::info;
 use lumina_merge::bundle::{
-    linear_from_rgba, merge_checksum, merge_command_name, run_merge as run_merge_bundle, MergeExif,
-    MergeRunError, MergeRunOptions, MergeSourceFrame, PANO_DEFAULT_EXPOSURE_S,
-    PANO_DEFAULT_F_NUMBER, PANO_DEFAULT_ISO,
+    merge_command_name, run_merge as run_merge_bundle, MergeRunOptions, MergeSourceFrame,
 };
-use lumina_sidecar::{
-    MergeDecodeContext, MergeExposure, MergeMode, MAX_MERGE_EXPOSURE_TIME_S, MAX_MERGE_F_NUMBER,
-    MAX_MERGE_ISO,
-};
-use std::fs;
-use std::path::{Path, PathBuf};
+use lumina_sidecar::MergeMode;
+use std::path::PathBuf;
 
-use super::{decode_input, emit, CliError};
+use super::{emit, CliError};
 
 /// Shared arguments for `merge-hdr` and `merge-pano` (SOLL:
 /// `feature/platform/cli-gui-wasm.md`).
@@ -89,9 +86,21 @@ pub fn merge_pano(args: MergeArgs) -> Result<(), CliError> {
     run_merge(MergeMode::Panorama, &args)
 }
 
+/// Thin CLI wiring over the shared orchestration
+/// ([`lumina_merge::bundle::run_merge`]) plus the shared decode + exposure
+/// adapter ([`lumina_stages::merge`]): map the clap flags onto the
+/// frontend-independent run options, wrap the adapter errors into
+/// [`CliError`] (their class and text are transport-independent), render the
+/// outcome. No merge logic lives here — the MCP tools call the same adapter.
 fn run_merge(mode: MergeMode, args: &MergeArgs) -> Result<(), CliError> {
     let command = merge_command_name(mode);
-    check_explicit_list_lengths(args)?;
+    let explicit = lumina_stages::merge::MergeExplicitInputs {
+        input: &args.input,
+        exposure_times: &args.exposure_times,
+        isos: &args.isos,
+        f_numbers: &args.f_numbers,
+    };
+    lumina_stages::merge::check_explicit_list_lengths(&explicit).map_err(CliError::Message)?;
     let options = MergeRunOptions {
         output: args.output.clone(),
         max_shift_px: args.max_shift_px,
@@ -100,10 +109,16 @@ fn run_merge(mode: MergeMode, args: &MergeArgs) -> Result<(), CliError> {
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };
     let resolve = |mode: MergeMode, index: usize, source: &MergeSourceFrame| {
-        resolve_exposure(mode, index, args, source)
+        lumina_stages::merge::resolve_exposure(mode, index, &explicit, source)
     };
-    let outcome = run_merge_bundle(mode, &args.input, &options, decode_source, resolve)
-        .map_err(|error| CliError::Message(error.to_string()))?;
+    let outcome = run_merge_bundle(
+        mode,
+        &args.input,
+        &options,
+        lumina_stages::merge::decode_source,
+        resolve,
+    )
+    .map_err(|error| CliError::Message(error.to_string()))?;
 
     if outcome.residual_warning {
         eprintln!(
@@ -133,282 +148,4 @@ fn run_merge(mode: MergeMode, args: &MergeArgs) -> Result<(), CliError> {
         }),
         &message,
     )
-}
-
-/// Usage-level validation of the explicit exposure lists: each list is
-/// either empty (per-source fallback) or carries exactly one value per
-/// `--input`, in order. Anything else is a loud error, never a silent
-/// truncation or repetition.
-fn check_explicit_list_lengths(args: &MergeArgs) -> Result<(), CliError> {
-    let count = args.input.len();
-    for (flag, len) in [
-        ("--exposure-times", args.exposure_times.len()),
-        ("--isos", args.isos.len()),
-        ("--f-numbers", args.f_numbers.len()),
-    ] {
-        if len != 0 && len != count {
-            return Err(CliError::Message(format!(
-                "invalid {flag}: expected 0 or {count} values (one per --input), got {len}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Reads and decodes one source (CLI decode adapter for the shared
-/// orchestration). A missing/unreadable file is `missing`, an undecodable
-/// file or a non-RGBA frame is `unsupported` — never a silent skip.
-fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
-    let bytes = fs::read(input).map_err(|error| {
-        MergeRunError::Missing(format!("cannot read source `{}`: {error}", input.display()))
-    })?;
-    let content_hash = merge_checksum(&bytes);
-    let (frame, raw) = decode_input(input, &bytes).map_err(|error| {
-        MergeRunError::Unsupported(format!(
-            "cannot decode source `{}`: {error}",
-            input.display()
-        ))
-    })?;
-    let decode_context = MergeDecodeContext {
-        decoder: if raw.is_some() { "libraw" } else { "image" }.into(),
-        decode_version: if raw.is_some() {
-            lumina_raw::libraw_decode_version()
-        } else {
-            env!("CARGO_PKG_VERSION").into()
-        },
-        orientation: raw.as_ref().map_or(1, |meta| meta.orientation),
-    };
-    let linear = linear_from_rgba(&frame).ok_or_else(|| {
-        MergeRunError::Unsupported(format!(
-            "source `{}` has {} bytes for a {}x{} RGBA8 frame",
-            input.display(),
-            frame.pixels.len(),
-            frame.width,
-            frame.height
-        ))
-    })?;
-    Ok(MergeSourceFrame {
-        path: input.to_path_buf(),
-        content_hash,
-        frame: linear,
-        decode_context,
-        exif: merge_exif_from_raw(raw.as_ref()),
-    })
-}
-
-/// Maps the RAW metadata onto the neutral [`MergeExif`] subset (missing
-/// fields stay `None`; validity is enforced by the accessors).
-fn merge_exif_from_raw(raw: Option<&lumina_raw::RawMetadata>) -> MergeExif {
-    raw.map_or_else(MergeExif::default, |meta| MergeExif {
-        camera_make: meta.camera_make.clone(),
-        camera_model: meta.camera_model.clone(),
-        lens: meta.lens.clone(),
-        exposure_time_s: meta.shutter,
-        f_number: meta.aperture,
-        iso: meta.iso,
-        timestamp: meta.timestamp,
-    })
-}
-
-/// Per-source exposure for the recipe and (HDR) the pixel merge.
-///
-/// HDR: explicit value wins; otherwise the RAW EXIF exposure; otherwise
-/// `unsupported` — exposure is never guessed from pixels. Panorama: the
-/// pixels ignore exposure, so EXIF (or the documented neutral default)
-/// is stored as provenance only.
-fn resolve_exposure(
-    mode: MergeMode,
-    index: usize,
-    args: &MergeArgs,
-    source: &MergeSourceFrame,
-) -> Result<MergeExposure, MergeRunError> {
-    match mode {
-        MergeMode::Hdr => resolve_hdr_exposure(index, args, source),
-        MergeMode::Panorama => Ok(resolve_pano_exposure(index, args, source)),
-    }
-}
-
-fn explicit_at<T: Copy>(values: &[T], index: usize) -> Option<T> {
-    if values.is_empty() {
-        None
-    } else {
-        Some(values[index])
-    }
-}
-
-fn resolve_hdr_exposure(
-    index: usize,
-    args: &MergeArgs,
-    source: &MergeSourceFrame,
-) -> Result<MergeExposure, MergeRunError> {
-    let path = args.input[index].display().to_string();
-    let exposure_time_s = match explicit_at(&args.exposure_times, index) {
-        Some(value) => {
-            if !value.is_finite() || value <= 0.0 || value > MAX_MERGE_EXPOSURE_TIME_S {
-                return Err(MergeRunError::Unsupported(format!(
-                    "invalid --exposure-times[#{index}] {value} \
-                     (finite within (0, {MAX_MERGE_EXPOSURE_TIME_S}])"
-                )));
-            }
-            value
-        }
-        None => source.exif.valid_exposure_time_s().ok_or_else(|| {
-            MergeRunError::Unsupported(format!(
-                "source `{path}` has no EXIF exposure \
-                 (pass --exposure-times/--isos/--f-numbers, one value per --input)"
-            ))
-        })?,
-    };
-    let iso = match explicit_at(&args.isos, index) {
-        Some(value) => {
-            if value == 0 || value > MAX_MERGE_ISO {
-                return Err(MergeRunError::Unsupported(format!(
-                    "invalid --isos[#{index}] {value} (within 1..={MAX_MERGE_ISO})"
-                )));
-            }
-            value
-        }
-        None => source.exif.valid_iso().ok_or_else(|| {
-            MergeRunError::Unsupported(format!(
-                "source `{path}` has no EXIF ISO \
-                 (pass --exposure-times/--isos/--f-numbers, one value per --input)"
-            ))
-        })?,
-    };
-    let f_number = match explicit_at(&args.f_numbers, index) {
-        Some(value) => {
-            if !value.is_finite() || value <= 0.0 || value > MAX_MERGE_F_NUMBER {
-                return Err(MergeRunError::Unsupported(format!(
-                    "invalid --f-numbers[#{index}] {value} \
-                     (finite within (0, {MAX_MERGE_F_NUMBER}])"
-                )));
-            }
-            value
-        }
-        None => source.exif.valid_f_number().ok_or_else(|| {
-            MergeRunError::Unsupported(format!(
-                "source `{path}` has no EXIF f-number \
-                 (pass --exposure-times/--isos/--f-numbers, one value per --input)"
-            ))
-        })?,
-    };
-    Ok(MergeExposure {
-        exposure_time_s,
-        iso,
-        f_number,
-    })
-}
-
-fn resolve_pano_exposure(
-    index: usize,
-    args: &MergeArgs,
-    source: &MergeSourceFrame,
-) -> MergeExposure {
-    if let (Some(t), Some(i), Some(f)) = (
-        explicit_at(&args.exposure_times, index),
-        explicit_at(&args.isos, index),
-        explicit_at(&args.f_numbers, index),
-    ) {
-        if t.is_finite()
-            && t > 0.0
-            && t <= MAX_MERGE_EXPOSURE_TIME_S
-            && (1..=MAX_MERGE_ISO).contains(&i)
-            && f.is_finite()
-            && f > 0.0
-            && f <= MAX_MERGE_F_NUMBER
-        {
-            return MergeExposure {
-                exposure_time_s: t,
-                iso: i,
-                f_number: f,
-            };
-        }
-    }
-    if let Some(exif) = source.exif.exposure() {
-        return exif;
-    }
-    info!(
-        "merge-pano: source `{}` has no EXIF exposure; storing neutral \
-         provenance (panorama pixels never use exposure)",
-        args.input[index].display()
-    );
-    MergeExposure {
-        exposure_time_s: PANO_DEFAULT_EXPOSURE_S,
-        iso: PANO_DEFAULT_ISO,
-        f_number: PANO_DEFAULT_F_NUMBER,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn merge_args(inputs: &[&str]) -> MergeArgs {
-        MergeArgs {
-            input: inputs.iter().map(PathBuf::from).collect(),
-            output: None,
-            exposure_times: vec![],
-            isos: vec![],
-            f_numbers: vec![],
-            max_shift_px: 16,
-            blend_width_px: 64,
-            force: false,
-            json: false,
-        }
-    }
-
-    fn source(path: &str) -> MergeSourceFrame {
-        MergeSourceFrame {
-            path: PathBuf::from(path),
-            content_hash: format!("blake3:{}", "ab".repeat(32)),
-            frame: lumina_merge::LinearImage::solid(4, 4, [0.3, 0.3, 0.3]),
-            decode_context: MergeDecodeContext {
-                decoder: "image".into(),
-                decode_version: "0.1.0".into(),
-                orientation: 1,
-            },
-            exif: MergeExif::default(),
-        }
-    }
-
-    #[test]
-    fn explicit_lists_accept_empty_or_exactly_per_input() {
-        let mut args = merge_args(&["a.png", "b.png"]);
-        check_explicit_list_lengths(&args).unwrap();
-        args.exposure_times = vec![0.01, 0.02];
-        args.isos = vec![100, 200];
-        args.f_numbers = vec![8.0, 5.6];
-        check_explicit_list_lengths(&args).unwrap();
-        args.isos = vec![100];
-        assert!(check_explicit_list_lengths(&args).is_err());
-    }
-
-    #[test]
-    fn hdr_without_explicit_or_exif_exposure_is_unsupported() {
-        let args = merge_args(&["a.png", "b.png"]);
-        let error = resolve_exposure(MergeMode::Hdr, 0, &args, &source("a.png")).unwrap_err();
-        assert!(matches!(error, MergeRunError::Unsupported(_)), "{error}");
-        assert!(error.to_string().contains("no EXIF exposure"), "{error}");
-    }
-
-    #[test]
-    fn hdr_rejects_out_of_range_explicit_values() {
-        let mut args = merge_args(&["a.png", "b.png"]);
-        args.exposure_times = vec![0.0, 0.02];
-        let error = resolve_exposure(MergeMode::Hdr, 0, &args, &source("a.png")).unwrap_err();
-        assert!(error.to_string().contains("--exposure-times"), "{error}");
-        let mut args = merge_args(&["a.png", "b.png"]);
-        args.isos = vec![0, 100];
-        let error = resolve_exposure(MergeMode::Hdr, 0, &args, &source("a.png")).unwrap_err();
-        assert!(error.to_string().contains("--isos"), "{error}");
-    }
-
-    #[test]
-    fn pano_without_exif_uses_the_documented_neutral_default() {
-        let args = merge_args(&["a.png", "b.png"]);
-        let exposure = resolve_exposure(MergeMode::Panorama, 0, &args, &source("a.png")).unwrap();
-        assert!((exposure.exposure_time_s - PANO_DEFAULT_EXPOSURE_S).abs() < 1e-9);
-        assert_eq!(exposure.iso, PANO_DEFAULT_ISO);
-        assert!((exposure.f_number - PANO_DEFAULT_F_NUMBER).abs() < 1e-9);
-    }
 }

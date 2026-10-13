@@ -22,6 +22,13 @@ lumina-core = { path = "../lumina-core" }
 # `matched_exposure` from the same render choke point. Moving the command into
 # this crate therefore also moves its model call — a second, MCP-side producer
 # would be exactly the divergence the byte-identity requirement forbids.
+# MCP-PARITY-C / Impl-A: the shared merge decode + exposure adapter
+# (`src/merge.rs`) feeds the frontend-independent orchestration
+# `lumina_merge::bundle::run_merge` and needs its contract types
+# (`MergeSourceFrame`, `MergeRunError`, `linear_from_rgba`, `merge_checksum`).
+# No package cycle: `lumina-merge` depends only on core/sidecar
+# (+ blake3, serde_json, thiserror, log, tempfile, tiff), never on this crate.
+lumina-merge = { path = "../lumina-merge" }
 lumina-onnx = { path = "../lumina-onnx" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }

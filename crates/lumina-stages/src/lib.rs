@@ -60,6 +60,22 @@
 //! are one function, so a second copy in the MCP layer could not stay
 //! consistent with the writer.
 
+//! # MCP-PARITY-C: the merge decode + exposure adapter
+//!
+//! `merge-hdr`/`merge-pano` (CLI) and their MCP twins (`lumina_merge_hdr` /
+//! `lumina_merge_pano`, later slice) feed the *same* orchestration
+//! (`lumina_merge::bundle::run_merge`) through the *same* adapter
+//! ([`merge`]): one [`merge::decode_source`] for the bytes→frame step, one
+//! [`merge::resolve_exposure`] for the explicit-wins/EXIF/neutral-default
+//! policy. Both transports build [`merge::MergeExplicitInputs`] from their own
+//! argument shape (clap flags resp. JSON arrays) and call the identical
+//! functions, so the merge digest, the DNG checksum, the sidecar and the
+//! error classes cannot drift per frontend (SOLL:
+//! `feature/quality/mcp-parity-c-soll.md` §4.3, §6 Invarianten 1–2, §10
+//! Roadmap-Punkt 2 „Impl-A"). This is also *why the adapter lives here and
+//! not in `lumina-merge`*: it decodes through [`decode`], and `lumina-merge`
+//! stays free of the native RAW dependency by design.
+
 pub mod auto_tone;
 pub mod collections;
 pub mod copy;
@@ -71,6 +87,7 @@ pub mod generative_status;
 pub mod geometry;
 pub mod geometry_fields;
 pub mod lens_blur;
+pub mod merge;
 pub mod paths;
 pub mod pipeline;
 pub mod regenerate;
