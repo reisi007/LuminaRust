@@ -38,6 +38,22 @@ use lumina_sidecar::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Decoder version recorded in the merge-source decode context of a non-RAW
+/// source (MCP-PARITY-C / Impl-A follow-up).
+///
+/// This was `env!("CARGO_PKG_VERSION")` while the adapter lived in
+/// `lumina-cli`, where it expanded to the CLI's package version. The workspace
+/// does **not** inherit versions (no `[workspace.package]`; every crate pins
+/// its own `version`), so the same expression here would expand to the
+/// **`lumina-stages`** version — a `lumina-stages`-only bump would then
+/// silently rewrite this value. The value is *persisted* inside every merge
+/// source identity and is part of the digested [`MergeRecipe`], so a silent
+/// rewrite drifts the merge digest of every new sidecar away from the
+/// CLI/GUI anchor (and marks existing bundles stale). It is therefore a pinned
+/// literal, following the precedent of `crate::decode::IMAGE_DECODER_VERSION`
+/// (`decode.rs`): keep it in lockstep with `lumina-cli`'s package version.
+const MERGE_IMAGE_DECODER_VERSION: &str = "0.1.0";
+
 /// The clap-free mirror of the four CLI `MergeArgs` fields the merge adapter
 /// consumes: the source paths in merge order (first = reference) plus the
 /// explicit `--exposure-times`/`--isos`/`--f-numbers` lists.
@@ -81,7 +97,7 @@ pub fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
         decode_version: if raw.is_some() {
             lumina_raw::libraw_decode_version()
         } else {
-            env!("CARGO_PKG_VERSION").into()
+            MERGE_IMAGE_DECODER_VERSION.into()
         },
         orientation: raw.as_ref().map_or(1, |meta| meta.orientation),
     };

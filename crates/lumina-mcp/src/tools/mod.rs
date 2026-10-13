@@ -18,6 +18,9 @@ pub mod inspect;
 pub mod lens_blur;
 pub mod library_common;
 pub mod load;
+pub mod merge_common;
+pub mod merge_hdr;
+pub mod merge_pano;
 pub mod meta_common;
 pub mod meta_export;
 pub mod meta_get;
@@ -109,6 +112,16 @@ pub fn list_tool_definitions() -> Vec<Value> {
             regenerate::DESCRIPTION,
             regenerate::schema(),
         ),
+        // MCP-PARITY-C: the two path-based merge commands. One shared core
+        // (`merge_common::run_mode`) drives both, so `MergeMode` is the only
+        // variable between them and a merge-domain rejection carries the CLI's
+        // own error class on every frontend.
+        tool_def(merge_hdr::NAME, merge_hdr::DESCRIPTION, merge_hdr::schema()),
+        tool_def(
+            merge_pano::NAME,
+            merge_pano::DESCRIPTION,
+            merge_pano::schema(),
+        ),
     ]
 }
 
@@ -149,6 +162,8 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         relocate::NAME => relocate::run(server, args),
         generative::NAME => generative::run(server, args),
         regenerate::NAME => regenerate::run(server, args),
+        merge_hdr::NAME => merge_hdr::run(server, args),
+        merge_pano::NAME => merge_pano::run(server, args),
         other => Err(McpError::MethodNotFound(format!("unknown tool: {other}"))),
     }
 }

@@ -40,6 +40,21 @@ pub enum McpError {
     /// (compare-and-swap miss). The session never overwrites an externally
     /// modified sidecar; the caller must re-load to pick up external changes.
     SidecarConflict(String),
+    /// A merge bundle no longer matches its sources (`merge stale:`; the CLI
+    /// prefix is kept in the message). Only `force: true` re-merges — the MCP
+    /// mapping of `lumina_merge::bundle::MergeRunError::Stale`.
+    MergeStale(String),
+    /// Merge decode/geometry/exposure/dimension/writer-limit rejection
+    /// (`merge unsupported:`), the MCP mapping of
+    /// `lumina_merge::bundle::MergeRunError::Unsupported`.
+    MergeUnsupported(String),
+    /// Unexpected merge I/O, serialization or validation failure
+    /// (`merge failed:`), the MCP mapping of
+    /// `lumina_merge::bundle::MergeRunError::Failed`. Carries every merge
+    /// domain rule `run_merge` enforces itself (source count, `output` form,
+    /// recipe ranges), so an MCP call reports the same class as the CLI for
+    /// the same input instead of a tool-level `InvalidParams`.
+    MergeFailed(String),
 }
 
 impl McpError {
@@ -61,6 +76,13 @@ impl McpError {
             McpError::Encode(_) => -32008,
             McpError::Sidecar(_) => -32009,
             McpError::SidecarConflict(_) => -32010,
+            // MCP-PARITY-C: the merge-run classes keep their CLI prefix in
+            // `message` and get one stable name + code each (§3 table of
+            // `feature/quality/mcp-parity-c-soll.md`); `merge missing:` maps
+            // onto the existing `FileNotFound` row of that table.
+            McpError::MergeStale(_) => -32011,
+            McpError::MergeUnsupported(_) => -32012,
+            McpError::MergeFailed(_) => -32013,
         }
     }
 
@@ -83,6 +105,9 @@ impl McpError {
             McpError::Encode(_) => "EncodeError",
             McpError::Sidecar(_) => "SidecarError",
             McpError::SidecarConflict(_) => "SidecarConflict",
+            McpError::MergeStale(_) => "MergeStale",
+            McpError::MergeUnsupported(_) => "MergeUnsupported",
+            McpError::MergeFailed(_) => "MergeFailed",
         }
     }
 
@@ -120,6 +145,13 @@ impl McpError {
             McpError::Render(m) => format!("{}: {}", self.name(), m),
             McpError::Encode(m) => format!("{}: {}", self.name(), m),
             McpError::Internal(m) => format!("{}: {}", self.name(), m),
+            // The `MergeRunError` `Display` text (`merge missing:` /
+            // `merge stale:` / `merge unsupported:` / `merge failed:`) is kept
+            // verbatim inside the message, so a client can substring-test the
+            // CLI's canonical prefix (MCP-PARITY-C §3).
+            McpError::MergeStale(m) => format!("{}: {}", self.name(), m),
+            McpError::MergeUnsupported(m) => format!("{}: {}", self.name(), m),
+            McpError::MergeFailed(m) => format!("{}: {}", self.name(), m),
             McpError::InvalidRequest(m) => format!("{}: {}", self.name(), m),
             McpError::MethodNotFound(m) => format!("{}: {}", self.name(), m),
             McpError::Parse(m) => format!("{}: {}", self.name(), m),
@@ -151,6 +183,9 @@ impl McpError {
             McpError::Decode(m) => json!({ "error": self.name(), "message": m }),
             McpError::Render(m) => json!({ "error": self.name(), "message": m }),
             McpError::Encode(m) => json!({ "error": self.name(), "message": m }),
+            McpError::MergeStale(m) => json!({ "error": self.name(), "message": m }),
+            McpError::MergeUnsupported(m) => json!({ "error": self.name(), "message": m }),
+            McpError::MergeFailed(m) => json!({ "error": self.name(), "message": m }),
             _ => json!({ "error": self.name() }),
         }
     }

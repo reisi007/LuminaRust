@@ -18,6 +18,14 @@ lumina-iptc = { path = "../lumina-iptc" }
 # third crate.
 lumina-stages = { path = "../lumina-stages" }
 lumina-raw = { path = "../lumina-raw" }
+# MCP-PARITY-C: the shared merge orchestration `lumina_merge::bundle::run_merge`
+# that `lumina merge-hdr` / `lumina merge-pano` (CLI) and the GUI actions call —
+# the MCP tools `lumina_merge_hdr` / `lumina_merge_pano` call the very same
+# function over the very same decode adapter (`lumina_stages::merge`), so no
+# second merge implementation exists. No package cycle: `lumina-merge` depends
+# only on core/sidecar (+ blake3, serde_json, thiserror, log, tempfile, tiff),
+# never on `lumina-mcp`.
+lumina-merge = { path = "../lumina-merge" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
 blake3 = "1"

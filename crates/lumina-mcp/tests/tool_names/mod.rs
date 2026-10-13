@@ -51,6 +51,11 @@ pub const TOOL_NAMES: &[&str] = &[
     "lumina_relocate",
     "lumina_generative",
     "lumina_regenerate",
+    // MCP-PARITY-C: the two path-based merge commands (shared core
+    // `tools::merge_common`; one merge job per call, like the CLI twins
+    // `merge-hdr` / `merge-pano`).
+    "lumina_merge_hdr",
+    "lumina_merge_pano",
 ];
 
 /// `tools/list` reports exactly [`TOOL_NAMES`] — no more, no less, no twice.
