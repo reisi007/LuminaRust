@@ -1,0 +1,58 @@
+name: Golden Gate
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      report:
+        description: Produce and upload a golden-gate report artifact
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: read
+
+jobs:
+  golden:
+    name: GUI goldens (ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_TEST_THREADS: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run ignored GUI golden tests
+        id: gold
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG="$PWD/golden-gate.log"
+          cargo test -p lumina-gui --lib -- --ignored 2>&1 | tee "$LOG"
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload golden-gate report
+        if: ${{ inputs.report != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-gate-log
+          path: golden-gate.log
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Record a non-silent result
+        if: always()
+        shell: bash
+        run: |
+          echo "GOLDEN-GATE-62: ignored GUI golden run, dispatch-triggered."
+          echo "Result class (DoD §12): 'laeuft' only if exit 0 and test count > 0."
+          test "${{ steps.gold.outputs.exit_code }}" = "0"
