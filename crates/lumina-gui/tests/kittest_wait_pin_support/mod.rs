@@ -128,14 +128,16 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether a `for`-loop header iterates a range that begins at zero, e.g.
-/// `for _ in 0..N` or `for _i in 0..N`. Such a header is a blind frame budget
-/// rather than a collection iteration, regardless of the (often decorative)
-/// loop binding, so the `_i` variant cannot evade the pin.
+/// Whether a `for`-loop header iterates a zero-anchored range, e.g.
+/// `for _ in 0..N`, `for _i in 0..N` or `for _i in (0..N)`: the token after
+/// `in` only has to *contain* `0..` — bare, parenthesised (`rustfmt` keeps
+/// those parentheses) and inclusive `0..=N` all count, so no `_i`-spelled
+/// binding evades the pin: a blind frame budget, not a collection iteration.
+/// Deliberate boundary: `for _i in 1..N` (not starting at zero) is no budget.
 pub fn zero_start_range(condition: &str) -> bool {
     let tokens: Vec<&str> = condition.split_whitespace().collect();
     for pair in tokens.windows(2) {
-        if pair[0] == "in" && pair[1].starts_with("0..") {
+        if pair[0] == "in" && pair[1].contains("0..") {
             return true;
         }
     }

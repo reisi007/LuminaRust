@@ -44,7 +44,7 @@
 //! first test below does not flag it. Eleven such loops step the harness today,
 //! and **all eleven are named** so none is skipped in silence:
 //!
-//! * **Eight blind frame budgets** (`for _ in 0..N`) — four input gestures
+//! * **Eight blind frame budgets** (`for … in 0..N`) — four input gestures
 //!   (`double_click`, `press_hold_release`, `drag_then_hold`, and
 //!   `graph_click_at`, whose frames dispatch the pointer gesture itself), and
 //!   four fixed layout pumps: 4 frames to let a mask seed paint in
@@ -153,7 +153,7 @@ const EXCEPTIONS: [Exception; 4] = [
 /// green run.
 const INVENTORY: usize = 5;
 
-/// One named blind frame budget: `for _ in 0..N` around a harness step, with no
+/// One named blind frame budget: `for … in 0..N` around a harness step, with no
 /// app-state exit. Named, because the silent wait this task removed had exactly
 /// this shape.
 struct FrameBudget {
@@ -399,7 +399,7 @@ fn no_unnamed_blind_frame_budget_pump() {
     assert!(
         unnamed.is_empty(),
         "KITT-WAIT-PIN-57: {n} blind frame budget(s) outside the named set. A \
-         `for _ in 0..N` pump is how the silent wait looked before \
+         `for … in 0..N` pump is how the silent wait looked before \
          KITT-SETTLE-UNIFY-53 — it exhausted its budget, returned normally and \
          let the golden be taken from an unsettled state with a green test.\n\
          found: {found}\n\
