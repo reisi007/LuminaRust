@@ -116,10 +116,18 @@ fn local_color_survives_history_snapshot_and_reload() {
         .has_local_color());
 }
 
-/// The legacy `adjustment_*` extras still accept only the four P0 keys, and the
-/// local presence/detail/AI-denoise/optics controls stay rejected.
+/// The still-disabled local stages stay rejected — the **one canonical pin** of
+/// this family (audit TEST-AUDIT-36, M-A mutation „`set_value` akzeptiert
+/// `detail`“): the scalar setter must refuse every disabled key, typed or
+/// dotted. Consolidated here from the three representatives the audit found:
+/// every non-duplicated statement of the presence/detail_state variants lives
+/// below, with the same fail mechanism, so only this one remains.
 #[test]
 fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
+    // The scalar setter stays closed for every disabled stage: the flat
+    // presence/clarity/optics/... keys and the detail sub-block names are the
+    // typed setters' business only, and the dotted sub-block paths are refused
+    // just like the plain ones.
     let mut local = LocalAdjustments::default();
     for key in [
         "presence",
@@ -132,6 +140,11 @@ fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
         "sharpening",
         "optics",
         "lens_correction",
+        "luminance",
+        "color",
+        "radius",
+        "sharpening.amount",
+        "noise_reduction.luminance",
     ] {
         assert!(
             local.set_value(key, 0.1).is_err(),
@@ -157,18 +170,86 @@ fn disabled_local_presence_detail_denoise_and_optics_stay_rejected() {
         ]
     );
 
-    // And the legacy extras path still refuses a colour or detail key.
-    for (key, value) in [
-        ("adjustment_hsl", json!({"version": 1})),
-        ("adjustment_vibrance", json!(0.5)),
-        ("adjustment_presence", json!(0.5)),
-        ("adjustment_detail", json!(0.5)),
+    // The flattened legacy `adjustment_*` extras stay limited to the four P0
+    // scalars: every other key is refused by the same loud validator the
+    // migration uses, and the refusal names the key it refused.
+    for key in [
+        "adjustment_hsl",
+        "adjustment_vibrance",
+        "adjustment_presence",
+        "adjustment_texture",
+        "adjustment_clarity",
+        "adjustment_dehaze",
+        "adjustment_detail",
+        "adjustment_sharpening",
+        "adjustment_noise_reduction",
+        "adjustment_denoise_ai",
+        "adjustment_optics",
+        "adjustment_luminance",
+        "adjustment_masking",
+        "adjustment_radius",
     ] {
         let mut legacy = layer_with_legacy();
-        legacy.local_adjustments = None;
-        legacy.extras.insert(key.into(), value);
-        let document = document_with_layer(legacy);
-        let error = document.to_json().unwrap_err().to_string();
+        legacy.extras.clear();
+        legacy.extras.insert(key.into(), json!(0.5));
+        let error = validate_mask_layer_local_state(&legacy)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unknown local adjustment"), "{key}: {error}");
+        assert!(
+            error.contains(&key["adjustment_".len()..]),
+            "{key}: {error}"
+        );
+    }
+    // And the four P0 legacy keys still migrate.
+    for key in [
+        "adjustment_exposure",
+        "adjustment_contrast",
+        "adjustment_highlights",
+        "adjustment_shadows",
+    ] {
+        let mut legacy = layer_with_legacy();
+        legacy.extras.clear();
+        legacy.extras.insert(key.into(), json!(0.5));
+        validate_mask_layer_local_state(&legacy)
+            .unwrap_or_else(|error| panic!("{key} is a legal P0 legacy key: {error}"));
+    }
+    // The typed detail block carries exactly the two enabled sub-blocks: no
+    // disabled stage and no render-scale field may ride in it.
+    let block = serde_json::to_value(neutral_local_detail()).unwrap();
+    let mut block_keys: Vec<String> = block.as_object().unwrap().keys().cloned().collect();
+    block_keys.sort();
+    assert_eq!(
+        block_keys,
+        vec!["noise_reduction".to_string(), "sharpening".to_string()]
+    );
+    for forbidden in [
+        "denoise_ai",
+        "optics",
+        "lens_correction",
+        "scale",
+        "render_scale",
+    ] {
+        assert!(
+            !block_keys.iter().any(|key| key == forbidden),
+            "{forbidden}"
+        );
+    }
+    // The wire decoder refuses a disabled field outright, so no surface can
+    // smuggle one in — not the disabled stages and not a scale field.
+    for disabled in ["optics", "denoise_ai", "lens_correction", "scale"] {
+        let mut layer = layer_with_legacy();
+        layer.extras.clear();
+        layer.local_adjustments = Some(LocalAdjustments::default());
+        let document = document_with_layer(layer);
+        let mut value: Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        value["virtual_copies"][0]["mask_layers"][0]["local_adjustments"][disabled] = json!(0.5);
+        let error = SidecarDocument::from_json(&serde_json::to_string(&value).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("unknown field"),
+            "`{disabled}` must be refused by the wire shape, got: {error}"
+        );
     }
 }

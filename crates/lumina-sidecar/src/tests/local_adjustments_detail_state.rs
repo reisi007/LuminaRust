@@ -1,13 +1,13 @@
 //! MASK-LOCAL-P1.2d sidecar *state* tests for the local detail block: the
-//! canonical digests, the history/previous snapshot and the still-disabled local
-//! AI-denoise / optics stages.
+//! canonical digests and the history/previous snapshot.
 //!
 //! Split from `local_adjustments_detail.rs` (file-size ratchet): that file owns
-//! the schema and the migration, this one owns the identity contracts.
+//! the schema and the migration, this one owns the identity contracts. The
+//! disabled-stage refusal pins live in `local_adjustments_color_digest.rs`
+//! (`disabled_local_presence_detail_denoise_and_optics_stay_rejected`), the one
+//! representative of that family.
 
 use super::local_adjustments::layer_with_legacy;
-use super::local_adjustments_color::document_with_layer;
-use super::local_adjustments_detail::sharpened_layer;
 use super::*;
 use serde_json::json;
 
@@ -78,82 +78,4 @@ fn canonical_digests_cover_the_local_detail_block() {
         .as_ref()
         .expect("typed local recipe")
         .has_local_detail());
-}
-
-/// The still-disabled local AI-denoise and optics have no field, no key and no
-/// renderer stub; the legacy flattened `adjustment_*` extras stay limited to the
-/// four P0 scalars.
-#[test]
-fn disabled_local_denoise_and_optics_stay_rejected_and_the_legacy_keys_stay_p0() {
-    // `adjustment_detail`, `adjustment_sharpening` and `adjustment_noise_reduction`
-    // are not legacy keys: the flattened extras stay limited to the four P0
-    // scalars.
-    for key in [
-        "adjustment_detail",
-        "adjustment_sharpening",
-        "adjustment_noise_reduction",
-        "adjustment_luminance",
-        "adjustment_masking",
-        "adjustment_denoise_ai",
-        "adjustment_optics",
-        "adjustment_radius",
-    ] {
-        let mut layer = layer_with_legacy();
-        layer.extras.clear();
-        layer.extras.insert(key.into(), json!(0.5));
-        let error = validate_mask_layer_local_state(&layer)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unknown local adjustment"), "{key}: {error}");
-        assert!(
-            error.contains(&key["adjustment_".len()..]),
-            "{key}: {error}"
-        );
-    }
-    // And the four P0 legacy keys still migrate.
-    for key in [
-        "adjustment_exposure",
-        "adjustment_contrast",
-        "adjustment_highlights",
-        "adjustment_shadows",
-    ] {
-        let mut layer = layer_with_legacy();
-        layer.extras.clear();
-        layer.extras.insert(key.into(), json!(0.5));
-        validate_mask_layer_local_state(&layer)
-            .unwrap_or_else(|error| panic!("{key} is a legal P0 legacy key: {error}"));
-    }
-    // The typed block has no AI-denoise or optics field, and no scale field.
-    let json = serde_json::to_value(neutral_local_detail()).unwrap();
-    let keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
-    // The persisted sub-block key order follows the struct declaration order.
-    let mut expected = vec!["sharpening".to_string(), "noise_reduction".to_string()];
-    expected.sort();
-    let mut sorted = keys.clone();
-    sorted.sort();
-    assert_eq!(sorted, expected);
-    for forbidden in [
-        "denoise_ai",
-        "optics",
-        "lens_correction",
-        "scale",
-        "render_scale",
-    ] {
-        assert!(!keys.iter().any(|key| key == forbidden), "{forbidden}");
-    }
-    // The wire decoder refuses a disabled field outright, so no surface can
-    // smuggle one in.
-    for disabled in ["optics", "denoise_ai", "lens_correction", "scale"] {
-        let mut value: Value =
-            serde_json::from_str(&document_with_layer(sharpened_layer()).to_json().unwrap())
-                .unwrap();
-        value["virtual_copies"][0]["mask_layers"][0]["local_adjustments"][disabled] = json!(0.5);
-        let error = SidecarDocument::from_json(&serde_json::to_string(&value).unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("unknown field"),
-            "`{disabled}` must be refused by the wire shape, got: {error}"
-        );
-    }
 }
