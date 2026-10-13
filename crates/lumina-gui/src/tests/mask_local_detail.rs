@@ -265,18 +265,8 @@ fn a_detail_only_local_layer_refuses_the_stand_in_routes() {
     assert!(!app.has_visible_local_adjustments());
     assert!(app.local_adjustment_route_reason().is_none());
 
-    // The still-disabled local AI-denoise and optics have no setter, no field and
-    // no local key: they stay disabled.
-    let json = serde_json::to_value(lumina_sidecar::LocalAdjustments::default()).unwrap();
-    let keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
-    for disabled in ["denoise_ai", "optics", "lens_correction"] {
-        assert!(
-            !keys.iter().any(|key| key == disabled),
-            "the local recipe must not carry a `{disabled}` field"
-        );
-        let mut recipe = lumina_sidecar::LocalAdjustments::default();
-        assert!(recipe.set_value(disabled, 0.1).is_err());
-    }
+    // (Der kanonische disabled-Stages-Test lebt im sidecar; siehe
+    //  disabled_local_presence_detail_denoise_and_optics_stay_rejected.)
 }
 
 /// The detail block is part of the local state digest, so a detail edit must

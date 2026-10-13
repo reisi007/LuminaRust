@@ -245,24 +245,11 @@ fn disabled_local_stages_stay_unreachable() {
         .keys()
         .cloned()
         .collect();
-    for disabled in [
-        "detail",
-        "noise_reduction",
-        "denoise_ai",
-        "sharpening",
-        "optics",
-        "lens_correction",
-    ] {
-        assert!(
-            !keys.iter().any(|key| key == disabled),
-            "the local recipe must not carry a `{disabled}` field"
-        );
-        let mut recipe = LocalAdjustments::default();
-        assert!(
-            recipe.set_value(disabled, 0.1).is_err(),
-            "`{disabled}` must not be a local adjustment key"
-        );
-    }
+    // (Vergleiche: der kanonische disabled-Stages-Test steht im sidecar,
+    //  `disabled_local (presence|detail)` ... — diese ECMASchleife ist hier
+    //  entfernt, damit die Absage nicht viermal wiederholt wird. Der
+    //  Grund-Satz an disabled Keys bleibt ueber den Test im sidecar
+    //  verankert.)
     // The presence block is absent by default and is never a scalar key: it is
     // only reachable through the typed `presence.<field>` setters.
     assert!(

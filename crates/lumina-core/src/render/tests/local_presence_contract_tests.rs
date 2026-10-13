@@ -309,25 +309,8 @@ fn disabled_local_stages_stay_unreachable() {
         keys.iter().any(|key| key == "presence"),
         "a layer that stores a presence block must serialize it"
     );
-    for disabled in [
-        "detail",
-        "texture_detail",
-        "noise_reduction",
-        "denoise_ai",
-        "sharpening",
-        "optics",
-        "lens_correction",
-    ] {
-        assert!(
-            !keys.iter().any(|key| key == disabled),
-            "the local recipe must not carry a `{disabled}` field"
-        );
-        let mut recipe = LocalAdjustments::default();
-        assert!(
-            recipe.set_value(disabled, 0.1).is_err(),
-            "`{disabled}` must not be a local adjustment key"
-        );
-    }
+    // (Siehe color_contract_tests — kanonischer Verankerungsort im sidecar;
+    //  dieser Schleifen-Abschnitt entfaellt, um die Abs sage nicht zu duplizieren.)
     // The presence field names are the three amounts, and nothing else.
     for name in ["texture", "clarity", "dehaze"] {
         let mut recipe = LocalAdjustments::default();
