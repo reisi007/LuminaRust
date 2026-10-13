@@ -31,13 +31,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # NOTE: ubuntu-latest carries no GPU. kittest_snapshots needs a headless
+      # wgpu adapter, so in the nightly a red/skip outcome here is the expected
+      # visible result — green would be the silent lie. The first real adapter
+      # run (GPU-runner job, or a documented manual run with command, platform
+      # and result file) is still open; it stays tracked under GOLDEN-REF-30 /
+      # GOLDEN-BASELINE-32.
       - name: Run ignored GUI golden tests
         id: gold
         shell: bash
         run: |
           set -o pipefail
           LOG="$PWD/golden-gate.log"
-          cargo test -p lumina-gui --lib -- --ignored 2>&1 | tee "$LOG"
+          cargo test -p lumina-gui --test kittest_snapshots -- --ignored 2>&1 | tee "$LOG"
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Upload golden-gate report
@@ -53,6 +59,6 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "GOLDEN-GATE-62: ignored GUI golden run, dispatch-triggered."
+          echo "GOLDEN-GATE-62: ignored GUI golden run, schedule/dispatch-triggered."
           echo "Result class (DoD §12): 'laeuft' only if exit 0 and test count > 0."
           test "${{ steps.gold.outputs.exit_code }}" = "0"
