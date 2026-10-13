@@ -259,7 +259,6 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | 1.0 | R5-BRUSH-24 | G-03 | Pinsel-Masken |
 | 1.0 | R5-MASKVIS-25 | G-03 | Masken-Overlay |
 | 1.0 | GPU-MASKPLANE-CLEAR-PERF-51 | alle G | GPU-Kosten des Plane-Clears gemessen |
-| 1.0 | KITT-WAIT-PIN-RANGE-65 | offen — bei der Task | Wait-Pin Range-Schreibweisen + Regelwortlaut |
 | 1.0 | GOLDEN-STALE-55 | alle G | 127px-Stale-Indikator in develop_section_rating geklaert |
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | fortlaufend | TEST-AUDIT-36 | alle G | Test-Redundanz-Audit (1×/Woche) |
@@ -423,7 +422,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 
 
-- [ ] **[PRIO: niedrig] KITT-WAIT-PIN-RANGE-65 (Release 1.0; Folgetask aus der Verifikation zu `KITT-WAIT-PIN-TIGHTEN-59`, 2026-10-13)** `zero_start_range` (`crates/lumina-gui/tests/kittest_wait_pin_support/mod.rs:135-143`) verlangt das `0..`-Präfix unmittelbar am `in`-Token: die ebenfalls gültigen Rust-Schreibweisen `for _i in (0..400)` (parenthesiert — rustfmt normalisiert das NICHT weg) und `for _i in 1..400` fallen weiter durch das `continue` und bleiben grün — gemessen in der Verifikation (Bindungs-Matrix 2/5 gefangen; `0 .. 400` ist faktisch zu, weil rustfmt es zu `0..400` normalisiert und das fmt-Gate es sonst nicht passieren lässt). **Abnahme:** das Prädikat auf „iteriert einen Range, der bei 0 beginnt" erweitern (`in` + Token, das `0..` *enthält*: `(0..`, `0..=`); die Verifikations-Sonde (400 stille Frames, Parent-Kontrolllauf grün 2/2) ist direkt wiederverwendbar; daneben den Regelwortlaut in `kittest_wait_pin.rs:47,156,402-403` von „`for _ in 0..N`" auf „`for … in 0..N`" aktualisieren (alle acht heutigen Einträge nutzen `_`, sachlich nicht falsch, aber die rote Meldung benennt sonst die historische Form); Gates wie beim Parent (fmt, clippy, Ratchet, Lib-Zählung unverändert, `golden_ref.sh check` MATCH bzw. benanntes Hardware-Gate); keine neuen Baseline-Einträge. **Abgrenzung:** nur Scanner + Test + Meldungswortlaut, keine Produktlogik, keine Änderung an der Warte-Logik.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 
