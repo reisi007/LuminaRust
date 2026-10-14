@@ -9,16 +9,18 @@ Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
 Metadaten-Tools aus LRPAR-G15-IPTC-S7 waren es **17**, mit den vier
 Stage-Editor-Tools aus **MCP-PARITY-A** **21**, mit den fünf pfadbasierten
-Tools aus **MCP-PARITY-B** (2026-09-26) sind es **26**. Verträge,
-dokumentierte Grenzen und die **offene** CLI-Lücke (**6** von 32
-Subcommands: `previous`, `merge-hdr`, `merge-pano`, `matrix`, `denoise`,
-`cull`): Abschnitt „Erweiterter MVP-Scope“.
+Tools aus **MCP-PARITY-B** (2026-09-26) sind es **26**, mit den beiden
+Merge-Tools aus **MCP-PARITY-C** (2026-10-14) **28**. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (**4** von 32
+Subcommands: `previous`, `matrix`, `denoise`, `cull`): Abschnitt
+„Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
 `lumina_batch_sync_metadata`, `lumina_trigger_export`, s. Abschnitt
 „Metadaten-Schnittstelle“) — Gesamtstand nach **MCP-PARITY-A** und
-**MCP-PARITY-B**: **26 Tools** (26 registrierte Tools, davon 24 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
+**MCP-PARITY-B** und **MCP-PARITY-C**: **28 Tools** (28 registrierte Tools,
+davon 26 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
@@ -700,21 +702,21 @@ ursprüngliche Scope lautete „alle CLI-Funktionalitäten"; diese Zusage war
 **zu weit gefasst** und wird hier auf den geprüften Stand
 zurückgenommen (siehe „Ist-Abdeckung" unten).
 
-### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26)
+### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26; Merge-Zählstand 2026-10-14)
 
-`lumina-cli` hat **32** Subcommands. Abgedeckt sind **26**, offen sind
-**6**. Der Abgleich erfolgte gegen die tatsächlich implementierten
+`lumina-cli` hat **32** Subcommands. Abgedeckt sind **28**, offen sind
+**4**. Der Abgleich erfolgte gegen die tatsächlich implementierten
 Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
 2026-09-26: 17 abgedeckt / 15 offen vor MCP-PARITY-A, 21 / 11 nach A
 (dort mit dem unten genannten `previous`-Zählfehler), **26 / 6 nach
-MCP-PARITY-B**.
+MCP-PARITY-B**, **28 / 4 nach MCP-PARITY-C** (`merge-hdr`, `merge-pano`).
 
-**Abgedeckt (26):**
+**Abgedeckt (28):**
 
-(Die Tabelle hat 25 Datenzeilen: `lumina develop` / `lumina render` /
-`lumina export` teilen sich eine Zeile, und die letzte Zeile
-(`lumina mcp`) ist der Transport-Einstiegspunkt des Servers, nicht Teil
-der 32 abgeglichenen Subcommands. 26 + 6 = 32.)
+(Die Tabelle hat 25 Datenzeilen (mit Kopf- und Trennzeile 27 Leitungen):
+`lumina develop` / `lumina render` / `lumina export` teilen sich eine Zeile,
+und die letzte Zeile (`lumina mcp`) ist der Transport-Einstiegspunkt des
+Servers, nicht Teil der 32 abgeglichenen Subcommands. 28 + 4 = 32.)
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
@@ -740,10 +742,12 @@ der 32 abgeglichenen Subcommands. 26 + 6 = 32.)
 | `lumina relocate` | `lumina_relocate` (`op=move`, Kollisions- und Sidecar-Move abgedeckt) | MCP-PARITY-B |
 | `lumina generative` | `lumina_generative` (Leseweg `op=status`, Schreibwege `generate`/`remove`) | MCP-PARITY-B |
 | `lumina regenerate` | `lumina_regenerate` (`op=all` lesend auf einem frischen Dokument, Schreibwege `masks`/`auto_tone`/`matching`/`all`) | MCP-PARITY-B |
+| `lumina merge-hdr` | `lumina_merge_hdr` (Eingabemenge wird vor der Verarbeitung validiert; 0/1/257 Quellen → lautes `merge failed:`) | MCP-PARITY-C |
+| `lumina merge-pano` | `lumina_merge_pano` (Eingabemenge wie `merge-hdr` validiert; Canvas wächst um den geschätzten Offset) | MCP-PARITY-C |
 | `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
 
-**Offen — kein MCP-Weg (8):** **`previous`**, `batch-meta`, `keywords`,
-`merge-hdr`, `merge-pano`, `matrix`, `denoise`, `cull`.
+**Offen — kein MCP-Weg (6):** **`previous`**, `batch-meta`, `keywords`,
+`matrix`, `denoise`, `cull`.
 
 **Korrektur 2026-09-26 (MCP-PARITY-B-Verifikation):** `lumina batch-meta` und
 `lumina keywords` waren hier kurz als abgedeckt geführt. Das ist **falsch**:
@@ -765,9 +769,24 @@ Arithmetik ist: **32 − 8 = 24 abgedeckt**, und `batch-meta` plus
 `keywords` sind über die Metadaten-Tools abgedeckt (oben erstmals als Zeilen
 geführt).
 
+**Korrektur 2026-10-14 (MCP-PARITY-C-Verifikation):** `lumina merge-hdr` und
+`lumina merge-pano` standen in der Offen-Liste. Beide sind **geliefert**
+(`lumina_merge_hdr` / `lumina_merge_pano`; Adapter `189b7d9`, Tools
+`d2dc045`, Byte-Paritäts-Suite `7255c85`): der Merge läuft über denselben
+`lumina-stages`-Decode-/Exposure-Adapter und dieselbe
+`lumina_merge::bundle::run_merge`-Orchestrierung wie das CLI, deshalb sind
+Merge-Digest, DNG-`checksum` und die DNG-/Sidecar-Bytes für dieselbe
+Eingabemenge **byte-identisch**, und jede Ablehnung behält die CLI-eigene
+Fehlerklasse samt Präfix (T11–T20 in
+`crates/lumina-cli/tests/merge_mcp_parity*.rs`). Offen bleibt allein
+`matrix` als eigener Sub-Slice — an `expected_route` wird nicht gerührt.
+Der Abstand zwischen der Kopfzahl „4 offen" und der sechseintragigen
+Offen-Liste ist unverändert der dokumentierte `batch-meta`/`keywords`-Streit
+aus den beiden Korrekturen oben.
+
 Diese Lücke ist **offen, nicht abgesichert**: die früher hier
 formulierte Zusage „Jeder `lumina`-CLI-Befehl ist als MCP-Tool
-erreichbar" trifft auf die obigen 6 nicht zu und wird nicht mehr
+erreichbar" trifft auf die obigen 4 nicht zu und wird nicht mehr
 behauptet. Die Schliessung erfolgt in benannten Slices (Aufgabe
 `MCP-PARITY-C` in `Agents.todo.md`), **nicht** durch einen einzigen
 Blindumbau: `denoise` und `cull` sind über das F-078-Modellgate
