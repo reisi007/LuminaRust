@@ -1,6 +1,6 @@
 //! MCP-PARITY-C: the graders of the byte-parity suite.
 //!
-//! They answer three questions, one per group, and nothing else:
+//! They answer five questions, one per group, and nothing else:
 //!
 //! 1. **Do the two transports render one payload?** [`assert_same_payload`]
 //!    compares an MCP `structuredContent` against the CLI's `--json` document,
@@ -18,6 +18,13 @@
 //!    SOLL §3 requires to survive the transport mapping verbatim — the
 //!    canonical `merge <class>: …` clause — so a test can compare the *text* of
 //!    a rejection and not merely its existence.
+//! 4. **Does a merge bundle carry its envelope?**
+//!    [`assert_merge_envelope`] is the §9.1 (6) claim: T13 reads it on the HDR
+//!    mode, T14 on the pano mode, from one signature — so "what a merge sidecar
+//!    must carry" is asserted once instead of twice in drifting copies.
+//! 5. **Does a cache hit rewrite anything?** [`assert_cache_hit`] is §9.1 (7),
+//!    likewise one claim run by T15 (HDR) and T14 (pano), each on both
+//!    frontends.
 //!
 //! [`snapshot`] and [`content_fingerprint`] serve the "a refusal leaves
 //! nothing behind" claim (T18): a content fingerprint, not a cryptographic
@@ -26,7 +33,7 @@
 #![allow(dead_code)]
 
 use super::job::stderr_of;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -176,6 +183,58 @@ pub fn assert_identical_files(a: &Path, b: &Path, label: &str) {
     );
 }
 
+/// §9.1 (7): a second identical call is a cache hit that rewrites no byte —
+/// `cached: true`, `status` `ok`, the same identity on every §5 field, no
+/// invented field, and every listed artifact byte-unchanged.
+///
+/// `before` carries the bytes captured **after** the first run, one
+/// `(path, bytes)` pair per file that must not move. `first` must come from
+/// the same tree as `second`: `output` and `sidecar` echo absolute paths, so
+/// a cross-tree comparison would compare addresses instead of state (the
+/// cross-front digest equality is a separate, explicit assertion).
+///
+/// T15 (HDR) and T14 (pano) run this on both frontends — a merge cache that
+/// rewrote one byte on a hit would show up on either.
+pub fn assert_cache_hit(
+    label: &str,
+    first: &Value,
+    second: &Value,
+    before: &[(&Path, &[u8])],
+    expect_warning: bool,
+) {
+    assert_eq!(
+        second["cached"],
+        json!(true),
+        "{label}: the bundle is already current"
+    );
+    assert_eq!(
+        second["status"],
+        json!("ok"),
+        "{label}: a cache hit stays a success"
+    );
+    for field in ["digest", "checksum", "output"] {
+        assert_eq!(
+            second[field], first[field],
+            "{label}: the cache hit must report the same `{field}`"
+        );
+    }
+    assert_payload_field_set(&format!("{label} cache hit"), second, expect_warning);
+    for field in ["saved", "action", "text", "mode", "warnings"] {
+        assert!(
+            second.get(field).is_none(),
+            "{label}: no invented `{field}` on a cache hit: {second}"
+        );
+    }
+    for (path, bytes) in before {
+        assert_eq!(
+            super::fixtures::bytes(path),
+            *bytes,
+            "{label}: a cache hit must not rewrite `{}`",
+            path.display()
+        );
+    }
+}
+
 // --------------------------------------------------------------- sidecar
 
 /// The DNG path a payload reports under `output` — the artifact every artifact
@@ -240,6 +299,81 @@ fn collect_path_fields(value: &Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// The §9.1 (6) merge envelope, read from the merge sidecar file: the
+/// `"type": "merge"` envelope, the recipe's `mode`, `merge_version == 1`,
+/// `status` `ok`, the artifact reference agreeing with the reported checksum
+/// and the merged geometry, relative source names only — and no absolute path
+/// anywhere in the document (`merge_e2e.rs:158-199,232-279`, §6 Invariante 7).
+///
+/// T13 runs this on the HDR mode, T14 on the pano mode (there on both
+/// frontends). What differs between the modes is the mode string, the canvas
+/// size and the source names — never the shape — so the envelope claim lives
+/// here once, and a third mode could not quietly grow a different one.
+pub fn assert_merge_envelope(
+    label: &str,
+    sidecar_path: &Path,
+    dir: &Path,
+    mode: &str,
+    checksum: &Value,
+    size: (u32, u32),
+    sources: &[&str],
+) {
+    let text = fs::read_to_string(sidecar_path).unwrap_or_else(|error| {
+        panic!(
+            "{label}: cannot read the merge sidecar `{}`: {error}",
+            sidecar_path.display()
+        )
+    });
+    let sidecar: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("{label}: the merge sidecar is not JSON ({error})"));
+    assert_eq!(
+        sidecar["type"],
+        json!("merge"),
+        "{label}: the merge envelope"
+    );
+    let recipe = &sidecar["merge_recipe"];
+    assert_eq!(recipe["mode"], json!(mode), "{label}: the recipe mode");
+    assert_eq!(
+        recipe["merge_version"],
+        json!(1),
+        "{label}: `merge_version`"
+    );
+    assert_eq!(recipe["status"], json!("ok"), "{label}: `status`");
+    // The artifact reference agrees with the reported checksum and geometry.
+    assert_eq!(
+        sidecar["merge_artifact"]["checksum"], *checksum,
+        "{label}: merge_artifact.checksum must be the reported checksum"
+    );
+    assert_eq!(
+        sidecar["merge_artifact"]["width"],
+        json!(size.0),
+        "{label}: merged canvas geometry"
+    );
+    assert_eq!(sidecar["merge_artifact"]["height"], json!(size.1));
+    // Only relative source paths: the recipe schema rejects absolute paths and
+    // `..` segments, so the bundle stays portable.
+    let mut names: Vec<&str> = recipe["sources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{label}: no source list in the merge sidecar"))
+        .iter()
+        .map(|source| source["path"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    let mut expected = sources.to_vec();
+    expected.sort_unstable();
+    assert_eq!(names, expected, "{label}: relative source names");
+    for source in recipe["sources"].as_array().unwrap() {
+        assert!(
+            source["content_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("blake3:"),
+            "{label}: every source carries a content hash: {source}"
+        );
+    }
+    assert_no_absolute_paths(&text, dir);
 }
 
 // ----------------------------------------------------- snapshot: T18 support

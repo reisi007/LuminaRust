@@ -17,9 +17,12 @@
 //! * the DNG is compared byte for byte (T12), and against the `checksum` field
 //!   both transports report;
 //! * the merge sidecar is compared byte for byte except for exactly one masked
-//!   field (T13), and then read for the envelope §9.1 (6) demands;
+//!   field (T13), and then read for the envelope §9.1 (6) demands — T13 on the
+//!   HDR mode, T14 on the pano mode, through the one `assert_merge_envelope`
+//!   grader;
 //! * a cache hit must rewrite nothing (T15) and a force re-merge must land on
-//!   the CLI's own digest again (T16).
+//!   the CLI's own digest again (T16) — the cache-hit claim T14 mirrors on the
+//!   pano mode, on both frontends.
 //!
 //! # The two masks, and why they are the only two
 //!
@@ -173,7 +176,9 @@ fn t12_the_anchor_dng_is_byte_identical_and_re_imports_at_64x48() {
 /// §8 T13: sidecar bytes identical (an `assert_unchanged`-shaped byte compare,
 /// `library_parity_common:277-284`), `"type": "merge"`, `merge_recipe.mode`,
 /// `merge_version == 1`, `status ok`, `merge_artifact.checksum == checksum`, and
-/// no absolute paths (`merge_e2e.rs:158-199,232-279`, §6 Invariante 7).
+/// no absolute paths (`merge_e2e.rs:158-199,232-279`, §6 Invariante 7). The
+/// envelope itself is read by `assert_merge_envelope` — T14 runs the very same
+/// claim on the pano mode, so it must not exist twice.
 #[test]
 fn t13_the_anchor_sidecar_is_byte_identical_and_carries_the_merge_envelope() {
     let root = tempfile::tempdir().unwrap();
@@ -189,41 +194,16 @@ fn t13_the_anchor_sidecar_is_byte_identical_and_carries_the_merge_envelope() {
     let mcp_sidecar = Path::new(mcp_payload["sidecar"].as_str().unwrap()).to_path_buf();
     assert_identical_sidecar(&cli_sidecar, &mcp_sidecar, "T13 merge sidecar");
 
-    let sidecar = sidecar_json(&dng_of(&mcp_payload));
-    assert_eq!(sidecar["type"], json!("merge"), "the merge envelope");
-    let recipe = &sidecar["merge_recipe"];
-    assert_eq!(recipe["mode"], json!("hdr"));
-    assert_eq!(recipe["merge_version"], json!(1));
-    assert_eq!(recipe["status"], json!("ok"));
-    // The artifact reference agrees with both transports' `checksum`.
-    assert_eq!(
-        sidecar["merge_artifact"]["checksum"], mcp_payload["checksum"],
-        "merge_artifact.checksum must be the reported checksum"
+    // §9.1 (6): the envelope the sidecar must carry on the HDR mode.
+    assert_merge_envelope(
+        "T13 hdr",
+        &mcp_sidecar,
+        &mcp_dir,
+        "hdr",
+        &mcp_payload["checksum"],
+        (ANCHOR_W, ANCHOR_H),
+        &["a.png", "b.png"],
     );
-    assert_eq!(
-        sidecar["merge_artifact"]["width"],
-        json!(ANCHOR_W),
-        "merged canvas geometry"
-    );
-    assert_eq!(sidecar["merge_artifact"]["height"], json!(ANCHOR_H));
-    // Only relative source paths: the recipe schema rejects absolute paths and
-    // `..` segments, so the bundle stays portable (`merge_e2e.rs:158-199`).
-    let names: Vec<&str> = recipe["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|source| source["path"].as_str().unwrap())
-        .collect();
-    let mut sorted = names.clone();
-    sorted.sort_unstable();
-    assert_eq!(sorted, vec!["a.png", "b.png"], "relative source names");
-    for source in recipe["sources"].as_array().unwrap() {
-        assert!(source["content_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("blake3:"));
-    }
-    assert_no_absolute_paths(&std::fs::read_to_string(&mcp_sidecar).unwrap(), &mcp_dir);
 }
 
 /// T14 — the panorama mirror, with the neutral default exposure.
@@ -232,6 +212,11 @@ fn t13_the_anchor_sidecar_is_byte_identical_and_carries_the_merge_envelope() {
 /// offset. §6 Invariante 5 / §9.1 (8): a panorama merge without **any**
 /// exposure list succeeds and stores the documented neutral defaults as
 /// provenance only — the MCP tool must inherit that unweakened.
+///
+/// The pano mirror also carries the two claims T13 and T15 make on the HDR
+/// anchor, so the synthetic PNG coverage matches what the RAW gate T21 already
+/// measures for both pipelines (MCP-PARITY-C Folgepunkt (b)): the full §9.1 (6)
+/// merge envelope and the §9.1 (7) cache hit, each on **both** frontends.
 #[test]
 fn t14_pano_parity_with_neutral_defaults_and_a_canvas_that_grows() {
     let root = tempfile::tempdir().unwrap();
@@ -251,13 +236,11 @@ fn t14_pano_parity_with_neutral_defaults_and_a_canvas_that_grows() {
 
     let cli_dng = dng_of(&cli_report);
     let mcp_dng = dng_of(&mcp_payload);
+    let cli_sidecar = Path::new(cli_report["sidecar"].as_str().unwrap()).to_path_buf();
+    let mcp_sidecar = Path::new(mcp_payload["sidecar"].as_str().unwrap()).to_path_buf();
     assert_identical_files(&cli_dng, &mcp_dng, "T14 pano DNG");
     assert_eq!(mcp_payload["checksum"], json!(blake3_file(&mcp_dng)));
-    assert_identical_sidecar(
-        Path::new(cli_report["sidecar"].as_str().unwrap()),
-        Path::new(mcp_payload["sidecar"].as_str().unwrap()),
-        "T14 pano sidecar",
-    );
+    assert_identical_sidecar(&cli_sidecar, &mcp_sidecar, "T14 pano sidecar");
 
     // Canvas pin: sidecar recipe and decoded DNG agree, and the canvas grew by
     // the estimated offset (`merge_e2e.rs:303-316`).
@@ -281,6 +264,60 @@ fn t14_pano_parity_with_neutral_defaults_and_a_canvas_that_grows() {
             "a panorama source keeps a provenance exposure: {source}"
         );
     }
+
+    // §9.1 (6): the pano sidecar carries the full merge envelope — T13's claim
+    // on the pano mode, read on BOTH frontends. The canvas geometry is the pin
+    // above, so the artifact reference and the decoded DNG must agree on it.
+    let size = (GRADIENT_W + dx.unsigned_abs(), GRADIENT_H);
+    assert_merge_envelope(
+        "T14 MCP pano",
+        &mcp_sidecar,
+        &mcp_dir,
+        "panorama",
+        &mcp_payload["checksum"],
+        size,
+        &["a.png", "b.png"],
+    );
+    assert_merge_envelope(
+        "T14 CLI pano",
+        &cli_sidecar,
+        &cli_dir,
+        "panorama",
+        &cli_report["checksum"],
+        size,
+        &["a.png", "b.png"],
+    );
+
+    // §9.1 (7): a second identical call is a cache hit that rewrites no byte —
+    // T15's claim on the pano mode, again on BOTH frontends.
+    let mcp_before = (bytes(&mcp_dng), bytes(&mcp_sidecar));
+    let second = mcp_call.mcp_ok(PANO_TOOL);
+    assert_cache_hit(
+        "T14 MCP",
+        &mcp_payload,
+        &second,
+        &[
+            (mcp_dng.as_path(), &mcp_before.0),
+            (mcp_sidecar.as_path(), &mcp_before.1),
+        ],
+        false,
+    );
+    let cli_before = (bytes(&cli_dng), bytes(&cli_sidecar));
+    let cli_second = cli_call.cli_json("merge-pano");
+    assert_cache_hit(
+        "T14 CLI",
+        &cli_report,
+        &cli_second,
+        &[
+            (cli_dng.as_path(), &cli_before.0),
+            (cli_sidecar.as_path(), &cli_before.1),
+        ],
+        false,
+    );
+    assert_eq!(
+        cli_second["digest"], mcp_payload["digest"],
+        "the cached CLI run keeps the digest both frontends agree on"
+    );
 }
 
 /// T15 — a second identical call is a cache hit that rewrites no byte.
@@ -288,7 +325,8 @@ fn t14_pano_parity_with_neutral_defaults_and_a_canvas_that_grows() {
 /// §8 T15 / §9.1 (7): `cached: true`, `status: "ok"`, DNG and sidecar bytes
 /// unchanged, and no `saved`/`action` field invented. The CLI counterpart is the
 /// `merge already current:` branch (`merge.rs:133-137`,
-/// `merge_e2e.rs:323-348`).
+/// `merge_e2e.rs:323-348`). The claim itself lives in `assert_cache_hit`; T14
+/// runs it on the pano mode.
 #[test]
 fn t15_a_second_identical_call_is_a_cache_hit_that_rewrites_no_byte() {
     let root = tempfile::tempdir().unwrap();
@@ -307,43 +345,36 @@ fn t15_a_second_identical_call_is_a_cache_hit_that_rewrites_no_byte() {
 
     // Second identical run on the MCP side: nothing is rewritten.
     let second = mcp_call.mcp_ok(HDR_TOOL);
-    assert_eq!(
-        second["cached"],
-        json!(true),
-        "the bundle is already current"
-    );
-    assert_eq!(second["status"], json!("ok"));
-    assert_eq!(second["digest"], first["digest"]);
-    assert_eq!(second["checksum"], first["checksum"]);
-    assert_eq!(second["output"], first["output"]);
-    assert_payload_field_set("T15 cache hit", &second, true);
-    for field in ["saved", "action", "text", "mode", "warnings"] {
-        assert!(
-            second.get(field).is_none(),
-            "T15: no invented `{field}` on a cache hit: {second}"
-        );
-    }
-    assert_eq!(
-        bytes(&mcp_dng),
-        dng_before,
-        "a cache hit must not rewrite the DNG"
-    );
-    assert_eq!(
-        bytes(&mcp_sidecar),
-        sidecar_before,
-        "a cache hit must not rewrite the sidecar"
+    assert_cache_hit(
+        "T15 MCP",
+        &first,
+        &second,
+        &[
+            (mcp_dng.as_path(), &dng_before),
+            (mcp_sidecar.as_path(), &sidecar_before),
+        ],
+        true,
     );
 
-    // The CLI agrees: its second report is `cached: true` as well.
+    // The CLI agrees: its second report is a cache hit as well — on the same
+    // digest both frontends share, and without rewriting one byte either.
     let cli_dng = Path::new(cli_first["output"].as_str().unwrap()).to_path_buf();
-    let cli_dng_before = bytes(&cli_dng);
+    let cli_sidecar = Path::new(cli_first["sidecar"].as_str().unwrap()).to_path_buf();
+    let (cli_dng_before, cli_sidecar_before) = (bytes(&cli_dng), bytes(&cli_sidecar));
     let cli_second = cli_call.cli_json("merge-hdr");
-    assert_eq!(cli_second["cached"], json!(true));
-    assert_eq!(cli_second["digest"], first["digest"]);
+    assert_cache_hit(
+        "T15 CLI",
+        &cli_first,
+        &cli_second,
+        &[
+            (cli_dng.as_path(), &cli_dng_before),
+            (cli_sidecar.as_path(), &cli_sidecar_before),
+        ],
+        false,
+    );
     assert_eq!(
-        bytes(&cli_dng),
-        cli_dng_before,
-        "a cached CLI run rewrites no DNG byte either"
+        cli_second["digest"], first["digest"],
+        "a cached CLI run keeps the digest both frontends agree on"
     );
 }
 
