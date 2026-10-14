@@ -34,6 +34,10 @@ lumina-raw = { path = "../lumina-raw" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+# MCP-PARITY-C / Impl-A: the shared matrix runner stages golden/export/diff
+# bytes atomically (same `.{name}.tmp-*` + fsync + rename scheme the CLI used)
+# and owns the default temporary work directory.
+tempfile = "3"
 thiserror = "2"
 
 [dev-dependencies]

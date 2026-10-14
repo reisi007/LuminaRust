@@ -29,7 +29,6 @@
 1031 crates/lumina-core/src/denoise.rs  # R5-WARN-2: DenoiseStageInput nach src/denoise/stage_input.rs extrahiert (1084 -> 1031; quiet-Feld additiv)
 1059 crates/lumina-onnx/src/face/backend.rs
 1035 crates/lumina-sidecar/src/face.rs
-1007 crates/lumina-cli/src/matrix.rs
 970 crates/lumina-gpu/src/shaders.rs
 947 crates/lumina-gui/src/denoise_gui.rs
 933 crates/lumina-onnx/src/sam2.rs
