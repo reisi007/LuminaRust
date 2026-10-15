@@ -701,7 +701,11 @@ erst fertig, wenn:
   bei ≤ 500 Zeilen steht). Neue Dateien bleiben strikt bei ≤ 500 Zeilen
   (User-Entscheid 2026-09-18: keine neuen Baseline-Einträge — größere Ziele
   werden feiner gesplittet; bestehende Einträge bleiben bestehen). Kein willkürliches Splitten ohne Kohäsion — Extraktion
-  folgt Modulgrenzen. **Anti-Gaming (Pflicht):** Kommt neue Logik hinzu, gehört
+  folgt Modulgrenzen. Für die größte Datei des Repos, `crates/lumina-gui/src/lib.rs`,
+  ist die kohäsionsgetriebene Extraktion seit dem Eigentümerentscheid 2026-10-15 ein
+  **eigener, fortlaufender Planpunkt** (`GUI-LIB-SPLIT-65`): Slice für Slice, jeder
+  Slice byte-identisch und mit **gesenktem** Baseline-Eintrag. Der Punkt ist nicht
+  1.0-blockierend und verdrängt keinen Gate-Task. **Anti-Gaming (Pflicht):** Kommt neue Logik hinzu, gehört
   sie in neue oder passende kleine Dateien (Umdesign-Pflicht) — nicht in die
   übergroße Bestandsdatei. Kleinstverdrahtung an bestehenden Aufrufstellen
   (z. B. ein Makro-Aufruf je Methode) darf bleiben. Das Löschen von Kommentaren,
