@@ -10,17 +10,18 @@ in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
 Metadaten-Tools aus LRPAR-G15-IPTC-S7 waren es **17**, mit den vier
 Stage-Editor-Tools aus **MCP-PARITY-A** **21**, mit den fünf pfadbasierten
 Tools aus **MCP-PARITY-B** (2026-09-26) sind es **26**, mit den beiden
-Merge-Tools aus **MCP-PARITY-C** (2026-10-14) **28**. Verträge,
-dokumentierte Grenzen und die **offene** CLI-Lücke (**4** von 32
-Subcommands: `previous`, `matrix`, `denoise`, `cull`): Abschnitt
+Merge-Tools aus **MCP-PARITY-C** (2026-10-14) **28**, mit dem Matrix-Tool
+aus **MCP-PARITY-C** (2026-10-15) **29**. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (**3** von 32
+Subcommands: `previous`, `denoise`, `cull`): Abschnitt
 „Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
 `lumina_batch_sync_metadata`, `lumina_trigger_export`, s. Abschnitt
 „Metadaten-Schnittstelle“) — Gesamtstand nach **MCP-PARITY-A** und
-**MCP-PARITY-B** und **MCP-PARITY-C**: **28 Tools** (28 registrierte Tools,
-davon 26 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
+**MCP-PARITY-B** und **MCP-PARITY-C**: **29 Tools** (29 registrierte Tools,
+davon 27 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
@@ -702,21 +703,22 @@ ursprüngliche Scope lautete „alle CLI-Funktionalitäten"; diese Zusage war
 **zu weit gefasst** und wird hier auf den geprüften Stand
 zurückgenommen (siehe „Ist-Abdeckung" unten).
 
-### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26; Merge-Zählstand 2026-10-14)
+### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26; Merge-Zählstand 2026-10-14; Matrix-Zählstand 2026-10-15)
 
-`lumina-cli` hat **32** Subcommands. Abgedeckt sind **28**, offen sind
-**4**. Der Abgleich erfolgte gegen die tatsächlich implementierten
+`lumina-cli` hat **32** Subcommands. Abgedeckt sind **29**, offen sind
+**3**. Der Abgleich erfolgte gegen die tatsächlich implementierten
 Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
 2026-09-26: 17 abgedeckt / 15 offen vor MCP-PARITY-A, 21 / 11 nach A
 (dort mit dem unten genannten `previous`-Zählfehler), **26 / 6 nach
-MCP-PARITY-B**, **28 / 4 nach MCP-PARITY-C** (`merge-hdr`, `merge-pano`).
+MCP-PARITY-B**, **28 / 4 nach MCP-PARITY-C** (`merge-hdr`, `merge-pano`),
+**29 / 3 nach MCP-PARITY-C** (`matrix`).
 
-**Abgedeckt (28):**
+**Abgedeckt (29):**
 
-(Die Tabelle hat 25 Datenzeilen (mit Kopf- und Trennzeile 27 Leitungen):
+(Die Tabelle hat 26 Datenzeilen (mit Kopf- und Trennzeile 28 Leitungen):
 `lumina develop` / `lumina render` / `lumina export` teilen sich eine Zeile,
 und die letzte Zeile (`lumina mcp`) ist der Transport-Einstiegspunkt des
-Servers, nicht Teil der 32 abgeglichenen Subcommands. 28 + 4 = 32.)
+Servers, nicht Teil der 32 abgeglichenen Subcommands. 29 + 3 = 32.)
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
@@ -744,10 +746,11 @@ Servers, nicht Teil der 32 abgeglichenen Subcommands. 28 + 4 = 32.)
 | `lumina regenerate` | `lumina_regenerate` (`op=all` lesend auf einem frischen Dokument, Schreibwege `masks`/`auto_tone`/`matching`/`all`) | MCP-PARITY-B |
 | `lumina merge-hdr` | `lumina_merge_hdr` (Eingabemenge wird vor der Verarbeitung validiert; 0/1/257 Quellen → lautes `merge failed:`) | MCP-PARITY-C |
 | `lumina merge-pano` | `lumina_merge_pano` (Eingabemenge wie `merge-hdr` validiert; Canvas wächst um den geschätzten Offset) | MCP-PARITY-C |
+| `lumina matrix` | `lumina_matrix` (Shared-Runner `lumina_stages::matrix_run::run` wie das CLI; `expected_route` nur Austrag/Echo, nie Steuerung; roter Lauf liefert den Report mit `matrix failed:` als `MatrixError`) | MCP-PARITY-C |
 | `lumina mcp` | CLI-Subcommand, startet den Server (kein Tool) | F-101-F1 |
 
-**Offen — kein MCP-Weg (6):** **`previous`**, `batch-meta`, `keywords`,
-`matrix`, `denoise`, `cull`.
+**Offen — kein MCP-Weg (5):** **`previous`**, `batch-meta`, `keywords`,
+`denoise`, `cull`.
 
 **Korrektur 2026-09-26 (MCP-PARITY-B-Verifikation):** `lumina batch-meta` und
 `lumina keywords` waren hier kurz als abgedeckt geführt. Das ist **falsch**:
@@ -784,9 +787,28 @@ Der Abstand zwischen der Kopfzahl „4 offen" und der sechseintragigen
 Offen-Liste ist unverändert der dokumentierte `batch-meta`/`keywords`-Streit
 aus den beiden Korrekturen oben.
 
+**Korrektur 2026-10-15 (MCP-PARITY-C-Matrix-Verifikation):** `lumina matrix`
+stand in der Offen-Liste. Es ist **geliefert** (`lumina_matrix`; Kern
+`272d14f`, Tool `21823d6`, Byte-Paritäts-Suite `fccb243`, Sweep-Hang-Fix
+`3936b66`): das Tool fährt denselben Shared-Runner
+(`lumina_stages::matrix_run::run`, `MatrixRequest`) wie das CLI, deshalb sind
+Report (`structuredContent` == CLI-`--json`, T15), Goldens/Exporte/Diffs
+(T17–T18), Argumentformen (T22–T25) und Ablehnungsklasse samt Text (T19–T21
+in `crates/lumina-cli/tests/matrix_mcp_parity*.rs`) für dieselbe
+Eingabemenge **byte-identisch**. `expected_route` ist nur Austrag: T16 belegt,
+dass eine rotierte Route nur das Echo ändert und die Set-Datei byte-identisch
+bleibt (per Diff nachweisbar unangetastet). Das GPU-Verdikt ist nur
+gespiegelt, nicht bewiesen (§5 des SOLL, kein Teil dieses Slices). T26
+(Real-RAW-Gate auf dem committeten Set) ist geschrieben, aber **nicht
+ausgeführt**: `#[ignore]` + `LUMINA_MATRIX=1`-Gate
+(`matrix_mcp_parity_gate.rs`), Abnahme-Entscheid §13 Pkt 8 ausstehend. Der
+Abstand zwischen der Kopfzahl „3 offen" und der fünfeintragigen Offen-Liste
+ist unverändert der dokumentierte `batch-meta`/`keywords`-Streit aus den
+Korrekturen oben.
+
 Diese Lücke ist **offen, nicht abgesichert**: die früher hier
 formulierte Zusage „Jeder `lumina`-CLI-Befehl ist als MCP-Tool
-erreichbar" trifft auf die obigen 4 nicht zu und wird nicht mehr
+erreichbar" trifft auf die obigen 3 nicht zu und wird nicht mehr
 behauptet. Die Schliessung erfolgt in benannten Slices (Aufgabe
 `MCP-PARITY-C` in `Agents.todo.md`), **nicht** durch einen einzigen
 Blindumbau: `denoise` und `cull` sind über das F-078-Modellgate
