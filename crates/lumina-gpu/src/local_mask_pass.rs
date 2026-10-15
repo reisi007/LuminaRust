@@ -71,13 +71,38 @@ impl LocalMaskLayer {
     }
 }
 
+/// The P1.2 CPU-routing reason for one persisted local recipe, or `None`.
+///
+/// The plane-free half of [`unsupported_local_mask_stages`]: a routing gate can
+/// decide *before* any mask plane exists, i.e. without touching the GPU.
+#[must_use]
+pub fn unsupported_local_mask_adjustments(
+    layer_id: &str,
+    adjustments: &LocalAdjustments,
+) -> Option<String> {
+    if adjustments.has_local_curves()
+        || adjustments.has_local_color()
+        || adjustments.has_local_presence()
+        || adjustments.has_local_detail()
+    {
+        Some(format!(
+            "local mask layer `{layer_id}` uses a P1.2 block (tone curve/color/presence/detail) \
+             not GPU-wired"
+        ))
+    } else {
+        None
+    }
+}
+
 /// The GPU-routing reasons for a set of bound local mask layers.
 ///
 /// Empty when every non-neutral layer is GPU-renderable. A non-empty result is
 /// the caller's cue to keep the exact CPU present path: the GPU local-mask pass
 /// would otherwise drop a stage. This is the local-mask-context companion of
 /// [`crate::unsupported_gpu_stages_with_context`] — the mask-layer context the
-/// recipe-only gate cannot see.
+/// recipe-only gate cannot see. The plane-free half is
+/// [`unsupported_local_mask_adjustments`]; this function only adds the
+/// neutrality skip.
 #[must_use]
 pub fn unsupported_local_mask_stages(layers: &[LocalMaskLayer]) -> Vec<String> {
     let mut reasons = Vec::new();
@@ -85,17 +110,10 @@ pub fn unsupported_local_mask_stages(layers: &[LocalMaskLayer]) -> Vec<String> {
         if layer.is_neutral() {
             continue;
         }
-        let adjustments = &layer.adjustments;
-        if adjustments.has_local_curves()
-            || adjustments.has_local_color()
-            || adjustments.has_local_presence()
-            || adjustments.has_local_detail()
+        if let Some(reason) =
+            unsupported_local_mask_adjustments(&layer.layer_id, &layer.adjustments)
         {
-            reasons.push(format!(
-                "local mask layer `{}` uses a P1.2 block (tone curve/color/presence/detail) \
-                 not GPU-wired",
-                layer.layer_id
-            ));
+            reasons.push(reason);
         }
     }
     reasons
@@ -151,11 +169,11 @@ impl GpuContext {
     ///
     /// The global/geometry chain runs through [`GpuContext::render_with_gpu`]
     /// (so every existing stage and its loud CPU-routing contract is unchanged);
-    /// this method then runs the mask-local pass on the result. Layers whose
-    /// recipe is neutral are skipped; a non-neutral layer whose recipe carries a
-    /// P1.2 block is a **loud** refusal (see [`unsupported_local_mask_stages`])
-    /// rather than a silent drop, and the caller keeps the exact CPU present
-    /// path.
+    /// this method then delegates to [`GpuContext::apply_gpu_local_masks`] on
+    /// that result. Layers whose recipe is neutral are skipped; a non-neutral
+    /// layer whose recipe carries a P1.2 block is a **loud** refusal (see
+    /// [`unsupported_local_mask_stages`]) rather than a silent drop, and the
+    /// caller keeps the exact CPU present path.
     ///
     /// Without a bound adapter the pass cannot run: the method returns
     /// [`GpuError::AdapterUnavailable`] for a non-neutral layer set instead of
@@ -169,8 +187,25 @@ impl GpuContext {
         layers: &[LocalMaskLayer],
     ) -> Result<Frame, GpuError> {
         let global = self.render_with_gpu(frame, recipe)?;
+        self.apply_gpu_local_masks(&global, layers)
+    }
+
+    /// Apply the caller-evaluated local mask layers to an **already globally
+    /// rendered** frame (GPU-RENDER-MASK-19).
+    ///
+    /// `global` is the output of [`GpuContext::render_with_gpu`] or
+    /// [`GpuContext::render_with_gpu_and_generative`] for the same recipe — the
+    /// exact post-global/post-geometry stage the CPU oracle composites local
+    /// layers onto. Returns `global` unchanged when every layer is neutral.
+    /// Validates loudly (no silent drop) and requires a bound adapter for a
+    /// non-neutral set.
+    pub fn apply_gpu_local_masks(
+        &self,
+        global: &Frame,
+        layers: &[LocalMaskLayer],
+    ) -> Result<Frame, GpuError> {
         if layers.iter().all(LocalMaskLayer::is_neutral) {
-            return Ok(global);
+            return Ok(global.clone());
         }
         validate_local_mask_layers(global.width, global.height, layers)?;
         let unsupported = unsupported_local_mask_stages(layers);
@@ -188,7 +223,7 @@ impl GpuContext {
                     "GPU local-mask pass requires a bound adapter".into(),
                 ));
             };
-            self.run_local_mask_chain(resources, &global, layers)
+            self.run_local_mask_chain(resources, global, layers)
         }
         #[cfg(not(feature = "gpu"))]
         {
@@ -368,5 +403,81 @@ impl GpuContext {
         );
         gpu_util::encode_fullscreen_pass(encoder, &tone.pipeline, &bind, target_view);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumina_sidecar::CurvePoint;
+
+    fn layer_with(adjustments: LocalAdjustments) -> LocalMaskLayer {
+        LocalMaskLayer {
+            layer_id: "layer-1".into(),
+            plane: MaskPlane::new(2, 2, vec![u16::MAX; 4]).unwrap(),
+            adjustments,
+        }
+    }
+
+    /// A neutral recipe is never a route reason — plane-free or bound.
+    #[test]
+    fn neutral_adjustments_have_no_plane_free_route_reason() {
+        let adjustments = LocalAdjustments::default();
+        assert_eq!(
+            unsupported_local_mask_adjustments("layer-1", &adjustments),
+            None
+        );
+        assert!(unsupported_local_mask_stages(&[layer_with(adjustments)]).is_empty());
+    }
+
+    /// Every P1.2 block reports through the plane-free predicate, and the bound
+    /// helper is exactly that predicate plus the neutrality skip — same message.
+    #[test]
+    fn each_p12_block_is_the_same_plane_free_and_bound_reason() {
+        let curve = LocalAdjustments {
+            curves: Some(lumina_sidecar::Curves {
+                version: 1,
+                master: vec![
+                    CurvePoint {
+                        input: 0.0,
+                        output: 0.0,
+                    },
+                    CurvePoint {
+                        input: 1.0,
+                        output: 0.5,
+                    },
+                ],
+                channels: lumina_sidecar::CurveChannels {
+                    red: None,
+                    green: None,
+                    blue: None,
+                },
+            }),
+            ..LocalAdjustments::default()
+        };
+        let color = LocalAdjustments {
+            vibrance: 0.5,
+            ..LocalAdjustments::default()
+        };
+        let mut presence = LocalAdjustments::default();
+        presence
+            .set_local_presence_field("texture", 0.5)
+            .expect("valid local presence");
+        let mut detail = LocalAdjustments::default();
+        detail
+            .set_local_sharpening_field("amount", 0.5)
+            .expect("valid local sharpening");
+
+        for adjustments in [curve, color, presence, detail] {
+            let plane_free = unsupported_local_mask_adjustments("layer-1", &adjustments)
+                .expect("a P1.2 block must be a plane-free route reason");
+            assert_eq!(
+                plane_free,
+                "local mask layer `layer-1` uses a P1.2 block \
+                 (tone curve/color/presence/detail) not GPU-wired"
+            );
+            let bound = unsupported_local_mask_stages(&[layer_with(adjustments)]);
+            assert_eq!(bound, vec![plane_free]);
+        }
     }
 }

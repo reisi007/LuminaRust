@@ -344,7 +344,12 @@ die Reihenfolge ab.
 lokal ausgewertete Maske moduliert auf der GPU die Pixel über
 `crates/lumina-gpu/src/local_mask_pass.rs` (+ `src/local_mask_gpu.rs`): pro
 nicht-neutralem Layer wird das lokale Rezept GPU-gerendert und über die exakte
-`blend_local_layer`-Formel gemischt. Details, Messung und die laut benannte
+`blend_local_layer`-Formel gemischt. **Zweiter, isolierter Einstieg (Slice B1):**
+`GpuContext::apply_gpu_local_masks` zieht die Maskenkette isoliert auf einen
+bereits global gerenderten Frame nach; die Auswertung liefert der Kern über
+`lumina_core::render::mask_evaluation::evaluate_local_mask_layers` — dieselbe
+`evaluate_mask_stage`-Auswertung wie der CPU-Render, kein zweiter
+Auswertungspfad. Details, Messung und die laut benannte
 P1.2-/GUI-Grenze stehen im SOLL-Abschnitt unten und in
 `feature/architecture/pipeline.md` §GPU.
 

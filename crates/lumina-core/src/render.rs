@@ -19,7 +19,7 @@ mod local_detail;
 mod local_presence;
 mod local_tone;
 mod local_wb;
-mod mask_evaluation;
+pub mod mask_evaluation;
 mod source_stage;
 use mask_evaluation::{evaluate_layer, LayerFailure};
 pub use source_stage::render_frame_from_base_with_source_stage;

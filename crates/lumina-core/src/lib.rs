@@ -92,6 +92,7 @@ pub use red_eye::{
     RED_EYE_DETECT_MAX_REGIONS, RED_EYE_DETECT_MIN_PIXELS, RED_EYE_DETECT_RADIUS_MARGIN,
     RED_EYE_DETECT_REDNESS_THRESHOLD,
 };
+pub use render::mask_evaluation::evaluate_local_mask_layers;
 pub use render::{
     apply_spot_heals_from_recipe, generative_input_frames, prepare_source_base, render_frame,
     render_frame_from_base, render_frame_from_base_with_denoise,

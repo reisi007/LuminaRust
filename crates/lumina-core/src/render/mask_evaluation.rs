@@ -148,3 +148,188 @@ fn find_definition<'a>(
         .find(|c| c.id == reference.copy_id)
         .and_then(|c| c.mask_library.iter().find(|m| m.id == reference.mask_id))
 }
+
+/// Evaluate the local mask stage for a caller-known geometry, without
+/// rendering the global/geometry stages (GPU-RENDER-MASK-19 integration).
+///
+/// This is the *same* evaluation the CPU render uses: it validates the
+/// persisted local adjustments loudly (`prevalidate_local_adjustments`) and
+/// then runs the one `evaluate_mask_stage` implementation. It exists so a
+/// GPU path can obtain the caller-evaluated layers the mask pass needs
+/// (`LocalMaskLayer`) **without** a full CPU render and **without** a second,
+/// divergent mask-evaluation implementation.
+///
+/// `input_width`/`input_height` are the decoded source dimensions the CPU
+/// render would use as `mask_input_*`; `frame_width`/`frame_height` are the
+/// post-global/post-geometry output dimensions the layers must be aligned to.
+pub fn evaluate_local_mask_layers(
+    context: &super::RenderContext<'_>,
+    input_width: u32,
+    input_height: u32,
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<(Vec<super::MaskLayerResult>, Vec<String>), crate::CoreError> {
+    super::local_adjustments::prevalidate_local_adjustments(context)?;
+    super::evaluate_mask_stage(
+        context.masks.as_ref(),
+        super::MaskStageGeometry {
+            recipe: context.recipe,
+            input_width,
+            input_height,
+            frame_width,
+            frame_height,
+            local_adjustment_mode: super::local_adjustments::has_visible_local_adjustments(
+                context.masks.as_ref(),
+            ),
+        },
+        &mut super::StageWork::default(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{render_frame, MaskPolicy, RenderContext};
+    use crate::ImageFrame;
+    use lumina_sidecar::{
+        CoordinateSystem, DecodeFingerprint, EditRecipe, Extras, Flag, GeometryFingerprint,
+        LocalAdjustments, MaskLayer, MaskOperation, ModelIdentity, Preprocessing, Resolution,
+        SourceFingerprint,
+    };
+    use std::collections::BTreeMap;
+
+    fn mask_definition(id: &str, width: u32, height: u32) -> MaskDefinition {
+        MaskDefinition {
+            id: id.into(),
+            name: id.into(),
+            source_fingerprint: SourceFingerprint {
+                content_hash: "h".into(),
+                byte_length: 1,
+                extras: Extras::new(),
+            },
+            decode_context: DecodeFingerprint {
+                decoder: "d".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            geometry_context: GeometryFingerprint {
+                width,
+                height,
+                orientation: 1,
+                pixel_aspect_ratio: 1.0,
+                extras: Extras::new(),
+            },
+            model: ModelIdentity {
+                name: "m".into(),
+                version: "1".into(),
+                hash: "h".into(),
+                extras: Extras::new(),
+            },
+            inference_resolution: Resolution {
+                width,
+                height,
+                extras: Extras::new(),
+            },
+            preprocessing: Preprocessing {
+                name: "p".into(),
+                version: "1".into(),
+                parameters: BTreeMap::new(),
+                extras: Extras::new(),
+            },
+            rescaling_method: "none".into(),
+            rescaling_parameters: BTreeMap::new(),
+            coordinate_system: CoordinateSystem::SourceOriented,
+            status: MaskStatus::Valid,
+            created_at: "now".into(),
+            generator_version: "g".into(),
+            error_text: None,
+            artifact: None,
+            operation: MaskOperation::Source,
+            references: vec![],
+            prompt: None,
+            extras: Extras::new(),
+            ai_select: None,
+        }
+    }
+
+    /// One visible, non-neutral P0 local layer over a `2x2` source definition.
+    fn fixture() -> (
+        Vec<VirtualCopy>,
+        BTreeMap<(String, String), MaskPlane>,
+        EditRecipe,
+    ) {
+        let definition = mask_definition("subject", 2, 2);
+        let layer = MaskLayer {
+            id: "layer-1".into(),
+            mask: MaskReference {
+                copy_id: "vc".into(),
+                mask_id: "subject".into(),
+                extras: Extras::new(),
+            },
+            inverted: false,
+            feather: 0.0,
+            blur: 0.0,
+            density: 1.0,
+            extras: Extras::new(),
+            visible: true,
+            local_adjustments: Some(LocalAdjustments {
+                exposure: 1.0,
+                ..LocalAdjustments::default()
+            }),
+        };
+        let copies = vec![VirtualCopy {
+            id: "vc".into(),
+            name: "vc".into(),
+            is_default: true,
+            rating: 0,
+            flag: Flag::Unflagged,
+            recipe: EditRecipe::default(),
+            mask_library: vec![definition],
+            mask_layers: vec![layer],
+            history: vec![],
+            export_records: vec![],
+            extras: Extras::new(),
+        }];
+        let planes = BTreeMap::from([(
+            ("vc".into(), "subject".into()),
+            MaskPlane::new(2, 2, vec![0, 32_768, u16::MAX, 0]).unwrap(),
+        )]);
+        (copies, planes, EditRecipe::default())
+    }
+
+    /// The public seam is *the same* evaluation the CPU render runs: for the
+    /// identical geometry the layers and warnings are byte-for-byte equal to
+    /// `RenderOutput.mask_layers`/`mask_warnings`.
+    #[test]
+    fn evaluate_local_mask_layers_matches_the_render_frame_mask_stage() {
+        let (copies, planes, recipe) = fixture();
+        let context = MaskContext {
+            copies: &copies,
+            active_copy_id: "vc",
+            planes,
+            policy: MaskPolicy::Strict,
+            source_roi: None,
+        };
+        let frame = ImageFrame::new(2, 2, vec![100; 16]).unwrap();
+        let render_context = RenderContext {
+            recipe: &recipe,
+            camera_white_balance: None,
+            source_actions: &[],
+            lensfun: None,
+            depth: None,
+            masks: Some(context),
+        };
+
+        let output = render_frame(&frame, &render_context).unwrap();
+        assert_eq!(
+            output.mask_layers.len(),
+            1,
+            "the fixture must exercise exactly one visible local layer"
+        );
+
+        let (layers, warnings) = evaluate_local_mask_layers(&render_context, 2, 2, 2, 2).unwrap();
+        assert_eq!(layers, output.mask_layers);
+        assert_eq!(warnings, output.mask_warnings);
+    }
+}

@@ -2109,6 +2109,14 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   stiller Fallback):** die P1.2-Blöcke (lokale Tonkurve/Farbe/Presence/Detail)
   sind noch nicht GPU-verdrahtet; `unsupported_local_mask_stages` nennt sie als
   CPU-Routing-Grund und `render_with_gpu_local_masks` verweigert sie laut.
+  **Zweiter, isolierter Einstieg (Slice B1):** `GpuContext::apply_gpu_local_masks`
+  zieht die Maskenkette isoliert auf einen bereits global gerenderten Frame nach;
+  der Ein-Call-Einstieg `render_with_gpu_local_masks` ist genau
+  `render_with_gpu` plus diesem zweiten Schritt (eine Maskenkette, kein zweiter
+  Codepfad). Die Auswertung liefert der Kern über
+  `lumina_core::render::mask_evaluation::evaluate_local_mask_layers` — dieselbe
+  `evaluate_mask_stage`-Auswertung wie der CPU-Render, kein zweiter
+  Auswertungspfad.
   **Noch offen (eigener Slice):** die GUI-Verdrahtung — `local_adjustment_route_reason`
   routet heute weiterhin jeden sichtbaren lokalen Maskenzustand auf die CPU, der
   Present-Pfad bindet die ausgewerteten Layer also noch nicht an den neuen

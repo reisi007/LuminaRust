@@ -380,6 +380,42 @@ fn local_mask_layers_composite_in_order_and_after_global() {
     );
 }
 
+/// Pins the **delegation contract** of the second step, not the chain's
+/// effectiveness: `apply_gpu_local_masks` on the already-rendered global frame
+/// and the one-call entry `render_with_gpu_local_masks` (`render_with_gpu` plus
+/// that same step) agree byte-for-byte, so the split cannot have grown a
+/// divergent second code path.
+///
+/// It cannot prove the chain itself: both sides share the one chain, so a
+/// disabled chain would stay green here. The chain is pinned by the oracle tests
+/// above (`local_mask_p0_pass_matches_cpu_oracle`,
+/// `local_mask_wb_delta_pass_matches_cpu_oracle`,
+/// `local_mask_layers_composite_in_order_and_after_global`), which a `take(0)`
+/// mutation on the layer loop turns red (measured).
+#[test]
+#[cfg_attr(not(feature = "gpu-adapter-tests"), ignore = "requires a GPU adapter")]
+fn apply_gpu_local_masks_on_a_global_frame_is_byte_identical_to_the_one_call_entry() {
+    let Some(ctx) = require_gpu() else { return };
+    let frame = gradient_frame();
+    let plane = alpha_plane();
+    let adjustments = LocalAdjustments {
+        exposure: 1.0,
+        contrast: -0.3,
+        ..LocalAdjustments::default()
+    };
+    let recipe = EditRecipe::default();
+    let entries = vec![("subject".to_string(), plane, adjustments)];
+    let layers = local_layers(&entries);
+    let global = ctx.render_with_gpu(&frame, &recipe).expect("global render");
+    let isolated = ctx
+        .apply_gpu_local_masks(&global, &layers)
+        .expect("isolated mask pass");
+    let one_call = ctx
+        .render_with_gpu_local_masks(&frame, &recipe, &layers)
+        .expect("one-call local-mask render");
+    assert_eq!(isolated, one_call);
+}
+
 #[test]
 fn local_mask_p12_blocks_are_a_loud_route_reason() {
     // No adapter needed: the gate and the refusal are pure Rust.
