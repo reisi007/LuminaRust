@@ -56,6 +56,7 @@ pub const ALLOWED: &[&str] = &[
     "f_numbers",
     "max_shift_px",
     "blend_width_px",
+    "gain_compensation",
     "force",
 ];
 
@@ -110,12 +111,28 @@ pub fn run_mode(mode: MergeMode, args: &Value) -> Result<Value, McpError> {
     // (§2 Pkt. 4).
     let max_shift_px = optional_i32(args, "max_shift_px")?.unwrap_or(DEFAULT_MAX_SHIFT_PX);
     let blend_width_px = optional_u32(args, "blend_width_px")?.unwrap_or(DEFAULT_BLEND_WIDTH_PX);
+    // Slice A: `gain_compensation` is a string enum on the wire (`off` |
+    // `overlap-median`; absent/`null` = `off`). The SHAPE (string, known
+    // value) is handler-side `InvalidParams`; the pano-only domain rule lives
+    // in `run_merge` (`merge failed:`), like every other domain rule (§2).
+    let gain_compensation = match args.get("gain_compensation") {
+        None | Some(Value::Null) => lumina_merge::bundle::PanoGainMode::Off,
+        Some(Value::String(value)) => {
+            lumina_merge::bundle::PanoGainMode::parse(value).map_err(McpError::InvalidParams)?
+        }
+        Some(other) => {
+            return Err(McpError::InvalidParams(format!(
+                "`gain_compensation` must be a string (`off` or `overlap-median`), got `{other}`"
+            )));
+        }
+    };
     let force = optional_bool(args, "force")?.unwrap_or(false);
 
     let options = MergeRunOptions {
         output,
         max_shift_px,
         blend_width_px,
+        gain_compensation,
         force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };
@@ -289,6 +306,11 @@ pub fn schema(mode: MergeMode) -> Value {
                 "minimum": 0,
                 "maximum": 65536,
                 "description": "Feather-blend width in the panorama overlap (default 64). The 0..=65536 range is enforced by the merge domain (`merge failed:`), not by this schema."
+            },
+            "gain_compensation": {
+                "type": ["string", "null"],
+                "enum": ["off", "overlap-median"],
+                "description": "Panorama brightness matching (default off). `overlap-median` scales each frame by the median overlap-luminance ratio vs. the reference before blending and records the gains in the recipe. Panorama only: any other value on merge-hdr fails loudly as `merge failed:`. An unknown string is a shape error (`InvalidParams`)."
             },
             "force": {
                 "type": "boolean",

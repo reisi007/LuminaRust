@@ -45,6 +45,7 @@ pub mod digest;
 pub mod dng;
 pub mod image;
 pub mod merge;
+pub mod pano_gain;
 
 use thiserror::Error;
 
@@ -100,3 +101,7 @@ pub use dng::{
 };
 pub use image::LinearImage;
 pub use merge::{blend_panorama, blend_panorama_transformed, merge_hdr_weighted};
+pub use pano_gain::{
+    blend_panorama_transformed_with_gains, blend_panorama_with_gains, estimate_pano_gains,
+    PanoGainEstimate, PanoGainMode,
+};

@@ -322,6 +322,45 @@ fn t10_a_single_source_is_merge_failed_never_invalid_params() {
     assert_eq!(error.code(), -32013);
 }
 
+// --------------------------- Slice A: gain_compensation shape vs. domain
+
+/// Slice A: `gain_compensation` shape violations are handler-side
+/// `InvalidParams` (a non-string, an unknown method string) — like every
+/// other JSON-type error (T7), fired before any I/O (the non-existent paths
+/// would otherwise fail as `FileNotFound`). Absent and explicit `null` are the
+/// same shape-valid input (`off`), so they reach the merge domain. The
+/// pano-only rule with a *valid* value stays merge domain (`merge failed:`,
+/// the Slice-A mirror A-T8 proves it on both transports).
+#[test]
+fn gain_compensation_shape_is_invalid_params_while_absent_and_null_reach_the_domain() {
+    for args in [
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": 1 }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": true }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": ["off"] }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": "exif-ratio" }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": "OverlapMedian" }),
+    ] {
+        let error = run(MERGE_TOOLS[1], args.clone()).unwrap_err();
+        assert_eq!(error.name(), "InvalidParams", "{args}");
+        assert!(
+            error.message().contains("gain_compensation"),
+            "{args}: {}",
+            error.message()
+        );
+    }
+    // Absent and explicit `null` are shape-valid (`off`): they pass the
+    // handler and fail in the merge domain on the missing file, never as
+    // `InvalidParams`.
+    for args in [
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"] }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": null }),
+        json!({ "inputs": ["/nonexistent/a.png", "/nonexistent/b.png"], "gain_compensation": "off" }),
+    ] {
+        let error = run(MERGE_TOOLS[1], args.clone()).unwrap_err();
+        assert_eq!(error.name(), "FileNotFound", "{args}: {error:?}");
+    }
+}
+
 // ------------------------------------------- §5 payload on a successful run
 
 /// The success payload is the CLI `--json` document, field for field (§5):

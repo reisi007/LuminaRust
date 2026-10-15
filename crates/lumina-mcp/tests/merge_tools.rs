@@ -169,8 +169,10 @@ fn t3_tools_list_publishes_both_schemas_with_the_soll_contract() {
 // ------------------------------------------------------- T4: one core, two names
 
 /// The two tools are one implementation: their schemas are identical except
-/// for the descriptions (no `enum` vocabulary exists anywhere, so nothing else
-/// can differ). `MergeMode` is the only variable.
+/// for the descriptions. Slice A adds the one shared `enum` vocabulary
+/// (`gain_compensation`: `off` | `overlap-median`) — identical on both
+/// modes, so still "one schema modulo description". `MergeMode` is the only
+/// variable.
 #[test]
 fn t4_both_schemas_are_one_core_modulo_description() {
     let hdr = merge_hdr::schema();
@@ -183,10 +185,16 @@ fn t4_both_schemas_are_one_core_modulo_description() {
     // … but only in the descriptions: strip them and both trees are equal.
     let hdr_stripped = strip_descriptions(hdr);
     let pano_stripped = strip_descriptions(pano);
-    assert!(
-        !has_key(&hdr_stripped, "enum"),
-        "the merge vocabulary has nothing to enumerate: {hdr_stripped}"
-    );
+    // The single shared enum vocabulary (Slice A): present on both modes
+    // with the same values — a per-mode vocabulary would fail the equality
+    // below.
+    for stripped in [&hdr_stripped, &pano_stripped] {
+        assert_eq!(
+            stripped["properties"]["gain_compensation"]["enum"],
+            json!(["off", "overlap-median"]),
+            "the gain vocabulary is shared, not per-mode: {stripped}"
+        );
+    }
     assert_eq!(
         hdr_stripped, pano_stripped,
         "one shared core must publish one schema modulo description"

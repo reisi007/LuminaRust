@@ -18,7 +18,7 @@
 use lumina_core::{ImageFileFormat, ImageFrame};
 use lumina_merge::bundle::{
     linear_from_rgba, merge_checksum, run_merge, MergeExif, MergeRunError, MergeRunOptions,
-    MergeSourceFrame,
+    MergeSourceFrame, PanoGainMode,
 };
 use lumina_sidecar::{MergeDecodeContext, MergeExposure, MergeMode};
 use std::fs;
@@ -125,6 +125,7 @@ fn cli_and_gui_contract_paths_share_the_same_anchor() {
         output: None,
         max_shift_px: 16,
         blend_width_px: 64,
+        gain_compensation: PanoGainMode::Off,
         force: false,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };

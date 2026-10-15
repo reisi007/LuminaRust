@@ -42,49 +42,18 @@ use lumina_merge::bundle::{
     MergeSourceFrame,
 };
 use lumina_merge::LinearImage;
-use lumina_sidecar::{
-    load_sidecar, sidecar_path_for, MergeDecodeContext, MergeExposure, MergeMode, MIN_MERGE_SOURCES,
-};
+use lumina_sidecar::{MergeDecodeContext, MergeExposure, MergeMode, MIN_MERGE_SOURCES};
 
 pub use lumina_merge::bundle::{
-    classify_merge_document, stored_merge_artifact, stored_merge_recipe, MergeDocumentKind,
     MergeRunOutcome as MergeOutcome, PANO_DEFAULT_EXPOSURE_S, PANO_DEFAULT_F_NUMBER,
     PANO_DEFAULT_ISO,
 };
 
 use crate::i18n::Str;
+use crate::merge_status::{merge_bundle_status, MergeArtifactStatus};
 #[cfg(debug_assertions)]
 use crate::GuiAction;
 use crate::GuiError;
-
-/// Visible status of a persisted merge bundle (decision §Persistenz).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MergeArtifactStatus {
-    /// No merge bundle at the target (nothing to report).
-    NoBundle,
-    /// Source hashes, decode contexts and the DNG checksum match.
-    Ok,
-    /// The bundle exists but an input changed (only `force` re-merges).
-    Stale,
-    /// A bundle part is gone (DNG or sidecar).
-    Missing,
-    /// The sidecar is not a merge envelope / unreadable / the stored recipe is
-    /// invalid (a hard, loud state — never overwritten silently).
-    Unsupported,
-}
-
-impl MergeArtifactStatus {
-    /// Visible status text (status line + panel).
-    pub fn text(self) -> &'static str {
-        match self {
-            MergeArtifactStatus::NoBundle => Str::MergeStatusNone.t(),
-            MergeArtifactStatus::Ok => Str::MergeStatusOk.t(),
-            MergeArtifactStatus::Stale => Str::MergeStatusStale.t(),
-            MergeArtifactStatus::Missing => Str::MergeStatusMissing.t(),
-            MergeArtifactStatus::Unsupported => Str::MergeStatusUnsupported.t(),
-        }
-    }
-}
 
 /// Running merge job (background thread + result channel). Polled by
 /// `LuminaApp::poll_merge_job` in the frame loop — job control with a visible
@@ -200,6 +169,9 @@ fn resolve_exposure(
 ///
 /// `exposures` mirrors the CLI `--exposure-times/--isos/--f-numbers` triple;
 /// `None` resolves per-source EXIF (HDR: loud `unsupported` without it).
+/// `gain_compensation` mirrors the CLI `--gain-compensation` spelling
+/// (`off` | `overlap-median`, panorama only); unknown values are a loud
+/// `Err` — the GUI adds no logic of its own.
 pub fn run_merge_sync(
     mode: MergeMode,
     inputs: &[PathBuf],
@@ -207,6 +179,7 @@ pub fn run_merge_sync(
     force: bool,
     max_shift_px: i32,
     blend_width_px: u32,
+    gain_compensation: &str,
 ) -> Result<MergeOutcome, String> {
     if let Some(values) = exposures {
         if values.len() != inputs.len() {
@@ -217,10 +190,12 @@ pub fn run_merge_sync(
             ));
         }
     }
+    let gain_compensation = lumina_merge::bundle::PanoGainMode::parse(gain_compensation)?;
     let options = MergeRunOptions {
         output: None,
         max_shift_px,
         blend_width_px,
+        gain_compensation,
         force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };
@@ -236,84 +211,6 @@ pub fn run_merge_sync(
         );
     }
     Ok(outcome)
-}
-
-/// Reads the visible status of a merge bundle at `dng_path` (decision
-/// §Persistenz). Pure I/O + validation; never rewrites anything.
-pub fn merge_bundle_status(dng_path: &Path) -> (MergeArtifactStatus, String) {
-    let sidecar_path = sidecar_path_for(dng_path);
-    if !sidecar_path.exists() {
-        return if dng_path.exists() {
-            (
-                MergeArtifactStatus::Missing,
-                format!(
-                    "merge DNG `{}` exists without its sidecar",
-                    dng_path.display()
-                ),
-            )
-        } else {
-            (MergeArtifactStatus::NoBundle, String::new())
-        };
-    }
-    let document = match load_sidecar(&sidecar_path) {
-        Ok(document) => document,
-        Err(error) => {
-            return (
-                MergeArtifactStatus::Unsupported,
-                format!("merge sidecar unreadable: {error}"),
-            )
-        }
-    };
-    match classify_merge_document(&document) {
-        MergeDocumentKind::Merge => {}
-        MergeDocumentKind::Standard => {
-            return (
-                MergeArtifactStatus::Unsupported,
-                "sidecar is a standard sidecar (no merge envelope)".into(),
-            )
-        }
-        MergeDocumentKind::Unknown(kind) => {
-            return (
-                MergeArtifactStatus::Unsupported,
-                format!("unknown document type `{kind}`"),
-            )
-        }
-    }
-    let recipe = match stored_merge_recipe(&document) {
-        Ok(recipe) => recipe,
-        Err(reason) => return (MergeArtifactStatus::Unsupported, reason),
-    };
-    let artifact = match stored_merge_artifact(&document) {
-        Ok(artifact) => artifact,
-        Err(reason) => return (MergeArtifactStatus::Unsupported, reason),
-    };
-    let Ok(dng_bytes) = std::fs::read(dng_path) else {
-        return (MergeArtifactStatus::Missing, "merge DNG is gone".into());
-    };
-    if merge_checksum(&dng_bytes) != artifact.checksum {
-        return (
-            MergeArtifactStatus::Stale,
-            "merge DNG checksum changed on disk".into(),
-        );
-    }
-    // Source hashes are relative to the bundle directory.
-    let bundle_dir = dng_path.parent().unwrap_or_else(|| Path::new("."));
-    for source in &recipe.sources {
-        let source_path = bundle_dir.join(&source.path);
-        let Ok(bytes) = std::fs::read(&source_path) else {
-            return (
-                MergeArtifactStatus::Missing,
-                format!("source `{}` is missing", source.path),
-            );
-        };
-        if merge_checksum(&bytes) != source.content_hash {
-            return (
-                MergeArtifactStatus::Stale,
-                format!("source `{}` changed (hash mismatch)", source.path),
-            );
-        }
-    }
-    (MergeArtifactStatus::Ok, String::new())
 }
 
 impl crate::LuminaApp {
@@ -359,7 +256,7 @@ impl crate::LuminaApp {
         let (tx, rx) = mpsc::channel();
         let job_inputs = inputs.clone();
         std::thread::spawn(move || {
-            let result = run_merge_sync(mode, &job_inputs, None, false, 16, 64);
+            let result = run_merge_sync(mode, &job_inputs, None, false, 16, 64, "off");
             let _ = tx.send(result);
         });
         self.merge_job = Some(MergeJob { mode, rx });
@@ -471,7 +368,10 @@ mod tests {
     use super::*;
     use crate::LuminaApp;
     use lumina_core::{ImageFileFormat, ImageFrame};
-    use lumina_sidecar::{ArtifactReference, MergeAlignmentMethod, MergeProjection};
+    use lumina_merge::bundle::{classify_merge_document, stored_merge_recipe, MergeDocumentKind};
+    use lumina_sidecar::{
+        load_sidecar, sidecar_path_for, ArtifactReference, MergeAlignmentMethod, MergeProjection,
+    };
 
     fn new_app() -> LuminaApp {
         LuminaApp::new(crate::egui::Context::default())
@@ -522,8 +422,16 @@ mod tests {
         write_png(&b, 160);
         let exposures = exposure(0.004);
         let inputs = vec![a.clone(), b.clone()];
-        let outcome =
-            run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), false, 16, 64).unwrap();
+        let outcome = run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap();
         assert!(!outcome.cached);
         assert_eq!(outcome.dng_path, dir.path().join("shot_a-HDR.dng"));
         assert!(outcome.dng_path.is_file());
@@ -564,8 +472,16 @@ mod tests {
         assert_eq!((frame.width, frame.height), (64, 48));
 
         // Deterministic re-run with `force` (same machine → byte-identical).
-        let again =
-            run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), true, 16, 64).unwrap();
+        let again = run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            true,
+            16,
+            64,
+            "off",
+        )
+        .unwrap();
         let again_bytes = std::fs::read(&again.dng_path).unwrap();
         assert_eq!(
             merge_checksum(&again_bytes),
@@ -576,8 +492,16 @@ mod tests {
 
         // Without `force` an already-current bundle is reported cached, not
         // rewritten.
-        let cached =
-            run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), false, 16, 64).unwrap();
+        let cached = run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap();
         assert!(cached.cached);
     }
 
@@ -592,7 +516,8 @@ mod tests {
         write_png(&b, 90);
         let inputs = vec![a.clone(), b.clone()];
         // Identical frames overlap completely: a valid panorama with no shift.
-        let outcome = run_merge_sync(MergeMode::Panorama, &inputs, None, false, 16, 64).unwrap();
+        let outcome =
+            run_merge_sync(MergeMode::Panorama, &inputs, None, false, 16, 64, "off").unwrap();
         assert!(outcome.dng_path.is_file());
         let document = load_sidecar(&outcome.sidecar_path).unwrap();
         let recipe = stored_merge_recipe(&document).unwrap();
@@ -619,8 +544,16 @@ mod tests {
         let b = dir.path().join("noexif_b.png");
         write_png(&a, 40);
         write_png(&b, 160);
-        let error = run_merge_sync(MergeMode::Hdr, &[a.clone(), b.clone()], None, false, 16, 64)
-            .unwrap_err();
+        let error = run_merge_sync(
+            MergeMode::Hdr,
+            &[a.clone(), b.clone()],
+            None,
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap_err();
         assert!(error.contains("unsupported"), "{error}");
         assert!(!dir.path().join("noexif_a-HDR.dng").exists());
         assert!(!sidecar_path_for(&dir.path().join("noexif_a-HDR.dng")).exists());
@@ -638,14 +571,31 @@ mod tests {
         let inputs = vec![a.clone(), b.clone()];
         let exposures = exposure(0.004);
         // First merge creates the bundle, then we deface the envelope.
-        run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), false, 16, 64).unwrap();
+        run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap();
         let sidecar = sidecar_path_for(&dir.path().join("conflict_a-HDR.dng"));
         let mut document = load_sidecar(&sidecar).unwrap();
         document.extras.remove("type");
         lumina_sidecar::save_sidecar(&sidecar, &document).unwrap();
         let before = std::fs::read(&sidecar).unwrap();
-        let error =
-            run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), false, 16, 64).unwrap_err();
+        let error = run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap_err();
         assert!(
             error.contains("merge stale") || error.contains("standard sidecar"),
             "{error}"
@@ -671,8 +621,16 @@ mod tests {
         write_png(&b, 160);
         let inputs = vec![a.clone(), b.clone()];
         let exposures = exposure(0.004);
-        let outcome =
-            run_merge_sync(MergeMode::Hdr, &inputs, Some(&exposures), false, 16, 64).unwrap();
+        let outcome = run_merge_sync(
+            MergeMode::Hdr,
+            &inputs,
+            Some(&exposures),
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap();
         assert_eq!(
             merge_bundle_status(&outcome.dng_path).0,
             MergeArtifactStatus::Ok
@@ -786,8 +744,16 @@ mod tests {
         write_png(&outside, 90);
         let b = dir.path().join("inside.png");
         write_png(&b, 90);
-        let error =
-            run_merge_sync(MergeMode::Panorama, &[outside, b], None, false, 16, 64).unwrap_err();
+        let error = run_merge_sync(
+            MergeMode::Panorama,
+            &[outside, b],
+            None,
+            false,
+            16,
+            64,
+            "off",
+        )
+        .unwrap_err();
         assert!(error.contains("unsupported"), "{error}");
     }
 

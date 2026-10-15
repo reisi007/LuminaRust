@@ -103,8 +103,8 @@ Begründung (code-belegt):
 
 | Eingriff | Datei:Zeile | Was |
 |---|---|---|
-| Gain-Schätzung (neu, pure Funktion) | `crates/lumina-merge/src/merge.rs` (neu, neben `merge_hdr_weighted` `:54`) | `estimate_pano_gains(frames, matrices/offsets) -> Result<Vec<f64>, MergeError>` — Median-Verhältnis Luminanz im Overlap vs. Frame 0; Gain[0] = 1.0 per Definition |
-| Gain-Anwendung vor Blend | `merge.rs:255-279` (`blend_panorama`-Schleife) + `merge.rs:403-441` (`blend_panorama_transformed`-Schleife) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; `acc`-Startwert (`:256-262`) ebenfalls gain-skaliert |
+| Gain-Schätzung (neu, pure Funktion) | `crates/lumina-merge/src/pano_gain.rs` (neu; `merge.rs` extrahiert, neben `merge_hdr_weighted` `:54`) | `estimate_pano_gains(frames, matrices/offsets) -> Result<PanoGainEstimate, MergeError>` — Median-Verhältnis Luminanz im Overlap vs. Frame 0; Gain[0] = 1.0 per Definition |
+| Gain-Anwendung vor Blend | `pano_gain.rs`-Kerne via `merge.rs:268-291` (translations) + `merge.rs:441-455` (transformiert, inkl. `radiance`-Fallback) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; Seed/`acc`-Startwert ebenfalls gain-skaliert |
 | Orchestrierung | `bundle.rs:539-574` (`align_and_merge`, Pano-Arm) + `MergeRunOptions` `:213-227` | neues Options-Feld (A.3), Gain-Schätzung nach Alignment, vor Blend; Gains an `build_recipe` `:735-782` durchreichen |
 | Rezept + Digest | `merge_recipe.rs:133-143` (`MergeAlignment`), `:247-261` (`merge_digest`), `:355-379` (Validierung) | neues Feld `gain_compensation` (A.3); Digest-relevant (Teil von `alignment`, damit automatisch im Digest) |
 | CLI | `cli/src/merge.rs:43-77` (`MergeArgs`), `:104-110` (Options-Mapping) | neues Flag (A.3) |
@@ -192,7 +192,7 @@ Interaktion mit `blend_width_px`:
 
 | Situation | Klasse | Text-Präfix | Ort |
 |---|---|---|---|
-| Overlap-Pixel < `A_MIN_OVERLAP_STAT_PX` | `MergeError::Unsupported` → `merge unsupported:` | `gain compensation needs ≥ N overlap pixels, got M` | neue Schätzfunktion, `merge.rs` |
+| Overlap-Pixel < `A_MIN_OVERLAP_STAT_PX` | `MergeError::Unsupported` → `merge unsupported:` | `gain compensation needs ≥ N overlap pixels, got M` | neue Schätzfunktion, `pano_gain.rs` |
 | Gain > `MAX_PANO_GAIN` | `Unsupported` → `merge unsupported:` | `gain {g} exceeds {MAX}` (A.4) | dto. |
 | `--gain-compensation` bei `merge-hdr` | `MergeRunError::Failed` → `merge failed:` (Options-Validierung, wie `max_shift_px < 0`, `bundle.rs:370-375`) | `invalid --gain-compensation …: panorama only` | `run_merge` `:368-376` |
 | Unbekannter Methoden-String (MCP/CLI) | Transport-Ebene: CLI clap-Usage / MCP `InvalidParams` (Shape, per Trennregel) | — | Frontend |
@@ -205,15 +205,15 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 
 | ID | Art | Ort | Prüft | Fixture |
 |---|---|---|---|---|
-| A-T1 | [U] | `lumina-merge` `merge.rs` `#[cfg(test)]` | synthetische Helligkeitsrampe: Frame B = Frame A × 2.0 im Overlap ⇒ `gains == [1.0, 0.5]` (±1e-6); B = A ⇒ `[1.0, 1.0]` | 2× 32×24 Solid + Rampe, Offset (8,0) |
+| A-T1 | [U] | `lumina-merge` `tests/pano_gain.rs` | synthetische Helligkeitsrampe: Frame B = Frame A × 2.0 im Overlap ⇒ `gains == [1.0, 0.5]` (±1e-6); B = A ⇒ `[1.0, 1.0]` | 2× 32×24 Solid + Rampe, Offset (8,0) |
 | A-T2 | [U] | dto. | Outlier-Robustheit: 10 % der Overlap-Pixel als Geist (s. B) verunreinigt ⇒ Median-Gain driftet < 1 % gegenüber sauberem Overlap (Mittelwert würde versagen — Negativ-Kontrolle im Test dokumentieren) | wie A-T1 + synthetischer Geist-Block |
 | A-T3 | [U] | dto. | Negativ: Overlap < `A_MIN_OVERLAP_STAT_PX` ⇒ `Unsupported`, Text enthält Pixelzahlen | 8×8 Frames, Offset (7,0) |
 | A-T4 | [U] | dto. | Negativ: Helligkeitsverhältnis 16× ⇒ Gain > MAX ⇒ `Unsupported` (kein Clamp: Output-Byte darf nie dem geclampten Wert entsprechen — Assert auf Fehler, nicht auf Pixel) | Solid 0.05 vs. 0.8 |
 | A-T5 | [U] | `lumina-sidecar` | Rezept-Roundtrip mit Gain (byte-stabil, Muster `:543-554`); Digest ändert sich bei Gain-Änderung (Muster `:579-599`); `None` parst auf alten JSON (Kompat, A.9) | `sample_recipe`-Derivat |
 | A-T6 | [U] | `lumina-sidecar` | Validierungsmatrix: `gains.len` ≠ sources, `gains[0]` ≠ 1.0, Gain ≤ 0 / NaN / Inf, `min_overlap_px` < Minimum ⇒ je `Invalid` | wie `:637-844`-Muster |
-| A-T7 | [P] | `merge_mcp_parity*.rs`-Spiegel (neue Datei oder Erweiterung) | CLI `--gain-compensation overlap-median` ≡ MCP `gain_compensation` ⇒ identischer `digest` + `checksum` + DNG-Bytes | A-T1-Fixture als PNG-Paar |
-| A-T8 | [N] | `merge_e2e.rs`-Spiegel | `--gain-compensation overlap-median` bei `merge-hdr` ⇒ `merge failed:`; Ablehnung hinterlässt nichts (Snapshot-Vergleich) | 2 PNG |
-| A-T9 | [P] | dto. | Default-Parität: ohne Flag ⇒ Digest **identisch zum regenerierten Stand** (Post-Migration-Anker: gegen ALTE Goldens scheitert der Digest per Design — beabsichtigtes Stale-Fenster A.9; No-Flag-Läufe bleiben pixel-identisch) | bestehender `merge_parity.rs`-Anker, nach Regeneration neu verankert |
+| A-T7 | [P] | neue Datei `merge_gain_parity.rs` | CLI `--gain-compensation overlap-median` ≡ MCP `gain_compensation` ⇒ identischer `digest` + `checksum` + DNG-Bytes | A-T1-Fixture als PNG-Paar |
+| A-T8 | [N] | `merge_gain_parity.rs`-Spiegel | `--gain-compensation overlap-median` bei `merge-hdr` ⇒ `merge failed:`; Ablehnung hinterlässt nichts (Snapshot-Vergleich) | 2 PNG |
+| A-T9 | [P] | dto. | Default-Parität: ohne Flag ⇒ Digest **identisch zum ALTEN Stand** — KEIN Stale-Fenster, KEINE Golden-Regeneration nötig (A.9-Abweichung: `skip_serializing_if` ⇒ `None` fällt aus dem Digest-Input; T21-Pins laufen unverändert grün); No-Flag-Läufe bleiben pixel-identisch | neuer `merge_gain_parity.rs`-Anker + bestehende `merge_parity.rs`/T21-Anker (unverändert) |
 
 ### A.8 Abnahmekriterien (stub-tötend)
 
@@ -228,25 +228,41 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 ### A.9 Migrations-/Kompatibilitäts-Aussage
 
 - Rezept-Schema: `gain_compensation: Option<…>` — alte Sidecars parsen weiter
-  (`None` = Verhalten wie heute). **Aber:** `serde_json`-Serialisierung von
-  `None` vs. fehlendem Feld muss Digest-stabil sein: `merge_digest` (`:247-261`)
-  baut `"alignment": recipe.alignment` aus dem **typisierten** Struct — `None`
-  serialisiert als `"gain_compensation": null` (sofern nicht
-  `skip_serializing_if`). Bestehende Goldens wurden aus Structs **ohne** das
-  Feld erzeugt — deren Digest-Input enthält den Key gar nicht. Folge: **jeder
-  Digest ändert sich**, sobald das Feld existiert (auch bei `None`), weil der
-  kanonische JSON-Input einen Key mehr/weniger hat. Das ist die
-  Cache-/Stale-Semantik: alle bestehenden Bundles werden beim nächsten Lauf
-  `stale` (`bundle.rs:857-863`) und brauchen `--force`. Abfang-Plan, §D.1.
+  (`None` = Verhalten wie heute).
+- **ABWEICHUNG VOM SOLL-PLAN (Implementierungs-Slice A, entschieden und
+  code-belegt 2026-10-15):** Die obige Planung sagte ein Digest-Stale-Fenster
+  voraus („`None` serialisiert als `"gain_compensation": null` … jeder Digest
+  ändert sich, sobald das Feld existiert"). Implementiert ist stattdessen
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`
+  (`merge_recipe.rs`, `MergeAlignment.gain_compensation`): ein `None`-Feld
+  fällt aus der kanonischen JSON-Serialisierung **vollständig heraus** (der Key
+  existiert nicht, er wird nicht als `null` geschrieben). `merge_digest`
+  (`:255-269`) serialisiert das typisierte `MergeAlignment` über
+  `serde_json::json!` — der Digest-Input eines Rezepts ohne Gain ist damit
+  **byte-identisch** zum prä-Slice-Input. Folge: **kein Stale-Fenster für
+  Slice A** — bestehende Bundles bleiben `cached`-gültig, committete Goldens
+  brauchen **keine** Regeneration, die gepinnten Digest-Anker (`merge_parity.rs`
+  Hash-Anker, `merge_mcp_parity_gate.rs`-T21-Pins) laufen unverändert grün.
+  Code-Beleg: `PanoGainMode::Off` bzw. fehlendes Feld ⇒
+  `gain_compensation == None` ⇒ Key fehlt im JSON (A-T9 prüft
+  `alignment.get("gain_compensation").is_none()` auf beiden Transporten;
+  A-T5 prüft `absent.digest() == pre_gain_shape.digest()`; T21 läuft mit den
+  ALTEN gepinnten Digests grün). Ein **gesetztes** Gain (≠ `None`) bleibt
+  digest-relevant: gleiche Quellen + andere Gains = anderer Digest = `stale`
+  (A-T5/A-T7).
 - `MERGE_RECIPE_VERSION` bleibt 1 (Feld ist additiv-optional, kein
-  Versionsbruch — Gegenstück: `deny_unknown_fields` + `Option` = vorwärts-lesbar).
-- CLI-Default `off` ⇒ ohne Flag keine Verhaltensänderung (A-T9 sichert das —
-  bis auf den Digest-Key-Effekt, der separat migriert wird).
+  Versionsbruch — `deny_unknown_fields` + `Option` = vorwärts-lesbar; ein
+  unbekannter Methoden-String scheitert laut, A-T5).
+- CLI-Default `off` ⇒ ohne Flag keine Verhaltensänderung **und** kein
+  Digest-Drift (A-T9).
 
 ### A.10 Risiken + Rollback
 
-- **Digest-Drift durch `Option`-Key** (A.9): Risiko hoch, Wirkung begrenzt
-  (nur Stale-Meldungen, kein Datenverlust). Mitigation: Migrationsplan §D.1.
+- **Digest-Drift durch `Option`-Key** (A.9): **im Implementierungsstand
+  aufgelöst** — `skip_serializing_if = "Option::is_none"` hält den Digest-Input
+  eines Off-Laufs byte-identisch zum prä-Slice-Input (T21-Pins grün). Rest-
+  Risiko: entfernt jemand das Attribut, kehrt das Stale-Fenster zurück —
+  deswegen steht der Beleg in A-T5/A-T9 und in den gepinnten Ankern.
 - **Median auf echtem Rauschen**: Overlap-Statistik auf homogenen Flächen
   (Himmel) kann durch Rauschen/Quantisierung streuen. Mitigation:
   `min_overlap_px`-Schwelle + dokumentierte Grenze (nur globale Gains, keine
@@ -564,6 +580,13 @@ Goldens mit pin-nierten Digests (`merge_parity.rs`, `merge_e2e.rs`,
 `merge_mcp_parity*.rs`).
 
 Plan (einmalig, gemeinsam für A+B+C — kein dreifaches Stale-Fenster):
+
+> **Stand Slice A (2026-10-15):** A löst das Problem für sich **nicht** aus —
+> `skip_serializing_if = "Option::is_none"` (A.9-Abweichung) hält den
+> Digest-Input eines Off-Laufs byte-identisch zum prä-Slice-Input. A erzeugt
+> deshalb keine Stale-Welle und keine Golden-Regeneration; der Plan unten
+> gilt weiterhin für B und C, sofern deren Felder nicht ebenso serialisiert
+> werden.
 
 1. Alle drei Felder in **einem** Schema-Slice landen (ein Commit-Fenster, eine
    Digest-Änderung). Getrennte Slices würden drei aufeinanderfolgende

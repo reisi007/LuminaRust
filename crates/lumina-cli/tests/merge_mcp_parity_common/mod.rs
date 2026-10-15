@@ -1,6 +1,7 @@
 //! MCP-PARITY-C: the shared harness of the CLI↔MCP byte-parity tests
 //! (`merge_mcp_parity.rs` = digest/checksum/DNG/sidecar/pano/cache/force,
-//! `merge_mcp_parity_errors.rs` = the loud rejections).
+//! `merge_mcp_parity_errors.rs` = the loud rejections,
+//! `merge_gain_parity.rs` = Slice-A gain compensation + no-flag no-drift).
 //!
 //! # What is actually compared
 //!

@@ -17,6 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::merge_gain::PanoGainCompensation;
 use crate::{validate_metadata_timestamp, SidecarError};
 
 /// Current merge-recipe schema version. Foreign versions are rejected
@@ -140,6 +141,13 @@ pub struct MergeAlignment {
     pub residual_px: f64,
     pub projection: MergeProjection,
     pub blend_width_px: u32,
+    /// Slice A: absent (`None`) = behaviour as before (no gain applied).
+    /// Skipped on serialization when absent, so recipes written without a
+    /// gain carry no new key and their digest is unchanged (no silent
+    /// stale-window for pre-gain bundles). Present = part of the digest
+    /// (same sources + different gains = different digest = `stale`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_compensation: Option<PanoGainCompensation>,
 }
 
 /// Merge output descriptor. 1.5 scope: linear 16-bit non-mosaic DNG only;
@@ -228,7 +236,7 @@ pub fn validate_merge_recipe(recipe: &MergeRecipe) -> Result<(), SidecarError> {
         validate_merge_source(source)
             .map_err(|e| SidecarError::Invalid(format!("merge source #{index}: {e}")))?;
     }
-    validate_merge_alignment(&recipe.alignment)
+    validate_merge_alignment(&recipe.alignment, recipe.sources.len(), recipe.mode)
         .map_err(|e| SidecarError::Invalid(format!("merge alignment: {e}")))?;
     validate_mode_alignment(recipe.mode, &recipe.alignment)?;
     validate_merge_transforms(&recipe.alignment.transforms, recipe.sources.len())?;
@@ -260,7 +268,7 @@ pub fn merge_digest(recipe: &MergeRecipe) -> String {
     )
 }
 
-fn invalid<T>(message: impl Into<String>) -> Result<T, SidecarError> {
+pub(crate) fn invalid<T>(message: impl Into<String>) -> Result<T, SidecarError> {
     Err(SidecarError::Invalid(message.into()))
 }
 
@@ -352,7 +360,11 @@ fn validate_merge_exposure(exposure: &MergeExposure) -> Result<(), SidecarError>
     Ok(())
 }
 
-fn validate_merge_alignment(alignment: &MergeAlignment) -> Result<(), SidecarError> {
+fn validate_merge_alignment(
+    alignment: &MergeAlignment,
+    source_count: usize,
+    mode: MergeMode,
+) -> Result<(), SidecarError> {
     if !alignment.residual_px.is_finite()
         || alignment.residual_px < 0.0
         || alignment.residual_px > MAX_MERGE_RESIDUAL_PX
@@ -375,6 +387,11 @@ fn validate_merge_alignment(alignment: &MergeAlignment) -> Result<(), SidecarErr
             ));
         }
     }
+    crate::merge_gain::validate_pano_gain_compensation(
+        alignment.gain_compensation.as_ref(),
+        source_count,
+        mode,
+    )?;
     Ok(())
 }
 
@@ -464,73 +481,7 @@ fn validate_merge_status(status: MergeStatus, error: Option<&str>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn hex_hash(fill: u8) -> String {
-        format!("{MERGE_HASH_PREFIX}{}", hex::fill(fill))
-    }
-
-    /// Local hex filler without a new dependency: repeat one byte value.
-    mod hex {
-        pub fn fill(byte: u8) -> String {
-            let digit = format!("{byte:02x}");
-            digit.repeat(32)
-        }
-    }
-
-    fn sample_source(path: &str, hash_fill: u8, exposure_time_s: f64) -> MergeSource {
-        MergeSource {
-            path: path.into(),
-            content_hash: hex_hash(hash_fill),
-            decode_context: MergeDecodeContext {
-                decoder: "libraw".into(),
-                decode_version: "0.22.2+luminaabi1".into(),
-                orientation: 1,
-            },
-            exposure: MergeExposure {
-                exposure_time_s,
-                iso: 100,
-                f_number: 8.0,
-            },
-        }
-    }
-
-    fn sample_recipe() -> MergeRecipe {
-        MergeRecipe {
-            merge_version: MERGE_RECIPE_VERSION,
-            mode: MergeMode::Hdr,
-            sources: vec![
-                sample_source("IMG_0001.ARW", 0xab, 0.01),
-                sample_source("IMG_0002.ARW", 0xcd, 0.04),
-            ],
-            alignment: MergeAlignment {
-                method: MergeAlignmentMethod::HdrTranslate,
-                transforms: vec![MergeTransform {
-                    source_index: 1,
-                    matrix_3x3: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-                }],
-                residual_px: 0.4,
-                projection: MergeProjection::None,
-                blend_width_px: 64,
-            },
-            output: MergeOutput {
-                file: "IMG_0001-HDR.dng".into(),
-                bits: MERGE_OUTPUT_BITS,
-                mosaic: false,
-            },
-            created_at: "2026-09-05T00:00:00Z".into(),
-            status: MergeStatus::Ok,
-            error: None,
-        }
-    }
-
-    fn sample_panorama_recipe() -> MergeRecipe {
-        let mut recipe = sample_recipe();
-        recipe.mode = MergeMode::Panorama;
-        recipe.alignment.method = MergeAlignmentMethod::PanoCylindricalHomography;
-        recipe.alignment.projection = MergeProjection::Cylindrical;
-        recipe.output.file = "IMG_0001-Pano.dng".into();
-        recipe
-    }
+    use crate::merge_gain::test_fixtures::{hex_hash, sample_panorama_recipe, sample_recipe};
 
     #[test]
     fn valid_hdr_and_panorama_recipes_pass() {

@@ -57,6 +57,8 @@ pub struct MergeCall {
     f_numbers: Vec<f64>,
     max_shift_px: Option<i32>,
     blend_width_px: Option<u32>,
+    /// Slice A: `None` = flag/key absent (both frontends default to `off`).
+    gain_compensation: Option<String>,
     force: bool,
 }
 
@@ -72,6 +74,7 @@ impl MergeCall {
             f_numbers: Vec::new(),
             max_shift_px: None,
             blend_width_px: None,
+            gain_compensation: None,
             force: false,
         }
     }
@@ -97,6 +100,14 @@ impl MergeCall {
 
     pub fn blend_width_px(mut self, px: u32) -> Self {
         self.blend_width_px = Some(px);
+        self
+    }
+
+    /// Slice A: the gain-compensation spelling (`off` | `overlap-median`),
+    /// rendered as `--gain-compensation` on the CLI and `gain_compensation`
+    /// in MCP JSON — one value, two spellings, same rule as every other field.
+    pub fn gain_compensation(mut self, mode: &str) -> Self {
+        self.gain_compensation = Some(mode.to_string());
         self
     }
 
@@ -137,6 +148,10 @@ impl MergeCall {
             args.push("--blend-width-px".to_string());
             args.push(px.to_string());
         }
+        if let Some(mode) = &self.gain_compensation {
+            args.push("--gain-compensation".to_string());
+            args.push(mode.clone());
+        }
         if self.force {
             args.push("--force".to_string());
         }
@@ -164,6 +179,9 @@ impl MergeCall {
         }
         if let Some(px) = self.blend_width_px {
             args["blend_width_px"] = json!(px);
+        }
+        if let Some(mode) = &self.gain_compensation {
+            args["gain_compensation"] = json!(mode);
         }
         if self.force {
             args["force"] = json!(true);

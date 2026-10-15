@@ -38,6 +38,8 @@ mod i18n_library;
 // `Str::t` delegates to them (file-size ratchet).
 mod i18n_masking;
 mod merge_gui;
+// LRPAR-G13-MERGE-15: read-only merge-bundle status view, extracted (file-size ratchet).
+mod merge_status;
 // GPU-LENSFUN-PARITY-1 (GUI-Wiring): build the CPU `LensfunMap` from the strict
 // auto-corrector and bind it on the `GpuContext`, so a corrector recipe presents
 // through the readback-free VRAM path instead of the documented CPU exception.
