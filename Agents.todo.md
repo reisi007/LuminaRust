@@ -167,6 +167,48 @@ durch Aendern am Code.
   dem nächsten manuellen GUI-Test sinnvoll/erforderlich sind (Verifikations-
   und Abschluss-Tasks, die auf Testergebnissen aufbauen).
 
+### Headless-TODO — welche offenen Tasks ohne GPU/Display/Mensch abarbeitbar sind (Stand 2026-10-15)
+
+**Rolle dieser Liste: abgeleitete Sicht, kein zweiter Task-Eigentuemer.** Der
+verbindliche Aufgabentext steht **ausschliesslich** in den Blöcken A/B/C oben
+(dort mit Nummer, Abnahme und Abgrenzung). Diese Tabelle sagt nur, **ob** ein
+offener Task auf einer Maschine ohne wgpu-Adapter, ohne Display und ohne
+menschlichen GUI-Lauf abarbeitbar ist, und mit welchem Gate. Sie darf deshalb
+auch **keine Checkboxen** tragen — sonst entstuenden Doppel-Tasks, die das
+Plan-Format-Gate mitzaehlt. Wird ein Task nach bestandener Verifikation aus dem
+Plan entfernt, wird **seine Zeile hier mit entfernt**; die Liste wird bei jeder
+Task-Aufnahme/-Entfernung mitgefuehrt (sonst driftet sie und wird durch die
+naechste Messung widerlegt).
+
+**Maßstab:** „headless abarbeitbar“ heisst, dass **Implementierung und Gate**
+ohne Adapter, ohne Display und ohne Menschen auskommen. Ein Task, dessen
+Verifikation einen echten Metal-/Vulkan-Adapter oder einen sichtbaren GUI-Lauf
+braucht, ist **nicht** headless — auch wenn sein Code headless geschrieben
+werden kann. Reine Struktur-/Audit-/Doku-Tasks sind der Regelfall.
+
+| Task-ID | headless? | Headless-Gate (Kommando) | Was sonst noetig ist |
+| --- | --- | --- | --- |
+| `MERGE-DEGHOST-RATCHET-67` (427) | **ja** | `cargo test -p lumina-merge`, `sh scripts/check_file_sizes.sh` | — |
+| `GUI-LIB-SPLIT-65` (428) | **ja** | `cargo test -p lumina-gui --lib`, `sh scripts/check_file_sizes.sh` | — |
+| `SIDE-LOCK-STALE-FLAKE-66` (423) | **ja** | `cargo test -p lumina-sidecar` (deterministischer Rotbeweis zuerst) | — |
+| `PIPELINE-CROP-EARLY-9` (405) | **ja** | `cargo test -p lumina-core` / `-p lumina-cli` / `-p lumina-gui --lib` | SOLL zuerst; GPU-Paritaet des geaenderten Pfads bleibt Adapter-Sache |
+| `TEST-AUDIT-36` (415) | **ja** | gezielte `cargo test`-Laeufe + Mutationen (exklusiver Baum) | — |
+| `CI-WATCH-1` (416) | **ja** | `gh run list --branch main` / `gh run watch` | — |
+| `GPU-RENDER-MASK-19` (361) | **teilweise** | `cargo test -p lumina-gui --lib` fuer die GUI-/CLI-Verdrahtung | der GPU-Paritaetsnachweis braucht `--features gpu-adapter-tests` **mit** Adapter |
+| `GPU-MASKPLANE-CLEAR-REMEASURE` (362) | **nein** | — | ruhige Session **mit** Adapter (Fremdlast verfaelscht die Messung) |
+| `MCP-PARITY-C` (408) | **nein** | — | echte RAW-Fixture-Reihe (Referenzdaten) |
+| `LRPAR-G09-CULL-IMPL-25` (418) | **teilweise** | CLI-/Heuristik-Teil headless | kittest-Goldens + ONNX-Stufe 2 brauchen Adapter/Gewichte |
+| `LRPAR-G14-DENOISE-IMPL-20` (417) | **nein** | — | echte Modell-Gewichte (F-078-Gate) |
+| `R5-DUST-23-FOLLOWUP` (375), `R5-BRUSH-24` (376), `R5-MASKVIS-25` (377) | **nein** | — | Metal/Vulkan + echte Maus-/DPI-/Pointer-Ereignisse |
+| `F-103-N6` (513), `F-103-N6-GUI-COVERAGE-27` (482) | **nein** | — | sichtbarer `RUST_LOG=trace`-GUI-Lauf durch einen Menschen (R5-LOG-1) |
+| `R2-GUIMOD-04b` (510), `R2-GUIMOD-04c` (511) | **nein** | — | Messwerte aus `F-103-N6` (manueller Lauf) |
+
+**Reihenfolge unter headless:** zuerst, was ein Gate gefaehrdet oder ein `main`-Rot
+verursachen kann (`MERGE-DEGHOST-RATCHET-67`, `SIDE-LOCK-STALE-FLAKE-66`), dann
+was andere Tasks freigibt (`GPU-RENDER-MASK-19`-Verdrahtung), dann die
+fortlaufenden Audits/Doku (`TEST-AUDIT-36`, `CI-WATCH-1`). `GUI-LIB-SPLIT-65`
+ist PRIO niedrig und darf den GPU-E2E-Pfad **nicht** verdraengen.
+
 ## Releaseplan (User-Entscheide 2026-09-03; MVP = 1.0)
 
 Maschinenlesbar: Die Tabelle `Version | Task-ID | Goal | Stichwort` ist die
