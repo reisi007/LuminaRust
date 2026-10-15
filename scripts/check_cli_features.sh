@@ -23,27 +23,42 @@
 # class is "a feature works only in the presence of another one".
 #
 # Named limits (honest, not a covered claim):
-#   * `--features gpu,lensfun` is NOT re-run here. It is covered twice over by
-#     the individual `gpu` and `lensfun` checks ONLY for additive features; a
-#     feature that only breaks WHEN combined would not be caught. The CI test
-#     shard already builds `lumina-cli --features lensfun`, and this script
-#     keeps the individual axis. Extending to pairs is a separate task if a
-#     pairing defect is ever measured.
+#   * The `gpu,lensfun` COMBINATION is checked below, but only as a TESTBUILD
+#     check (`--all-targets`), not as a full feature-space sweep: a feature
+#     that only breaks when combined with a THIRD feature would still not be
+#     caught. The individual axis above stays the primary coverage; the
+#     combination check is the measured extension (CI-CLI-GPU-TESTBUILD-68).
 #   * This checks `cargo check`, not `cargo test`: compile breakage is the
-#     subject here. Behavioural tests stay in the workspace test shards.
+#     subject here. Behavioural tests stay in the workspace test shards. The
+#     `--all-targets` flag extends the compile check to test targets (unit
+#     tests in `src/tests/`, integration tests in `tests/`), which was the
+#     measured gap: three latent testbuild defects (missing `Geometry` import
+#     in `lensfun_gpu.rs`, `unused_mut` in `matrix_mcp_parity_errors.rs`,
+#     missing `RawMetadata` import under `gpu,lensfun`) were invisible
+#     because no CI built the CLI test targets with `gpu`.
 #
 # Usage: sh scripts/check_cli_features.sh        (exit 0 = all combinations green)
 #        CARGO="${CARGO:-cargo}" sh scripts/check_cli_features.sh
 #
-# Mutation proof (the gate is testable and this is the recipe): re-introduce
-# the orphan attribute —
+# Mutation proof (the gate is testable and this is the recipe):
+#
+# (a) Library axis — re-introduce the orphan attribute:
 #     # add `#[cfg(feature = "lensfun")]` on the line above the
 #     # `#[cfg(feature = "gpu")] use lumina_gpu::{…}` in main.rs
-# — then `sh scripts/check_cli_features.sh` must exit 1 with
-#     FAIL  lumina-cli --features gpu
-# and, crucially, STILL exit 0 for `--features gpu,lensfun`. That asymmetry is
-# the signature of the original defect and is why a combined-only gate is not
-# enough. Removing the attribute restores exit 0.
+#     then `sh scripts/check_cli_features.sh` must exit 1 with
+#       FAIL  lumina-cli --features gpu
+#     and, crucially, STILL exit 0 for `--features gpu,lensfun`. That asymmetry
+#     is the signature of the original defect and is why a combined-only gate
+#     is not enough. Removing the attribute restores exit 0.
+#
+# (b) Testbuild axis (CI-CLI-GPU-TESTBUILD-68) — remove a test-only import:
+#     # delete `use lumina_sidecar::Geometry;` from
+#     #   crates/lumina-cli/src/tests/lensfun_gpu.rs (line 19)
+#     then `sh scripts/check_cli_features.sh` must exit 1 with
+#       FAIL  lumina-cli --features gpu --all-targets
+#     The library axis above stays green (the import is test-only), which is
+#     exactly why the testbuild checks are an extension and not a replacement.
+#     Restoring the import restores exit 0.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -100,6 +115,23 @@ done
 # --- 2. the two ends of the feature space -----------------------------------
 check_combo "(default features)"
 check_combo "--no-default-features" --no-default-features
+
+# --- 3. testbuild checks (CI-CLI-GPU-TESTBUILD-68) ---------------------------
+# The individual axis above compiles the LIBRARY only. The CLI's own test
+# targets (`src/tests/**`, `tests/**`) were invisible to every CI job:
+# `cargo check -p lumina-gpu --features gpu` covers lumina-gpu, the test shard
+# runs the CLI with `--features lensfun` only, and `check_cli_features.sh`
+# itself checked `cargo check` without `--all-targets`. Three latent testbuild
+# defects (missing `Geometry` import in `src/tests/lensfun_gpu.rs`,
+# `unused_mut` in `tests/matrix_mcp_parity_errors.rs`, missing `RawMetadata`
+# import under `gpu,lensfun`) were found by the B2 work and fixed — they
+# stayed invisible because no gate compiled the CLI test targets with `gpu`.
+#
+# These two combinations are an EXTENSION, not a replacement: the individual
+# axis above stays the primary feature coverage. `gpu` alone and `gpu,lensfun`
+# are the two combinations the B2 work measured as broken-in-testbuild.
+check_combo "--features gpu --all-targets" --features gpu --all-targets
+check_combo "--features gpu,lensfun --all-targets" --features gpu,lensfun --all-targets
 
 if [ "$failed" -ne 0 ]; then
     echo "cli_feature_build FAILED: at least one declared CLI feature does not compile on its own" >&2

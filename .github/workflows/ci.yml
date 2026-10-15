@@ -368,6 +368,20 @@ jobs:
       - name: Run onnx-rt tests
         run: cargo test -p lumina-onnx --features onnx-rt
 
+      # CI-CLI-GPU-TESTBUILD-68: the CLI's own GPU test targets. The routing
+      # cells (P0/P1.2/invisible/neutral predicate, neutral no-op of the pass,
+      # mask-free composite no-op, WB routing) are pure recipe state and run
+      # WITHOUT a GPU adapter — they carry real CI assertions. The adapter-
+      # dependent cells (byte-identical parity, GPU route, unavailable-mask
+      # refusal, lensfun GPU route) print an explicit SKIP verdict and return
+      # when no adapter is present, so a GPU-less runner never counts a silent
+      # pass. The testbuild itself (compile) is gated in rust-fast via
+      # scripts/check_cli_features.sh --features gpu --all-targets.
+      # `--bin lumina-cli` (not `--lib`): the crate is a binary; the gpu-gated
+      # unit tests live in `src/tests/` and compile into the bin target.
+      - name: Run CLI GPU tests (adapter-free cells)
+        run: cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun
+
   bench:
     name: Benchmarks (optional)
     needs: detect
