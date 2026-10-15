@@ -70,6 +70,15 @@ pub use merge_recipe::{
 mod merge_gain;
 pub use merge_gain::{PanoGainCompensation, PanoGainMethod, A_MIN_OVERLAP_STAT_PX, MAX_PANO_GAIN};
 
+// Slice B (deghosting): the recipe-side deghost value + validation
+// (`merge_deghost`) plus the alignment validators (`merge_recipe_alignment`),
+// both extracted from `merge_recipe` (file-size ratchet).
+mod merge_deghost;
+mod merge_recipe_alignment;
+pub use merge_deghost::{
+    HdrDeghost, DEGHOST_DEFAULT_THRESHOLD, DEGHOST_MAX_THRESHOLD, DEGHOST_MIN_THRESHOLD,
+};
+
 // UX-LOOK-HISTORY-18: structured edit-history steps (parameter/from/to) carried
 // additively as typed extras; loud validation (see module docs).
 mod history;

@@ -59,6 +59,11 @@ pub struct MergeCall {
     blend_width_px: Option<u32>,
     /// Slice A: `None` = flag/key absent (both frontends default to `off`).
     gain_compensation: Option<String>,
+    /// Slice B: `None` = flag/key absent (both frontends default to `off`).
+    /// The value is the CLI spelling; the MCP rendering is the numeric wire
+    /// form (`{ "deghost": 0.25 }`), so one value has two spellings exactly
+    /// like every other field.
+    deghost: Option<String>,
     force: bool,
 }
 
@@ -75,6 +80,7 @@ impl MergeCall {
             max_shift_px: None,
             blend_width_px: None,
             gain_compensation: None,
+            deghost: None,
             force: false,
         }
     }
@@ -108,6 +114,15 @@ impl MergeCall {
     /// in MCP JSON — one value, two spellings, same rule as every other field.
     pub fn gain_compensation(mut self, mode: &str) -> Self {
         self.gain_compensation = Some(mode.to_string());
+        self
+    }
+
+    /// Slice B: the deghost spelling (`off` | `<threshold>`), rendered as
+    /// `--deghost` on the CLI and as the numeric MCP wire form for a
+    /// threshold (`{ "deghost": 0.25 }`, the `"off"` string staying the
+    /// shared text spelling).
+    pub fn deghost(mut self, mode: &str) -> Self {
+        self.deghost = Some(mode.to_string());
         self
     }
 
@@ -152,6 +167,10 @@ impl MergeCall {
             args.push("--gain-compensation".to_string());
             args.push(mode.clone());
         }
+        if let Some(mode) = &self.deghost {
+            args.push("--deghost".to_string());
+            args.push(mode.clone());
+        }
         if self.force {
             args.push("--force".to_string());
         }
@@ -182,6 +201,19 @@ impl MergeCall {
         }
         if let Some(mode) = &self.gain_compensation {
             args["gain_compensation"] = json!(mode);
+        }
+        if let Some(mode) = &self.deghost {
+            // The numeric wire form: a threshold arrives as a JSON number (the
+            // field is numeric, not a string enum), `off` keeps the shared
+            // text spelling. Both are the same rule on the same value.
+            args["deghost"] = if mode == "off" {
+                json!("off")
+            } else {
+                let threshold: f64 = mode
+                    .parse()
+                    .unwrap_or_else(|_| panic!("`{mode}` must be `off` or a number"));
+                json!(threshold)
+            };
         }
         if self.force {
             args["force"] = json!(true);

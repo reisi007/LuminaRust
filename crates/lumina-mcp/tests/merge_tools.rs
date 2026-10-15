@@ -171,7 +171,8 @@ fn t3_tools_list_publishes_both_schemas_with_the_soll_contract() {
 /// The two tools are one implementation: their schemas are identical except
 /// for the descriptions. Slice A adds the one shared `enum` vocabulary
 /// (`gain_compensation`: `off` | `overlap-median`) — identical on both
-/// modes, so still "one schema modulo description". `MergeMode` is the only
+/// modes, so still "one schema modulo description". Slice B adds the numeric
+/// `deghost` field, likewise identical on both modes. `MergeMode` is the only
 /// variable.
 #[test]
 fn t4_both_schemas_are_one_core_modulo_description() {
@@ -193,6 +194,17 @@ fn t4_both_schemas_are_one_core_modulo_description() {
             stripped["properties"]["gain_compensation"]["enum"],
             json!(["off", "overlap-median"]),
             "the gain vocabulary is shared, not per-mode: {stripped}"
+        );
+        // The deghost shape (Slice B): a number or the `off` string or
+        // `null`, identical on both modes.
+        assert_eq!(
+            stripped["properties"]["deghost"]["anyOf"],
+            json!([
+                { "type": "number" },
+                { "type": "string", "enum": ["off"] },
+                { "type": "null" }
+            ]),
+            "the deghost shape is shared, not per-mode: {stripped}"
         );
     }
     assert_eq!(

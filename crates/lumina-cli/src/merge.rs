@@ -24,12 +24,25 @@
 use clap::Args;
 use log::info;
 use lumina_merge::bundle::{
-    merge_command_name, run_merge as run_merge_bundle, MergeRunOptions, MergeSourceFrame,
+    merge_command_name, run_merge as run_merge_bundle, HdrDeghostMode, MergeRunOptions,
+    MergeSourceFrame,
 };
 use lumina_sidecar::MergeMode;
 use std::path::PathBuf;
 
 use super::{emit, CliError};
+
+/// Slice B: the `--deghost` value parser (`off` | `<threshold-float>`).
+///
+/// A custom parser, not `PossibleValuesParser`: one accepted value is a
+/// number, and the range `(0.05, 2.0]` belongs to the shared
+/// [`HdrDeghostMode`] rule rather than to a clap-side copy of it. A rejected
+/// value reaches the user as the CLI's own usage error with the accepted
+/// values and the range — the merge domain rejects a persisted out-of-range
+/// threshold separately (`merge failed:`), never silently.
+fn parse_deghost(value: &str) -> Result<HdrDeghostMode, String> {
+    HdrDeghostMode::parse(value)
+}
 
 /// Shared arguments for `merge-hdr` and `merge-pano` (SOLL:
 /// `feature/platform/cli-gui-wasm.md`).
@@ -74,6 +87,14 @@ pub struct MergeArgs {
     /// is a loud `merge failed:`.
     #[arg(long, default_value = "off", value_parser = clap::builder::PossibleValuesParser::new(["off", "overlap-median"]))]
     pub gain_compensation: String,
+    /// Slice B: HDR ghost removal. `off` (default) keeps the plain hat-weight
+    /// mean; a number in `(0.05, 2.0]` is the relative radiance deviation
+    /// above which a frame counts as a ghost at that pixel (per channel, vs.
+    /// the reference frame) and contributes weight 0 — the opt-in suggestion
+    /// is `0.25`. HDR only: any other value on `merge-pano` is a loud
+    /// `merge failed:`.
+    #[arg(long, default_value = "off", value_parser = parse_deghost)]
+    pub deghost: HdrDeghostMode,
     /// Re-merge even when an existing bundle is stale or dangling.
     /// Without it, staleness is a loud error, never a silent overwrite.
     #[arg(long)]
@@ -115,6 +136,7 @@ fn run_merge(mode: MergeMode, args: &MergeArgs) -> Result<(), CliError> {
         max_shift_px: args.max_shift_px,
         blend_width_px: args.blend_width_px,
         gain_compensation,
+        deghost: args.deghost,
         force: args.force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };

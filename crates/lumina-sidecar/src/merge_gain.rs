@@ -149,6 +149,7 @@ pub(crate) mod test_fixtures {
                 projection: MergeProjection::None,
                 blend_width_px: 64,
                 gain_compensation: None,
+                deghost: None,
             },
             output: MergeOutput {
                 file: "IMG_0001-HDR.dng".into(),

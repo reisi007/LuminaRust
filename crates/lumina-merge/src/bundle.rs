@@ -42,17 +42,18 @@ use std::path::{Path, PathBuf};
 use log::info;
 use lumina_sidecar::{
     load_sidecar, now_rfc3339_utc, save_sidecar, sidecar_path_for, ArtifactReference,
-    DecodeFingerprint, GeometryFingerprint, MergeAlignment, MergeAlignmentMethod,
+    DecodeFingerprint, GeometryFingerprint, HdrDeghost, MergeAlignment, MergeAlignmentMethod,
     MergeDecodeContext, MergeExposure, MergeMode, MergeOutput, MergeProjection, MergeRecipe,
     MergeSource, MergeStatus, MergeTransform, PanoGainCompensation, SidecarDocument,
     SourceIdentity, MAX_MERGE_EXPOSURE_TIME_S, MAX_MERGE_F_NUMBER, MAX_MERGE_ISO,
     MAX_MERGE_SOURCES, MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
 };
 
+use crate::hdr_deghost::{align_and_merge_hdr, check_deghost_mode};
 use crate::pano_gain::{align_and_merge_pano, check_gain_mode};
 use crate::{
-    encode_linear_dng, estimate_hdr_translation, merge_dng_filename, merge_hdr_weighted,
-    validate_dng_file_name, DngError, DngExif, LinearImage, MergeError,
+    encode_linear_dng, merge_dng_filename, validate_dng_file_name, DngError, DngExif, LinearImage,
+    MergeError,
 };
 
 /// Document-level envelope discriminator of a merge-DNG sidecar
@@ -220,6 +221,13 @@ pub struct MergeRunOptions {
     /// `gain_compensation` / GUI parameter; default `Off` = behaviour as
     /// before). HDR with any other value is a loud `Failed` (panorama only).
     pub gain_compensation: PanoGainMode,
+    /// Slice B: HDR deghosting (`--deghost` / `deghost` / GUI parameter;
+    /// default `Off` = the plain hat-weight mean, no ghost test). A set
+    /// threshold masks every frame whose per-channel relative radiance
+    /// deviation from the reference frame exceeds it and falls back to the
+    /// reference frame's radiance when no frame survives. HDR only: any other
+    /// value on `merge-pano` is a loud `Failed`.
+    pub deghost: HdrDeghostMode,
     /// Re-merge even when an existing bundle is stale or dangling. Without it
     /// staleness is a loud error, never a silent overwrite.
     pub force: bool,
@@ -230,7 +238,12 @@ pub struct MergeRunOptions {
     pub dng_decode_version: String,
 }
 
+// Slice A / Slice B: the two frontend-facing option enums, re-exported next
+// to the run options they belong to (each frontend parses its own spelling
+// into the same value; the two domains gate them in `run_merge`).
+pub use crate::hdr_deghost::HdrDeghostMode;
 pub use crate::pano_gain::PanoGainMode;
+
 /// Loud merge-run failure with the stable frontend prefixes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeRunError {
@@ -380,6 +393,8 @@ where
     }
     // Slice A: the panorama-only options gate (before any decode or file write).
     check_gain_mode(mode, options.gain_compensation).map_err(MergeRunError::Failed)?;
+    // Slice B: the HDR-only options gate (same place, same class).
+    check_deghost_mode(mode, options.deghost).map_err(MergeRunError::Failed)?;
     info!("{command}: merging {} source(s)", inputs.len());
 
     let mut sources = Vec::with_capacity(inputs.len());
@@ -409,6 +424,7 @@ where
         options.max_shift_px,
         options.blend_width_px,
         options.gain_compensation,
+        options.deghost,
     )?;
     info!(
         "{command}: merged frame {}x{}",
@@ -432,6 +448,7 @@ where
         dng_file_name: &dng_file_name,
         blend_width_px: options.blend_width_px,
         gain_compensation: pass.gain_compensation.clone(),
+        deghost: options.deghost.recipe_value(),
     });
     recipe
         .validate()
@@ -521,34 +538,10 @@ fn align_and_merge(
     max_shift_px: i32,
     blend_width_px: u32,
     gain_compensation: PanoGainMode,
+    deghost: HdrDeghostMode,
 ) -> Result<MergePass, MergeRunError> {
     match mode {
-        MergeMode::Hdr => {
-            let mut shifts = Vec::with_capacity(frames.len());
-            let mut transforms = Vec::new();
-            let mut residual_px: f64 = 0.0;
-            let mut residual_warning = false;
-            shifts.push((0.0, 0.0));
-            for (index, frame) in frames.iter().enumerate().skip(1) {
-                let shift = estimate_hdr_translation(&frames[0], frame, max_shift_px)
-                    .map_err(map_merge_error)?;
-                shifts.push((shift.dx, shift.dy));
-                transforms.push(MergeTransform {
-                    source_index: index,
-                    matrix_3x3: [1.0, 0.0, shift.dx, 0.0, 1.0, shift.dy, 0.0, 0.0, 1.0],
-                });
-                residual_px = residual_px.max(shift.residual_px);
-                residual_warning |= shift.status.residual_flag();
-            }
-            let merged = merge_hdr_weighted(frames, exposures, &shifts).map_err(map_merge_error)?;
-            Ok(MergePass {
-                merged,
-                transforms,
-                residual_px,
-                residual_warning,
-                gain_compensation: None,
-            })
-        }
+        MergeMode::Hdr => align_and_merge_hdr(frames, exposures, max_shift_px, deghost),
         MergeMode::Panorama => {
             align_and_merge_pano(frames, max_shift_px, blend_width_px, gain_compensation)
         }
@@ -710,6 +703,7 @@ struct RecipeInputs<'a> {
     dng_file_name: &'a str,
     blend_width_px: u32,
     gain_compensation: Option<PanoGainCompensation>,
+    deghost: Option<HdrDeghost>,
 }
 
 /// Assembles the merge recipe (validation happens in [`run_merge`]: unknown
@@ -725,6 +719,7 @@ fn build_recipe(inputs: RecipeInputs<'_>) -> MergeRecipe {
         dng_file_name,
         blend_width_px,
         gain_compensation,
+        deghost,
     } = inputs;
     let (method, projection) = match mode {
         MergeMode::Hdr => (MergeAlignmentMethod::HdrTranslate, MergeProjection::None),
@@ -753,6 +748,7 @@ fn build_recipe(inputs: RecipeInputs<'_>) -> MergeRecipe {
             projection,
             blend_width_px,
             gain_compensation,
+            deghost,
         },
         output: MergeOutput {
             file: dng_file_name.to_string(),
@@ -1023,6 +1019,7 @@ mod tests {
             max_shift_px: 16,
             blend_width_px: 64,
             gain_compensation: PanoGainMode::Off,
+            deghost: HdrDeghostMode::Off,
             force: false,
             dng_decode_version: "test".into(),
         }

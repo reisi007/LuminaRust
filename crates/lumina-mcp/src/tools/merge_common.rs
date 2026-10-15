@@ -34,7 +34,7 @@
 use crate::error::McpError;
 use crate::tools::stage_common::{optional_bool, optional_str, reject_unknown_fields};
 use lumina_merge::bundle::{
-    merge_command_name, run_merge, MergeRunError, MergeRunOptions, MergeRunOutcome,
+    merge_command_name, run_merge, HdrDeghostMode, MergeRunError, MergeRunOptions, MergeRunOutcome,
     MergeSourceFrame,
 };
 use lumina_sidecar::MergeMode;
@@ -57,6 +57,7 @@ pub const ALLOWED: &[&str] = &[
     "max_shift_px",
     "blend_width_px",
     "gain_compensation",
+    "deghost",
     "force",
 ];
 
@@ -126,6 +127,35 @@ pub fn run_mode(mode: MergeMode, args: &Value) -> Result<Value, McpError> {
             )));
         }
     };
+    // Slice B: `deghost` is a NUMBER on the wire (the threshold) plus the
+    // shared text spelling `"off"` — a numeric field, not a string enum, so a
+    // model can hand over `0.25` exactly as the CLI flag does. Absent or
+    // `null` is the valid default (`off`); the SHAPE (number or the `off`
+    // string) is handler-side `InvalidParams`, and the RANGE `(0.05, 2.0]`
+    // is refused by the shared `HdrDeghostMode` rule before any I/O, with
+    // `recipe.validate()` as the second, domain-side gate (`merge failed:`).
+    let deghost = match args.get("deghost") {
+        None | Some(Value::Null) => HdrDeghostMode::Off,
+        Some(Value::String(value)) => {
+            HdrDeghostMode::parse(value).map_err(McpError::InvalidParams)?
+        }
+        Some(Value::Number(number)) => {
+            let threshold = number.as_f64().ok_or_else(|| {
+                McpError::InvalidParams(format!(
+                    "`deghost` must be a finite number, got `{number}`"
+                ))
+            })?;
+            // The range is the shared `HdrDeghostMode` rule; naming the field
+            // keeps the message greppable like every other tool-level one.
+            HdrDeghostMode::threshold(threshold)
+                .map_err(|reason| McpError::InvalidParams(format!("`deghost` {reason}")))?
+        }
+        Some(other) => {
+            return Err(McpError::InvalidParams(format!(
+                "`deghost` must be a number (threshold) or the string `off`, got `{other}`"
+            )));
+        }
+    };
     let force = optional_bool(args, "force")?.unwrap_or(false);
 
     let options = MergeRunOptions {
@@ -133,6 +163,7 @@ pub fn run_mode(mode: MergeMode, args: &Value) -> Result<Value, McpError> {
         max_shift_px,
         blend_width_px,
         gain_compensation,
+        deghost,
         force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };
@@ -311,6 +342,14 @@ pub fn schema(mode: MergeMode) -> Value {
                 "type": ["string", "null"],
                 "enum": ["off", "overlap-median"],
                 "description": "Panorama brightness matching (default off). `overlap-median` scales each frame by the median overlap-luminance ratio vs. the reference before blending and records the gains in the recipe. Panorama only: any other value on merge-hdr fails loudly as `merge failed:`. An unknown string is a shape error (`InvalidParams`)."
+            },
+            "deghost": {
+                "anyOf": [
+                    { "type": "number" },
+                    { "type": "string", "enum": ["off"] },
+                    { "type": "null" }
+                ],
+                "description": "HDR ghost removal: the relative radiance deviation (per channel, vs. the reference frame) above which a frame counts as a ghost at that pixel and contributes weight 0 (default off = the plain hat-weight mean). The number must be within (0.05, 2.0]; 0.25 is the suggested opt-in. Absent or null = off. HDR only: any value other than off on merge-pano fails loudly as `merge failed:`. A non-number/non-`off` value or an out-of-range number is a shape error (`InvalidParams`), enforced by the merge domain again for persisted recipes."
             },
             "force": {
                 "type": "boolean",

@@ -14,8 +14,7 @@
 use crate::pano_gain::invert_matrix_3x3;
 use crate::{LinearImage, MergeError};
 use lumina_core::merge_geom::{
-    apply_matrix_3x3, clamp_linear, feather_weight, hdr_hat_weight, is_translation_rotation_light,
-    sample_bilinear,
+    apply_matrix_3x3, clamp_linear, feather_weight, is_translation_rotation_light, sample_bilinear,
 };
 use lumina_sidecar::MergeExposure;
 
@@ -52,91 +51,19 @@ pub fn relative_exposure(exposure: &MergeExposure) -> Result<f64, MergeError> {
 /// `out = sum(hat(pixel) * radiance) / sum(hat(pixel))`.
 /// Fully clipped pixels (all weights 0) fall back to the mean radiance
 /// (documented, never NaN).
+///
+/// Slice B moved the merge pass into [`crate::hdr_deghost`] so the ghost mask
+/// and the plain merge share ONE pixel loop (no second implementation); this
+/// entry point is the `deghost == None` spelling of
+/// [`crate::hdr_deghost::merge_hdr_weighted_deghost`] and stays byte-identical
+/// to the pre-slice merge. Callers that may ask for a threshold belong on the
+/// deghost variant; the bundle's HDR pass does.
 pub fn merge_hdr_weighted(
     frames: &[LinearImage],
     exposures: &[MergeExposure],
     shifts_px: &[(f64, f64)],
 ) -> Result<LinearImage, MergeError> {
-    if frames.len() < 2 {
-        return Err(MergeError::Invalid(format!(
-            "hdr merge needs at least 2 frames, got {}",
-            frames.len()
-        )));
-    }
-    if frames.len() != exposures.len() || frames.len() != shifts_px.len() {
-        return Err(MergeError::Invalid(format!(
-            "hdr merge needs one exposure and shift per frame, got {} frames, {} exposures, {} shifts",
-            frames.len(),
-            exposures.len(),
-            shifts_px.len()
-        )));
-    }
-    let (w, h) = (frames[0].width(), frames[0].height());
-    for (i, frame) in frames.iter().enumerate() {
-        if frame.width() != w || frame.height() != h {
-            return Err(MergeError::Invalid(format!(
-                "hdr merge frame #{i} is {}x{}, expected {w}x{h} (no silent rescale)",
-                frame.width(),
-                frame.height()
-            )));
-        }
-    }
-    let rel: Vec<f64> = exposures
-        .iter()
-        .map(relative_exposure)
-        .collect::<Result<_, _>>()?;
-    // Validate shifts once, before touching pixels (fail fast, same contract).
-    for (i, (dx, dy)) in shifts_px.iter().enumerate() {
-        if !dx.is_finite() || !dy.is_finite() {
-            return Err(MergeError::Invalid(format!(
-                "hdr shift #{i} must be finite, got ({dx}, {dy})"
-            )));
-        }
-    }
-    // Extract every channel plane exactly once, before the pixel loop
-    // (O(frames * pixels)); the same pattern as `blend_panorama`. The
-    // previous per-pixel `frame.channel_plane(c)` re-extracted a whole plane
-    // for every pixel/channel/frame, so the merge scaled quadratically in the
-    // pixel count (C1: 512x512x2 was ~54 s release, effectively unusable).
-    let planes: Vec<[Vec<f32>; 3]> = frames
-        .iter()
-        .map(|frame| {
-            [
-                frame.channel_plane(0),
-                frame.channel_plane(1),
-                frame.channel_plane(2),
-            ]
-        })
-        .collect();
-    let mut out = vec![0.0f32; w as usize * h as usize * 3];
-    for y in 0..h {
-        for x in 0..w {
-            for c in 0..3 {
-                let mut num = 0.0f64;
-                let mut den = 0.0f64;
-                let mut rad_sum = 0.0f64;
-                for (i, frame_planes) in planes.iter().enumerate() {
-                    let (dx, dy) = shifts_px[i];
-                    let pixel =
-                        sample_bilinear(&frame_planes[c], w, h, x as f64 - dx, y as f64 - dy)
-                            as f64;
-                    let weight = hdr_hat_weight(pixel as f32) as f64;
-                    let radiance = pixel / rel[i];
-                    num += weight * radiance;
-                    den += weight;
-                    rad_sum += radiance;
-                }
-                let radiance = if den > 0.0 {
-                    num / den
-                } else {
-                    // All inputs clipped: mean radiance instead of NaN.
-                    rad_sum / frames.len() as f64
-                };
-                out[(y * w * 3 + x * 3) as usize + c] = clamp_linear(radiance as f32);
-            }
-        }
-    }
-    LinearImage::new(w, h, out).map_err(|e| MergeError::Invalid(e.to_string()))
+    crate::hdr_deghost::merge_hdr_weighted_deghost(frames, exposures, shifts_px, None)
 }
 
 /// Feather-blended panorama of same-size frames placed side by side.

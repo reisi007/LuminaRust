@@ -13,7 +13,10 @@
 //! Scope (1.5, loudly enforced):
 //!
 //! - HDR alignment is translation-only (integer + subpixel-light, step 0.5).
-//!   No homography, no ghost removal.
+//!   No homography. Ghost *removal* is the opt-in Slice-B deghost mask
+//!   ([`crate::hdr_deghost`]): a deterministic per-pixel, per-channel relative
+//!   radiance test against the reference frame within a documented threshold
+//!   range — `off` by default, and never a heuristic fit.
 //! - Panorama alignment is a chained translation+rotation-light homography
 //!   with cylindrical projection only (no spherical/fisheye), no bundle
 //!   adjustment, feather blend only (no multi-band). The blend path
@@ -43,6 +46,7 @@ pub mod align;
 pub mod bundle;
 pub mod digest;
 pub mod dng;
+pub mod hdr_deghost;
 pub mod image;
 pub mod merge;
 pub mod pano_gain;
@@ -99,6 +103,7 @@ pub use dng::{
     DNG_MAX_DIMENSION_PX, DNG_MIN_DIMENSION_PX, DNG_PHOTOMETRIC_LINEAR_RAW, DNG_SOFTWARE,
     DNG_VERSION, HDR_DNG_SUFFIX, PANO_DNG_SUFFIX,
 };
+pub use hdr_deghost::{deghost_mask, merge_hdr_weighted_deghost, HdrDeghostMode, DEGHOST_EPS};
 pub use image::LinearImage;
 pub use merge::{blend_panorama, blend_panorama_transformed, merge_hdr_weighted};
 pub use pano_gain::{
