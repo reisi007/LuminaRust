@@ -368,9 +368,14 @@ Mehr-Layer-Fall byte-identisch zum CPU-Orakel, die relative-WB-Zelle
 `maxAbsDiff ≤ 1`. Die P1.2-Blöcke (lokale Tonkurve/Farbe/Presence/Detail) sind
 noch **nicht** GPU-verdrahtet: `unsupported_local_mask_stages` nennt sie als
 CPU-Routing-Grund, `render_with_gpu_local_masks` verweigert sie laut — kein
-stiller Fallback. Die Parent-Gates für echte Hardware/GPU-Parität
-(`GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`) und die GUI-Verdrahtung des
-Present-Pfads bleiben offen.
+stiller Fallback. Die **CLI-Verdrahtung ist geliefert** (Slice B2, 2026-10-15,
+`crates/lumina-cli/src/local_mask_gpu.rs`): der pauschale CPU-Grund entfällt,
+P0-/relative-WB-Masken laufen über den GPU-Pass, eine Pass-Verweigerung ist ein
+lauter CPU-Routing-Grund (`--require-gpu` scheitert laut). Der Masken-Grund
+tritt **nur** bei einer aktiven Kopie mit maskierten Ebenen auf; ein
+**maskenfreies** Rezept bleibt unverändert auf der GPU-Route. Die Parent-Gates für
+echte Hardware/GPU-Parität (`GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`)
+und die **GUI**-Verdrahtung des Present-Pfads bleiben offen.
 
 - **Nutzerentscheidungen:** Lokale Layer werden sequenziell auf dem global
   angepassten Ergebnis angewendet. Globales WB bleibt absolute-only und wird

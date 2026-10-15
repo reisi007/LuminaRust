@@ -2542,6 +2542,7 @@ der frühere glow/wgpu-Dual-Backend-Konflikt ist aufgelöst.
 | Color/Tone GPU Shader (`lumina-gpu::shaders`) | ✅ `render_with_gpu` / `render_to_vram` | ✅ VRAM-resident (`render_to_vram`, Uniform → UBO) |
 | SourceAction GPU Stage (`SOURCE_ACTION_STAGE_SRC`) | ✅ bei gebundenen Artefakten (`set_source_action_artifacts`), sonst CPU-Route | ✅ Drag-Pfad compositiert vor Tone; Present-Gate hält nicht unterstützte Rezepte auf CPU |
 | Masken‑Brush + evaluierte Ebenen im VRAM (`R16Uint`) | — | ✅ persistente `Vec<u16>` Plane → dirty 512² Tiles (`upload_mask_tile`) + evaluierte Planes nach Full-Render (`combine_mask_planes` → `upload_mask_plane`, byte-exakt) |
+| Lokaler Masken‑Pixelpass (`local_mask_pass`, GPU‑RENDER‑MASK‑19) | ✅ P0 + relative WB (`local_mask_gpu`, Slice B2); P1.2 laut CPU‑Route; Pass‑Verweigerung = lauter CPU‑Pfad; **maskenfreie** Rezepte bleiben GPU (kein Masken‑Grund) | — (Present‑Pfad‑Verdrahtung ist ein eigener, offener Slice) |
 | Overlay‑Composite + Present | — | ✅ readback-frei: `copy_vram_to_texture(present_target, overlay_color)` → `register_native_texture` → `painter().image`; effektive Session-Farbe im vorhandenen Uniform, CPU-Upload als Fallback erhalten | — |
 | `VramState` Management | — | LRU-Pool dimensionsschlüsselt (`LUMINA_GPU_VRAM_POOL_ENTRIES`=4, `LUMINA_GPU_VRAM_BUDGET_MB`=1024); 512² `TiledCache`/`DraftPyramid` bleibt M2 | — |
 | Fehlerreporting | `warn!`/CPU-Route-Logs einmal pro Grundmenge | `warn!` bei Tile-/Plane-/Overlay-Fehlern; Init-Fehler via `log_gpu_init_failure` (getestet) | — |

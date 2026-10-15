@@ -12,6 +12,18 @@
 use super::*;
 use crate::lensfun_gpu;
 use lumina_core::LensfunMap;
+// F7 (CLI-Wiring): the sidecar `Geometry` type the fixture builds by hand. It
+// is not part of the crate-root test glob (unlike `Crop`/`AspectPreset`), so the
+// gpu-gated test imports it locally — a `#[cfg(test)]` import in `main.rs` would
+// be unused in the non-gpu test build.
+use lumina_sidecar::Geometry;
+// Same class as the `Geometry` import above: `RawMetadata` is not part of the
+// crate-root test glob, so the `--features gpu,lensfun` bin-test build needs it
+// locally. Gated by `lensfun` because the only user (`metadata`) is — an
+// ungated import would be unused (and a `-D warnings` failure) in a gpu-only
+// test build.
+#[cfg(feature = "lensfun")]
+use lumina_raw::RawMetadata;
 
 /// A 2x2 map with the given distortion flag. Coordinates/gains are inert; only
 /// `has_distortion` and the recipe crop feed [`lensfun_gpu::classify`].

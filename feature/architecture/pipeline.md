@@ -2117,10 +2117,32 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `lumina_core::render::mask_evaluation::evaluate_local_mask_layers` — dieselbe
   `evaluate_mask_stage`-Auswertung wie der CPU-Render, kein zweiter
   Auswertungspfad.
-  **Noch offen (eigener Slice):** die GUI-Verdrahtung — `local_adjustment_route_reason`
-  routet heute weiterhin jeden sichtbaren lokalen Maskenzustand auf die CPU, der
-  Present-Pfad bindet die ausgewerteten Layer also noch nicht an den neuen
-  GPU-Eintritt.
+  **CLI-Verdrahtung (Slice B2, 2026-10-15):** die CLI rendert lokale Masken jetzt
+  auf der GPU. `crates/lumina-cli/src/local_mask_gpu.rs` (gpu-only, Muster
+  `lensfun_gpu`) ersetzt den pauschalen CPU-Grund `masks (active copy has layers)`
+  durch das echte P1.2-Prädikat (`unsupported_local_mask_adjustments`): nur eine
+  **sichtbare, nicht-neutrale** Ebene mit P1.2-Block (lokale Tonkurve/Farbe/
+  Presence/Detail) routet weiter laut auf die CPU. Der Masken-Grund tritt damit
+  **nur** auf, wenn überhaupt eine aktive Kopie mit maskierten Ebenen existiert;
+  ein **maskenfreies** Rezept (`masks: None`, der normale CLI-/Matrix-Fall, z. B.
+  `testdata/matrix/recipe-set.v1.json`) hat nichts zu paaren, wird als reiner
+  No-Op komponiert und bleibt **unverändert auf der GPU-Route** (leere `reasons`,
+  gemessen via `matrix --require-gpu`). Der GPU-Zweig von
+  `render_best_effort` rendert global, wertet die Ebenen über
+  `evaluate_local_mask_layers` mit `input = Decode-Frame` und `frame =
+  GPU-Global-Ausgabe` aus (dieselbe Abbildung wie der CPU-Render:
+  `mask_input_width` vor der Geometrie, `render.rs:611-612`; `frame_width` nach
+  `Crop`, `render.rs:697-698`), paart sie id-basiert mit dem persistierten Rezept
+  und wendet `apply_gpu_local_masks` an; `RenderOutput.mask_layers` /
+  `mask_warnings` werden gefüllt. **Kein stiller Fallback:** verweigert der Pass
+  (Dimensions-Guard, fehlender Adapter, `RenderFailed`), wird der Grund laut
+  geloggt und der exakte CPU-Pfad gefahren, sodass `--require-gpu` laut
+  scheitert statt einen un-modulierten Frame zu akzeptieren. **P1.2 bleibt laut
+  verweigert** (CPU-Grund); `--require-gpu` ist für P0-/relative-WB-Masken jetzt
+  GPU-fähig. **GUI bleibt weiterhin offen (eigener Slice):**
+  `local_adjustment_route_reason` routet jeden sichtbaren lokalen Maskenzustand
+  auf die CPU, der Present-Pfad bindet die ausgewerteten Layer also noch nicht an
+  den neuen GPU-Eintritt.
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →
@@ -2519,8 +2541,9 @@ bestehenden Parent-Gates für echte Hardware-/GPU-Parität (`GPU-PARITY-HW-28`,
 geschlossen. **`GPU-RENDER-MASK-19` ist als Pixelpass umgesetzt** (siehe
 „Implementierungsstatus GPU-Pfad"): der GPU-Pass deckt die relative-WB- und
 P0-Basic-Blöcke byte-parität zum CPU-Orakel ab; die P1.2-Blöcke sind ein
-laut benannter CPU-Routing-Grund, und die GUI-Verdrahtung des Present-Pfads
-ist ein eigener, noch offener Slice.
+laut benannter CPU-Routing-Grund. Die **CLI ist seit Slice B2 verdrahtet**
+(`crates/lumina-cli/src/local_mask_gpu.rs`); die GUI-Verdrahtung des
+Present-Pfads ist ein eigener, noch offener Slice.
 
 ### Nutzerentscheidungen und Reihenfolge
 

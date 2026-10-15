@@ -23,6 +23,10 @@ mod lens_blur;
 #[cfg(feature = "lensfun")]
 mod lensfun;
 mod lensfun_gpu;
+#[cfg(feature = "gpu")]
+mod local_mask_gpu;
+#[cfg(feature = "gpu")]
+mod local_mask_gpu_route;
 mod mask;
 mod mask_render;
 mod mask_zdata;

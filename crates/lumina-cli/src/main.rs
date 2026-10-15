@@ -42,7 +42,7 @@ use lumina_raw::RawError;
 // enabled, so the default build stays CPU-only (per `Agents.md` capability
 // separation).
 #[cfg(feature = "gpu")]
-use lumina_gpu::{unsupported_gpu_stages_with_context, Frame, GpuContext};
+use lumina_gpu::{unsupported_gpu_stages_with_context, GpuContext};
 // Visible backend-selection logging (no silent fallback to CPU).
 use log::info;
 #[allow(unused_imports)]
@@ -131,6 +131,9 @@ mod matrix;
 // GPU-LENSFUN-PARITY-1 (F7): CLI-side strict-corrector map bind (ratchet §8).
 #[cfg(feature = "gpu")]
 mod lensfun_gpu;
+// GPU-RENDER-MASK-19 (Slice B2): CLI wiring of the GPU local-mask pixel pass.
+#[cfg(feature = "gpu")]
+mod local_mask_gpu;
 // MCP-PARITY-A: the four session-based recipe stage editors (`spot`, `lens-blur`,
 // `geometry`, `upright`). All of their logic lives in `lumina-stages`, which
 // `lumina-mcp` calls too, so an MCP call and the equivalent CLI call share one
@@ -382,21 +385,20 @@ fn render_best_effort(
             }
             // GEN-ONNX-1 Welle 2a: the generative artifact compositing runs on
             // the GPU (mid-geometry `Substitute` steps) — no blanket CPU route.
-            let frame = ctx
+            let global = ctx
                 .render_with_gpu_and_generative(frame, recipe, &generative)
-                .map(Frame::to_image_frame)
                 .map_err(|error| CliError::Message(error.to_string()))?;
-            Ok((
-                RenderOutput {
-                    // MASK-LOCAL-P1.1: the CLI has no local-WB picker, so it
-                    // never asks for (and never pays for) the pre-local stage.
-                    effective_source_stage: None,
-                    frame,
-                    mask_layers: Vec::new(),
-                    mask_warnings: Vec::new(),
-                },
-                RenderRoute::Gpu,
-            ))
+            // GPU-RENDER-MASK-19 (Slice B2): a pass refusal is a loud CPU route.
+            match local_mask_gpu::composite(ctx, render_ctx, frame, &global) {
+                Ok(output) => Ok((output, RenderRoute::Gpu)),
+                Err(reason) => {
+                    let reasons = vec![reason];
+                    lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
+                    let output = render_frame_with_generative(frame, render_ctx, generative)
+                        .map_err(|error| CliError::Message(error.to_string()))?;
+                    Ok((output, RenderRoute::Cpu { reasons }))
+                }
+            }
         }
         _ => {
             if !reasons.is_empty() {
@@ -415,7 +417,9 @@ fn render_best_effort(
 ///
 /// Context-level features the GPU path cannot reproduce here: an **invalid**
 /// decoder As-Shot white balance (R2-MCP-01; valid gains are carried into the
-/// GPU entry and are pixel-neutral) and source-action artifacts / mask layers.
+/// GPU entry and are pixel-neutral) and source-action artifacts. Local mask
+/// layers are no longer a blanket reason: only a visible, non-neutral layer that
+/// carries a **P1.2** block is named (`local_mask_gpu::mask_layer_routing_reasons`).
 /// The Lensfun corrector is **not** a static reason: [`lensfun_gpu::bind`]
 /// builds/binds its map and reports only an unbound map or a distortion
 /// corrector without an explicit crop as a loud CPU route.
@@ -446,19 +450,10 @@ fn gpu_routing_reasons(recipe: &EditRecipe, render_ctx: &RenderContext<'_>) -> V
     if !render_ctx.source_actions.is_empty() {
         reasons.push("source_actions (context artifacts)".into());
     }
-    let has_mask_layers = render_ctx
-        .masks
-        .as_ref()
-        .and_then(|masks| {
-            masks
-                .copies
-                .iter()
-                .find(|copy| copy.id == masks.active_copy_id)
-        })
-        .is_some_and(|copy| !copy.mask_layers.is_empty());
-    if has_mask_layers {
-        reasons.push("masks (active copy has layers)".into());
-    }
+    // GPU-RENDER-MASK-19 (Slice B2): the blanket `masks (active copy has layers)`
+    // route is replaced by the real P1.2 predicate — a P0-only / relative-WB
+    // layer set stays GPU-eligible and is composited by `local_mask_gpu`.
+    reasons.extend(local_mask_gpu::mask_layer_routing_reasons(render_ctx));
     reasons
 }
 

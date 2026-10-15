@@ -89,7 +89,7 @@ const TYPO_RECIPE: &str = r#"{
 /// reach. Every case is runnable up to the point its own rule fires, so a
 /// failure is attributable to that rule and not to a fixture.
 fn refusal_cases() -> Vec<RefusalCase> {
-    let mut cases = vec![
+    let cases = vec![
         // A set file that is not there (`load_recipe_set`).
         RefusalCase {
             label: "a set file that is not there",
@@ -220,12 +220,16 @@ fn refusal_cases() -> Vec<RefusalCase> {
     ];
     // CPU-only build: `--require-gpu` fails at the entry point.
     #[cfg(not(feature = "gpu"))]
-    cases.push(RefusalCase {
-        label: "require-gpu without a GPU backend",
-        must_contain: Some("no GPU backend"),
-        same_inputs_both_trees: true,
-        build: Box::new(|dir| anchor_call(dir).require_gpu()),
-    });
+    let cases = {
+        let mut cases = cases;
+        cases.push(RefusalCase {
+            label: "require-gpu without a GPU backend",
+            must_contain: Some("no GPU backend"),
+            same_inputs_both_trees: true,
+            build: Box::new(|dir| anchor_call(dir).require_gpu()),
+        });
+        cases
+    };
     cases
 }
 
