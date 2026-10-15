@@ -235,10 +235,14 @@ fn mask_gate_states_stay_pixel_equal() {
 /// presented photo bytes.
 ///
 /// The repair is at the production path, GUI-side: `present_mask_plane.rs`
-/// writes zeros over the active entry's mask plane on every render whose frame
-/// carries no coverage (`MaskPlaneIntent::Clear`), so the SOLL condition "no
-/// stale mask plane resident" holds by construction instead of being tracked by
-/// a flag. After the repair the same script measures `vram_present=Some([160,
+/// writes zeros over the active entry's mask plane on the render whose frame
+/// carries no coverage **and** whose active entry still holds coverage from an
+/// earlier frame — the render that empties the layer list (`MaskPlaneIntent::
+/// Clear`, gated by the residency verdict; decision `GPU-CLEAR-TRANSITION`). A
+/// maskless frame on an entry that already reads zero writes nothing, which is
+/// the same plane. The SOLL condition "no stale mask plane resident" still
+/// holds by construction instead of being tracked by a flag. After the repair
+/// the same script measures `vram_present=Some([160,
 /// 120])` with `maxAbsDiff=0 differingBytes=0 of 603904` — the VRAM route is
 /// still taken (a `return false` fix would also measure 0/0 but would restore
 /// the reachability regression; `mask_gate_states_stay_pixel_equal` guards that

@@ -105,10 +105,13 @@ impl LuminaApp {
     ///    mask plane may be resident in the VRAM pool for the current
     ///    dimensions* — and that one is held by construction, not by a flag:
     ///    `present_mask_plane::LuminaApp::sync_mask_plane_to_vram` runs at the
-    ///    end of every render and writes zeros over the active pool entry
-    ///    whenever the frame carries no coverage, so a plane uploaded for a
-    ///    since-deleted mask is overwritten by the very render that empties the
-    ///    layer list. Without that write the relaxation below presented a
+    ///    end of every render and writes zeros over the active pool entry when
+    ///    the frame carries no coverage **and** that entry still holds coverage
+    ///    from an earlier frame (`GPU-CLEAR-TRANSITION`: the transition, not
+    ///    every maskless frame — an entry that already reads zero is left
+    ///    alone), so a plane uploaded for a since-deleted mask is overwritten
+    ///    by the very render that empties the layer list. Without that write the
+    ///    relaxation below presented a
     ///    deleted mask's coverage (measured on a real adapter: `maxAbsDiff=67`
     ///    over 127 707 presented photo bytes), and `vram_mask_is_evaluated`
     ///    could not have detected it — every `mark_dirty` resets that flag. The
