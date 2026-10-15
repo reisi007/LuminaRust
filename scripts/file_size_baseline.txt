@@ -59,7 +59,6 @@
 611 crates/lumina-sidecar/src/culling.rs
 599 crates/lumina-core/src/lens_blur.rs
 584 crates/lumina-gpu/src/lens_blur.rs
-567 crates/lumina-merge/src/hdr_deghost.rs  # neu 2026-10-15 SLICE-B-MERGE-DEGHOST: HdrDeghostMode (off | Schwelle in (0.05, 2.0], Parse/Threshold/recipe_value), check_deghost_mode (HDR-only-Gate), die pure Geister-Entscheidung deghost_mask, der deghost-faehige HDR-Merge-Kern merge_hdr_weighted_deghost und align_and_merge_hdr. Bewusste Aufnahme: die Datei traegt Kern + Mode + Tests (B-T1..B-T4, Masken-Vertrag, Parse-/Gate-Matrix, Bit-Identitaet ohne Maske); eine weitere Aufteilung wuerde den Pixel-Kern von seinem Test trennen, der ihn allein belegt.
 568 crates/lumina-cli/tests/meta_draft_e2e.rs
 566 crates/lumina-core/src/cache.rs
 552 crates/lumina-core/src/histogram.rs
