@@ -150,6 +150,15 @@ fn a_non_finite_or_wrongly_typed_value_is_refused_without_writing() {
 
 // ---------------------------------------------------------------- registry
 
+/// Tools the sweep only checks for dispatch reachability (no full `{}` call):
+/// a `{}` call on these would resolve defaults and run expensive real work.
+/// `lumina_matrix` with `{}` runs the full 22-pair CR3 matrix (60+ min in the
+/// debug profile); the full path is covered in `matrix_tools.rs` T1–T14 +
+/// `matrix_mcp_parity*` (CI time). The sweep still asserts list membership +
+/// `is_known_tool` + dispatch reachability (no `MethodNotFound`) for these
+/// tools, so a listed-but-dead tool still fails here — no silent skip.
+const DISPATCH_ONLY: &[&str] = &["lumina_matrix"];
+
 #[test]
 fn all_four_stage_tools_are_registered_in_both_paths() {
     let definitions = list_tool_definitions();
@@ -169,12 +178,21 @@ fn all_four_stage_tools_are_registered_in_both_paths() {
     }
     // `dispatch_tool` must agree with `list_tool_definitions`: a name that is
     // listed but not dispatchable would be a dead tool.
+    // `DISPATCH_ONLY` exception (`lumina_matrix`): dispatch reachability only —
+    // a `{}` call would run the full matrix, so an unknown field is sent
+    // instead. It must reach the handler (`InvalidParams`), never the
+    // `MethodNotFound` fall-through (the T1 pattern from `matrix_tools.rs`).
     for name in &listed {
+        let arguments = if DISPATCH_ONLY.contains(name) {
+            json!({"bogus_field": true})
+        } else {
+            json!({})
+        };
         let request = json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": { "name": name, "arguments": {} }
+            "params": { "name": name, "arguments": arguments }
         });
         let mut server = Server::with_preview_dir(std::env::temp_dir());
         let response = server.handle_message(request).expect("a response");
@@ -182,6 +200,21 @@ fn all_four_stage_tools_are_registered_in_both_paths() {
             response.get("error").is_none(),
             "{name} is listed but dispatch_tool does not know it: {response}"
         );
+        // `DISPATCH_ONLY` pin (T1 claim): no `MethodNotFound`, and the probe
+        // reached the handler (`InvalidParams`) — not just "not dead".
+        if DISPATCH_ONLY.contains(name) {
+            assert_ne!(
+                response["result"]["structuredContent"]["error"],
+                json!("MethodNotFound"),
+                "{name} is in list_tool_definitions but has no dispatch_tool arm \
+                 (a listed-but-dead tool): {response}"
+            );
+            assert_eq!(
+                response["result"]["structuredContent"]["error"],
+                json!("InvalidParams"),
+                "{name} dispatch arm did not handle the probe: {response}"
+            );
+        }
     }
 }
 
