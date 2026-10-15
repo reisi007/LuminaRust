@@ -176,6 +176,22 @@ fn serialized_writes_reject_concurrent_lock_holder() {
     let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
     let lock_path = directory.path().join(".image.lumina.json.lock");
     std::fs::File::create(&lock_path).unwrap();
+    // Test-environment guard: STALE_THRESHOLD in acquire_write_lock is 30 s.
+    // If the test stalls > 30 s, its own lockfile would be (correctly) reclaimed
+    // by production logic and the assertion fails spuriously. Keep the lockfile
+    // mtime fresh (~every 50 ms) so the production test of freshness stays
+    // exercised, while an environment stall can no longer steal our lock.
+    // (Test-only; no product change.)
+    let keeper_lock_path = lock_path.clone();
+    let keeper_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let keeper_stop2 = std::sync::Arc::clone(&keeper_stop);
+    let keeper = std::thread::spawn(move || {
+        while !keeper_stop2.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = std::fs::File::open(&keeper_lock_path)
+                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
 
     let mut edited = document.clone();
     edited.virtual_copies[0].name = "plain".into();
@@ -198,6 +214,8 @@ fn serialized_writes_reject_concurrent_lock_holder() {
         load_sidecar(&path).unwrap().virtual_copies[0].name,
         "Original"
     );
+    keeper_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = keeper.join();
     std::fs::remove_file(&lock_path).unwrap();
     // After the lock is released both writers work again.
     save_sidecar(&path, &edited).unwrap();
