@@ -389,7 +389,10 @@ fn a_partial_zero_write_keeps_asking_for_the_write() {
 /// The device half of the transition, so it is not carried by reasoning alone:
 /// on a machine with a usable adapter the maskless render after a mask render
 /// leaves a plane that reads back as **zero**, and the maskless render after
-/// *that* performs no write at all. The decision tests above pin the same
+/// *that* performs no write at all. It also checks (c) on the device **first**:
+/// a session that never painted a mask has no resident plane, so its maskless
+/// render must not write at all — the mask is created only after that check.
+/// The decision tests above pin the same
 /// property without an adapter; this one measures the bytes. Without one it
 /// skips loudly rather than passing silently (`Agents.headless.md` §1/§3) — a
 /// test that does not run is neither green nor red.
@@ -408,7 +411,8 @@ fn a_partial_zero_write_keeps_asking_for_the_write() {
 #[test]
 #[cfg(feature = "gpu")]
 fn a_maskless_render_zeroes_the_plane_once_on_a_real_adapter() {
-    let (mut app, id) = app_with_evaluated_mask();
+    let mut app = new_app();
+    app.load_bytes(png(), "gpu-mask-plane-cold.png").unwrap();
     let Some(gpu) = lumina_gpu::GpuContext::new().ok() else {
         lumina_testskip::report_env_skip(
             "a_maskless_render_zeroes_the_plane_once_on_a_real_adapter",
@@ -425,9 +429,17 @@ fn a_maskless_render_zeroes_the_plane_once_on_a_real_adapter() {
     }
     app.gpu = Some(gpu);
 
-    // Baseline: an unwritten pool. Nothing has been written in this session and
-    // no entry exists yet, so there is nothing to zero.
+    // (c) on the device: this session never painted a mask, so the frame
+    // carries no coverage and no entry holds one either — the maskless render
+    // must not write zeros. The mask is created only *after* this check: an app
+    // that already rendered a mask would be the *transition* state (b) below,
+    // not the maskless-without-a-prior-plane state (c) is about.
     app.render().unwrap();
+    assert!(
+        app.render_mask_layers.is_empty(),
+        "precondition: no evaluated layer"
+    );
+    assert_eq!(app.vram_mask_plane_intent(), MaskPlaneIntent::Clear);
     assert!(
         !app.vram_mask_plane_needs_zero_write(),
         "criterion (c) on the device: nothing resident, no write"
@@ -436,6 +448,17 @@ fn a_maskless_render_zeroes_the_plane_once_on_a_real_adapter() {
 
     // Real coverage: the evaluated layer is combined and pushed into the entry
     // the present path composites.
+    let id = app.create_mask("Plane").unwrap();
+    app.commit_brush_stroke(vec![BrushMark {
+        x: 0.5,
+        y: 0.5,
+        radius: 0.2,
+        sign: BrushMarkSign::Positive,
+        softness: 0.25,
+        flow: 0.75,
+    }])
+    .unwrap();
+    app.set_section_open(SECTION_MASKING, true);
     app.render().unwrap();
     assert_eq!(app.vram_mask_plane_intent(), MaskPlaneIntent::Push);
     assert!(
