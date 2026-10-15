@@ -340,14 +340,32 @@ Jede Stufe ist bei ihrem Identitätswert ein No-op; die Modulation verändert di
 persistierte Maske nicht. 9 Unit-Tests sichern Invert/Feather/Blur/Density und
 die Reihenfolge ab.
 
+**Implementierungsstatus GPU-Pixelpass (`GPU-RENDER-MASK-19`, 2026-10-15):** Die
+lokal ausgewertete Maske moduliert auf der GPU die Pixel über
+`crates/lumina-gpu/src/local_mask_pass.rs` (+ `src/local_mask_gpu.rs`): pro
+nicht-neutralem Layer wird das lokale Rezept GPU-gerendert und über die exakte
+`blend_local_layer`-Formel gemischt. Details, Messung und die laut benannte
+P1.2-/GUI-Grenze stehen im SOLL-Abschnitt unten und in
+`feature/architecture/pipeline.md` §GPU.
+
 ## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
-**Task-Eintrag 2026-09-25 (Dokument zuerst):** Die erste sichere lokale
-Anpassungsebene wird als versioniertes, typed `MaskLayer`-Objekt umgesetzt und
-nicht als undokumentierte `adjustment_*`-Extras. Die lokale CPU-Schicht ist
-P0; die bestehenden Parent-Gates für echte Hardware/GPU-Parität
-(`GPU-RENDER-MASK-19`, `GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`)
-bleiben offen.
+**Task-Eintrag 2026-09-25 (Dokument zuerst; GPU-Pass 2026-10-15):** Die erste
+sichere lokale Anpassungsebene wird als versioniertes, typed `MaskLayer`-Objekt
+umgesetzt und nicht als undokumentierte `adjustment_*`-Extras. Die lokale
+CPU-Schicht ist P0. **`GPU-RENDER-MASK-19` ist als GPU-Pixelpass umgesetzt:**
+`crates/lumina-gpu/src/local_mask_pass.rs` + `src/local_mask_gpu.rs` wenden die
+lokal ausgewertete Maske (`R16Uint`-Alpha) pixelgenau auf den Composite an
+(relative WB + P0-Basic im Float-Kernel, delta-freies P0 über die globale
+Ton-Pipeline, Blend exakt nach `blend_local_layer`). Am Adapter gemessen
+(`crates/lumina-gpu/tests/local_mask_parity.rs`, Metal): P0-only und der
+Mehr-Layer-Fall byte-identisch zum CPU-Orakel, die relative-WB-Zelle
+`maxAbsDiff ≤ 1`. Die P1.2-Blöcke (lokale Tonkurve/Farbe/Presence/Detail) sind
+noch **nicht** GPU-verdrahtet: `unsupported_local_mask_stages` nennt sie als
+CPU-Routing-Grund, `render_with_gpu_local_masks` verweigert sie laut — kein
+stiller Fallback. Die Parent-Gates für echte Hardware/GPU-Parität
+(`GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`) und die GUI-Verdrahtung des
+Present-Pfads bleiben offen.
 
 - **Nutzerentscheidungen:** Lokale Layer werden sequenziell auf dem global
   angepassten Ergebnis angewendet. Globales WB bleibt absolute-only und wird

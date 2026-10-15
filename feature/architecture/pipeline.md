@@ -2094,9 +2094,25 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   keine/passende Artefakte fehlen. Der **Masken-Datenpfad**
   (`combine_mask_planes` nach F-041-Schnittprodukt + `upload_mask_plane`,
   Roundtrip byte-exakt getestet) macht evaluierte Ebenen im VRAM-Composite
-  sichtbar; Masken modulieren CPU-seitig noch keine Pixel (dokumentierte
-  F-042-Grenze), daher existiert dafür derzeit keine Pixel-Gleichheit zu
-  verifizieren.
+  sichtbar. **GPU-RENDER-MASK-19 (2026-10-15): der GPU-Masken-Pixelpass
+  existiert.** `crates/lumina-gpu/src/local_mask_pass.rs` +
+  `src/local_mask_gpu.rs` wenden die lokal ausgewertete Maske (Alpha,
+  `R16Uint`) pixelgenau auf den Composite an: pro nicht-neutralem Layer wird
+  das lokale Rezept GPU-gerendert (relative WB + P0-Basic im Float-Kernel; das
+  delta-freie P0-Rezept über die bereits byte-identische globale Ton-Pipeline)
+  und über `blend_local_layer` gemischt — Endpunkte `alpha == 0` unverändert,
+  `alpha == u16::MAX` volle Kopie, sonst die u16-Integer-Formel mit der
+  Rundungskonstante `32767`. Am Adapter gemessen (`tests/local_mask_parity.rs`,
+  Metal): P0-only und der Mehr-Layer-Fall **byte-identisch** zum CPU-Orakel,
+  die relative-WB-Zelle `maxAbsDiff ≤ 1`; die Mutationsprobe (Rundungskonstante
+  `32767u` → `0u`) macht die Byte-identischen Zellen rot. **Grenze (laut, kein
+  stiller Fallback):** die P1.2-Blöcke (lokale Tonkurve/Farbe/Presence/Detail)
+  sind noch nicht GPU-verdrahtet; `unsupported_local_mask_stages` nennt sie als
+  CPU-Routing-Grund und `render_with_gpu_local_masks` verweigert sie laut.
+  **Noch offen (eigener Slice):** die GUI-Verdrahtung — `local_adjustment_route_reason`
+  routet heute weiterhin jeden sichtbaren lokalen Maskenzustand auf die CPU, der
+  Present-Pfad bindet die ausgewerteten Layer also noch nicht an den neuen
+  GPU-Eintritt.
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →
@@ -2487,12 +2503,16 @@ Kopie entfernen — explizite Nutzeraktion, laut persistiert).
 
 ## P0 SOLL — Mask-Local Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
-**Task-Status (Dokument zuerst, 2026-09-25):** Dieses Dokument ist die
-verbindliche SOLL für die erste korrekte lokale Adjustment-Schicht. Die
-Implementierung ist atomar und CPU-first; die bestehenden Parent-Gates für
-echte Hardware-/GPU-Parität (`GPU-RENDER-MASK-19`, `GPU-PARITY-HW-28`,
+**Task-Status (Dokument zuerst, 2026-09-25; GPU-Pass-Stand 2026-10-15):** Dieses
+Dokument ist die verbindliche SOLL für die erste korrekte lokale
+Adjustment-Schicht. Die Implementierung ist atomar und CPU-first; die
+bestehenden Parent-Gates für echte Hardware-/GPU-Parität (`GPU-PARITY-HW-28`,
 `R5-BRUSH-24`, `R5-MASKVIS-25`) bleiben offen und werden durch CPU-P0 nicht
-geschlossen.
+geschlossen. **`GPU-RENDER-MASK-19` ist als Pixelpass umgesetzt** (siehe
+„Implementierungsstatus GPU-Pfad"): der GPU-Pass deckt die relative-WB- und
+P0-Basic-Blöcke byte-parität zum CPU-Orakel ab; die P1.2-Blöcke sind ein
+laut benannter CPU-Routing-Grund, und die GUI-Verdrahtung des Present-Pfads
+ist ein eigener, noch offener Slice.
 
 ### Nutzerentscheidungen und Reihenfolge
 

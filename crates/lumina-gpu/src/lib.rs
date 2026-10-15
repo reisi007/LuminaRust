@@ -144,6 +144,10 @@ use thiserror::Error;
 // pure-CPU (`--no-default-features`) build can validate too.
 mod validate;
 
+#[cfg(feature = "gpu")]
+mod local_mask_gpu;
+pub mod local_mask_pass;
+
 // Shader + tiling modules are scaffolded (empty) so parallel subagents can fill
 // them in without touching this file. They are GPU-specific, hence gated.
 #[cfg(feature = "gpu")]
