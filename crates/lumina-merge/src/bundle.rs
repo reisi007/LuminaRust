@@ -44,15 +44,15 @@ use lumina_sidecar::{
     load_sidecar, now_rfc3339_utc, save_sidecar, sidecar_path_for, ArtifactReference,
     DecodeFingerprint, GeometryFingerprint, MergeAlignment, MergeAlignmentMethod,
     MergeDecodeContext, MergeExposure, MergeMode, MergeOutput, MergeProjection, MergeRecipe,
-    MergeSource, MergeStatus, MergeTransform, SidecarDocument, SourceIdentity,
-    MAX_MERGE_EXPOSURE_TIME_S, MAX_MERGE_F_NUMBER, MAX_MERGE_ISO, MAX_MERGE_SOURCES,
-    MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
+    MergeSource, MergeStatus, MergeTransform, PanoGainCompensation, SidecarDocument,
+    SourceIdentity, MAX_MERGE_EXPOSURE_TIME_S, MAX_MERGE_F_NUMBER, MAX_MERGE_ISO,
+    MAX_MERGE_SOURCES, MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
 };
 
+use crate::pano_gain::{align_and_merge_pano, check_gain_mode};
 use crate::{
-    blend_panorama_transformed, encode_linear_dng, estimate_hdr_translation,
-    estimate_pano_transform, merge_dng_filename, merge_hdr_weighted, validate_dng_file_name,
-    DngError, DngExif, LinearImage, MergeError,
+    encode_linear_dng, estimate_hdr_translation, merge_dng_filename, merge_hdr_weighted,
+    validate_dng_file_name, DngError, DngExif, LinearImage, MergeError,
 };
 
 /// Document-level envelope discriminator of a merge-DNG sidecar
@@ -216,6 +216,10 @@ pub struct MergeRunOptions {
     pub output: Option<PathBuf>,
     pub max_shift_px: i32,
     pub blend_width_px: u32,
+    /// Slice A: panorama gain compensation (`--gain-compensation` /
+    /// `gain_compensation` / GUI parameter; default `Off` = behaviour as
+    /// before). HDR with any other value is a loud `Failed` (panorama only).
+    pub gain_compensation: PanoGainMode,
     /// Re-merge even when an existing bundle is stale or dangling. Without it
     /// staleness is a loud error, never a silent overwrite.
     pub force: bool,
@@ -226,6 +230,7 @@ pub struct MergeRunOptions {
     pub dng_decode_version: String,
 }
 
+pub use crate::pano_gain::PanoGainMode;
 /// Loud merge-run failure with the stable frontend prefixes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeRunError {
@@ -373,6 +378,8 @@ where
             options.max_shift_px
         )));
     }
+    // Slice A: the panorama-only options gate (before any decode or file write).
+    check_gain_mode(mode, options.gain_compensation).map_err(MergeRunError::Failed)?;
     info!("{command}: merging {} source(s)", inputs.len());
 
     let mut sources = Vec::with_capacity(inputs.len());
@@ -401,6 +408,7 @@ where
         &exposures,
         options.max_shift_px,
         options.blend_width_px,
+        options.gain_compensation,
     )?;
     info!(
         "{command}: merged frame {}x{}",
@@ -423,6 +431,7 @@ where
         residual_px: pass.residual_px,
         dng_file_name: &dng_file_name,
         blend_width_px: options.blend_width_px,
+        gain_compensation: pass.gain_compensation.clone(),
     });
     recipe
         .validate()
@@ -494,11 +503,13 @@ fn validate_source_count(count: usize) -> Result<(), MergeRunError> {
 }
 
 /// Result of one alignment + merge pass.
-struct MergePass {
-    merged: LinearImage,
-    transforms: Vec<MergeTransform>,
-    residual_px: f64,
-    residual_warning: bool,
+pub(crate) struct MergePass {
+    pub(crate) merged: LinearImage,
+    pub(crate) transforms: Vec<MergeTransform>,
+    pub(crate) residual_px: f64,
+    pub(crate) residual_warning: bool,
+    /// Slice A: the estimated gain compensation (`None` = off).
+    pub(crate) gain_compensation: Option<PanoGainCompensation>,
 }
 
 /// Alignment (via `lumina-merge`) plus the pixel merge, exactly as the CLI and
@@ -509,6 +520,7 @@ fn align_and_merge(
     exposures: &[MergeExposure],
     max_shift_px: i32,
     blend_width_px: u32,
+    gain_compensation: PanoGainMode,
 ) -> Result<MergePass, MergeRunError> {
     match mode {
         MergeMode::Hdr => {
@@ -534,49 +546,18 @@ fn align_and_merge(
                 transforms,
                 residual_px,
                 residual_warning,
+                gain_compensation: None,
             })
         }
         MergeMode::Panorama => {
-            // Full 3x3 matrix per frame (translation + rotation about the
-            // frame centre, `lumina-merge::pano_matrix`). The blend applies
-            // each frame through its **full inverse matrix**
-            // ([`blend_panorama_transformed`]), never only the integer
-            // offsets (which silently dropped the estimated rotation).
-            let mut matrices = Vec::with_capacity(frames.len());
-            let mut transforms = Vec::new();
-            let mut residual_px: f64 = 0.0;
-            let mut residual_warning = false;
-            matrices.push([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-            for (index, frame) in frames.iter().enumerate().skip(1) {
-                let transform = estimate_pano_transform(&frames[0], frame, max_shift_px)
-                    .map_err(map_merge_error)?;
-                matrices.push(transform.matrix_3x3);
-                transforms.push(MergeTransform {
-                    source_index: index,
-                    matrix_3x3: transform.matrix_3x3,
-                });
-                info!(
-                    "merge-pano: source #{index} aligned with rotation {:.3}deg (matrix {:?})",
-                    transform.rotation_deg, transform.matrix_3x3
-                );
-                residual_px = residual_px.max(transform.residual_px);
-                residual_warning |= transform.status.residual_flag();
-            }
-            let merged = blend_panorama_transformed(frames, &matrices, blend_width_px)
-                .map_err(map_merge_error)?;
-            Ok(MergePass {
-                merged,
-                transforms,
-                residual_px,
-                residual_warning,
-            })
+            align_and_merge_pano(frames, max_shift_px, blend_width_px, gain_compensation)
         }
     }
 }
 
 /// Every merge-domain failure (scope limit or incompatible input set) is
 /// `unsupported`: loud, with the cause, never a silent fallback.
-fn map_merge_error(error: MergeError) -> MergeRunError {
+pub(crate) fn map_merge_error(error: MergeError) -> MergeRunError {
     match error {
         MergeError::Unsupported(message) => MergeRunError::Unsupported(message),
         MergeError::Invalid(message) => {
@@ -728,6 +709,7 @@ struct RecipeInputs<'a> {
     residual_px: f64,
     dng_file_name: &'a str,
     blend_width_px: u32,
+    gain_compensation: Option<PanoGainCompensation>,
 }
 
 /// Assembles the merge recipe (validation happens in [`run_merge`]: unknown
@@ -742,6 +724,7 @@ fn build_recipe(inputs: RecipeInputs<'_>) -> MergeRecipe {
         residual_px,
         dng_file_name,
         blend_width_px,
+        gain_compensation,
     } = inputs;
     let (method, projection) = match mode {
         MergeMode::Hdr => (MergeAlignmentMethod::HdrTranslate, MergeProjection::None),
@@ -769,6 +752,7 @@ fn build_recipe(inputs: RecipeInputs<'_>) -> MergeRecipe {
             residual_px,
             projection,
             blend_width_px,
+            gain_compensation,
         },
         output: MergeOutput {
             file: dng_file_name.to_string(),
@@ -1038,6 +1022,7 @@ mod tests {
             output: None,
             max_shift_px: 16,
             blend_width_px: 64,
+            gain_compensation: PanoGainMode::Off,
             force: false,
             dng_decode_version: "test".into(),
         }

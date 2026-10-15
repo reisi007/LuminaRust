@@ -55,6 +55,31 @@ pub enum McpError {
     /// recipe ranges), so an MCP call reports the same class as the CLI for
     /// the same input instead of a tool-level `InvalidParams`.
     MergeFailed(String),
+    /// A recipe-matrix domain rejection (`lumina matrix` twin): every
+    /// [`lumina_stages::StageError`] the shared runner (`matrix_run::run`)
+    /// returns arrives here with the CLI text verbatim, so an MCP call reports
+    /// the same class and text as the CLI for the same input instead of a
+    /// tool-level `InvalidParams`.
+    ///
+    /// MCP-PARITY-C §13 Pkt 2 (entschieden für diesen Slice): eigene Variante
+    /// (`MatrixError` / `-32014`, erster freier Block-Platz) statt
+    /// `Render`/`-32007`-Recycling — das Merge-Vorbild hat eine eigene Variante
+    /// pro Klasse etabliert, und Matrix-Domäne (Set, Rezepte, Toleranz,
+    /// `require_gpu`-Kombis) ist keine Render-Störung; Recycling würde beide
+    /// Klassen im selben Namen/Code vermischen.
+    ///
+    /// MCP-PARITY-C §13 Pkt 4 (entschieden): `report` liegt flach unter
+    /// `data.report` (kein `data.matrix.report`) — `tool_error_result`
+    /// übernimmt `data()` unverändert in `structuredContent`, und das
+    /// Merge-Vorbild (`{"error","message"}`) ist ebenfalls flach.
+    Matrix {
+        /// The CLI's own rejection text (SOLL §7: der Kanon sind die Texte);
+        /// for a red run the `matrix failed: N of M pair(s) not green` summary.
+        message: String,
+        /// The full CLI report for a red run (`failed > 0`, SOLL §7.1);
+        /// `None` for rejections before any report existed.
+        report: Option<Value>,
+    },
 }
 
 impl McpError {
@@ -83,6 +108,8 @@ impl McpError {
             McpError::MergeStale(_) => -32011,
             McpError::MergeUnsupported(_) => -32012,
             McpError::MergeFailed(_) => -32013,
+            // MCP-PARITY-C matrix slice: first free block slot (§7 table).
+            McpError::Matrix { .. } => -32014,
         }
     }
 
@@ -108,6 +135,7 @@ impl McpError {
             McpError::MergeStale(_) => "MergeStale",
             McpError::MergeUnsupported(_) => "MergeUnsupported",
             McpError::MergeFailed(_) => "MergeFailed",
+            McpError::Matrix { .. } => "MatrixError",
         }
     }
 
@@ -152,6 +180,9 @@ impl McpError {
             McpError::MergeStale(m) => format!("{}: {}", self.name(), m),
             McpError::MergeUnsupported(m) => format!("{}: {}", self.name(), m),
             McpError::MergeFailed(m) => format!("{}: {}", self.name(), m),
+            // The matrix CLI text (`CliError::Message`, SOLL §7) is kept
+            // verbatim inside the message, like the merge prefixes above.
+            McpError::Matrix { message, .. } => format!("{}: {}", self.name(), message),
             McpError::InvalidRequest(m) => format!("{}: {}", self.name(), m),
             McpError::MethodNotFound(m) => format!("{}: {}", self.name(), m),
             McpError::Parse(m) => format!("{}: {}", self.name(), m),
@@ -186,6 +217,16 @@ impl McpError {
             McpError::MergeStale(m) => json!({ "error": self.name(), "message": m }),
             McpError::MergeUnsupported(m) => json!({ "error": self.name(), "message": m }),
             McpError::MergeFailed(m) => json!({ "error": self.name(), "message": m }),
+            // Flat `data.report` for the red run (SOLL §7.1, Invariante 8):
+            // `tool_error_result` carries `data()` into `structuredContent`
+            // unchanged, so the caller keeps the full report on a failure.
+            McpError::Matrix { message, report } => {
+                let mut data = json!({ "error": self.name(), "message": message });
+                if let Some(report) = report {
+                    data["report"] = report.clone();
+                }
+                data
+            }
             _ => json!({ "error": self.name() }),
         }
     }

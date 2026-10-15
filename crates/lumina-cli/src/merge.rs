@@ -67,6 +67,13 @@ pub struct MergeArgs {
     /// as recipe metadata; its pixels use the weighted merge).
     #[arg(long, default_value_t = 64)]
     pub blend_width_px: u32,
+    /// Slice A: panorama brightness matching. `off` (default) keeps the
+    /// pixels untouched; `overlap-median` scales each frame by the median
+    /// overlap-luminance ratio vs. the reference before blending and records
+    /// the gains in the recipe. Panorama only: any other value on `merge-hdr`
+    /// is a loud `merge failed:`.
+    #[arg(long, default_value = "off", value_parser = clap::builder::PossibleValuesParser::new(["off", "overlap-median"]))]
+    pub gain_compensation: String,
     /// Re-merge even when an existing bundle is stale or dangling.
     /// Without it, staleness is a loud error, never a silent overwrite.
     #[arg(long)]
@@ -101,10 +108,13 @@ fn run_merge(mode: MergeMode, args: &MergeArgs) -> Result<(), CliError> {
         f_numbers: &args.f_numbers,
     };
     lumina_stages::merge::check_explicit_list_lengths(&explicit).map_err(CliError::Message)?;
+    let gain_compensation = lumina_merge::bundle::PanoGainMode::parse(&args.gain_compensation)
+        .map_err(CliError::Message)?;
     let options = MergeRunOptions {
         output: args.output.clone(),
         max_shift_px: args.max_shift_px,
         blend_width_px: args.blend_width_px,
+        gain_compensation,
         force: args.force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };

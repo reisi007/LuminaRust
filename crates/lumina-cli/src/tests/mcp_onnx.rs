@@ -23,8 +23,9 @@ fn mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools() {
     // + 4 MCP-PARITY-A stage-editor tools (spot, lens-blur, geometry, upright)
     // + 5 MCP-PARITY-B path-based / artefact tools (collections,
     //   smart-collections, relocate, generative, regenerate)
-    // + 2 MCP-PARITY-C merge tools (merge-hdr, merge-pano twins).
-    assert_eq!(tools.len(), 28, "tool set drifted; update SOLL + tests");
+    // + 2 MCP-PARITY-C merge tools (merge-hdr, merge-pano twins)
+    // + 1 MCP-PARITY-C matrix tool (matrix twin).
+    assert_eq!(tools.len(), 29, "tool set drifted; update SOLL + tests");
     // Every named tool must be VISIBLE, not just counted: a count alone lets a
     // rename slip through as long as the total matches, so the membership is
     // pinned explicitly in both directions.
@@ -97,6 +98,8 @@ const EXPECTED_TOOLS: &[&str] = &[
     // MCP-PARITY-C: the two path-based merge commands.
     "lumina_merge_hdr",
     "lumina_merge_pano",
+    // MCP-PARITY-C: the recipe-matrix twin.
+    "lumina_matrix",
 ];
 
 // ---- F-082-FOLLOWUP: onnx-rt wiring semantics ----

@@ -65,6 +65,10 @@ pub use merge_recipe::{
     MAX_MERGE_ISO, MAX_MERGE_RESIDUAL_PX, MAX_MERGE_SOURCES, MERGE_HASH_HEX_LEN, MERGE_HASH_PREFIX,
     MERGE_OUTPUT_BITS, MERGE_RECIPE_VERSION, MIN_MERGE_SOURCES,
 };
+// Slice A (gain compensation): the recipe-side gain value + validation,
+// extracted from `merge_recipe` (file-size ratchet); re-exported unchanged.
+mod merge_gain;
+pub use merge_gain::{PanoGainCompensation, PanoGainMethod, A_MIN_OVERLAP_STAT_PX, MAX_PANO_GAIN};
 
 // UX-LOOK-HISTORY-18: structured edit-history steps (parameter/from/to) carried
 // additively as typed extras; loud validation (see module docs).

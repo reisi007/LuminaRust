@@ -56,6 +56,10 @@ pub const TOOL_NAMES: &[&str] = &[
     // `merge-hdr` / `merge-pano`).
     "lumina_merge_hdr",
     "lumina_merge_pano",
+    // MCP-PARITY-C: the recipe-matrix twin (shared runner
+    // `lumina_stages::matrix_run`; one matrix run per call, like the CLI twin
+    // `matrix`).
+    "lumina_matrix",
 ];
 
 /// `tools/list` reports exactly [`TOOL_NAMES`] — no more, no less, no twice.

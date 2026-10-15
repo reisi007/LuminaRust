@@ -11,6 +11,7 @@
 //!   `iso == 0`, non-finite or non-positive `f_number`) is `Unsupported`,
 //!   never estimated from pixels.
 
+use crate::pano_gain::invert_matrix_3x3;
 use crate::{LinearImage, MergeError};
 use lumina_core::merge_geom::{
     apply_matrix_3x3, clamp_linear, feather_weight, hdr_hat_weight, is_translation_rotation_light,
@@ -152,10 +153,21 @@ pub fn merge_hdr_weighted(
 /// This path is translation-only (integer offsets, used by the CLI wiring);
 /// rotation must go through [`blend_panorama_transformed`], which applies the
 /// full 3x3 matrix about the frame centre (C3).
+///
+/// Gain variant: [`crate::pano_gain::blend_panorama_with_gains`].
 pub fn blend_panorama(
     frames: &[LinearImage],
     offsets_px: &[(i32, i32)],
     blend_width_px: u32,
+) -> Result<LinearImage, MergeError> {
+    blend_panorama_impl(frames, offsets_px, blend_width_px, None)
+}
+
+pub(crate) fn blend_panorama_impl(
+    frames: &[LinearImage],
+    offsets_px: &[(i32, i32)],
+    blend_width_px: u32,
+    gains: Option<&[f64]>,
 ) -> Result<LinearImage, MergeError> {
     if frames.len() < 2 {
         return Err(MergeError::Invalid(format!(
@@ -253,13 +265,15 @@ pub fn blend_panorama(
                 continue; // Outside every frame: stays 0 (canvas gap).
             }
             for c in 0..3 {
+                // Slice A: the seed is gain-scaled (gain acts before the ramp).
+                let seed_gain = gains.map_or(1.0, |g| g[covering[0]]) as f32;
                 let mut acc = sample_bilinear(
                     &planes[covering[0]][c],
                     w,
                     h,
                     (gx - offsets_px[covering[0]].0) as f64,
                     (gy - offsets_px[covering[0]].1) as f64,
-                );
+                ) * seed_gain;
                 for &idx in &covering[1..] {
                     let ox = offsets_px[idx].0;
                     let overlap_start = ox;
@@ -267,13 +281,14 @@ pub fn blend_panorama(
                     let overlap = (overlap_end - overlap_start).max(0) as u32;
                     let pos = (gx - overlap_start).max(0) as u32;
                     let t = feather_weight(pos, overlap, blend_width_px);
+                    let gain = gains.map_or(1.0, |g| g[idx]) as f32;
                     let sample = sample_bilinear(
                         &planes[idx][c],
                         w,
                         h,
                         (gx - ox) as f64,
                         (gy - offsets_px[idx].1) as f64,
-                    );
+                    ) * gain;
                     acc = acc * (1.0 - t) + sample * t;
                 }
                 out[(y * cw * 3 + x * 3) as usize + c] = clamp_linear(acc);
@@ -302,10 +317,21 @@ pub fn blend_panorama(
 /// stay 0 (canvas gap). Consecutive frames whose transformed boxes do not
 /// overlap in both axes are [`MergeError::Unsupported`] (no silent partial
 /// panorama).
+///
+/// Gain variant: [`crate::pano_gain::blend_panorama_transformed_with_gains`].
 pub fn blend_panorama_transformed(
     frames: &[LinearImage],
     matrices: &[[f64; 9]],
     blend_width_px: u32,
+) -> Result<LinearImage, MergeError> {
+    blend_panorama_transformed_impl(frames, matrices, blend_width_px, None)
+}
+
+pub(crate) fn blend_panorama_transformed_impl(
+    frames: &[LinearImage],
+    matrices: &[[f64; 9]],
+    blend_width_px: u32,
+    gains: Option<&[f64]>,
 ) -> Result<LinearImage, MergeError> {
     if frames.len() < 2 {
         return Err(MergeError::Invalid(format!(
@@ -404,7 +430,7 @@ pub fn blend_panorama_transformed(
             let mut den = [0.0f64; 3];
             let mut radiance = [0.0f64; 3];
             let mut covering = 0u32;
-            for (inverse, frame_planes) in inverses.iter().zip(&planes) {
+            for (i, (inverse, frame_planes)) in inverses.iter().zip(&planes).enumerate() {
                 let (sx, sy) = apply_matrix_3x3(inverse, gx, gy).ok_or_else(|| {
                     MergeError::Invalid("panorama inverse transform is singular".into())
                 })?;
@@ -412,6 +438,8 @@ pub fn blend_panorama_transformed(
                     continue;
                 }
                 covering += 1;
+                // Slice A: gain acts before the feather combination.
+                let gain = gains.map_or(1.0, |g| g[i]);
                 // Feather ramp measured from the frame border (rotation-aware:
                 // it follows the frame's own local axes).
                 let edge = sx.min((w - 1) as f64 - sx).min(sy).min((h - 1) as f64 - sy);
@@ -421,7 +449,7 @@ pub fn blend_panorama_transformed(
                     (edge.max(0.0) / blend_width_px as f64).clamp(0.0, 1.0)
                 };
                 for c in 0..3 {
-                    let sample = sample_bilinear(&frame_planes[c], w, h, sx, sy) as f64;
+                    let sample = sample_bilinear(&frame_planes[c], w, h, sx, sy) as f64 * gain;
                     num[c] += weight * sample;
                     den[c] += weight;
                     radiance[c] += sample;
@@ -442,32 +470,6 @@ pub fn blend_panorama_transformed(
         }
     }
     LinearImage::new(cw, ch, out).map_err(|e| MergeError::Invalid(e.to_string()))
-}
-
-/// Inverse of a row-major 3x3 matrix; `None` when numerically singular.
-fn invert_matrix_3x3(matrix: &[f64; 9]) -> Option<[f64; 9]> {
-    let m = matrix;
-    if m.iter().any(|v| !v.is_finite()) {
-        return None;
-    }
-    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
-        + m[2] * (m[3] * m[7] - m[4] * m[6]);
-    if !det.is_finite() || det.abs() < 1e-12 {
-        return None;
-    }
-    let inv_det = 1.0 / det;
-    // Row-major: [inv00, inv01, inv02, inv10, inv11, inv12, inv20, inv21, inv22].
-    Some([
-        (m[4] * m[8] - m[5] * m[7]) * inv_det,
-        (m[2] * m[7] - m[1] * m[8]) * inv_det,
-        (m[1] * m[5] - m[2] * m[4]) * inv_det,
-        (m[5] * m[6] - m[3] * m[8]) * inv_det,
-        (m[0] * m[8] - m[2] * m[6]) * inv_det,
-        (m[2] * m[3] - m[0] * m[5]) * inv_det,
-        (m[3] * m[7] - m[4] * m[6]) * inv_det,
-        (m[1] * m[6] - m[0] * m[7]) * inv_det,
-        (m[0] * m[4] - m[1] * m[3]) * inv_det,
-    ])
 }
 
 #[cfg(test)]
@@ -678,23 +680,6 @@ mod tests {
              O(pixels) (quadratic plane re-extraction regression?)"
         );
     }
-
-    #[test]
-    fn invert_matrix_3x3_roundtrip() {
-        let m = crate::pano_matrix(7.0, -3.0, 2.0, 12.0, 8.0);
-        let inv = invert_matrix_3x3(&m).expect("rotation+translation is invertible");
-        for &(x, y) in &[(0.0, 0.0), (24.0, 16.0), (3.5, 9.25), (-2.0, 40.0)] {
-            let (rx, ry) = apply_matrix_3x3(&m, x, y).unwrap();
-            let (bx, by) = apply_matrix_3x3(&inv, rx, ry).unwrap();
-            assert!(
-                (bx - x).abs() < 1e-9 && (by - y).abs() < 1e-9,
-                "({x},{y}) -> ({rx},{ry}) -> ({bx},{by})"
-            );
-        }
-        let singular = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
-        assert!(invert_matrix_3x3(&singular).is_none());
-    }
-
     #[test]
     fn pano_blend_transformed_applies_rotation() {
         // C3: the blend must apply the full transform. Frame B is a

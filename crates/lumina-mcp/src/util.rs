@@ -5,6 +5,7 @@ use crate::error::{map_core_error, McpError};
 use crate::session::ImageState;
 use lumina_core::{
     render_frame, BitDepth, ExportOptions, ImageFileFormat, ImageFrame, MaskContext, RenderContext,
+    RenderOutput,
 };
 #[cfg(feature = "gpu")]
 use lumina_gpu::{log_cpu_routing_once, unsupported_gpu_stages_with_context, GpuContext};
@@ -12,6 +13,7 @@ use lumina_raw::RawMetadata;
 use lumina_sidecar::{
     DecodeFingerprint, EditRecipe, GeometryFingerprint, SourceIdentity, SIDECAR_FILE_SUFFIX,
 };
+use lumina_stages::{matrix_port::MatrixRoute, StageError};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -363,27 +365,10 @@ fn render_best_effort(
     camera_white_balance: Option<[f32; 4]>,
     masks: Option<&MaskContext<'_>>,
 ) -> Result<ImageFrame, McpError> {
-    // Consult the shared routing gate BEFORE entering the GPU path. Recipe
-    // stages alone would also be caught inside `render_with_gpu`; checking
-    // here additionally covers the render-context half (an **invalid** As-Shot
-    // WB) and keeps CLI/MCP byte-for-byte on the same decision function.
-    let mut reasons =
-        unsupported_gpu_stages_with_context(recipe, false, camera_white_balance.as_ref());
-    // Invalid adjustment values have no GPU meaning and must CPU-route so the
-    // strict CPU validation rejects them loudly instead of silently rendering
-    // `inf`/`nan`/out-of-range (see the CLI twin in `gpu_routing_reasons`).
-    for (key, value) in &recipe.adjustments {
-        let (minimum, maximum) = match key.as_str() {
-            "exposure" => (-10.0, 10.0),
-            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
-            | "vibrance" | "saturation" => (-1.0, 1.0),
-            "wb_temperature" => (1500.0, 12000.0),
-            _ => continue,
-        };
-        if !value.is_finite() || *value < minimum || *value > maximum {
-            reasons.push(format!("invalid adjustment `{key}`"));
-        }
-    }
+    // The routing gate lives in `gpu_routing_reasons` (shared with the matrix
+    // port): it covers recipe stages plus an invalid As-Shot WB context, so
+    // CLI/MCP stay byte-for-byte on one decision function.
+    let reasons = gpu_routing_reasons(recipe, camera_white_balance.as_ref());
     match ctx {
         Some(ctx) if ctx.is_available() && reasons.is_empty() => {
             // CAMERA-WB-WELLE: carry the decoder As-Shot context into the GPU
@@ -444,6 +429,95 @@ fn render_best_effort(
 thread_local! {
     static GPU_CTX: std::cell::OnceCell<std::mem::ManuallyDrop<Option<GpuContext>>> =
         const { std::cell::OnceCell::new() };
+}
+
+/// MCP-side GPU routing gate, shared by `render_best_effort` and the matrix
+/// port: one decision function for both.
+#[cfg(feature = "gpu")]
+fn gpu_routing_reasons(
+    recipe: &EditRecipe,
+    camera_white_balance: Option<&[f32; 4]>,
+) -> Vec<String> {
+    let mut reasons = unsupported_gpu_stages_with_context(recipe, false, camera_white_balance);
+    // Invalid adjustment values have no GPU meaning and must CPU-route so the
+    // strict CPU validation rejects them loudly instead of silently rendering
+    // `inf`/`nan`/out-of-range (see the CLI twin in `gpu_routing_reasons`).
+    for (key, value) in &recipe.adjustments {
+        let (minimum, maximum) = match key.as_str() {
+            "exposure" => (-10.0, 10.0),
+            "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "wb_tint"
+            | "vibrance" | "saturation" => (-1.0, 1.0),
+            "wb_temperature" => (1500.0, 12000.0),
+            _ => continue,
+        };
+        if !value.is_finite() || *value < minimum || *value > maximum {
+            reasons.push(format!("invalid adjustment `{key}`"));
+        }
+    }
+    reasons
+}
+
+/// MCP-PARITY-C matrix render entry (the [`MatrixRender`] port calls this,
+/// never the CLI's baseline-locked `render_standard_routed`). The route
+/// decision lives here — the single MCP-side place — and render failures keep
+/// the core text (`StageError::Message`, like the CLI port).
+#[cfg(feature = "gpu")]
+pub(crate) fn render_matrix_routed(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    context: &RenderContext<'_>,
+) -> Result<(RenderOutput, MatrixRoute), StageError> {
+    let mut reasons = gpu_routing_reasons(recipe, context.camera_white_balance.as_ref());
+    GPU_CTX.with(|cell| {
+        let ctx = cell.get_or_init(|| std::mem::ManuallyDrop::new(init_render_backend()));
+        let inner: &Option<GpuContext> = ctx;
+        let cpu = |reasons: Vec<String>| {
+            if !reasons.is_empty() {
+                log_cpu_routing_once(&reasons, "mcp matrix");
+            }
+            render_frame(frame, context)
+                .map(|output| (output, MatrixRoute::Cpu { reasons }))
+                .map_err(|error| StageError::Message(error.to_string()))
+        };
+        match inner {
+            Some(ctx) if ctx.is_available() && reasons.is_empty() => {
+                if let Err(error) = ctx.set_camera_white_balance(context.camera_white_balance) {
+                    reasons.push(format!("camera_white_balance ({error})"));
+                    return cpu(reasons);
+                }
+                match ctx.render_with_gpu(frame, recipe) {
+                    Ok(rendered) => {
+                        // Mask-free by construction (`masks: None`, `source_actions: &[]`).
+                        Ok((
+                            RenderOutput {
+                                frame: rendered.to_image_frame(),
+                                effective_source_stage: None,
+                                mask_layers: Vec::new(),
+                                mask_warnings: Vec::new(),
+                            },
+                            MatrixRoute::Gpu,
+                        ))
+                    }
+                    Err(error) => Err(StageError::Message(error.to_string())),
+                }
+            }
+            _ => cpu(reasons),
+        }
+    })
+}
+
+/// CPU-only [`render_matrix_routed`] (no `gpu` feature): the CPU reference
+/// pipeline — the same call the CLI makes — with an empty reason list.
+#[cfg(not(feature = "gpu"))]
+pub(crate) fn render_matrix_routed(
+    frame: &ImageFrame,
+    _recipe: &EditRecipe,
+    context: &RenderContext<'_>,
+) -> Result<(RenderOutput, MatrixRoute), StageError> {
+    let reasons: Vec<String> = Vec::new();
+    render_frame(frame, context)
+        .map(|output| (output, MatrixRoute::Cpu { reasons }))
+        .map_err(|error| StageError::Message(error.to_string()))
 }
 
 /// Lazily creates a [`GpuContext`] and logs the backend selection exactly once

@@ -18,6 +18,7 @@ pub mod inspect;
 pub mod lens_blur;
 pub mod library_common;
 pub mod load;
+pub mod matrix;
 pub mod merge_common;
 pub mod merge_hdr;
 pub mod merge_pano;
@@ -122,6 +123,11 @@ pub fn list_tool_definitions() -> Vec<Value> {
             merge_pano::DESCRIPTION,
             merge_pano::schema(),
         ),
+        // MCP-PARITY-C: the recipe-matrix twin (`lumina matrix`). One shared
+        // runner (`lumina_stages::matrix_run::run`) drives the CLI and this
+        // tool, so the report, the golden/export bytes and the domain rejection
+        // texts are transport-independent.
+        tool_def(matrix::NAME, matrix::DESCRIPTION, matrix::schema()),
     ]
 }
 
@@ -164,6 +170,7 @@ pub fn dispatch_tool(server: &mut Server, name: &str, args: &Value) -> Result<Va
         regenerate::NAME => regenerate::run(server, args),
         merge_hdr::NAME => merge_hdr::run(server, args),
         merge_pano::NAME => merge_pano::run(server, args),
+        matrix::NAME => matrix::run(server, args),
         other => Err(McpError::MethodNotFound(format!("unknown tool: {other}"))),
     }
 }
