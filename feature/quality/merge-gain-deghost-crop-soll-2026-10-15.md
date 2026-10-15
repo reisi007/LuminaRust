@@ -425,6 +425,51 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
   Migrationsplan §D.1 (ein Stale-Fenster für A+B+C zusammen, nicht drei).
 - `MERGE_RECIPE_VERSION` bleibt 1.
 
+- **ABWEICHUNG VOM SOLL-PLAN (Implementierungs-Slice B, entschieden und
+  code-belegt 2026-10-15):** Die obige Planung sagte für B denselben
+  Digest-Key-Effekt voraus wie A.9 („jeder Digest ändert sich, sobald das
+  Feld existiert"). Implementiert ist stattdessen — das in A.9 bereits
+  gewählte Muster — `#[serde(default, skip_serializing_if =
+  "Option::is_none")]` an `MergeAlignment.deghost`
+  (`merge_recipe.rs:142-161`): ein `None`-Feld fällt aus der kanonischen
+  JSON-Serialisierung **vollständig heraus** (der Key existiert nicht, er
+  wird nicht als `null` geschrieben). `merge_digest`
+  (`merge_recipe.rs:266-280`) serialisiert das typisierte `MergeAlignment`
+  über `serde_json::json!` — der Digest-Input eines Laufs ohne `--deghost`
+  ist damit **byte-identisch** zum prä-Slice-Input. Folge: **auch B erzeugt
+  kein Stale-Fenster**; bestehende Bundles bleiben `cached`-gültig,
+  committete Goldens brauchen **keine** Regeneration, die gepinnten
+  Digest-Anker (`merge_parity.rs`, `merge_mcp_parity*.rs`, T21-Pins) laufen
+  unverändert grün (B-T8 prüft `alignment.get("deghost").is_none()` auf
+  beiden Transporten; die Vollsuite `test -p lumina-merge -p
+  lumina-sidecar -p lumina-stages -p lumina-mcp -p lumina-cli` läuft mit den
+  ALTEN Pins grün). Ein **gesetztes** Deghosting bleibt digest-relevant:
+  gleiche Quellen + andere Schwelle = anderer Digest = `stale` (B-T6 prüft
+  0.25 vs. `off`, B-T5 die 0.25/0.5-Sensitivität auf der Rezept-Ebene).
+  §D.1 Punkt 2 (Golden-Regeneration) entfällt für A **und** B.
+- **Zweite dokumentierte Abweichung, gleicher Absatz (B.5-TODO, SOLL
+  §D.4 Punkt 7):** Das MCP-Feld `deghost` ist ein **numerisches** Feld
+  (`number` | `"off"` | `null`, `schema()` mit `anyOf`), nicht die vom SOLL
+  empfohlene String-Form. Begründung: die CLI-Syntax ist bereits
+  `off | <threshold-float>`, und ein Zahl-Feld lässt den Schwellwert
+  unverändert über beide Transporte laufen (`--deghost 0.25` ≡
+  `{"deghost": 0.25}`) — ein zweiter Text-Parser würde genau die Drift
+  erzeugen, die die Paritätsregel §D.2 verbietet. Die Range wird im
+  Handler als `InvalidParams` **und** in `recipe.validate()` als `Invalid`
+  (`merge failed:`) geprüft — keine Clamp, kein Default (B-T5-Matrix).
+- **Dritte dokumentierte Abweichung (Modul-Lage):** Maske und HDR-Pass
+  liegen in `crates/lumina-merge/src/hdr_deghost.rs` (Ratchet-getrieben,
+  nicht wie in der §B-Tabelle genannt in `merge.rs`/`bundle.rs`); die
+  Baseline-Kommentare und die Modul-Doku in `merge.rs`/`hdr_deghost.rs`
+  dokumentieren den Move. Öffentlichkeit unverändert
+  (`merge_hdr_weighted` = `deghost == None`-Spelling,
+  `merge_hdr_weighted_deghost` = Vollpfad).
+- `MERGE_RECIPE_VERSION` bleibt 1 (Feld ist additiv-optional, kein
+  Versionsbruch — `deny_unknown_fields` + `Option` = vorwärts-lesbar; ein
+  unbekannter Feldinhalt scheitert laut).
+- CLI-Default `off` ⇒ ohne Flag keine Verhaltensänderung **und** kein
+  Digest-Drift (B-T8).
+
 ### B.10 Risiken + Rollback
 
 - **Over-Blocking bei Rauschen**: dunkle Brackets rauschen über die Schwelle ⇒

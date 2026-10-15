@@ -170,8 +170,16 @@ fn resolve_exposure(
 /// `exposures` mirrors the CLI `--exposure-times/--isos/--f-numbers` triple;
 /// `None` resolves per-source EXIF (HDR: loud `unsupported` without it).
 /// `gain_compensation` mirrors the CLI `--gain-compensation` spelling
-/// (`off` | `overlap-median`, panorama only); unknown values are a loud
-/// `Err` — the GUI adds no logic of its own.
+/// (`off` | `overlap-median`, panorama only); `deghost` mirrors the CLI
+/// `--deghost` spelling (`off` | a threshold, HDR only). Unknown values are a
+/// loud `Err` — the GUI adds no logic of its own.
+///
+/// The parameter list is one positional mirror per frontend-facing merge
+/// option, so it crosses the clippy arity line the moment an option is added;
+/// the alternative (an options struct) would re-shape every caller for a
+/// list of scalars that is stable across the 1.x frontend surface. Mirrors the
+/// `#[allow]` pattern used for the same reason elsewhere in the repo.
+#[allow(clippy::too_many_arguments)]
 pub fn run_merge_sync(
     mode: MergeMode,
     inputs: &[PathBuf],
@@ -180,6 +188,7 @@ pub fn run_merge_sync(
     max_shift_px: i32,
     blend_width_px: u32,
     gain_compensation: &str,
+    deghost: &str,
 ) -> Result<MergeOutcome, String> {
     if let Some(values) = exposures {
         if values.len() != inputs.len() {
@@ -191,11 +200,13 @@ pub fn run_merge_sync(
         }
     }
     let gain_compensation = lumina_merge::bundle::PanoGainMode::parse(gain_compensation)?;
+    let deghost = lumina_merge::bundle::HdrDeghostMode::parse(deghost)?;
     let options = MergeRunOptions {
         output: None,
         max_shift_px,
         blend_width_px,
         gain_compensation,
+        deghost,
         force,
         dng_decode_version: lumina_raw::libraw_decode_version(),
     };
@@ -256,7 +267,7 @@ impl crate::LuminaApp {
         let (tx, rx) = mpsc::channel();
         let job_inputs = inputs.clone();
         std::thread::spawn(move || {
-            let result = run_merge_sync(mode, &job_inputs, None, false, 16, 64, "off");
+            let result = run_merge_sync(mode, &job_inputs, None, false, 16, 64, "off", "off");
             let _ = tx.send(result);
         });
         self.merge_job = Some(MergeJob { mode, rx });
@@ -363,51 +374,23 @@ impl crate::LuminaApp {
     }
 }
 
+/// Slice B: the merge fixtures of the headless suite, extracted from the
+/// `tests` module below (file-size ratchet). A `#[path]` module at the top
+/// level of this file, so `check_test_orphans.sh` still sees it in the
+/// crate's dep-info.
+#[cfg(test)]
+#[path = "tests/merge_gui_tests.rs"]
+mod merge_gui_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LuminaApp;
-    use lumina_core::{ImageFileFormat, ImageFrame};
+    use lumina_core::ImageFrame;
     use lumina_merge::bundle::{classify_merge_document, stored_merge_recipe, MergeDocumentKind};
     use lumina_sidecar::{
         load_sidecar, sidecar_path_for, ArtifactReference, MergeAlignmentMethod, MergeProjection,
     };
-
-    fn new_app() -> LuminaApp {
-        LuminaApp::new(crate::egui::Context::default())
-    }
-
-    /// Synthetic 64×48 RGB frame encoded as PNG (brightness `level`). The
-    /// gradient gives the alignment a non-flat signal.
-    fn write_png(path: &Path, level: u8) {
-        let pixels: Vec<u8> = (0..64 * 48)
-            .flat_map(|i| {
-                let x = (i % 64) as u8;
-                let value = level.saturating_add(x % 16);
-                [value, value, value, 255]
-            })
-            .collect();
-        let png = ImageFrame::new(64, 48, pixels)
-            .unwrap()
-            .encode(ImageFileFormat::Png)
-            .unwrap();
-        std::fs::write(path, png).unwrap();
-    }
-
-    fn exposure(t: f64) -> Vec<MergeExposure> {
-        vec![
-            MergeExposure {
-                exposure_time_s: t,
-                iso: 100,
-                f_number: 8.0,
-            },
-            MergeExposure {
-                exposure_time_s: t * 4.0,
-                iso: 100,
-                f_number: 8.0,
-            },
-        ]
-    }
+    use merge_gui_tests::{exposure, new_app, write_png};
 
     /// Golden gate (HDR): hash anchor + sidecar envelope + deterministic
     /// re-run + LibRaw re-import. The recipe decode context is the shared
@@ -429,6 +412,7 @@ mod tests {
             false,
             16,
             64,
+            "off",
             "off",
         )
         .unwrap();
@@ -480,6 +464,7 @@ mod tests {
             16,
             64,
             "off",
+            "off",
         )
         .unwrap();
         let again_bytes = std::fs::read(&again.dng_path).unwrap();
@@ -500,6 +485,7 @@ mod tests {
             16,
             64,
             "off",
+            "off",
         )
         .unwrap();
         assert!(cached.cached);
@@ -516,8 +502,17 @@ mod tests {
         write_png(&b, 90);
         let inputs = vec![a.clone(), b.clone()];
         // Identical frames overlap completely: a valid panorama with no shift.
-        let outcome =
-            run_merge_sync(MergeMode::Panorama, &inputs, None, false, 16, 64, "off").unwrap();
+        let outcome = run_merge_sync(
+            MergeMode::Panorama,
+            &inputs,
+            None,
+            false,
+            16,
+            64,
+            "off",
+            "off",
+        )
+        .unwrap();
         assert!(outcome.dng_path.is_file());
         let document = load_sidecar(&outcome.sidecar_path).unwrap();
         let recipe = stored_merge_recipe(&document).unwrap();
@@ -552,6 +547,7 @@ mod tests {
             16,
             64,
             "off",
+            "off",
         )
         .unwrap_err();
         assert!(error.contains("unsupported"), "{error}");
@@ -579,6 +575,7 @@ mod tests {
             16,
             64,
             "off",
+            "off",
         )
         .unwrap();
         let sidecar = sidecar_path_for(&dir.path().join("conflict_a-HDR.dng"));
@@ -593,6 +590,7 @@ mod tests {
             false,
             16,
             64,
+            "off",
             "off",
         )
         .unwrap_err();
@@ -628,6 +626,7 @@ mod tests {
             false,
             16,
             64,
+            "off",
             "off",
         )
         .unwrap();
@@ -751,6 +750,7 @@ mod tests {
             false,
             16,
             64,
+            "off",
             "off",
         )
         .unwrap_err();

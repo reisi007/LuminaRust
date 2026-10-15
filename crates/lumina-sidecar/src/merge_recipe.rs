@@ -17,7 +17,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::merge_deghost::HdrDeghost;
 use crate::merge_gain::PanoGainCompensation;
+use crate::merge_recipe_alignment::{
+    validate_merge_alignment, validate_merge_transforms, validate_mode_alignment,
+};
 use crate::{validate_metadata_timestamp, SidecarError};
 
 /// Current merge-recipe schema version. Foreign versions are rejected
@@ -148,6 +152,13 @@ pub struct MergeAlignment {
     /// (same sources + different gains = different digest = `stale`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gain_compensation: Option<PanoGainCompensation>,
+    /// Slice B: absent (`None`) = behaviour as before (plain hat-weight
+    /// mean, no ghost test). Skipped on serialization when absent — same
+    /// mechanism as `gain_compensation` — so a run without `--deghost` adds
+    /// no key and no digest drift. Present = part of the digest: 0.25 and
+    /// 0.5 produce different pixels from the same sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deghost: Option<HdrDeghost>,
 }
 
 /// Merge output descriptor. 1.5 scope: linear 16-bit non-mosaic DNG only;
@@ -360,97 +371,10 @@ fn validate_merge_exposure(exposure: &MergeExposure) -> Result<(), SidecarError>
     Ok(())
 }
 
-fn validate_merge_alignment(
-    alignment: &MergeAlignment,
-    source_count: usize,
-    mode: MergeMode,
-) -> Result<(), SidecarError> {
-    if !alignment.residual_px.is_finite()
-        || alignment.residual_px < 0.0
-        || alignment.residual_px > MAX_MERGE_RESIDUAL_PX
-    {
-        return invalid(format!(
-            "merge residual_px must be finite within 0..={MAX_MERGE_RESIDUAL_PX}, got {}",
-            alignment.residual_px
-        ));
-    }
-    if alignment.blend_width_px > MAX_MERGE_BLEND_WIDTH_PX {
-        return invalid(format!(
-            "merge blend_width_px must be within 0..={MAX_MERGE_BLEND_WIDTH_PX}, got {}",
-            alignment.blend_width_px
-        ));
-    }
-    for (index, transform) in alignment.transforms.iter().enumerate() {
-        if transform.matrix_3x3.iter().any(|v| !v.is_finite()) {
-            return invalid(format!(
-                "merge transform #{index} matrix_3x3 must be finite"
-            ));
-        }
-    }
-    crate::merge_gain::validate_pano_gain_compensation(
-        alignment.gain_compensation.as_ref(),
-        source_count,
-        mode,
-    )?;
-    Ok(())
-}
-
-/// 1.5 scope pairing: HDR is translation-only without projection, panorama
-/// is the chained cylindrical homography. Anything else is rejected loudly
-/// (no silent reinterpretation of a foreign pipeline).
-fn validate_mode_alignment(
-    mode: MergeMode,
-    alignment: &MergeAlignment,
-) -> Result<(), SidecarError> {
-    let (expected_method, expected_projection) = match mode {
-        MergeMode::Hdr => (MergeAlignmentMethod::HdrTranslate, MergeProjection::None),
-        MergeMode::Panorama => (
-            MergeAlignmentMethod::PanoCylindricalHomography,
-            MergeProjection::Cylindrical,
-        ),
-    };
-    if alignment.method != expected_method {
-        return invalid(format!(
-            "merge mode `{mode:?}` requires method `{expected_method:?}`, got `{:?}`",
-            alignment.method
-        ));
-    }
-    if alignment.projection != expected_projection {
-        return invalid(format!(
-            "merge mode `{mode:?}` requires projection `{expected_projection:?}`, got `{:?}`",
-            alignment.projection
-        ));
-    }
-    Ok(())
-}
-
-fn validate_merge_transforms(
-    transforms: &[MergeTransform],
-    source_count: usize,
-) -> Result<(), SidecarError> {
-    if transforms.len() > source_count {
-        return invalid(format!(
-            "merge has more transforms ({}) than sources ({source_count})",
-            transforms.len()
-        ));
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for (index, transform) in transforms.iter().enumerate() {
-        if transform.source_index >= source_count {
-            return invalid(format!(
-                "merge transform #{index} references source {} of {source_count}",
-                transform.source_index
-            ));
-        }
-        if !seen.insert(transform.source_index) {
-            return invalid(format!(
-                "duplicate merge transform for source {}",
-                transform.source_index
-            ));
-        }
-    }
-    Ok(())
-}
+// The three alignment validators (ranges + the mode pairing + the transform
+// list, each with the Slice-A gain and the Slice-B deghosting) live in
+// `merge_recipe_alignment` — extracted in the Slice-B move that added the
+// `deghost` field (file-size ratchet).
 
 fn validate_merge_output(output: &MergeOutput) -> Result<(), SidecarError> {
     validate_merge_relative_path("output file", &output.file)?;
