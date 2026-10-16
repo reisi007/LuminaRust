@@ -397,18 +397,13 @@ pub(crate) use generative_canvas::{
     GenerativeRoleStatus,
 };
 
-/// Read a color label (`0..=4`, `0` = none) from a virtual copy's `extras`
-/// map. Missing, non-numeric or out-of-range values read as `0` (none): the
-/// field is a forward-compatible cosmetic annotation, while the strict
-/// `0..=4` gate lives on the [`LuminaApp::set_color_label`] write path.
-/// Shared by the Library scan and the rating section so both read one path.
-pub fn color_label_of(extras: &BTreeMap<String, serde_json::Value>) -> u8 {
-    extras
-        .get("color_label")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|&n| n <= 4)
-        .unwrap_or(0) as u8
-}
+// GUI-LIB-SPLIT-65 Slice 11: the Library panel value/decision helpers
+// (`color_label_of`, `CompareMode`/`compare_mode_for_key`,
+// `library_move_index`, `move_file_cross_volume`) are extracted (file-size
+// ratchet); the Develop-section index block right below stays in `lib.rs`.
+mod library_helpers;
+pub(crate) use library_helpers::move_file_cross_volume;
+pub use library_helpers::{color_label_of, compare_mode_for_key, library_move_index, CompareMode};
 
 /// Number of F-100 Develop sections in [`LuminaApp::DEVELOP_SECTIONS`] order
 /// (Basic, Tone Curve, Color, Detail, Effects, Optics, Geometry, Masking):
@@ -450,57 +445,6 @@ pub fn section_name(index: usize) -> Option<&'static str> {
         SECTION_GEOMETRY => Some(Str::Geometry.t()),
         SECTION_MASKING => Some(Str::Masking.t()),
         _ => None,
-    }
-}
-
-/// Library compare/survey view (Welle 3, LR-20 light): `C` shows the
-/// full-frame Before image through the existing [`LuminaApp::before_after`]
-/// path (compare proxy), `N` jumps to the Library grid (survey proxy over
-/// the file-browser entries). Pure function, unit-tested without an
-/// [`egui::Context`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareMode {
-    Compare,
-    Survey,
-}
-
-pub fn compare_mode_for_key(key: egui::Key) -> Option<CompareMode> {
-    match key {
-        egui::Key::C => Some(CompareMode::Compare),
-        egui::Key::N => Some(CompareMode::Survey),
-        _ => None,
-    }
-}
-
-/// Clamped Library raster navigation (G-09): move `current` by `delta`
-/// entries over `count` entries. Clamps at both ends (Lightroom-conform, no
-/// wrap); empty listings and out-of-range starts clamp to `0`. Pure
-/// function, unit-tested headless.
-pub fn library_move_index(current: usize, delta: isize, count: usize) -> usize {
-    if count == 0 {
-        return 0;
-    }
-    let current = current.min(count - 1);
-    current.saturating_add_signed(delta).min(count - 1)
-}
-
-/// Move one file to `target`, tolerating a cross-filesystem move: `rename`
-/// fails with `CrossesDevices` (EXDEV) when source and target live on
-/// different volumes, so fall back to copy + remove. Loud on error; a failed
-/// source removal cleans up the copied target again (the source still exists,
-/// so no data is lost).
-fn move_file_cross_volume(source: &Path, target: &Path) -> std::io::Result<()> {
-    match std::fs::rename(source, target) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-            std::fs::copy(source, target)?;
-            if let Err(remove_error) = std::fs::remove_file(source) {
-                let _ = std::fs::remove_file(target);
-                return Err(remove_error);
-            }
-            Ok(())
-        }
-        Err(error) => Err(error),
     }
 }
 
