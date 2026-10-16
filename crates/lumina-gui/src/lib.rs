@@ -11500,8 +11500,8 @@ mod tests {
     }
 
     /// Test-Eintrag mit allen erweiterten Filterdaten (Keywords,
-    /// Sammlungen, EXIF). Felder sind privat, aber die Tests leben im
-    /// selben Modul.
+    /// Sammlungen, EXIF). Die Felder sind `pub(crate)`; der Test baut den
+    /// Eintrag per Feldname (GUI-LIB-SPLIT-65 Slice 9).
     fn filter_entry() -> FileBrowserEntry {
         FileBrowserEntry {
             path: PathBuf::from("/tmp/a.png"),
