@@ -24,6 +24,11 @@ pub use overlay_modes::{
 // highlight clipping fractions, normalized histogram L1 distance).
 mod histogram_clip;
 pub use histogram_clip::{clip_fractions, normalized_histogram_l1};
+// GUI-LIB-SPLIT-65 Slice 9: the Library file-row data record
+// (`FileBrowserEntry`) and its `thumbnail_key` helper.
+mod file_browser_entry;
+pub(crate) use file_browser_entry::thumbnail_key;
+pub use file_browser_entry::FileBrowserEntry;
 // GUI-LIB-SPLIT-65 Slice 5: Library folder/badge path helpers.
 mod library_paths;
 pub use library_paths::LIBRARY_BADGE_BG;
@@ -1523,79 +1528,6 @@ pub fn attach_wgpu_render_state(
             log::warn!("GPU As-Shot white-balance bind rejected at attach: {error}");
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct FileBrowserEntry {
-    path: PathBuf,
-    name: String,
-    /// Stable thumbnail key: canonicalized absolute path. Identical filenames
-    /// in different folders must never share a thumbnail cell
-    /// (REVIEW-GUI-THUMB-1).
-    thumb_key: String,
-    has_sidecar: bool,
-    source_status: SourceStatus,
-    conflict: bool,
-    virtual_copies: usize,
-    missing_models: usize,
-    /// Star rating (`0..=5`, `0` = unrated) of the default virtual copy
-    /// (LR-01). `0` when no sidecar exists or it carries no copies.
-    rating: u8,
-    /// Pick flag of the default virtual copy (LR-01); `Unflagged` without a
-    /// sidecar.
-    flag: lumina_sidecar::Flag,
-    /// Color label (`0..=4`, `0` = none) of the default virtual copy (Welle 2),
-    /// read from the copy's `extras["color_label"]`; `0` without a sidecar.
-    color_label: u8,
-    /// Source-level keywords of the sidecar (`SidecarDocument.keywords`,
-    /// G-15 META-MVP Slice 3); empty without a sidecar. Powers the
-    /// `keyword:` Library filter and the smart-collection evaluation.
-    keywords: Vec<String>,
-    /// Source-level static collection memberships
-    /// (`SidecarDocument.collections`, G-15 META-MVP Slice 3); empty without
-    /// a sidecar. Powers the `collection:` filter and the collection picker.
-    collections: Vec<CollectionMembership>,
-    /// `camera_make + camera_model` from `lumina_raw::read_metadata`
-    /// (best effort; `None` when unreadable). Powers the `camera:` filter.
-    camera: Option<String>,
-    /// ISO from `lumina_raw::read_metadata` (best effort). Powers `iso:`.
-    iso: Option<f32>,
-    /// Focal length in mm from `lumina_raw::read_metadata` (best effort).
-    /// Powers `focal:`/`focal_length:`.
-    focal_length: Option<f32>,
-    /// LRPAR-G09-SORT-09: EXIF capture timestamp (Unix seconds, best effort)
-    /// from `lumina_raw::read_metadata`. Powers the `CaptureDate` sort; `None`
-    /// when unreadable/absent (sorts after every known timestamp).
-    capture_timestamp: Option<i64>,
-    /// Relative subfolder of the entry vs. the listed directory (`""` for
-    /// top-level files). Powers the Library grid path badge (F-100): the
-    /// recursive aggregation shows subfolder images with their relative
-    /// folder as badge; flat listings (tree click) always carry `""`.
-    folder: String,
-    /// LRPAR-G09-CULL-25 (GUI slice): scan-level assisted-culling badge
-    /// (`None`/`keep`/`review`/`reject`/`stale`) from the sidecar's
-    /// source-level `culling` section. Display only; the authoritative read
-    /// state is computed on demand by `LuminaApp::culling_read_state`.
-    cull_badge: cull_gui::CullBadge,
-    /// LRPAR-G12-FACE-20 (S5): person names of the sidecar's source-level face
-    /// analysis (empty without one). Powers the `person:` Library filter.
-    /// No geotag/GPS data is ever read or stored here.
-    face_persons: Vec<String>,
-    /// LRPAR-G15-STACK-15: source-level image-stack membership
-    /// (`SidecarDocument.stack`); `None` without a sidecar or outside a stack.
-    /// Drives the Grid/Filmstrip collapse and the stack-as-unit selection.
-    stack: Option<lumina_sidecar::StackMembership>,
-}
-
-/// REVIEW-GUI-THUMB-1: stable thumbnail cache key. The canonicalized absolute
-/// path guarantees that the same filename in two folders maps to different
-/// entries; a canonicalize failure (e.g. a missing file) falls back to the
-/// lossy path string, which is still folder-scoped.
-fn thumbnail_key(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// LRPAR-G15-IPTC-S8: open prompt dialog for a dynamic meta preset — one
