@@ -793,3 +793,7 @@ hinweg").
   (F-074-N5) ist nun kalibriert: 30 deterministische `core/*`/`batch/*`-
   Benchmarks tragen `gate: true`, die `decode/raw__*`-Benchmarks bleiben
   `gate: false` (siehe F-074-N5 oben).
+- **GPU-Nichtdeterminismus:** Der Auto-Tone-GPU-Pfad war auf einer headless
+  Maschine ohne Adapter nicht reproduzierbar; die CPU-Route ist grün. Die
+  Grenze und der Beweisplan (Adapter-Nachweis) stehen in
+  [`gpu-nondeterminism-2026-10-16.md`](gpu-nondeterminism-2026-10-16.md).
