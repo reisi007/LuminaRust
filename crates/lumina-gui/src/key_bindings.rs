@@ -15,19 +15,12 @@
 //! pure relocation — every item is re-exported from the crate root, so no call
 //! site in any crate changed, and not one doc comment was reworded.
 //!
-//! Three neighbours deliberately stay in `lib.rs`:
-//!
-//! * `color_label_of`, `compare_mode_for_key` and `mask_tool_for_key` document
-//!   themselves through the `LuminaApp` write path they feed
-//!   ([`crate::LuminaApp`] links in their rustdoc). A submodule can only reach
-//!   that name through an import that the compiler reports as unused, so moving
-//!   them would have meant rewording those links; this extraction changes no
-//!   doc text.
-//! * `stars_for_rating` and `flag_label` are pure *display* helpers with no
-//!   binding behind them, and `auto_endpoint_for_slider` /
-//!   `masking_preview_for_slider` dispatch on a recipe key under a mouse
-//!   gesture rather than on the keyboard. None of them is a shortcut, so
-//!   folding them in would group a second concern instead of extracting one.
+//! The pure, non-shortcut key/badge helpers of the same file edge
+//! (`mask_tool_for_key`, `stars_for_rating`, `flag_label`,
+//! `auto_endpoint_for_slider`, `masking_preview_for_slider` and the
+//! [`AutoEndpoint`] value type) live in `pure_helpers` (GUI-LIB-SPLIT-65
+//! Slice 13): none of them is a keyboard shortcut, so folding them in would
+//! group a second concern instead of extracting one.
 
 use crate::i18n::Str;
 use eframe::egui;
