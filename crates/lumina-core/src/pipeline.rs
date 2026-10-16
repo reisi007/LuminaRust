@@ -90,12 +90,12 @@ impl Default for Pipeline {
                     PipelineFormat::Rgba8Srgb,
                 ),
                 (
-                    PipelineStage::Masks,
+                    PipelineStage::Crop,
                     PipelineFormat::Rgba8Srgb,
                     PipelineFormat::Rgba8Srgb,
                 ),
                 (
-                    PipelineStage::Crop,
+                    PipelineStage::Masks,
                     PipelineFormat::Rgba8Srgb,
                     PipelineFormat::Rgba8Srgb,
                 ),
@@ -442,6 +442,8 @@ mod tests {
             .recipe_hash
         );
     }
+    #[path = "drift_order_tests.rs"]
+    mod drift_order_tests;
     #[path = "local_state_tests.rs"]
     mod local_state_tests;
     #[test]
@@ -459,13 +461,14 @@ mod tests {
                 PipelineStage::SpotHeal,
                 PipelineStage::AutoAnalysis,
                 PipelineStage::Adjustments,
-                PipelineStage::Masks,
                 PipelineStage::Crop,
+                PipelineStage::Masks,
                 PipelineStage::Output,
             ]
         );
         assert!(pipeline.validate());
     }
+
     #[test]
     fn downstream_recipe_options_do_not_change_decode_or_mask_digest() {
         let mut first_recipe = EditRecipe::default();

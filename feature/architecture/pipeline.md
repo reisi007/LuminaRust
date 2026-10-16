@@ -39,7 +39,7 @@ die Identität (As-Shot wird erst möglich, wenn `RawMetadata.camera_white_balan
 über eine Core-API übergeben wird). Für Nicht-RAW gilt ebenfalls Identität.
 
 Die aktive MVP-Pipeline bleibt `Decode → SourceActions → AutoAnalysis →
-Adjustments → Masks → Crop → Output` und arbeitet sRGB-codiertem RGBA8. Eine
+Adjustments → Crop → Masks → Output` und arbeitet sRGB-codiertem RGBA8. Eine
 echte lineare Zwischenrepräsentation ist daher noch nicht vorhanden. Sobald ein
 linearer Pfad aktiviert wird, muss Weißabgleich dort vor Tone-Mapping und vor
 sRGB-Encoding erfolgen; im aktuellen Raster-MVP werden die bestehenden Regler
@@ -99,7 +99,14 @@ Versionen erzeugt. GUI und CLI verwenden dieselbe Renderpipeline.
 Die implementierte `Pipeline::default()` definiert die verbindliche
 Stufenreihenfolge. Jede Stufe besitzt ein `(Stufe, Eingabeformat,
 Ausgabeformat)`-Tupel; `Pipeline::validate()` stellt sicher, dass das
-Ausgabeformat einer Stufe dem Eingabeformat der folgenden entspricht:
+Ausgabeformat einer Stufe dem Eingabeformat der folgenden entspricht.
+**Der Code ist die Quelle der Wahrheit:** `Pipeline::default()` in
+`crates/lumina-core/src/pipeline.rs` ist normativ; dieses Dokument spiegelt
+ihn und wird bei jeder Änderung des Codes nachgezogen. Ein quelltextbasierter
+Drift-Test (`render_stage_order_matches_nominal_pipeline_order` in
+`pipeline.rs`) sichert zusätzlich ab, dass die tatsächliche Stufenfolge in
+`crates/lumina-core/src/render.rs` nicht von dieser nominalen Reihenfolge
+abweicht.
 
 ```text
 Decode          EncodedSource  -> Rgba8Srgb
@@ -107,8 +114,8 @@ SourceActions   Rgba8Srgb      -> Rgba8Srgb
 SpotHeal        Rgba8Srgb      -> Rgba8Srgb
 AutoAnalysis    Rgba8Srgb      -> Rgba8Srgb
 Adjustments     Rgba8Srgb      -> Rgba8Srgb
-Masks           Rgba8Srgb      -> Rgba8Srgb
 Crop            Rgba8Srgb      -> Rgba8Srgb
+Masks           Rgba8Srgb      -> Rgba8Srgb
 Output          Rgba8Srgb      -> Output
 ```
 
@@ -456,7 +463,7 @@ höhere Genauigkeit verwenden und werden erst am Ende der jeweiligen Operation
 auf `0..=1` begrenzt.
 
 Die top-level-Reihenfolge bleibt `Decode → SourceActions → AutoAnalysis →
-Adjustments → Masks → Crop → Output`. Die in diesem Abschnitt genannten
+Adjustments → Crop → Masks → Output`. Die in diesem Abschnitt genannten
 Unterstufen innerhalb von `Adjustments` beziehungsweise `Crop` sind verbindlich
 und ändern dieses Format-Tupel nicht.
 
@@ -487,7 +494,7 @@ verbindliche Definition der Domäne samt Produktionspfad steht in § Auto-Tone
 > in `crates/lumina-cli/src/auto_tone_cli.rs`) und `regenerate --module
 > auto-tone` rufen **diese eine** Funktion; eine zweite Domänenbildung ist nicht
 > vorgesehen. Die Reihenfolge der Stufenliste `Decode → SourceActions →
-> AutoAnalysis → Adjustments → Masks → Crop → Output` beschreibt den
+> AutoAnalysis → Adjustments → Crop → Masks → Output` beschreibt den
 > **Rechenpfad**; `AutoAnalysis` ist der **Analyse-Input** und liegt deshalb
 > nicht als Renderstufe zwischen `Adjustments` und `Crop`. Die Anmerkung im
 > Abschnitt „Farbmanagement/Regler" oben und dieser Abschnitt sind dieselbe
