@@ -291,6 +291,13 @@ pub(crate) use fs_helpers::{
     FOLDER_SCAN_DEPTH,
 };
 
+// GUI-LIB-SPLIT-65 Slice 15: Werttypen der Hintergrund-Decode-Pipeline.
+mod decode_pipeline;
+pub(crate) use decode_pipeline::{
+    lens_identity_from_metadata, DecodeRequestResult, DecodeResult, DecodedFrame,
+    DirectoryOpenPolicy, LensIdentity, PendingDirectoryOpen,
+};
+
 // LRPAR-MATRIX-RECIPE (Slice 2): the headless GUI matrix runner. Test-only: it drives
 // `LuminaApp` on an egui context against the committed goldens and needs no window/GPU renderer.
 #[cfg(test)]
@@ -1521,86 +1528,6 @@ impl FileBrowserEntry {
         entry_badge_text(self)
     }
 }
-
-/// PERF-GUI-7: result of a background RAW/raster decode. Carries the decoded
-/// frame plus the metadata needed to apply it on the main thread (and to load
-/// the matching sidecar). `Err` carries the (path, message) so the GUI can show
-/// the decode failure without blocking the worker thread.
-struct DecodedFrame {
-    path: String,
-    name: String,
-    bytes: Vec<u8>,
-    frame: ImageFrame,
-    orientation: u8,
-    camera_white_balance: Option<[f32; 4]>,
-    source_is_raw: bool,
-    /// EXIF lens identity for the Lensfun auto-profile resolution (G-06):
-    /// populated for RAW sources from the decoder metadata, `None` for
-    /// raster sources (no EXIF) and when the metadata is unusable. Best
-    /// effort — never a decode failure.
-    lens_identity: Option<LensIdentity>,
-}
-
-/// EXIF lens identity snapshot driving the Lensfun auto-profile resolution
-/// (G-06, LRPAR-G06-GEO). Plain data (no lensfun types) so the decode path
-/// stays feature-independent; the corrector is built from it at render
-/// time behind the `lensfun` feature.
-#[derive(Debug, Clone, PartialEq)]
-struct LensIdentity {
-    camera_make: Option<String>,
-    camera_model: Option<String>,
-    lens: Option<String>,
-    focal_length: Option<f32>,
-    aperture: Option<f32>,
-}
-
-/// Snapshot helper: `None` when the metadata carries no lens-relevant EXIF
-/// at all (raster-equivalent); otherwise the identity, even partial (the
-/// corrector build enforces the required completeness strictly).
-fn lens_identity_from_metadata(metadata: &lumina_raw::RawMetadata) -> Option<LensIdentity> {
-    let identity = LensIdentity {
-        camera_make: metadata.camera_make.clone(),
-        camera_model: metadata.camera_model.clone(),
-        lens: metadata.lens.clone(),
-        focal_length: metadata.focal_length,
-        aperture: metadata.aperture,
-    };
-    if identity.camera_make.is_none()
-        && identity.camera_model.is_none()
-        && identity.lens.is_none()
-        && identity.focal_length.is_none()
-        && identity.aperture.is_none()
-    {
-        None
-    } else {
-        Some(identity)
-    }
-}
-
-/// Whether a background decode is allowed to adopt its target directory.
-///
-/// `None` is the ordinary lineage: `open_file` has already prepared the
-/// directory, while direct `begin_load_path` callers (the Develop path field,
-/// warmup, and tests) intentionally do not navigate. `Deferred` is reserved
-/// for native path drops, which must not mutate library navigation until their
-/// decode succeeds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DirectoryOpenPolicy {
-    None,
-    Deferred,
-}
-
-/// A decoded cross-directory target whose neighbor window must wait for the
-/// directory scan that will provide its authoritative listing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PendingDirectoryOpen {
-    directory: String,
-    active_path: String,
-    scan_generation: Option<u64>,
-}
-
-type DecodeResult = Result<DecodedFrame, (String, String)>;
-type DecodeRequestResult = (u64, DirectoryOpenPolicy, DecodeResult);
 
 /// Draw method of one Develop section: `fn(&mut LuminaApp, &mut egui::Ui)`.
 /// Factored out so [`LuminaApp::DEVELOP_SECTIONS`] stays readable.
