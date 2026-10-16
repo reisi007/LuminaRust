@@ -55,6 +55,7 @@ Zurückgezogene Ansätze. Sie sind **keine** offenen Entscheidungen und dürfen
 | Fassung von **Regel 4** mit dem Schlusssatz „der Zustand ist nicht mehr ausdrückbar" | Durch Messung widerlegt: eine Regel, die einen **Weg** abschließt statt einer **Klasse**, ist eine Absichtserklärung (`DoD.md` §9). Zurückgenommen **an der Fundstelle**, nicht fortgeschrieben | Regel 4 als **Zusage** zurückgenommen, siehe oben |
 | `check_plan_format.sh`-Ausnahme für abgehakte Entscheidungen | Der Eigentümer hat am 2026-09-28 bestätigt: **verifiziert abgeschlossene Sachen werden aus `Agents.todo.md` entfernt** — auch Entscheidungen. Eine Ausnahme hätte das Gate genau dort geschwächt, wo es am ehesten sichtbar bleiben soll | Kein Checkbox-Syntax; der `Stand`-Wert `umgesetzt`/`erledigt` ist im Skript ein Formverstoß |
 | Defekt-Claim „ein Regler-Drag verliert den entprellten Sidecar-Save" (`PLAN-ORPHAN-1`, als Waise aus dem Plan entfernt, 2026-10-02) | Widerlegt, und **mit zwei falschen Quellenangaben** überliefert. (1) `full_render_debounce_remaining` steht in `crates/lumina-gui/src/render_tick.rs:35–41` — **nicht** `29–35`, das ist der Doc-Kommentar (6 Zeilen daneben). (2) `slider.rs:203–206` **bewaffnet `pending_full_render` überhaupt nicht**: `grep -n "pending_full_render" crates/lumina-gui/src/slider.rs` liefert **null Treffer**; der Bewaffner sitzt in `dirty.rs:51` (`mark_dirty`), erreicht aus einem Slider-Drag über `set_adjustment` → `mark_recipe_dirty` → `mark_dirty`. (3) Die Messbehauptung „am 4-Frame-Exposure-Drag gemessen" hat **keinen** Test im Baum, der `dragged()` fährt. Die Wirkungsrichtung der Aussage stimmt, die angegebene Datei nicht | Der Defekt existiert nicht und ist **nicht** zu fixen; `pending_full_render = true` steht an vier Stellen (`dirty.rs:51`, `lib.rs:7981`, `render_schedule.rs:69`, `warmup.rs:173`), ein veralteter `last_edit_time` macht den Commit **eifriger**, nicht strandend. Ein Reproduktionsfall wurde nie belegt |
+| Vorziehen des **Crop**-Schritts vor die Geometrie-Kette/die Tonalstufe (`PIPELINE-CROP-EARLY-9`, geschlossen 2026-10-16) | Belegte **Totalordnung** `SpotHeal ≺ Adjustments ≺ Lens ≺ AutoFill ≺ Perspective ≺ Expand ≺ Crop ≺ LensBlur ≺ Masks` — jede Nachbarbeziehung ist durch eine Koordinaten-/Semantik-Invariante erzwungen: H1 expand→crop (`render.rs:634`, `lib.rs:593–595`, `generative.rs:709–738`), H2 Lens/Perspective→Crop über den Default-Content-Crop (`lib.rs:583–590`, `crop_max_rect.rs:41–83`), H4 Tonal-vor-Geometrie (`feature/architecture/pipeline.md:41–42`). Ein Crop vor Tonal **ändert Bytes** bei aktivem Warp (14,58 % Kanäle, `feature/quality/pipeline-crop-early-2026-10-13.md:38`). Es existiert kein tauschbares Nachbarpaar | Crop bleibt **direkt nach `composite_expand`** (`render.rs:678`). Die 85 %-Gewichtung der Tonalstufe ist am `perf/baseline.json` **nachgerechnet** (85,2/85,7/85,8 %), gilt aber nur im **geometriefreien** Bench-Rezept; die heutigen 9–10 % Crop-Ersparnis (`perf/crop_pipeline_measurement.json`) stammen aus einem **Frame-Klon**, nicht aus der Tonalstufe. Analyse durch einen deepseek-v4.1-Flash-Subagenten, abgenommen durch den Eigentümer am 2026-10-16 |
 
 ## Arbeitsregeln
 
@@ -201,7 +202,6 @@ werden kann. Reine Struktur-/Audit-/Doku-Tasks sind der Regelfall.
 | `MERGE-DEGHOST-RATCHET-67` (427) | **ja** | `cargo test -p lumina-merge`, `sh scripts/check_file_sizes.sh` | — |
 | `GUI-LIB-SPLIT-65` (428) | **ja** | `cargo test -p lumina-gui --lib`, `sh scripts/check_file_sizes.sh` | — |
 | `SIDE-LOCK-STALE-FLAKE-66` (423) | **ja** | `cargo test -p lumina-sidecar` (deterministischer Rotbeweis zuerst) | — |
-| `PIPELINE-CROP-EARLY-9` (405) | **ja** | `cargo test -p lumina-core` / `-p lumina-cli` / `-p lumina-gui --lib` | SOLL zuerst; GPU-Paritaet des geaenderten Pfads bleibt Adapter-Sache |
 | `TEST-AUDIT-36` (415) | **ja** | gezielte `cargo test`-Laeufe + Mutationen (exklusiver Baum) | — |
 | `CI-WATCH-1` (416) | **ja** | `gh run list --branch main` / `gh run watch` | — |
 | `CI-CLI-GPU-TESTBUILD-68` | **ja** | `sh scripts/check_cli_features.sh`, `cargo check -p lumina-cli --features gpu,lensfun --all-targets` | — (kein Adapter: die neuen CLI-GPU-Tests sind nicht adapterpflichtig) |
@@ -621,21 +621,16 @@ als Task beigelegt — der Task entsteht aus der Entscheidung, nicht umgekehrt.
 
 ## Headless-Arbeitsliste (wiedereingegliedert aus `Agents.headless-todo.md`, 2026-10-16)
 
-Diese Liste enthält die offenen Tasks, die auf einer headless Maschine ohne GPU-Adapter
-arbeitbar sind. Die `Agents.todo.md` fuehrt nur noch die Tasks, die durch GPU/Hardware
-geblockt sind (R5-*, GPU-E2E, manuelle GUI-Tests).
+Diese Liste sammelt die zuletzt headless arbeitbaren Tasks; die GPU/Hardware-geblockten
+Tasks stehen in den Bloecken oben. `PIPELINE-CROP-EARLY-9` wurde am 2026-10-16 als nicht
+machbar geschlossen (siehe `Verworfen`).
 
-**Stand: 2026-10-15**
+**Stand: 2026-10-16**
 
 ---
 
-## PRIO: hoch
+## PRIO: niedrig
 
-
-
-## PRIO: mittel
-
-- [ ] **[PRIO: mittel] PIPELINE-CROP-EARLY-9 — **BLOCKIERT (Widerspruch, 2026-10-16):** HARTE UNTERGRENZE verlangt Crop nach GenerativeExpand (Koordinaten referenzieren expandierten Canvas), Abgabe verlangt Crop vor Adjustments. Implementierung ohne Eigentümer-Entscheidung nicht möglich.** (vom Eigentümer am 2026-10-02 angestoßen, Release 1.0, GUI+CLI, nach AUTO-TONE-ANALYSIS-INPUT-8)** **Anlass:** Der Eigentümer fragt, ob sich Crop im Render **weiter nach vorn** ziehen lässt, um Arbeit zu sparen. **Gemessener Ist-Zustand (Reihenfolge aus `crates/lumina-core/src/render.rs`, nicht aus der Doku):** `apply_source_actions` (307) → `apply_spot_heals_from_recipe` (619) → **Adjustments/WB/Tonwerte (620, auf dem vollen Bild)** → Lens (645) → AutoFill (656) → Perspective (664) → GenerativeExpand (674) → **Crop (678)** → LensBlur (690) → Masks (712). **KORREKTUR AN DER GEWICHTUNG, gemessen in `PIPELINE-ANNASSUNGEN-10` (A2):** die Annahme, der Hebel sei die Kette zwischen 620 und 678, war **falsch gewichtet**. `apply_recipe_with_white_balance` ist **85 %** von `render_frame` (3,39/14,02/56,39 ms gegen 3,98/16,36/65,76 ms bei 512/1024/2048, aus `perf/baseline.json` ausgerechnet). **Der Hebel ist die Tonal-Stufe, nicht die Geometrie-Kette** — und genau die kommt man los, indem Crop **vor** Adjustments wandert. Ein vorgezogener Crop beschraenkt damit die **85 %** auf den Ausschnitt. Die Geometrie-Stufen bleiben der Grund, warum Crop nicht beliebig weit vorn stehen darf, sind aber **nicht** der Performance-Gewinn. Der Hebel ist damit die Kette zwischen 620 und 678: vier Stufen (Lens, AutoFill, Perspective, GenerativeExpand) arbeiten heute auf dem **vollen** Bild, davon Perspective und Lens als **Neuabtastung**. Ein vor Adjustments (620) gesetzter Crop würde die **sechs** teueren Stufen (Tonal/WB/Rauschen + die vier Geometrie-Stufen) nur noch auf den beschnittenen Pixeln laufen lassen. **HARTE UNTERGRENZE — Crop muss nach GenerativeExpand bleiben (674):** der Kommentar in `render.rs` sagt ausdrücklich, der generative Expand müsse **vor** Crop laufen, weil „crop coordinates reference the expanded canvas". Das ist keine Optimierung, sondern eine Koordinaten-Abhängigkeit. **WEICHE UNTERGRENZE — Crop muss nach Perspective (664) bleiben:** Perspective ist eine geometrische Stufe, die das Bild neu abtetastet; ein Crop vor Perspective würde die Perspektivkorrektur auf dem beschnittenen Bild berechnen, was die Geometrie verfaelscht. **Abgabe:** Crop wandert auf eine Position zwischen Adjustments (620) und Lens (645), mit Tests, die die Korrektheit der Crop-Koordinaten gegen die Referenz belegen.
 
 
 ## PRIO: niedrig
