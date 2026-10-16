@@ -3,9 +3,9 @@
 //!
 //! [`LuminaApp::draw_tone_curve`] paints the per-channel region sliders and the
 //! interactive point-curve graph. The curve math (`tone_curve_regions`,
-//! `build_tone_curve_points`, …) stays at the crate root because the headless
-//! tests and recipe helpers share it. `pub(crate)` because `DEVELOP_SECTIONS`
-//! references it.
+//! `build_tone_curve_points`, …) lives in `crate::tone_curve_regions` and is
+//! re-exported at the crate root so the headless tests and recipe helpers share
+//! it. `pub(crate)` because `DEVELOP_SECTIONS` references it.
 
 // UX-LOOK-TONECURVE-18: the interactive point-curve graph (new logic in its own
 // file per the file-size ratchet) while staying in this module boundary.
