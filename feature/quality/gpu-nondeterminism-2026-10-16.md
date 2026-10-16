@@ -26,7 +26,9 @@ Tasks `GPU-RENDER-NONDETERMINISM-69` nach der Regel
 - `cargo test -p lumina-cli --features gpu --bin lumina-cli tests::auto_tone_float::the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move -- --exact`
   → **3/3 grün** (`1 passed; 158 filtered out`).
 - Grund: ohne Adapter nimmt `render_best_effort`
-  (`crates/lumina-cli/src/main.rs:360`) über `cpu_fallback` die CPU-Route.
+  (`crates/lumina-cli/src/main.rs:350`) im `_ =>`-Arm (`main.rs:403-410`)
+  die CPU-Route: `render_frame_with_generative(...)` →
+  `Ok((output, RenderRoute::Cpu { reasons }))`.
 - Die grünen Läufe belegen die **CPU-Route**, **nicht** die GPU-Route.
 
 ### Keine lokalisierbare Nichtdeterminismus-Quelle im Projekt-Code
