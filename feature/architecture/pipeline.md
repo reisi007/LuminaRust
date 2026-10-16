@@ -858,7 +858,7 @@ jedem Render abgelehnt. Der Denoise-`model_hash` ist bis zur F-078-Freigabe
 
 **Reihenfolge (normativ, in `Adjustments`):**
 `… → Farbkorrekturen → DenoiseAI (optional) → NoiseReduction (F-096, manuell)
-→ Sharpening (F-095) → Red-Eye → Effects → Masks → Crop/Output`.
+→ Sharpening (F-095) → Red-Eye → Effects → Crop → Masks → Output`.
 DenoiseAI arbeitet wie die MVP-Pipeline sRGB-codiert auf RGBA8; Alpha bleibt
 unverändert. Ist die Stufe aktiv, aber nicht verfügbar/veraltet/fehlend/
 korrupt, greift **sichtbar** das manuelle F-096-NR (bzw. Identität) — nie
