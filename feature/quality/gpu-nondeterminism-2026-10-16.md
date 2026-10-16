@@ -45,8 +45,8 @@ Das Readback liest exakt `width*4` Bytes je Zeile und überspringt Padding
 
 Das GPU-Ressourcen-Pooling ist ein `Mutex<HashMap<…>>` (`lib.rs:810`, `:3234`).
 
-Der Tone-Shader verwendet **keine** Atome (die einzigen `atomicMax` liegen in
-`stages.rs:2030`/`:2056`, im Fixture inaktiv).
+Der Tone-Shader verwendet **keine** Atome (die einzige `atomicMax`-Verwendung
+steht in `stages.rs:2056`, im Fixture inaktiv).
 
 **Verbleibende Kandidaten liegen in der Treiber-/wgpu-Schicht.**
 
