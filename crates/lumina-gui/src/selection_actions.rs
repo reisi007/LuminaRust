@@ -11,7 +11,7 @@
 //! [`crate::GuiActionTimer`]); persistence, the loud per-image failure report
 //! and the `preview_generation` bumps are unchanged. `decode_selection_frame`,
 //! `selection_source_identity`, `default_copy_mut`, `previous_history_extras`
-//! and `is_raw_name` stay at the crate root because `merge_gui` shares them.
+//! and `is_raw_name` live in `fs_helpers` (shared with `merge_gui`).
 
 use super::*;
 use crate::sidecar_rebase::save_rebased_unit;

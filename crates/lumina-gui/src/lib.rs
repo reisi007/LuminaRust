@@ -284,6 +284,12 @@ mod preview_jobs;
 mod slider;
 mod theme;
 mod viewport;
+// GUI-LIB-SPLIT-65 Slice 14: Dateisystem- und Dateiformat-Erkennungshelfer.
+mod fs_helpers;
+pub(crate) use fs_helpers::{
+    format_label, is_lumina_cache_path, is_raw_name, is_supported_image, subdirectories,
+    FOLDER_SCAN_DEPTH,
+};
 
 // LRPAR-MATRIX-RECIPE (Slice 2): the headless GUI matrix runner. Test-only: it drives
 // `LuminaApp` on an egui context against the committed goldens and needs no window/GPU renderer.
@@ -9877,57 +9883,6 @@ fn hsl_channel_mut<'a>(hsl: &'a mut HslAdjustments, ch: &str) -> &'a mut HslChan
     slot.get_or_insert_with(HslChannel::default)
 }
 
-/// True when `path` lies inside a `.lumina/` cache directory (exact
-/// directory name `.lumina`, any level). Pure lexical path logic, no I/O:
-/// `.lumina/` holds only deletable cache and settings (F-100 Library,
-/// GUI-LIBRARY-LUMINA-DIR-1), so the Library scan must never surface files
-/// below it as images — flat or recursive, on every level.
-fn is_lumina_cache_path(path: &Path) -> bool {
-    path.components().any(
-        |component| matches!(component, std::path::Component::Normal(name) if name == ".lumina"),
-    )
-}
-
-fn is_supported_image(path: &Path) -> bool {
-    // The file browser lists all editable formats; the filmstrip display applies
-    // its own RAW-only filter (see `draw_filmstrip`). v1: PNG/JPEG/WebP plus the
-    // RAW extensions.
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png" | "jpg" | "jpeg" | "webp") => true,
-        _ => is_raw_name(&path.display().to_string()),
-    }
-}
-
-/// Human-readable label for an [`ImageFileFormat`] used by the Export panel.
-fn format_label(format: ImageFileFormat) -> &'static str {
-    match format {
-        ImageFileFormat::Png => "PNG",
-        ImageFileFormat::Jpeg => "JPEG",
-        ImageFileFormat::WebP => "WebP",
-    }
-}
-
-fn is_raw_name(name: &str) -> bool {
-    // Single source of truth: delegate to `lumina_raw::is_raw_extension`
-    // (RAW_EXTENSIONS lives there). R2-CLI-01 already consolidated the same
-    // list for the CLI path; keeping one canonical extension list prevents the
-    // two crates from drifting and re-introducing the silent 9-of-18 skip the
-    // review flagged. Matching stays ASCII-case-insensitive.
-    std::path::Path::new(name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(lumina_raw::is_raw_extension)
-}
-
-/// How many directory levels the RAW-count scan descends at most. Keeps the
-/// per-folder count cheap even under large trees.
-const FOLDER_SCAN_DEPTH: usize = 3;
-
 /// How much larger than the strictly visible window the zoom ROI is rendered
 /// (REVIEW-GUI-PANROI-1): the extra border is panning headroom so the hand
 /// tool always has off-screen content to drag into view without waiting for a
@@ -9942,22 +9897,6 @@ const PREVIEW_ROI_MARGIN: f64 = 1.3;
 /// source-action head and re-hashing the whole source file per tick. The
 /// desktop cache budget is generous (512 MiB of prepared frames).
 const BASE_STAGE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
-
-/// Immediate subdirectories of `dir`, sorted; empty when unreadable so a
-/// permission error degrades to "no children" instead of a broken node.
-fn subdirectories(dir: &Path) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.is_dir())
-                .collect()
-        })
-        .unwrap_or_default();
-    dirs.sort();
-    dirs
-}
 
 /// Maps the recipe's normalized free-crop rectangle (`Crop::Free` coordinates
 /// are `0..=1`) into an on-screen image rect for a display-only crop overlay.
