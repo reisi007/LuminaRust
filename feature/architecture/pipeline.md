@@ -104,6 +104,7 @@ Ausgabeformat einer Stufe dem Eingabeformat der folgenden entspricht:
 ```text
 Decode          EncodedSource  -> Rgba8Srgb
 SourceActions   Rgba8Srgb      -> Rgba8Srgb
+SpotHeal        Rgba8Srgb      -> Rgba8Srgb
 AutoAnalysis    Rgba8Srgb      -> Rgba8Srgb
 Adjustments     Rgba8Srgb      -> Rgba8Srgb
 Masks           Rgba8Srgb      -> Rgba8Srgb

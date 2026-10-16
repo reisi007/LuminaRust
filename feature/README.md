@@ -22,9 +22,12 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
   virtuelle Kopien
 - Autorität: fachlicher Zielzustand für Implementierungs- und
   Verifizierungs-Agenten
-- Codebestand: Raster-MVP in Arbeit — `lumina-sidecar`, `lumina-core`, `lumina-raw`,
-  `lumina-cli` und `lumina-gui` vorhanden; Stand und offene Arbeit siehe
-  `Agents.todo.md` (Stand 2026-08-18)
+- Codebestand: Raster-MVP in Arbeit — 16 Crates im Workspace (`lumina-sidecar`,
+  `lumina-core`, `lumina-raw`, `lumina-onnx`, `lumina-gpu`, `lumina-lensfun`,
+  `lumina-merge`, `lumina-cull`, `lumina-stages`, `lumina-cli`, `lumina-mcp`,
+  `lumina-gui`, `lumina-iptc` sowie die Test-Infra `lumina-testskip`,
+  `lumina-gui-harness` und `lumina-bench`); Stand und offene Arbeit siehe
+  `Agents.todo.md` (Stand 2026-10-16)
 
 ## Leitbild
 
@@ -284,8 +287,10 @@ Sidecars vollständig wiederherstellbar sein.
   validiert.
 - Die Adjustment-Unterstufen lauten im MVP: globale Tonwerte, Presence,
   Gradationskurve, HSL/Farbmischer, Dynamik/Sättigung, Color Grading,
-  Rauschreduzierung und Schärfen. Geometrisch gilt:
-  Objektivkorrektur → Perspektive → Crop → Rotation → Spiegelung.
+  Rauschreduzierung und Schärfen. Geometrisch gilt (mit den entkoppelten
+  GenerativeEdit-Unterschritten, siehe `architecture/pipeline.md`):
+  Objektivkorrektur → GenerativeEdit(auto-fill) → Perspektive →
+  GenerativeEdit(expand) → Crop → Rotation → Spiegelung.
 - HSL verwendet acht getrennte Zentren: Rot, Orange, Gelb, Grün, Cyan, Blau,
   Violett und Magenta. Lensfun-Vollausbau (Verzeichnung/CA/Vignettierung,
   EXIF-Profil-Erkennung) ist MVP/1.0 (User-Entscheid 2026-09-03,
