@@ -39,6 +39,9 @@ Negativrecords, damit sie nicht erneut implementiert werden.
 | `JSON-ROUNDTRIP` | `serde_json` wird mit `float_roundtrip` gebaut; jeder f64-Round-Trip ist exakt | Eigentümerentscheid 2026-10-02: „es soll nichts verloren gehen" (gemessen: 7,45 % der f64-Werte verloren beim Laden 1 ULP). Kostet eine Neubewertung aller Sidecar-Bytes/Digests/Goldens | entschieden 2026-10-02; Umsetzung in `JSON-FLOAT-ROUNDTRIP` |
 | `NAMING-F1 (2)` | Der **Anzeigename** bleibt „Lumina" (`crates/lumina-gui/src/main.rs:30` Fenstertitel, `lib.rs:11965` UI-Überschrift); der Formatbezeichner `.lumina.*` bleibt ohnehin | Eigentümerentscheid 2026-10-02 (Option „Lumina beibehalten"); keine Migration, null Zeilen | gilt |
 | `GPU-CLEAR-TRANSITION` | Der Masken-Plane-Clear läuft **nur beim Übergang** „Nicht-Null-Plane resident → keine Ebene", nicht bei jedem Render | Eigentümerentscheid 2026-10-02; gemessen (F-074-N10, Metal M5 Pro): der Clear kostet **37 µs / 722 µs / 15,21 ms** (160×120 / 1280×853 / 6000×4000), volumengetrieben, ~13× ein Vollrender @24 MP — die Host-Zahl 0,004 ms täuschte | entschieden 2026-10-02; Umsetzung in `GPU-MASKPLANE-CLEAR-PERF-51` |
+| `CACHE-SCHICHT` | die native Cache-/Preview-Disk-Schicht wird aus `lumina-core` in ein **eigenes Crate `lumina-cache`** gezogen; Core kompiliert danach ohne Dateisystemzugriff | Architektur-Review 2026-10-16 (Befund R4) — Core brach die in `Agents.md` und `feature/platform/cli-gui-wasm.md` gesetzte Grenze, während `feature/architecture/pipeline.md` den Bruch als umgesetzt dokumentierte | **entschieden 2026-10-16; Umsetzung in `LUMINA-CACHE-EXTRACT-70`** |
+| `DOWNSCALE-EIN-PFAD` | es bleibt **ein** Downscale-Pfad, GPU-fähig gedacht; wo Geschwindigkeit und Qualität auseinandergehen, gilt **Qualität**, die Geschwindigkeitsoptimierung bleibt Zukunft | Eigentümerentscheid 2026-10-16 auf den Review-Befund „zwei bilineare Downscaler im Core plus ein Nearest-Neighbour-Thumbnailer in der GUI" | **entschieden 2026-10-16; Umsetzung in `DOWNScaler-UNIFY-71`** |
+| `HEADLESS-GPU-TASK-SPLIT` | GPU-gegatete Tasks werden headless gebaut, der adapter-/GUI-E2E-Rest wandert als eigener Eintrag in `Agents.todo.md` — **rückwirkend** für alle bestehenden | Eigentümerweisung 2026-10-16; die Regel steht in `Agents.headless.md` §1 Punkt 6 | **gilt** |
 
 ### Offene Entscheidungen (warten auf den Eigentümer)
 
@@ -470,6 +473,11 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 ### PRIO: mittel
 
+- [ ] **[PRIO: mittel] LUMINA-CACHE-EXTRACT-70 (Architektur-Review 2026-10-16, Befund R4; Entscheid `CACHE-SCHICHT`)** Ein neues Crate `lumina-cache` zwischen `lumina-core` und den Frontends aufnehmen. Aus `lumina-core` wandern der Disk-Folder-Cache (`crates/lumina-core/src/cache.rs`, `cache/disk.rs`), der Disk-Tier des Preview-Caches (`crates/lumina-core/src/preview_cache.rs`, WebP-Disk) und der Dateisystemzugriff in `crates/lumina-core/src/lensfun_map.rs`. **Abnahme:** `grep -rn 'std::fs' crates/lumina-core/src/` liefert **0** Treffer; `cargo test -p lumina-core --lib` und die betroffenen Frontend-Tests mit **identischer Testzahl** wie vorher; `sh scripts/check_file_sizes.sh` grün (neues Crate mit Baseline-Eintrag); keine Verhaltensänderung. **Abgrenzung:** reine Schichten-Extraktion; keine Render-/Rezept-/Schema-Änderung. (Nicht behaupten, dass WASM dadurch ermöglicht wird — WASM ist gestrichen.)
+
+- [ ] **[PRIO: mittel] DOWNScaler-UNIFY-71 (Eigentümerentscheid 2026-10-16; Entscheid `DOWNSCALE-EIN-PFAD`)** Die drei Downscale-Implementierungen (`lumina-core::downscale_bilinear` f64/breitenbasiert, `downscale` f32/lange Kante, `lumina-gui::filmstrip::downscale_rgba` Nearest-Neighbour) auf **einen** Pfad konsolidieren, GPU-fähig gedacht, **Qualität vor Geschwindigkeit** (Entscheid `DOWNSCALE-EIN-PFAD`). **Abnahme:** genau eine Implementierung; Aufrufer umgestellt; für Aufrufer, deren Ergebnis sich nicht ändern darf, ein **Byte-Beweis** (vorher/nachher gleich bzw. bewusst neu eingefroren mit Begründung); headless-Tests grün. **Abgrenzung:** kein Bildqualitäts-Regress ohne benannte Entscheidung; Geschwindigkeitsoptimierung ist **nicht** Teil dieses Tasks.
+
+- [ ] **[PRIO: mittel] GPU-TASK-HEADLESS-SPLIT-74 (Eigentümerweisung 2026-10-16; Regel `HEADLESS-GPU-TASK-SPLIT`)** Rückwirkende Anwendung der Regel `HEADLESS-GPU-TASK-SPLIT` (`Agents.headless.md` §1 Punkt 6) auf die **bestehenden** GPU-blockierten Tasks (`R5-DUST-23-FOLLOWUP`, `R5-BRUSH-24`, `R5-MASKVIS-25`, `F-103-N6`, `F-103-N6-GUI-COVERAGE-27`, `R2-GUIMOD-04b/04c`, `GPU-MASKPLANE-CLEAR-REMEASURE`, `MCP-PARITY-C`, `LRPAR-G14-DENOISE-IMPL-20`): je Task den headless baubaren Teil umsetzen und den adapter-/GUI-E2E-Rest als **eigenen** Eintrag führen. **Abnahme:** für jeden betroffenen Task liegt ein belegter headless Teil und ein eigener Rest-Eintrag mit verbindlichem Kommando vor. **Abgrenzung:** kein Task wird fallengelassen; nur die Rest-Grenze wird sichtbar gemacht.
 
 ### PRIO: niedrig
 
@@ -477,6 +485,10 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 
 
+
+- [ ] **[PRIO: niedrig] MCP-LENSFUN-72 (Architektur-Review 2026-10-16)** Der MCP-Renderpfad baut nie einen Lensfun-Corrector (`crates/lumina-mcp/src/util.rs`, `lensfun: None`) und liefert damit bewusst andere Ergebnisse als CLI/GUI. Verdrahten oder als dauerhafte Grenze härten. **Abnahme:** MCP- und CLI-Ergebnis mit aktivem Profil byte-identisch **oder** eine benannte, dokumentierte Grenze mit Beleg. **Abgrenzung:** keine neue Lensfun-Funktionalität, nur der Anschluss.
+
+- [ ] **[PRIO: niedrig] HARNESS-GATES-73 (Architektur-Review 2026-10-16)** `agent-harness/` ist ein **zweiter** Cargo-Workspace (`agent-harness/Cargo.toml`, eigenes `Cargo.lock`) und läuft außerhalb von `cargo test --workspace`. In die Standard-Gates/CI einbeziehen oder die Ausnahme sichtbar begründen. **Abnahme:** entweder ein grüner Gate-Lauf, der `agent-harness` einschließt, oder eine dokumentierte, begründete Ausnahme. **Abgrenzung:** keine Änderung am Harness-Verhalten.
 
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 

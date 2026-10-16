@@ -33,6 +33,14 @@ die Aufgabe.
 5. **Nichts über den Adapter hinaus behaupten.** Weder „läuft auf GPU" noch
    „ist identisch zur CPU" noch „sollte funktionieren". Der Goldensatz lautet
    immer: *auf dem CPU-Pfad gemessen, der GPU-Pfad ungeprüft.*
+6. **Den Rest in die normale Todo übertragen.** Der headless baubare GPU-Teil
+   wird implementiert. Was **nur** am echten Adapter oder im echten GUI-E2E
+   prüfbar ist, bleibt **nicht** im ursprünglichen Task-Text hängen, sondern
+   wird als **eigener Eintrag** in `Agents.todo.md` geführt — mit dem
+   verbindlichen Kommando und der benannten Grenze. Der ursprüngliche Task
+   gilt damit als **headless abgeschlossen**, sobald sein headless Teil
+   verifiziert ist; sein offener Rest ist der neue Eintrag. Das gilt
+   **rückwirkend für die bereits GPU-blockierten Tasks** der Liste.
 
 **Was das praktisch heißt:** ein Task gilt als **halb** abgenommen, nicht als
 abgelehnt. Genau diese Trennung erlaubt, auf headless Maschinen echte Arbeit
