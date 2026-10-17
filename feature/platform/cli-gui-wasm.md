@@ -191,6 +191,27 @@ hier dokumentiert, damit dieselbe Klasse nicht zurückkehrt.
   erfasst — das wäre eine eigene Aufgabe, falls je gemessen. Geprüft wird
   `cargo check`, nicht `cargo test`.
 
+### Workspace-Feature-Matrix (`FEATURE-MATRIX-GATE-79`, Release 1.0)
+
+Normativer SOLL: **Jedes in einem Workspace-Crate deklarierte Feature muss
+kompilieren** — nicht nur die Kombination, die ein CI-Job zufällig baut. Das
+CLI-Gate oben deckt nur `lumina-cli`; das Workspace-Gate verallgemeinert es
+auf alle Crates. Skript: `scripts/check_feature_matrix.sh` (liest die
+Feature-Listen aus den Manifesten, kein Hardcoding); CI-Schritt „Check every
+workspace crate's declared feature sets compile" (`rust-fast`). Pro Crate mit
+Features: ein `cargo check -p <crate> --all-targets --all-features` (Union)
+plus ein `cargo check -p <crate> --all-targets --features <F>` je deklariertem
+nicht-`default`-Feature. Crates ohne `[features]`-Tabelle werden benannt
+übersprungen (`lumina-gui-harness` wird auf Linux als Stub kompiliert).
+`cargo check` (kein Link), daher kann das benannte onnx-rt-Host-Gate
+(glibc 2.36 < 2.38) diesen Schritt nicht rot machen.
+**Benannte Grenze:** `--all-features` beweist nicht, dass ein Feature *allein*
+funktioniert — das ist die Achse des CLI-Gates oben. Compile-only, kein
+Adapter, kein Laufzeit-Test, keine Golden-Änderung. Mutationsbeleg: ein
+eingefügtes `routed.pixels` (ohne Klammern) in
+`crates/lumina-mcp/src/util.rs` (im `#[cfg(all(test, feature = "gpu"))]`-
+Modul) macht das Skript rot mit `file:line`.
+
 **Umgesetzter Stand (Review-R2-CLI-Fixes, 2026-08-26):**
 
 - **RAW-Erkennung single-source (R2-CLI-01):** Die 18 RAW-Extensions aus der

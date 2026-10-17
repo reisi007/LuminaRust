@@ -384,6 +384,7 @@ Delegation"). Alles Folgende ist der **repo-spezifische** Teil — je nach Ände
 sind mindestens diese Prüfungen zu verwenden:
 
 - Formatierung und Clippy für Rust-Code
+- Feature-Matrix-Gate: `scripts/check_feature_matrix.sh` kompiliert je Workspace-Crate jede deklarierte Feature-Menge (Union `--all-features` + Einzelachse `--features <F>`), Feature-Listen aus den Manifesten; CI-Schritt in `rust-fast` („Check every workspace crate's declared feature sets compile"). Compile-only, kein Adapter, kein Laufzeit-Test. Benannte Grenzen: `--all-features` beweist nicht, dass ein Feature *allein* funktioniert; `lumina-gui-harness` ist macOS-only und wird auf Linux als Stub kompiliert; der onnx-rt-Link (glibc 2.36 < 2.38) ist ein Host-Gate, das `cargo check` nicht trifft.
 - Unit-Tests für mathematische und serielle Logik
 - Property-Tests für Wertebereiche, Monotonie und Clipping
 - JSON-Roundtrip- und Schema-Migrationstests

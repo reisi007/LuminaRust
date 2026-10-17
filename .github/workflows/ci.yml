@@ -223,6 +223,23 @@ jobs:
       - name: Check every CLI feature compiles on its own
         run: sh scripts/check_cli_features.sh
 
+      # FEATURE-MATRIX-GATE-79: the CI compiles only a SUBSET of the declared
+      # feature combinations of the workspace. Measured defect: the test module
+      # crates/lumina-mcp/src/util.rs is `#[cfg(all(test, feature = "gpu"))]`
+      # and no CI job built `lumina-mcp --features gpu` — four field accesses
+      # there survived the Q5 encapsulation unnoticed and only became visible
+      # through a targeted `cargo check -p lumina-mcp --all-targets --features
+      # gpu` (exit 101). This gate compiles, per workspace crate, every feature
+      # set DECLARED in its Cargo.toml (union `--all-features` + the individual
+      # feature axis), reading the feature lists from the manifests so a newly
+      # declared feature is covered automatically. It is compile-only (no
+      # adapter, no runtime test) and uses `cargo check` (no link), so the
+      # onnx-rt host LINK gate (glibc 2.36 < 2.38) cannot turn this step red.
+      # Mutation-proven: an injected `routed.pixels` in the gpu-gated test
+      # module turns this step red with file:line.
+      - name: Check every workspace crate's declared feature sets compile
+        run: sh scripts/check_feature_matrix.sh
+
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
 
