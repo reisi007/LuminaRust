@@ -973,6 +973,17 @@ Daraus folgt:
    `record`-Begründung und die Diff-Belege nennen. Zusammen mit §4.1 ist das die
    einzige Review-Schranke, die es für Goldens gibt.
 
+> **CI-GOLDEN-GATE-75 (Job `GUI goldens (ignored)`).** Der geplante
+> Linux-Lauf dieses Gates ist ein **benanntes Runnability-/Sichtbarkeits-Gate,
+> kein Golden-Ergebnis**: Er beweist, dass die ignorierten Tests im
+> CI-Container starten und einen Exit-Code erzeugen — nicht, dass die Goldens
+> stimmen. Die Pin verlangt macOS/Metal (`scripts/golden_ref.lock`:
+> `os.name=macOS`, `wgpu.backend=all->metal`, `gpu.metal=Metal 4`), der
+> Linux-Container hat keinen wgpu-Adapter, deshalb bleibt der Lauf bewusst
+> rot. Das echte Golden-Gate bleibt der lokale macOS-Lauf
+> (`scripts/golden_ref.sh check`); ein GPU-Runner ist in
+> `GOLDEN-REF-30`/`GOLDEN-BASELINE-32` getrackt.
+
 ---
 
 ## 11. Bekannte Grenzen

@@ -31,6 +31,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # CI-GOLDEN-GATE-75: the lumina-ci image deliberately ships no Rust
+      # toolchain (docker/Dockerfile: dtolnay/rust-toolchain installs the
+      # current stable toolchain inside the job container), so this job must
+      # install it itself — the same pattern as the rust-fast / rust-test-*
+      # shards in ci.yml. Without these two steps the job dies with
+      # "cargo: command not found" (exit 127) before any test runs.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Same shared input as the rust-fast / rust-test-* shards.
+          shared-key: lumina-rust-shards
+
       # NOTE: ubuntu-latest carries no GPU. kittest_snapshots needs a headless
       # wgpu adapter, so in the nightly a red/skip outcome here is the expected
       # visible result — green would be the silent lie. The first real adapter
@@ -61,4 +78,5 @@ jobs:
         run: |
           echo "GOLDEN-GATE-62: ignored GUI golden run, schedule/dispatch-triggered."
           echo "Result class (DoD §12): 'laeuft' only if exit 0 and test count > 0."
+          echo "CI-GOLDEN-GATE-75: this runner has no wgpu adapter (container without GPU/Mesa); the pinned golden platform is macOS/Metal (scripts/golden_ref.lock), so a red result here is the documented, non-silent state — see feature/quality/golden-references.md §10."
           test "${{ steps.gold.outputs.exit_code }}" = "0"
