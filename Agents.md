@@ -118,7 +118,9 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
   (LUMINA-CACHE-EXTRACT-70), das die Core-Schema- und Pfadlayout-API
   (`PreviewKind`, `FolderCacheSettings`, `preview_cache_key`, `entry_stem`)
   liest und schreibt. `lumina-cache` ist der Adapter zwischen Core und den
-  Frontends und darf `std::fs` verwenden; Test-only-Vorkommen bleiben in Core.
+  Frontends und darf `std::fs` verwenden; Test-only-Vorkommen bleiben in Core;
+  geprüft über `scripts/check_core_prod_fs_free.sh` (CORE-PROD-FS-FREE-GATE-76);
+  Grenze: textueller Scan, kein `std as x`-Alias.
 - Ein verpflichtendes `lumina-sidecar`-Modul soll Schema, Validierung,
   Roundtrip-Serialisierung, Migrationen und atomare Sidecar-Operationen bündeln.
 - `lumina-raw` kapselt RAW-Decoder, Demosaicing, EXIF und Farbprofile.

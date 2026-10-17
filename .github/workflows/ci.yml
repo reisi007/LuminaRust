@@ -247,6 +247,16 @@ jobs:
       - name: Check env-gate reasons
         run: sh scripts/check_env_gate_reasons.sh
 
+      # Core-Produktions-FS-Freiheit (CORE-PROD-FS-FREE-GATE-76, 2026-10-17):
+      # die Produktions-Dateisystemfreiheit von `lumina-core` (Entscheid
+      # `CACHE-SCHICHT`, Befund R4) war eine gepruefte Behauptung, kein
+      # erzwungener Zustand. Dieses Skript macht sie erzwungen: ein neuer
+      # `std::fs`-Treffer im Produktionscode von `crates/lumina-core/src`
+      # wird rot. Test-only-Treffer (tests/-Verzeichnis, _tests.rs-Suffix,
+      # Testmodul am Dateiende) sind erlaubt und werden als Zahl genannt.
+      - name: Check core production fs-free
+        run: sh scripts/check_core_prod_fs_free.sh
+
   rust-test-gui:
     name: Rust GUI tests
     needs: detect
