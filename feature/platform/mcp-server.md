@@ -672,6 +672,48 @@ Mutationsnachweis (Preview != No-Mask-Oracle) haftet an derselben Stelle.
 belegt die CLI-Seite der Paritaet. Die Divergenz ist damit nachweisbar
 umgekehrt, nicht nur behauptet.
 
+## Lensfun im MCP-Renderpfad: `lensfun: None` (MCP-LENSFUN-72)
+
+**Stand (code-verifiziert 2026-10-17):** `lumina-mcp` baut **nie** einen
+Lensfun-Corrector. Jeder MCP-Renderpfad laeuft mit `lensfun: None`
+(`crates/lumina-mcp/src/util.rs` — die `render_recipe`-CPU- und
+Camera-WB-Fallback-Stellen, sowie `tools/dust_removal.rs` render_out; die
+Matrix-Route erhaelt ihren Kontext aus der geteilten Schicht
+`crates/lumina-stages/src/matrix_run.rs`, die ebenfalls `lensfun: None`
+setzt).
+Die CLI (`crates/lumina-cli/src/lensfun_cli.rs::build_lensfun_corrector`,
+angetrieben von EXIF-Metadaten) und die GUI loesen ein Profil auf, wenn die
+Metadaten eine Kamera nennen, die die Lensfun-Datenbank kennt. Mit
+aufgelostem Profil rendern die beiden Seiten daher **unterschiedliche Pixel**;
+ohne aufgelostes Profil sind sie byte-identisch. Ein Corrector in den
+MCP-Server zu verdrahten, machte dessen Pixel host-database-haengig und
+fuegte liblensfun als Build-Abhaengigkeit hinzu — eine Architektur-Entscheidung,
+kein Bugfix. Die Grenze ist bewusst und dauerhaft (siehe den
+`CorrectorSource`/`NoCorrector`-Hinweis weiter unten).
+
+**Je renderfaehigem Tool — `lensfun: None`, keine Ausnahme:**
+
+| Tool | Render-Pfad | Lensfun |
+| --- | --- | --- |
+| `lumina_preview` | `render_copy` → `render_recipe` | `lensfun: None` |
+| `lumina_save` | `render_copy` → `render_recipe` | `lensfun: None` |
+| `lumina_analyze` | `render_copy` → `render_recipe` | `lensfun: None` |
+| `lumina_batch` | `render_recipe` | `lensfun: None` |
+| `lumina_trigger_export` | `render_recipe` | `lensfun: None` |
+| `lumina_dust_removal` (`render_out`) | `render_frame` | `lensfun: None` |
+| Matrix-Route | `render_matrix_routed` → `render_frame` | `lensfun: None` |
+
+**Belege (gemessen 2026-10-17 auf diesem Host):**
+- Mit aufgelostem Profil (`Nikon Corporation` / `Nikon D40`, 18 mm, f/5.6,
+  1000×750-Gradient): die CLI-Seite (Corrector angewendet) und die MCP-Seite
+  (`lensfun: None`) rendern **2.049.954 von 3.000.000 Bytes** unterschiedlich
+  (maximaler Kanal-Delta 254). Regression-Pin:
+  `crates/lumina-cli/tests/lensfun_mcp_boundary.rs`.
+- Strukturbeleg: `cargo tree -p lumina-mcp --features lensfun | grep -c
+  lumina-lensfun` ergibt **1** — die Abhaengigkeit ist transitiv ueber
+  `lumina-core/lensfun` im Baum, doch kein MCP-Code baut einen Corrector; die
+  Grenze liegt an den Aufrufstellen (`lensfun: None`), nicht im Graphen.
+
 ## Nicht-Ziele (Pre-MVP)
 
 - Kein HTTP/WebSocket-Transport — stdio reicht für Agent-in-Terminal.
