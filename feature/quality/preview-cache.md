@@ -136,7 +136,9 @@ nächsten Sichtwechsels) und damit eine reine Performance-Schicht.
 - **Disk-Tier:** persistente WebP-Dateien unter `.lumina/previews/` (nicht
   autoritativ, löschbar, Prune verwaister Einträge analog `DiskFolderCache`).
   Key = Cache-Key (siehe unten). Atomare Writes; unvollständige Dateien werden
-  als Miss behandelt, nie als gültiger Hit.
+  als Miss behandelt, nie als gültiger Hit. Träger ist `lumina-cache`
+  (`PreviewDiskCache`, crates/lumina-cache/src/preview_disk.rs) — nicht
+  `lumina-core`, dessen Produktionscode dateisystemfrei bleibt.
 - **RAM-Tier:** der LRU hält die dekodierten Frames (bzw. Texturen) der
   Fenster-Slots, damit der Bildwechsel ohne Disk-I/O auskommt (siehe
   [LRU-Eviction und Speicherbudget](#lru-eviction-und-speicherbudget)).

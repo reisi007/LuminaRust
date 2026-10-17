@@ -80,7 +80,6 @@ pub use mask_modulation::modulate_mask_plane;
 pub use masks::{MaskError, MaskGraph, MaskPlane};
 pub use memory::{MemoryBudget, MemoryBudgetError};
 pub use pipeline::{OutputSpec, Pipeline, PipelineFormat, PipelineStage, RenderKey, SourceAction};
-pub use preview_cache::PreviewDiskCache;
 pub use preview_cache::{
     decode_webp, encode_webp_lossless, prefetch_window, LruPreviewCache, PrefetchSlot,
     PreviewEncode, PreviewKey, PreviewKind,

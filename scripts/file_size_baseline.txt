@@ -16,7 +16,7 @@
 1050 crates/lumina-gpu/src/geometry.rs  # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
 516 crates/lumina-gpu/src/lensfun.rs  # neu 2026-09-18: GPU-LENSFUN-PARITY-1 Resample-Pass (kein Split ohne Kohaesion)
 512 crates/lumina-gpu/src/geometry_shaders.rs  # neu 2026-09-18: aus geometry.rs extrahierte WGSL/Uniform-Bloecke
-1398 crates/lumina-gui/src/preview_ctrl.rs  # 2026-09-20: R3-DENOISE-1 (1501 -> 1398, worker_preview + Helfer nach preview_jobs.rs extrahiert; `denoise_policy` am PreviewJob)
+1399 crates/lumina-gui/src/preview_ctrl.rs  # BEWUSSTE Anhebung 1398 -> 1399 am 2026-10-17 (LUMINA-CACHE-EXTRACT-70 Teil 2): +1 Zeile, reine Import-Pfadanderung — `PreviewDiskCache` zieht aus `lumina_core::preview_cache` nach `lumina_cache::preview_disk` und braucht seine eigene Importzeile (zwei verschiedene Crates, keine Gegenextraktion möglich, kein Kommentar gekürzt; Konvention wie pipeline.rs 1328 -> 1331). Vorher: 2026-09-20 R3-DENOISE-1 (1501 -> 1398, worker_preview + Helfer nach preview_jobs.rs extrahiert; `denoise_policy` am PreviewJob)
 1491 crates/lumina-gui/src/i18n.rs  # 2026-09-20: LRPAR-G09-SORT-09 (1492 -> 1491, Library-Strings nach i18n_library.rs ausgelagert); zuvor +5 am 2026-09-17: ExpandDragFrameHint/ExpandCropToImage (i18n-Fix UXG-17)
 1333 crates/lumina-merge/src/bundle.rs  # 2026-10-15 SLICE-B-MERGE-DEGHOST: der HDR-Arm von align_and_merge (Alignment + Merge-Aufruf + MergePass-Bau) nach src/hdr_deghost.rs extrahiert (align_and_merge_hdr, Muster align_and_merge_pano aus Slice A). Neu in bundle.rs: Options-Feld deghost + HDR-only-Gate, RecipeInputs/Destructuring/build_recipe-Anschluss, ein Test-Fixture-Wert; der extrahierte Arm ist -26 Zeilen, der Zuwachs +23, netto 1336 -> 1333, Baseline gesenkt.
 1331 crates/lumina-core/src/pipeline.rs  # 2026-10-16 PIPELINE-ORDER-DRIFT: der quelltextbasierte Drift-Test `render_stage_order_matches_nominal_pipeline_order` (+ Helper `render_frame_from_base_impl_body`) wurde als reiner Move aus `mod tests` in die neue `pipeline/tests/drift_order_tests.rs` verschrieben (Muster `local_state_tests.rs`; `include_str!("../../render.rs")` ist relativ zur neuen Datei korrekt); in pipeline.rs bleibt nur die reine Verdrahtung (2 Zeilen `#[path]`/`mod`, ohne Kommentar — die Begruendung steht im Test-File). 1328 -> 1334 -> 1331; bewusste Anhebung 1328 -> 1331 (3 Zeilen reine Modul-Vdrahtung, keine Gegenextraktion moeglich — der Test ist bereits extrahiert). Zugleich wurde die nominale Reihenfolge korrigiert (Masks hinter Crop), die Tupel-Formate unveraendert.
@@ -51,7 +51,7 @@
 729 crates/lumina-core/src/tone_props.rs
 683 crates/lumina-gui/src/presets.rs  # 2026-09-19: UX-LOOK-HISTORY-18 (713 -> 683, rekursiver Scan nach preset_tree.rs ausgelagert)
 704 crates/lumina-mcp/src/util.rs
-694 crates/lumina-core/src/preview_cache.rs
+559 crates/lumina-core/src/preview_cache.rs  # 2026-10-17 LUMINA-CACHE-EXTRACT-70 Teil 2: der native Preview-Disk-Tier (`PreviewDiskCache` inkl. des Disk-Tests `disk_tier_roundtrip_prune_and_clear`) wurde wortgleich nach `crates/lumina-cache/src/preview_disk.rs` verschoben, damit `lumina-core` im Produktionscode vollstaendig dateisystemfrei ist; 694 -> 559. Beleg: `grep -rn 'std::fs' crates/lumina-core/src/preview_cache.rs` findet kein Vorkommen mehr; in `crates/lumina-core/src` bleiben nur noch test-only-Treffer (`lensfun_map.rs`, `render/tests/tca_isolation_tests.rs`, `lens_row_tests.rs`).
 677 crates/lumina-mcp/tests/f101f1.rs
 665 crates/lumina-merge/src/dng.rs
 611 crates/lumina-onnx/tests/face.rs

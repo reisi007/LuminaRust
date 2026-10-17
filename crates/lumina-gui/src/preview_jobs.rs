@@ -12,7 +12,8 @@ use crate::preview_ctrl::{
     plan_window_jobs, PreviewController, PreviewJob, PreviewOutcome, PreviewResult,
 };
 use crate::LuminaApp;
-use lumina_core::preview_cache::{encode_webp_lossless, PreviewDiskCache, PreviewKey, PreviewKind};
+use lumina_cache::preview_disk::PreviewDiskCache;
+use lumina_core::preview_cache::{encode_webp_lossless, PreviewKey, PreviewKind};
 use lumina_core::{
     prepare_source_base, render_frame_with_denoise, DenoiseStageInput, DenoiseStageStatus,
     ImageFrame, RenderContext, StageWork,

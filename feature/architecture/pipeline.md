@@ -2049,10 +2049,14 @@ beziehungsweise beim Scan nicht mehr gefunden wird.
 
 > **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
 > verifiziert. `lumina-core` besitzt eine native Disk-Schicht
-> (`DiskFolderCache`, crates/lumina-core/src/cache/disk.rs): atomare Writes,
+> (`DiskFolderCache`, crates/lumina-cache/src/disk.rs): atomare Writes,
 > `settings.json` mit feldweiser Eltern-Vererbung, Vorschauen pro Quelle +
 > virtueller Kopie unter `.lumina/previews/` (Standard- vs. 1:1-Vorschau) und
-> sofortiger Prune verwaister Einträge. Offene Folgeaufgabe: Test für partielle
+> sofortiger Prune verwaister Einträge. Der Preview-Disk-Tier
+> (`PreviewDiskCache`, crates/lumina-cache/src/preview_disk.rs) ist der zweite
+> native Disk-Tier in `lumina-cache`; beide liegen außerhalb von `lumina-core`,
+> dessen Produktionscode damit dateisystemfrei bleibt (LUMINA-CACHE-EXTRACT-70).
+> Offene Folgeaufgabe: Test für partielle
 > Settings-Vererbung (Kind-JSON mit nur einem gesetzten Feld).
 
 Eine reine Crop- oder Ausgabeänderung soll keine unnötige AI-Inferenz auslösen.

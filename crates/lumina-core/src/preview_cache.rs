@@ -6,8 +6,7 @@
 //! previews on Screen/1:1 resolution, on disk and in a small RAM LRU, so the
 //! next image switch has no visible decode/render stall.
 //!
-//! What lives here (kept deliberately GPU-free and, except for the native disk
-//! tier, file-system-free):
+//! What lives here (kept deliberately GPU-free and file-system-free):
 //!
 //! - [`PreviewKey`]: the full cache identity derived from source content hash,
 //!   decode/pipeline context, virtual copy + render key, and preview
@@ -21,10 +20,14 @@
 //! - WebP encode/decode helpers ([`encode_webp_lossless`], [`decode_webp`]) that
 //!   preserve the alpha channel (via `image` 0.25, already a dependency).
 //!
-//! Disk tier: persistent `.webp` files under `.lumina/previews/` (native only),
-//! addressed by the digest of [`PreviewKey`]; a partial/corrupt file is a miss,
-//! never a valid hit. This is a *performance* layer only — fully deletable,
-//! never authoritative.
+//! Der **native Disk-Tier** liegt nicht hier, sondern als `PreviewDiskCache`
+//! in `crates/lumina-cache/src/preview_disk.rs` (Crate `lumina-cache`, Teil 2
+//! von LUMINA-CACHE-EXTRACT-70): persistente `.webp`-Dateien unter
+//! `.lumina/previews/`, adressiert über den Digest von [`PreviewKey`]; eine
+//! unvollständige/korrupte Datei ist ein Miss, nie ein gültiger Hit. Damit ist
+//! diese Datei — und der Produktionscode von `lumina-core` insgesamt —
+//! dateisystemfrei. Wie der RAM-LRU ist der Disk-Tier nur eine
+//! *Performance*-Schicht: voll löschbar, niemals autoritativ.
 //!
 //! Semantics (from the SOLL):
 //! - A **hit** with a matching key serves pixels immediately (no decode).
@@ -373,96 +376,6 @@ pub fn decode_webp(bytes: &[u8]) -> Result<ImageFrame, crate::CoreError> {
     ImageFrame::decode(bytes)
 }
 
-// ---------------------------------------------------------------------------
-// Native disk tier (`.lumina/previews/*.webp`). It touches the file system;
-// the RAM LRU + key + window + encode helpers above stay fully portable.
-// ---------------------------------------------------------------------------
-
-/// Native on-disk preview tier rooted at `<folder>/.lumina/previews/`.
-///
-/// Addresses entries by the digest of [`PreviewKey`]. Atomic write via
-/// write-to-temp + rename; a file that does not decode (partial write, corrupt)
-/// is reported as a miss — never a valid hit.
-#[derive(Clone)]
-pub struct PreviewDiskCache {
-    previews_dir: std::path::PathBuf,
-}
-
-impl PreviewDiskCache {
-    /// Root the disk tier at the given folder's `.lumina/previews` directory
-    /// (created on demand).
-    pub fn in_folder(folder: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
-        let previews_dir = folder.as_ref().join(".lumina").join("previews");
-        std::fs::create_dir_all(&previews_dir)?;
-        Ok(Self { previews_dir })
-    }
-
-    fn file_path(&self, key_digest: &str) -> std::path::PathBuf {
-        self.previews_dir.join(format!("{key_digest}.preview.webp"))
-    }
-
-    /// Store an encoded WebP atomically. Returns the number of bytes written.
-    pub fn store(&self, key_digest: &str, webp: &[u8]) -> std::io::Result<usize> {
-        let path = self.file_path(key_digest);
-        let temporary = self
-            .previews_dir
-            .join(format!("{key_digest}.{}.tmp", std::process::id()));
-        std::fs::write(&temporary, webp)?;
-        std::fs::rename(&temporary, &path)?;
-        Ok(webp.len())
-    }
-
-    /// Load an entry; a file that exists but fails to decode is a miss
-    /// (never a valid hit).
-    pub fn load(&self, key_digest: &str) -> Result<Option<ImageFrame>, crate::CoreError> {
-        let path = self.file_path(key_digest);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(_) => return Ok(None),
-        };
-        match decode_webp(&bytes) {
-            Ok(frame) => Ok(Some(frame)),
-            Err(_) => Ok(None),
-        }
-    }
-
-    /// Remove files whose records/digests are not in `live_digests` (prune
-    /// orphans, analogous to `DiskFolderCache::prune_orphans`).
-    pub fn prune_orphans(&self, live_digests: &[String]) -> std::io::Result<usize> {
-        let mut removed = 0;
-        for item in std::fs::read_dir(&self.previews_dir)? {
-            let item = item?;
-            let Some(name) = item.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            if name.ends_with(".tmp") {
-                // An interrupted atomic write: never a valid hit, remove it.
-                std::fs::remove_file(item.path())?;
-                removed += 1;
-                continue;
-            }
-            if let Some(stem) = name.strip_suffix(".preview.webp") {
-                if !live_digests.iter().any(|d| d == stem) {
-                    std::fs::remove_file(item.path())?;
-                    removed += 1;
-                }
-            }
-        }
-        Ok(removed)
-    }
-
-    /// Delete the whole tier (complete deletability test).
-    pub fn clear(&self) -> std::io::Result<()> {
-        for item in std::fs::read_dir(&self.previews_dir)? {
-            let item = item?;
-            if item.path().is_file() {
-                std::fs::remove_file(item.path())?;
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,53 +555,5 @@ mod tests {
     #[test]
     fn decode_webp_rejects_garbage() {
         assert!(decode_webp(b"not a real webp").is_err());
-    }
-
-    // ---- Disk tier (native) ----
-
-    #[test]
-    fn disk_tier_roundtrip_prune_and_clear() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "lumina-preview-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-                + (N.fetch_add(1, Ordering::Relaxed) as u128)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let disk = PreviewDiskCache::in_folder(&dir).unwrap();
-        let key = key_of("content-a", "render-a");
-        let digest = key.digest();
-        let frame = frame(4, 4, 9);
-        let webp = encode_webp_lossless(&frame).unwrap();
-        assert_eq!(disk.store(&digest, &webp).unwrap(), webp.len());
-
-        // Hit.
-        assert_eq!(disk.load(&digest).unwrap().map(|f| f.pixels[0]), Some(9));
-
-        // A non-existent digest is a miss.
-        assert!(disk.load("missing").unwrap().is_none());
-
-        // A partial write (interrupted temp) is a miss and is pruned.
-        disk.prune_orphans(std::slice::from_ref(&digest)).unwrap();
-        assert_eq!(
-            disk.load(&digest).unwrap().map(|f| f.pixels[0]),
-            Some(9),
-            "live digest survives prune"
-        );
-
-        // Orphan pruning removes a missing digest.
-        disk.prune_orphans(&[]).unwrap();
-        assert!(disk.load(&digest).unwrap().is_none());
-
-        // Completeness: store again then fully clear.
-        disk.store(&digest, &webp).unwrap();
-        assert!(disk.load(&digest).unwrap().is_some());
-        disk.clear().unwrap();
-        assert!(disk.load(&digest).unwrap().is_none());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

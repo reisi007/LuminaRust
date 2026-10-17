@@ -18,9 +18,10 @@
 //! The controller owns background threads and native file IO (capability
 //! boundary documented in `feature/platform/capability-matrix.md`).
 
+use lumina_cache::preview_disk::PreviewDiskCache;
 #[cfg(test)]
 use lumina_core::preview_cache::{decode_webp, encode_webp_lossless};
-use lumina_core::preview_cache::{prefetch_window, LruPreviewCache, PreviewDiskCache, PreviewKind};
+use lumina_core::preview_cache::{prefetch_window, LruPreviewCache, PreviewKind};
 use lumina_core::{DenoisePolicy, ImageFrame};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
