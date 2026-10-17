@@ -319,7 +319,7 @@ pub use render_tick::DragTickTimings;
 
 use draft_throttle::DraftThrottle;
 use eframe::egui;
-use lumina_core::cache::disk::DiskFolderCache;
+use lumina_cache::DiskFolderCache;
 use lumina_core::MaskPolicy;
 // `export_image`/`ExportOptions` (Export module) and `rasterize_prompt` (mask overlay).
 use lumina_core::{

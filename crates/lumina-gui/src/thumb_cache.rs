@@ -20,21 +20,20 @@
 //!   option can never be served silently from a stale index.
 //!
 //! The preview path layout (`<folder>/.lumina/previews/<blake3>-<kind>.bin`)
-//! mirrors `lumina_core::cache::disk`'s private `entry_paths`. The
-//! `preview_index_layout_matches_core_store` test pins the two together by
-//! writing through the core API and probing through this index, so a core layout
-//! change fails the suite loudly instead of silently turning every thumbnail
-//! into a cold render.
+//! is not mirrored here any more (Q4 of LUMINA-CACHE-EXTRACT-70): the index
+//! calls `lumina_cache::disk::entry_stem`, the same public layout
+//! `DiskFolderCache` itself writes. `preview_index_layout_matches_core_store`
+//! pins the two together by writing through the cache API and probing through
+//! this index, so a layout change fails the suite loudly instead of silently
+//! turning every thumbnail into a cold render.
 
-use lumina_core::cache::disk::DiskFolderCache;
-use lumina_core::cache::{preview_cache_key, PreviewKind};
+use lumina_cache::disk::{entry_stem, PREVIEWS_DIR};
+use lumina_cache::DiskFolderCache;
+use lumina_core::cache::PreviewKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::timing;
-
-/// Preview directory below a folder's `.lumina` cache root (mirrors core).
-const PREVIEWS_DIR: &str = "previews";
 
 /// Virtual copy whose standard preview the filmstrip/Library cells display
 /// (the same identity `ensure_thumbnail` has always probed).
@@ -100,10 +99,10 @@ impl PreviewIndex {
 }
 
 /// Stable on-disk stem of the standard preview for one source
-/// (`vc-original` copy). Mirrors `DiskFolderCache::entry_paths`.
+/// (`vc-original` copy). Exactly the layout `DiskFolderCache` writes (Q4 of
+/// LUMINA-CACHE-EXTRACT-70): the GUI calls it instead of mirroring it.
 fn standard_stem(source: &str) -> String {
-    let id = blake3::hash(preview_cache_key(source, THUMB_VIRTUAL_COPY).as_bytes()).to_hex();
-    format!("{id}-{}", PreviewKind::Standard.as_str())
+    entry_stem(source, THUMB_VIRTUAL_COPY, PreviewKind::Standard)
 }
 
 /// Per-folder metadata index, memoized across frames and invalidated visibly on
@@ -191,11 +190,12 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
-    /// The metadata index must agree with the core writer: a preview stored
-    /// through `DiskFolderCache::store_preview` is a probe hit, and the index's
-    /// derived stem is exactly the file core wrote. This pins the mirrored
-    /// layout so a core change fails here instead of silently degrading every
-    /// thumbnail to a cold render.
+    /// The metadata index must agree with the writer: a preview stored
+    /// through `DiskFolderCache::store_preview` is a probe hit, and the layout
+    /// the GUI calls (`standard_stem` → `lumina_cache::disk::entry_stem` and the
+    /// public `DiskFolderCache::entry_paths`) is exactly the file core wrote.
+    /// This pins the shared layout so a change fails here instead of silently
+    /// degrading every thumbnail to a cold render.
     #[test]
     fn preview_index_layout_matches_core_store() {
         let dir = folder();
@@ -218,6 +218,18 @@ mod tests {
             .find(|name| name.ends_with("-standard.bin"))
             .expect("core wrote a standard preview");
         assert_eq!(entry, format!("{}.bin", standard_stem(source)));
+        // The public layout API must name that very file, too (Q4).
+        let (_meta, data) = DiskFolderCache::entry_paths(
+            cache.path(),
+            source,
+            THUMB_VIRTUAL_COPY,
+            PreviewKind::Standard,
+        );
+        assert_eq!(
+            data.file_name().and_then(|name| name.to_str()),
+            Some(entry.as_str()),
+            "the public entry_paths layout must name the file core wrote"
+        );
 
         let mut index = PreviewIndexCache::default();
         assert!(

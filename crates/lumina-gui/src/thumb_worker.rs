@@ -21,7 +21,7 @@ use super::*;
 use crate::filmstrip::{downscale_rgba, THUMBNAIL_MAX_DIM};
 use crate::thumb_cache::THUMB_VIRTUAL_COPY;
 use log::{debug, info, trace, warn};
-use lumina_core::cache::disk::DiskFolderCache;
+use lumina_cache::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
 use lumina_core::{prepare_source_base, render_frame, StageWork};
 

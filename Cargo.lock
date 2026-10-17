@@ -2130,6 +2130,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-cache"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "lumina-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lumina-cli"
 version = "0.1.0"
 dependencies = [
@@ -2212,6 +2224,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "log",
+ "lumina-cache",
  "lumina-core",
  "lumina-cull",
  "lumina-gpu",

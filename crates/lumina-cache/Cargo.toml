@@ -1,0 +1,19 @@
+[package]
+name = "lumina-cache"
+version = "0.1.0"
+edition = "2021"
+description = "LUMINA-CACHE-EXTRACT-70 native folder-cache disk tier (Core stays filesystem-free in production code)"
+
+[dependencies]
+# Read-only consumer of the platform-neutral cache schema (`PreviewKind`,
+# `FolderCacheSettings`, `preview_cache_key`); this crate adds the file system
+# half, so `lumina-core` keeps compiling without `std::fs` (Architektur-Review
+# Befund R4).
+lumina-core = { path = "../lumina-core" }
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

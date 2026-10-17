@@ -113,7 +113,12 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 
 - `lumina-core` enthält plattformneutrale Domänen- und Renderlogik und darf
   keine GUI-, Dateisystem-, native ONNX- oder native RAW-Abhängigkeiten
-  voraussetzen.
+  voraussetzen. Im Produktionscode ist `lumina-core` dateisystemfrei: der
+  native Ordner-Cache-/Preview-Disk-Tier liegt im Crate `lumina-cache`
+  (LUMINA-CACHE-EXTRACT-70), das die Core-Schema- und Pfadlayout-API
+  (`PreviewKind`, `FolderCacheSettings`, `preview_cache_key`, `entry_stem`)
+  liest und schreibt. `lumina-cache` ist der Adapter zwischen Core und den
+  Frontends und darf `std::fs` verwenden; Test-only-Vorkommen bleiben in Core.
 - Ein verpflichtendes `lumina-sidecar`-Modul soll Schema, Validierung,
   Roundtrip-Serialisierung, Migrationen und atomare Sidecar-Operationen bündeln.
 - `lumina-raw` kapselt RAW-Decoder, Demosaicing, EXIF und Farbprofile.

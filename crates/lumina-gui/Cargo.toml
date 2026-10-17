@@ -18,6 +18,9 @@ serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP 
 # `Preset` structure.
 serde = { version = "1", features = ["derive"] }
 lumina-core = { path = "../lumina-core" }
+# LUMINA-CACHE-EXTRACT-70: the native folder-cache disk tier (and its public
+# entry layout, Q4) lives in `lumina-cache`, outside the filesystem-free `lumina-core`.
+lumina-cache = { path = "../lumina-cache" }
 lumina-raw = { path = "../lumina-raw" }
 # EXIF→Lensfun auto-profile resolution (G-06 Lensfun-Vollausbau). Only
 # compiled/linked when the `lensfun` feature is on (same pattern as

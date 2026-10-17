@@ -28,7 +28,8 @@
 //!   only and is never a render invariant (classification in the SOLL).
 
 use egui_kittest::{kittest::Queryable, Harness};
-use lumina_core::cache::{disk::DiskFolderCache, PreviewKind};
+use lumina_cache::DiskFolderCache;
+use lumina_core::cache::PreviewKind;
 use lumina_core::ImageFrame;
 use lumina_gui::LuminaApp;
 use lumina_sidecar::{DecodeFingerprint, GeometryFingerprint, SourceIdentity};

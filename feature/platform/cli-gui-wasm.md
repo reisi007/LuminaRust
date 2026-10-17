@@ -24,6 +24,12 @@ F-100 Lightroom-UI-Konventionen
 Dateisystemzugriff, GPU und Parallelisierung werden über Adapter angebunden.
 CLI und GUI verwenden dieselbe Rezept- und Renderlogik.
 
+Der native Ordner-Cache-/Preview-Disk-Tier liegt im Crate `lumina-cache`
+(LUMINA-CACHE-EXTRACT-70): `lumina-core` ist im Produktionscode
+dateisystemfrei, `lumina-cache` ist der Adapter zwischen Core und den
+Frontends und führt das Pfad-Layout als öffentliche API
+(`entry_stem`/`entry_paths`), statt es in der GUI zu spiegeln (Q4).
+
 Der ONNX-Adapter muss sowohl automatische Modelle als auch interaktive
 Segmentierungsmodelle mit Box-, Punkt- und Masken-Prompts unterstützen können.
 Die konkrete Modellfähigkeit wird aus dem Modellmanifest gelesen und nicht aus

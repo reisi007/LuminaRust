@@ -2,7 +2,7 @@
 //!
 //! Per F-103-N1 the filmstrip is the bottom-of-window file browser in Develop;
 //! it is driven by small previews.  Each source is tried against the on-disk
-//! folder cache ([`lumina_core::cache::disk::DiskFolderCache`]) first; on a miss
+//! folder cache ([`lumina_cache::DiskFolderCache`]) first; on a miss
 //! a background job decodes/render the source at a small resolution, stores the
 //! preview and uses it.  Until a thumbnail is ready a placeholder cell is shown
 //! — there is deliberately no silent fallback to a wrong/sized-up image.
@@ -300,7 +300,7 @@ pub fn downscale_rgba(pixels: &[u8], width: u32, height: u32, max_dim: u32) -> (
 /// core cache layout for the tests.
 #[cfg(test)]
 pub fn filmstrip_preview_cached(
-    cache: &lumina_core::cache::disk::DiskFolderCache,
+    cache: &lumina_cache::DiskFolderCache,
     source: &str,
     virtual_copy: &str,
 ) -> bool {

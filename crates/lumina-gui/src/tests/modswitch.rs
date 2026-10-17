@@ -15,7 +15,7 @@
 
 use super::*;
 use crate::thumb_cache::THUMB_VIRTUAL_COPY;
-use lumina_core::cache::disk::DiskFolderCache;
+use lumina_cache::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
 
 /// A distinct 4×4 red PNG (different pixels from `save_png`'s 2×1 fixture), so

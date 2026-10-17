@@ -2,8 +2,13 @@
 //!
 //! Nothing in this module is authoritative: deleting its directory only causes
 //! previews to be rendered again; recipes remain in their sidecars.
+//!
+//! LUMINA-CACHE-EXTRACT-70: dieser Tier liegt im Crate `lumina-cache`, außerhalb
+//! von `lumina-core`, damit `lumina-core` im Produktionscode ohne Dateisystem
+//! kompiliert (Architektur-Review-Befund R4). Q4: das Pfad-Layout ist hier
+//! öffentlich nutzbar, damit Frontends es aufrufen statt es zu spiegeln.
 
-use super::{preview_cache_key, FolderCacheSettings, PreviewKind};
+use lumina_core::cache::{preview_cache_key, FolderCacheSettings, PreviewKind};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -11,7 +16,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const SETTINGS: &str = "settings.json";
-const PREVIEWS: &str = "previews";
+
+/// Unterverzeichnis des `.lumina`-Cachewurzelverzeichnisses, das die Preview-
+/// Einträge trägt. Öffentlich, weil die Frontends dasselbe Verzeichnis listen.
+pub const PREVIEWS_DIR: &str = "previews";
 
 #[derive(Debug, Error)]
 pub enum DiskCacheError {
@@ -39,6 +47,16 @@ pub struct DiskFolderCache {
     root: PathBuf,
 }
 
+/// Shared on-disk layout of one preview entry: the stem of the `.json` metadata
+/// and the `.bin` data file below `PREVIEWS_DIR`, derived from source, virtual
+/// copy and kind. Public (Q4 of LUMINA-CACHE-EXTRACT-70) so native frontends
+/// index that directory through this function instead of mirroring the layout;
+/// the GUI thumbnail index is its only other reader.
+pub fn entry_stem(source: &str, virtual_copy: &str, kind: PreviewKind) -> String {
+    let id = blake3::hash(preview_cache_key(source, virtual_copy).as_bytes()).to_hex();
+    format!("{id}-{}", kind.as_str())
+}
+
 impl DiskFolderCache {
     /// Derive the cache from an image path (the image itself is never touched).
     pub fn for_image(image: impl AsRef<Path>) -> Result<Self, DiskCacheError> {
@@ -50,7 +68,7 @@ impl DiskFolderCache {
     pub fn in_folder(folder: impl AsRef<Path>) -> Result<Self, DiskCacheError> {
         let image_folder = folder.as_ref().to_path_buf();
         let root = image_folder.join(".lumina");
-        fs::create_dir_all(root.join(PREVIEWS))?;
+        fs::create_dir_all(root.join(PREVIEWS_DIR))?;
         Ok(Self { image_folder, root })
     }
 
@@ -105,17 +123,19 @@ impl DiskFolderCache {
         atomic_write(&self.settings_path(), &bytes)
     }
 
-    fn entry_paths(
-        &self,
+    /// Full path pair of one preview entry under a cache `root`. Associated
+    /// (handle-free) form of [`entry_stem`], callable without a
+    /// [`DiskFolderCache`] handle so frontends can name the entry core wrote.
+    pub fn entry_paths(
+        root: &Path,
         source: &str,
         virtual_copy: &str,
         kind: PreviewKind,
     ) -> (PathBuf, PathBuf) {
-        let id = blake3::hash(preview_cache_key(source, virtual_copy).as_bytes()).to_hex();
-        let stem = format!("{id}-{}", kind.as_str());
+        let stem = entry_stem(source, virtual_copy, kind);
         (
-            self.root.join(PREVIEWS).join(format!("{stem}.json")),
-            self.root.join(PREVIEWS).join(format!("{stem}.bin")),
+            root.join(PREVIEWS_DIR).join(format!("{stem}.json")),
+            root.join(PREVIEWS_DIR).join(format!("{stem}.bin")),
         )
     }
 
@@ -159,7 +179,7 @@ impl DiskFolderCache {
         if !self.effective_settings()?.allows(kind) {
             return Ok(false);
         }
-        let (meta, data) = self.entry_paths(source, virtual_copy, kind);
+        let (meta, data) = Self::entry_paths(&self.root, source, virtual_copy, kind);
         atomic_write(&data, bytes)?;
         let record = serde_json::to_vec(&PreviewRecord {
             source: source.into(),
@@ -180,7 +200,7 @@ impl DiskFolderCache {
         if !self.effective_settings()?.allows(kind) {
             return Ok(None);
         }
-        let (meta, data) = self.entry_paths(source, virtual_copy, kind);
+        let (meta, data) = Self::entry_paths(&self.root, source, virtual_copy, kind);
         if !meta.is_file() || !data.is_file() {
             return Ok(None);
         }
@@ -199,7 +219,7 @@ impl DiskFolderCache {
         if !self.effective_settings()?.allows(kind) {
             return Ok(None);
         }
-        let (meta, data) = self.entry_paths(source, virtual_copy, kind);
+        let (meta, data) = Self::entry_paths(&self.root, source, virtual_copy, kind);
         if !meta.is_file() || !data.is_file() {
             return Ok(None);
         }
@@ -216,7 +236,7 @@ impl DiskFolderCache {
 
     /// Delete entries whose recorded source is not in the current directory scan.
     pub fn prune_orphans(&self, live_sources: &[String]) -> Result<usize, DiskCacheError> {
-        let directory = self.root.join(PREVIEWS);
+        let directory = self.root.join(PREVIEWS_DIR);
         let mut removed = 0;
         for item in fs::read_dir(&directory)? {
             let path = item?.path();
@@ -444,6 +464,31 @@ mod tests {
             .load_preview("gone.raw", "main", PreviewKind::Standard)
             .unwrap()
             .is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Q4 of LUMINA-CACHE-EXTRACT-70: the public layout must be the one the
+    /// writer actually uses — the associated `entry_paths` names exactly the
+    /// file pair `store_preview` commits, without a handle being required to
+    /// ask for it.
+    #[test]
+    fn entry_paths_name_the_files_the_writer_commits() {
+        let (path, cache) = setup();
+        assert!(cache
+            .store_preview("a.raw", "vc-original", PreviewKind::Standard, b"s")
+            .unwrap());
+        let root = cache.path();
+        let (meta, data) =
+            DiskFolderCache::entry_paths(root, "a.raw", "vc-original", PreviewKind::Standard);
+        assert!(meta.is_file(), "metadata entry exists: {}", meta.display());
+        assert!(data.is_file(), "data entry exists: {}", data.display());
+        assert_eq!(meta.file_stem(), data.file_stem());
+        assert_eq!(
+            data.file_stem().and_then(|stem| stem.to_str()),
+            Some(entry_stem("a.raw", "vc-original", PreviewKind::Standard).as_str())
+        );
+        assert_eq!(meta.extension().and_then(|ext| ext.to_str()), Some("json"));
+        assert_eq!(data.extension().and_then(|ext| ext.to_str()), Some("bin"));
         fs::remove_dir_all(path).unwrap();
     }
 }

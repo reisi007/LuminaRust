@@ -2,7 +2,7 @@
 //! failed fresh render never falls back to an identified record for old bytes.
 
 use super::*;
-use lumina_core::cache::disk::DiskFolderCache;
+use lumina_cache::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
 use lumina_sidecar::{SidecarDocument, SourceFingerprint};
 

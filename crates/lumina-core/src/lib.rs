@@ -48,7 +48,6 @@ mod tone_props;
 // R2-LENS-01 row-path contracts (extracted from `lib.rs`, DoD §8 ratchet).
 #[cfg(all(test, feature = "lensfun"))]
 mod lens_row_tests;
-pub use cache::disk::{DiskCacheError, DiskFolderCache};
 pub use cache::{
     CacheEntry, CacheError, CacheStage, CacheStore, Cancellation, FolderCache, FolderCacheSettings,
     StaleTracker,

@@ -229,7 +229,7 @@ fn thumbnail_stand_in_rejects_same_dimension_source_replacement() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let cache = lumina_core::cache::disk::DiskFolderCache::for_image(&fixture.source).unwrap();
+    let cache = lumina_cache::DiskFolderCache::for_image(&fixture.source).unwrap();
     let stale = ImageFrame::new(2, 1, vec![31, 32, 33, 255, 34, 35, 36, 255])
         .unwrap()
         .encode(ImageFileFormat::Png)
@@ -274,7 +274,7 @@ fn thumbnail_rebuild_marker_survives_preexisting_cache_failure_until_fresh_succe
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let cache = lumina_core::cache::disk::DiskFolderCache::for_image(&fixture.source).unwrap();
+    let cache = lumina_cache::DiskFolderCache::for_image(&fixture.source).unwrap();
     let stale = ImageFrame::new(2, 1, vec![7, 8, 9, 255, 10, 11, 12, 255])
         .unwrap()
         .encode(ImageFileFormat::Png)

@@ -22,12 +22,12 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
   virtuelle Kopien
 - Autorität: fachlicher Zielzustand für Implementierungs- und
   Verifizierungs-Agenten
-- Codebestand: Raster-MVP in Arbeit — 16 Crates im Workspace (`lumina-sidecar`,
-  `lumina-core`, `lumina-raw`, `lumina-onnx`, `lumina-gpu`, `lumina-lensfun`,
-  `lumina-merge`, `lumina-cull`, `lumina-stages`, `lumina-cli`, `lumina-mcp`,
-  `lumina-gui`, `lumina-iptc` sowie die Test-Infra `lumina-testskip`,
-  `lumina-gui-harness` und `lumina-bench`); Stand und offene Arbeit siehe
-  `Agents.todo.md` (Stand 2026-10-16)
+- Codebestand: Raster-MVP in Arbeit — 17 Crates im Workspace (`lumina-sidecar`,
+  `lumina-core`, `lumina-cache`, `lumina-raw`, `lumina-onnx`, `lumina-gpu`,
+  `lumina-lensfun`, `lumina-merge`, `lumina-cull`, `lumina-stages`, `lumina-cli`,
+  `lumina-mcp`, `lumina-gui`, `lumina-iptc` sowie die Test-Infra
+  `lumina-testskip`, `lumina-gui-harness` und `lumina-bench`); Stand und offene
+  Arbeit siehe `Agents.todo.md` (Stand 2026-10-16)
 
 ## Leitbild
 

@@ -214,7 +214,7 @@ fn filmstrip_cache_miss_then_hit_roundtrip() {
     let source = directory.path().join("photo.png");
     save_png(&source);
     let name = source.file_name().unwrap().to_string_lossy().to_string();
-    let cache = lumina_core::cache::disk::DiskFolderCache::for_image(&source).unwrap();
+    let cache = lumina_cache::DiskFolderCache::for_image(&source).unwrap();
     // No preview on disk yet -> miss (no silent fallback to a wrong image).
     assert!(!crate::filmstrip::filmstrip_preview_cached(
         &cache,

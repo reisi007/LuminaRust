@@ -8,9 +8,6 @@ use std::sync::{
 };
 use thiserror::Error;
 
-/// On-disk half of the folder cache. Only available via the native file system.
-pub mod disk;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheStage {
     Decode,
