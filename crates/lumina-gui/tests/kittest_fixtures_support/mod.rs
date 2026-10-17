@@ -271,7 +271,7 @@ fn assert_thumbnail_is_real(cache: &DiskFolderCache, file_name: &str, hash: &str
         "{file_name} thumbnail must be the production downscale of {source}"
     );
     let mut colors: HashSet<[u8; 3]> = HashSet::new();
-    let (chunks, _) = frame.pixels.as_chunks::<4>();
+    let (chunks, _) = frame.pixels().as_chunks::<4>();
     for pixel in chunks {
         colors.insert([pixel[0], pixel[1], pixel[2]]);
     }

@@ -77,7 +77,8 @@ fn writer_roundtrip_hash_stable_and_reimportable() {
     let img2 = lumina_raw::decode_file(&path).unwrap();
     assert_eq!((img1.frame.width, img1.frame.height), (32, 24));
     assert_eq!(
-        img1.frame.pixels, img2.frame.pixels,
+        img1.frame.pixels(),
+        img2.frame.pixels(),
         "re-import decode is deterministic (hash-stable)"
     );
     assert_eq!(img1.metadata.iso, Some(100.0));
@@ -140,7 +141,7 @@ fn grey_stays_grey_and_tone_is_plausible() {
         )
         .unwrap();
         let decoded = lumina_raw::decode_file(&path).unwrap();
-        let px = &decoded.frame.pixels;
+        let px = decoded.frame.pixels();
         assert_eq!(px.len(), 32 * 24 * 4);
         let c = (12 * 32 + 16) * 4;
         let (r, g, b, a) = (px[c], px[c + 1], px[c + 2], px[c + 3]);
@@ -174,7 +175,7 @@ fn grey_stays_grey_and_tone_is_plausible() {
     )
     .unwrap();
     let decoded = lumina_raw::decode_file(&path).unwrap();
-    let out = &decoded.frame.pixels;
+    let out = decoded.frame.pixels();
     let mut prev = 0u8;
     for x in 0..32 {
         let r = out[(12 * 32 + x) * 4];

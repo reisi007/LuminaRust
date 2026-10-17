@@ -195,7 +195,7 @@ fn followup_update_spot_edits_params_and_reloads() {
     let original_bytes = std::fs::read(&path).unwrap();
     let key_before = app.render_key().cloned().unwrap().digest();
     let generation = app.preview_generation();
-    let before_pixels = app.preview().expect("preview after load").pixels.clone();
+    let before_pixels = app.preview().expect("preview after load").pixels().to_vec();
     app.update_spot_heal(
         &ids[0],
         5.0,
@@ -234,7 +234,10 @@ fn followup_update_spot_edits_params_and_reloads() {
     assert!(app.preview_generation() > generation);
     assert_ne!(
         before_pixels,
-        app.preview().expect("preview after update").pixels.clone()
+        app.preview()
+            .expect("preview after update")
+            .pixels()
+            .to_vec()
     );
     // Reload leg: the edit survived a fresh open; the original is untouched.
     let mut reopened = new_app();

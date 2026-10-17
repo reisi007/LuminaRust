@@ -142,7 +142,7 @@ pub(crate) fn rendered_pixels(path: &Path) -> Vec<u8> {
     let bytes = fs::read(path).unwrap();
     ImageFrame::decode(&bytes)
         .expect("the rendered output must be a decodable image")
-        .pixels
+        .into_pixels()
 }
 
 /// Lowercase hex of a byte slice (for the byte-level goldens).

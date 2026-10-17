@@ -85,7 +85,7 @@ fn generative_double_role_generate_render_and_status() {
     assert_eq!((rendered.width, rendered.height), (4, 4));
     assert!(
         rendered
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -120,7 +120,8 @@ fn generative_double_role_generate_render_and_status() {
     .unwrap()
     .frame;
     assert_eq!(
-        rendered.pixels, oracle.pixels,
+        rendered.pixels(),
+        oracle.pixels(),
         "the CLI render must be byte-identical to the core oracle"
     );
 }
@@ -282,7 +283,8 @@ fn generative_auto_fill_without_transparency_needs_no_artifact() {
     .unwrap();
     let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(
-        rendered.pixels, source.pixels,
+        rendered.pixels(),
+        source.pixels(),
         "no transparency after lens => identity, no artifact required (caller passes None)"
     );
 }

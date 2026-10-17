@@ -194,14 +194,15 @@ fn run_scene(harness: &mut Harness<'_, LuminaApp>, scene: &Scene) {
         .clone();
     if scene.name != "neutral" {
         assert!(
-            max_abs_diff(&baseline.pixels, &cpu_frame.pixels) > 0,
+            max_abs_diff(baseline.pixels(), cpu_frame.pixels()) > 0,
             "scene {}: the recipe must actually change pixels vs. the default \
              recipe (non-vacuous matrix cell)",
             scene.name
         );
     } else {
         assert_eq!(
-            baseline.pixels, cpu_frame.pixels,
+            baseline.pixels(),
+            cpu_frame.pixels(),
             "neutral scene must be deterministic across two draft renders"
         );
     }

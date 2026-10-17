@@ -199,7 +199,7 @@ fn spot_dab_persists_heals_and_reloads() {
     app.set_spot_tool(SpotTool::Heal);
     app.set_spot_radius(2.0);
     let source = directory.path().join("dust.png");
-    let before = app.preview().expect("preview after load").pixels.clone();
+    let before = app.preview().expect("preview after load").pixels().to_vec();
     let generation = app.preview_generation();
     click_preview_center(&mut app, &ctx);
     // Recipe: exactly one heuristic spot with the armed size at the center.
@@ -217,7 +217,7 @@ fn spot_dab_persists_heals_and_reloads() {
     );
     // Render leg: the dab visibly changed the preview (no stale frame).
     assert!(app.preview_generation() > generation);
-    let after = app.preview().expect("preview after dab").pixels.clone();
+    let after = app.preview().expect("preview after dab").pixels().to_vec();
     assert_ne!(before, after, "dab must heal the preview");
     let center = (8 * 16 + 8) as usize * 4;
     assert!(after[center] > before[center], "dust pixel must brighten");

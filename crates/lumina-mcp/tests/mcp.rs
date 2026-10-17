@@ -166,7 +166,8 @@ fn downscale_never_upsizes_and_is_deterministic() {
     let small = downscale_bilinear(&frame, 1024).unwrap();
     assert_eq!((small.width, small.height), (64, 48));
     assert_eq!(
-        small.pixels, frame.pixels,
+        small.pixels(),
+        frame.pixels(),
         "no-op downscale must preserve pixels byte-for-byte"
     );
 
@@ -175,7 +176,7 @@ fn downscale_never_upsizes_and_is_deterministic() {
     assert_eq!(scaled.height, 24);
 
     let again = downscale_bilinear(&frame, 32).unwrap();
-    assert_eq!(scaled.pixels, again.pixels);
+    assert_eq!(scaled.pixels(), again.pixels());
 }
 
 // ---------------------------------------------------------------------------

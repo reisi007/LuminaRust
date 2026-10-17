@@ -9764,7 +9764,7 @@ impl LuminaApp {
         let x = ((nx * frame.width as f64) as u32).min(frame.width.saturating_sub(1));
         let y = ((ny * frame.height as f64) as u32).min(frame.height.saturating_sub(1));
         let idx = ((y * frame.width + x) * 4) as usize;
-        let px = &frame.pixels[idx..idx + 4];
+        let px = &frame.pixels()[idx..idx + 4];
         let r = px[0] as f64 / 255.0;
         let g = px[1] as f64 / 255.0;
         let b = px[2] as f64 / 255.0;
@@ -10853,7 +10853,7 @@ mod tests {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let index = ((y * width + x) as usize) * 4;
-                    frame.pixels[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
+                    frame.pixels_mut()[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
                 }
             }
         }
@@ -10949,7 +10949,7 @@ mod tests {
 
     fn avg_luminance(frame: &ImageFrame) -> f64 {
         let sum: u64 = frame
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()

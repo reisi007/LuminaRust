@@ -205,7 +205,7 @@ fn psnr_tolerance_violation_is_loud() {
     let golden = golden_path(&directory, "tone");
     let bytes = fs::read(&golden).unwrap();
     let mut frame = ImageFrame::decode(&bytes).unwrap();
-    for (index, byte) in frame.pixels.iter_mut().enumerate() {
+    for (index, byte) in frame.pixels_mut().iter_mut().enumerate() {
         if index % 4 != 3 {
             *byte = 255 - *byte;
         }
@@ -234,7 +234,7 @@ fn exact_tolerance_requires_byte_identity() {
     let golden = golden_path(&directory, "identity");
     let bytes = fs::read(&golden).unwrap();
     let mut frame = ImageFrame::decode(&bytes).unwrap();
-    frame.pixels[0] = frame.pixels[0].wrapping_add(1);
+    frame.pixels_mut()[0] = frame.pixels()[0].wrapping_add(1);
     fs::write(&golden, frame.encode(ImageFileFormat::Png).unwrap()).unwrap();
 
     let verify = run_matrix(&recipe_set, &[]);

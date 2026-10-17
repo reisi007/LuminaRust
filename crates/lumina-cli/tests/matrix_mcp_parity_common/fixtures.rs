@@ -134,7 +134,7 @@ pub fn blake3_file(path: &Path) -> String {
 pub fn invert_golden(golden: &Path) {
     let raw = bytes(golden);
     let mut frame = lumina_core::ImageFrame::decode(&raw).unwrap();
-    for (index, byte) in frame.pixels.iter_mut().enumerate() {
+    for (index, byte) in frame.pixels_mut().iter_mut().enumerate() {
         if index % 4 != 3 {
             *byte = 255 - *byte;
         }

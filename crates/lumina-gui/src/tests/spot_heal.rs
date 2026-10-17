@@ -123,7 +123,7 @@ fn g04_spot_detect_lists_then_applies_explicitly() {
     open_and_decode(&mut app, source.display().to_string());
     assert!(app.set_spot_detect_threshold(2.0).is_err());
     app.set_spot_detect_threshold(0.5).unwrap();
-    let before_pixels = app.preview().expect("preview after load").pixels.clone();
+    let before_pixels = app.preview().expect("preview after load").pixels().to_vec();
     let candidates = app.detect_spot_candidates().unwrap();
     assert_eq!(candidates.len(), 1);
     assert!(!app.spot_detect_status.is_empty());
@@ -138,7 +138,11 @@ fn g04_spot_detect_lists_then_applies_explicitly() {
         serde_json::from_value(app.recipe().extras["spot_removals"].clone()).unwrap();
     assert_eq!(spots.len(), 1);
     assert_eq!(spots[0]["mode"], "heuristic");
-    let after_pixels = app.preview().expect("preview after apply").pixels.clone();
+    let after_pixels = app
+        .preview()
+        .expect("preview after apply")
+        .pixels()
+        .to_vec();
     assert_ne!(
         before_pixels, after_pixels,
         "applied heal must change the preview"

@@ -5211,7 +5211,7 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
         width: definition.region_width,
         height: definition.region_height,
         region: definition.region_values.clone(),
-        replacement: replacement_frame.pixels.clone(),
+        replacement: replacement_frame.pixels().to_vec(),
     };
     region
         .validate()
@@ -7187,8 +7187,8 @@ fn denoise_record_rgb(
             rgb_frame.width, rgb_frame.height, frame.width, frame.height
         )));
     }
-    let mut pixels = Vec::with_capacity(rgb_frame.pixels.len() / 4 * 3);
-    for pixel in rgb_frame.pixels.as_chunks::<4>().0 {
+    let mut pixels = Vec::with_capacity(rgb_frame.pixels().len() / 4 * 3);
+    for pixel in rgb_frame.pixels().as_chunks::<4>().0 {
         pixels.extend_from_slice(&pixel[..3]);
     }
     let core_artifact = CoreDenoiseRgbArtifact::new(rgb_frame.width, rgb_frame.height, pixels)?;

@@ -739,7 +739,7 @@ pub fn align_face_to_template(
             let source_index = ((py * source_width + px) as usize) * 4;
             let target_index = (y * width + x) * 4;
             pixels[target_index..target_index + 4]
-                .copy_from_slice(&image.pixels[source_index..source_index + 4]);
+                .copy_from_slice(&image.pixels()[source_index..source_index + 4]);
         }
     }
     ImageFrame::new(resolution.0, resolution.1, pixels).map_err(|error| fail(error.to_string()))
@@ -1006,7 +1006,8 @@ mod tests {
         let aligned = align_face_to_template(&frame, &landmarks, (112, 112)).unwrap();
         assert_eq!((aligned.width, aligned.height), (112, 112));
         assert_eq!(
-            aligned.pixels, frame.pixels,
+            aligned.pixels(),
+            frame.pixels(),
             "template landmarks on a 112×112 frame must be an identity warp"
         );
 
@@ -1014,8 +1015,8 @@ mod tests {
         assert_eq!(
             align_face_to_template(&frame, &landmarks, (112, 112))
                 .unwrap()
-                .pixels,
-            aligned.pixels
+                .pixels(),
+            aligned.pixels()
         );
     }
 

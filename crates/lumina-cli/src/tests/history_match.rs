@@ -298,7 +298,7 @@ fn valid_mask_with_match_total_exposure_measures_masked_domain() {
     // half clamps at 255 and must not be part of the target check.
     let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
     let visible_mean = rendered
-        .pixels
+        .pixels()
         .as_chunks::<4>()
         .0
         .iter()

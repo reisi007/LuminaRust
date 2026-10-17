@@ -118,7 +118,7 @@ fn frame_analysis(frame: &ImageFrame, mean_luminance: f64) -> FrameAnalysis {
     let mut maximum = [0u8; 3];
     let mut sum_luminance_squares = 0.0;
     let mut frequencies: HashMap<u32, u64> = HashMap::new();
-    for pixel in frame.pixels.as_chunks::<4>().0 {
+    for pixel in frame.pixels().as_chunks::<4>().0 {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
@@ -164,7 +164,7 @@ fn frame_analysis(frame: &ImageFrame, mean_luminance: f64) -> FrameAnalysis {
     });
     let luminance_stddev = (sum_luminance_squares / total).max(0.0).sqrt();
 
-    let total_pixels = frame.pixels.len() as u64 / 4;
+    let total_pixels = frame.pixels().len() as u64 / 4;
     let mut entries: Vec<(u32, u64)> = frequencies.into_iter().collect();
     entries.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     let dominant_colors: Vec<Value> = entries

@@ -132,7 +132,7 @@ fn denoise_benches(c: &mut Criterion) {
                 |mut candidate| {
                     apply_denoise_blend(black_box(&mut candidate), black_box(&artifact), 0.5, 0.5)
                         .unwrap();
-                    black_box(candidate.pixels[0])
+                    black_box(candidate.pixels()[0])
                 },
                 BatchSize::SmallInput,
             )

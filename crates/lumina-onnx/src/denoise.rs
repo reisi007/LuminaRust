@@ -528,7 +528,7 @@ impl DenoiseInference for StubDenoiseBackend {
                 actual_height: image.height,
             });
         }
-        Ok(stub_denoise_rgb(&image.pixels, image.width, image.height))
+        Ok(stub_denoise_rgb(image.pixels(), image.width, image.height))
     }
 }
 
@@ -802,7 +802,7 @@ fn tile_frame(
         for column in 0..width as usize {
             let src = ((y as usize + row) * frame_width + (x as usize + column)) * 4;
             let dst = (row * width as usize + column) * 4;
-            pixels[dst..dst + 3].copy_from_slice(&frame.pixels[src..src + 3]);
+            pixels[dst..dst + 3].copy_from_slice(&frame.pixels()[src..src + 3]);
             pixels[dst + 3] = 255;
         }
     }

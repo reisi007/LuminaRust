@@ -84,7 +84,8 @@ fn a_source_action_changes_the_analysis_frame_and_the_tone_analysis() {
     let with = auto_analysis_frame(&source, &recipe, &[repair_bright_half()]).unwrap();
 
     assert_ne!(
-        without.pixels, with.pixels,
+        without.pixels(),
+        with.pixels(),
         "AUTO-TONE-ANALYSIS-INPUT-8: the SourceActions stage must be inside the analysis domain"
     );
     // The repair replaces level 235 with level 90, so p99 must fall measurably.
@@ -140,7 +141,8 @@ fn the_crop_is_applied_after_the_source_actions() {
     // cropping, the repair is invisible. That is the proof that the crop runs
     // last: if the repair ran after the crop it would paint the kept half.
     assert_eq!(
-        cropped.pixels, cropped_repaired.pixels,
+        cropped.pixels(),
+        cropped_repaired.pixels(),
         "with the crop applied last, a right-half repair cannot reach the kept half"
     );
 }
@@ -162,7 +164,8 @@ fn adjustments_from_a_previous_auto_run_do_not_feed_back_into_the_domain() {
     let second = auto_analysis_frame(&source, &recipe, &[]).unwrap();
 
     assert_eq!(
-        first.pixels, second.pixels,
+        first.pixels(),
+        second.pixels(),
         "Adjustments are outside the Auto-Tone domain, so a previous run cannot feed back into it"
     );
 }

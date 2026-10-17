@@ -300,7 +300,7 @@ fn bench_input_spec_digest() -> String {
 pub fn make_denoise_artifact(size: u32) -> DenoiseRgbArtifact {
     let frame = make_frame(size);
     let pixels = frame
-        .pixels
+        .pixels()
         .as_chunks::<4>()
         .0
         .iter()

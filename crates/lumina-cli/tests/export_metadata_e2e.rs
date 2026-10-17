@@ -129,10 +129,10 @@ fn export_jpeg_bake_in_roundtrip_pixels_identical_and_deterministic() {
     assert!(result.status.success());
     let pixels_meta = ImageFrame::decode(&fs::read(&with_meta).unwrap())
         .unwrap()
-        .pixels;
+        .into_pixels();
     let pixels_plain = ImageFrame::decode(&fs::read(&plain).unwrap())
         .unwrap()
-        .pixels;
+        .into_pixels();
     assert_eq!(pixels_meta, pixels_plain);
 
     // Determinismus: gleiches Rezept + gleiche Drafts → byte-identische Datei.

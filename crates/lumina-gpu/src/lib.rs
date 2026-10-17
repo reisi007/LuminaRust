@@ -205,11 +205,9 @@ impl Frame {
     /// Build a [`Frame`] from a core [`ImageFrame`] (no copy of pixel semantics;
     /// the buffer is moved).
     pub fn from_image_frame(frame: ImageFrame) -> Self {
-        let ImageFrame {
-            width,
-            height,
-            pixels,
-        } = frame;
+        let width = frame.width;
+        let height = frame.height;
+        let pixels = frame.into_pixels();
         Self {
             width,
             height,
@@ -2207,7 +2205,7 @@ impl GpuContext {
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &action.replacement.pixels,
+                    action.replacement.pixels(),
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(action.replacement.width * 4),
@@ -2443,7 +2441,7 @@ impl GpuContext {
         let Some(v) = vram_guard.active() else {
             return Err(GpuError::RenderFailed("vram not ready".into()));
         };
-        let src_identity = (frame.pixels.as_ptr() as usize, frame.pixels.len());
+        let src_identity = (frame.pixels().as_ptr() as usize, frame.pixels().len());
         if v.input_source_identity != Some(src_identity) {
             resources.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -2452,7 +2450,7 @@ impl GpuContext {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &frame.pixels,
+                frame.pixels(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(frame.width * 4),
@@ -3260,7 +3258,7 @@ impl GpuContext {
         // only when the source actually changed (R2-GPU-04, mirroring
         // R2-GPU-01). A benchmark loop or repeated exports of the same frame
         // skip the ≈16 MB CPU→GPU transfer on every call after the first.
-        let src_identity = (frame.pixels.as_ptr() as usize, frame.pixels.len());
+        let src_identity = (frame.pixels().as_ptr() as usize, frame.pixels().len());
         if pooled.input_source_identity != Some(src_identity) {
             resources.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -3269,7 +3267,7 @@ impl GpuContext {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &frame.pixels,
+                frame.pixels(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
@@ -4319,7 +4317,7 @@ fn upload_generative_artifacts(
             )));
         }
         let frame = &artifact.frame;
-        if frame.pixels.len() != (frame.width as usize) * (frame.height as usize) * 4 {
+        if frame.pixels().len() != (frame.width as usize) * (frame.height as usize) * 4 {
             return Err(GpuError::RenderFailed(format!(
                 "{label}: generative artifact pixel length does not match {}x{}",
                 frame.width, frame.height
@@ -4348,7 +4346,7 @@ fn upload_generative_artifacts(
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &frame.pixels,
+            frame.pixels(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(frame.width * 4),

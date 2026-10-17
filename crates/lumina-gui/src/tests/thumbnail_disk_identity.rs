@@ -92,10 +92,11 @@ fn persistent_thumbnail_cache_is_bound_to_exact_source_content() {
     };
     let cached = crate::thumb_worker::decode_thumbnail_frame(&cached_job).unwrap();
     assert_eq!(
-        cached.pixels, fresh.pixels,
+        cached.pixels(),
+        fresh.pixels(),
         "mismatched disk pixels must miss"
     );
-    assert_ne!(cached.pixels, stale.pixels);
+    assert_ne!(cached.pixels(), stale.pixels());
     assert!(cache
         .load_preview_with_source_hash(
             fixture.source.file_name().unwrap().to_str().unwrap(),

@@ -235,12 +235,8 @@ impl LuminaApp {
                 return;
             };
             let (pixels, sw, sh) =
-                downscale_rgba(&original.pixels, original.width, original.height, max_dim);
-            let small = lumina_core::ImageFrame {
-                width: sw,
-                height: sh,
-                pixels,
-            };
+                downscale_rgba(original.pixels(), original.width, original.height, max_dim);
+            let small = lumina_core::ImageFrame::new(sw, sh, pixels).unwrap();
             match range_masks::evaluate_range_prompt(&small, &prompt) {
                 Ok(plane) => plane,
                 Err(_) => return,

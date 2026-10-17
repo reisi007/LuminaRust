@@ -228,8 +228,8 @@ fn batch_renders_directory_with_sidecar_recipe_and_writes_nothing_extra() {
     assert_eq!((out_edited.width, out_edited.height), (8, 8));
     let source_pixels = ImageFrame::decode(&fs::read(&edited).unwrap()).unwrap();
     assert_ne!(
-        out_edited.pixels[..4],
-        source_pixels.pixels[..4],
+        out_edited.pixels()[..4],
+        source_pixels.pixels()[..4],
         "sidecar recipe must be applied"
     );
 
@@ -555,13 +555,16 @@ fn dust_removal_persists_action_and_verifies_via_render_out() {
     // Verification render replaced every masked pixel with the red plate.
     let verified = ImageFrame::decode(&fs::read(&render_out).unwrap()).unwrap();
     assert_eq!((verified.width, verified.height), (2, 2));
-    for pixel in verified.pixels.as_chunks::<4>().0 {
+    for pixel in verified.pixels().as_chunks::<4>().0 {
         assert_eq!(&pixel[..3], &[255, 0, 0], "region pixel must be replaced");
     }
 
     // Original untouched.
     let original = ImageFrame::decode(&fs::read(&source).unwrap()).unwrap();
-    assert_eq!(&original.pixels.as_chunks::<4>().0[0][..3], &[128, 0, 128]);
+    assert_eq!(
+        &original.pixels().as_chunks::<4>().0[0][..3],
+        &[128, 0, 128]
+    );
 }
 
 #[test]

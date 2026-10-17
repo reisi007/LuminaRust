@@ -398,7 +398,7 @@ impl LuminaApp {
         key: &str,
     ) -> egui::TextureHandle {
         let size = [frame.width as usize, frame.height as usize];
-        let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
+        let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels());
         ctx.load_texture(format!("thumb-{key}"), image, egui::TextureOptions::LINEAR)
     }
 }

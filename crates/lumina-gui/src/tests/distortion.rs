@@ -94,7 +94,7 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
     );
     // auto_fill may or may not change pixels depending on heuristic; allow identical as valid if both opaque
     assert!(
-        out_without_core.pixels != out_with_core.pixels
+        out_without_core.pixels() != out_with_core.pixels()
             || !has_transparent_pixels(&out_without_core),
         "auto_fill must change pixels when transparent present"
     );
@@ -112,7 +112,8 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
     .unwrap()
     .frame;
     assert_eq!(
-        out_with_core.pixels, out_with2.pixels,
+        out_with_core.pixels(),
+        out_with2.pixels(),
         "seed-pinned auto_fill must be byte-identical"
     );
     let psnr_val = psnr(&out_without_core, &out_with_core);
@@ -156,7 +157,12 @@ fn auto_fill_transparent_headless_synthetic_8x8_lens_distortion() {
     );
     let with = app.preview().unwrap().clone();
     assert!(
-        !with.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255),
+        !with
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| px[3] < 255),
         "auto_fill must make all pixels opaque in app preview"
     );
     let recipe_without2 = EditRecipe {
@@ -215,7 +221,7 @@ fn crop_maxrect_default_applies_through_gui_preview() {
     let identity = app.preview().unwrap().clone();
     assert_eq!((identity.width, identity.height), (w, h));
     assert!(!identity
-        .pixels
+        .pixels()
         .as_chunks::<4>()
         .0
         .iter()
@@ -228,7 +234,7 @@ fn crop_maxrect_default_applies_through_gui_preview() {
     let preview = app.preview().unwrap().clone();
     assert!(
         !preview
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -255,5 +261,5 @@ fn crop_maxrect_default_applies_through_gui_preview() {
     .unwrap()
     .frame;
     assert_eq!((preview.width, preview.height), (core.width, core.height));
-    assert_eq!(preview.pixels, core.pixels);
+    assert_eq!(preview.pixels(), core.pixels());
 }

@@ -287,7 +287,8 @@ fn preview_applies_the_persisted_mask_that_the_cli_applies() {
     // The fixture's mask must actually do something, otherwise a
     // "preview == no-mask" comparison would pass vacuously.
     assert_ne!(
-        no_mask.pixels, masked.pixels,
+        no_mask.pixels(),
+        masked.pixels(),
         "the half-covered mask must change the masked half of the render"
     );
 
@@ -351,13 +352,15 @@ fn preview_applies_the_persisted_mask_that_the_cli_applies() {
 
     let preview_frame = ImageFrame::decode(&fs::read(&preview_path).unwrap()).unwrap();
     assert_eq!(
-        preview_frame.pixels, masked.pixels,
+        preview_frame.pixels(),
+        masked.pixels(),
         "MCP-MASK-APPLY: lumina_preview must APPLY the persisted mask — the \
          preview is byte-identical to the warn-masked oracle built through the \
          public render_frame entry point, exactly like the CLI"
     );
     assert_ne!(
-        preview_frame.pixels, no_mask.pixels,
+        preview_frame.pixels(),
+        no_mask.pixels(),
         "the preview must not equal the no-mask render of the same fixture — \
          that equality would mean the mask was NOT applied on the MCP path \
          (the MCP-MASKPOLICY divergence) and MCP-MASK-APPLY regressed"
@@ -387,7 +390,8 @@ fn flipping_one_mask_plane_value_changes_the_masked_render() {
 
     let mutated_render = masked_oracle(&frame, &document, &zdata_path);
     assert_ne!(
-        baseline.pixels, mutated_render.pixels,
+        baseline.pixels(),
+        mutated_render.pixels(),
         "changing one mask-plane value must change the masked render — \
          otherwise the byte comparison is insensitive to the mask"
     );

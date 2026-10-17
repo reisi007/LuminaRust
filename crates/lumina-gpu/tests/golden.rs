@@ -424,7 +424,7 @@ fn cpu_gpu_golden_equivalence() {
                 .expect("GPU render_with_gpu must succeed");
 
             // 3) Compare + gate on tolerances.
-            let report = compare(&cpu.pixels, &gpu.pixels);
+            let report = compare(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "equivalence[{frame_name}/{recipe_name}]: maxAbsDiff={:?} psnr={:.2} (dB) \
                  hashes_equal={}",
@@ -513,7 +513,7 @@ fn unsupported_recipes_route_to_cpu_byte_identically() {
         let gpu = ctx
             .render_with_gpu(&frame, &recipe)
             .unwrap_or_else(|error| panic!("GPU render_with_gpu failed for {name}: {error}"));
-        let report = compare(&cpu.pixels, &gpu.pixels);
+        let report = compare(cpu.pixels(), &gpu.pixels);
         assert_eq!(
             report.max_abs_diff,
             [0, 0, 0, 0],

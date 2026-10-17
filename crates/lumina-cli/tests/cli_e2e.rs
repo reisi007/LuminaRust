@@ -204,10 +204,10 @@ fn write_repair_region(
 fn pixel_at(frame: &ImageFrame, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let index = ((y * frame.width + x) * 4) as usize;
     (
-        frame.pixels[index],
-        frame.pixels[index + 1],
-        frame.pixels[index + 2],
-        frame.pixels[index + 3],
+        frame.pixels()[index],
+        frame.pixels()[index + 1],
+        frame.pixels()[index + 2],
+        frame.pixels()[index + 3],
     )
 }
 
@@ -300,7 +300,7 @@ fn dust_removal_persists_action_and_renders_only_inside_region() {
         width: 4,
         height: 4,
         region: region_values.to_vec(),
-        replacement: replacement.pixels.clone(),
+        replacement: replacement.pixels().to_vec(),
     };
     assert_eq!(spec.artifact.checksum, expected.checksum());
 

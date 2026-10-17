@@ -123,7 +123,7 @@ pub(super) fn replace_fixture_artifact(
 }
 
 fn first_pixel(frame: &ImageFrame) -> [u8; 4] {
-    frame.pixels[..4].try_into().unwrap()
+    frame.pixels()[..4].try_into().unwrap()
 }
 
 #[test]
@@ -339,7 +339,7 @@ fn active_preview_applies_action_and_matches_core_cli_context() {
     )
     .unwrap()
     .frame;
-    assert_eq!(preview.pixels, direct.pixels, "GUI preview vs core/CLI");
+    assert_eq!(preview.pixels(), direct.pixels(), "GUI preview vs core/CLI");
     assert_eq!(
         app.render_key().unwrap().source_action_artifact_hashes,
         vec![fixture.artifact.checksum()]

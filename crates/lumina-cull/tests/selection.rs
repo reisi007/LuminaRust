@@ -100,7 +100,7 @@ fn a_burst_exposure_drift_in_the_selection_emits_the_series_reason() {
     // exact-copy tests above).
     let base = block_texture(160, 160, 8, 7);
     let drifted = gray_frame(160, 160, |x, y| {
-        base.pixels[((y * 160 + x) * 4) as usize].saturating_sub(6)
+        base.pixels()[((y * 160 + x) * 4) as usize].saturating_sub(6)
     });
     let inputs = [
         CullSourceInput {

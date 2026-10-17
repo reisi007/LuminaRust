@@ -284,7 +284,7 @@ fn pending_integration_is_unavailable_without_a_silent_fallback() {
         error,
         lumina_core::CoreError::Denoise { ref status, .. } if status == "unavailable"
     ));
-    assert_eq!(strict.pixels, original.pixels);
+    assert_eq!(strict.pixels(), original.pixels());
 
     let mut warn = frame.clone();
     let outcome = apply_denoise_stage(
@@ -295,7 +295,7 @@ fn pending_integration_is_unavailable_without_a_silent_fallback() {
     )
     .unwrap();
     assert!(!outcome.applied, "the fallback is explicit, not silent");
-    assert_eq!(warn.pixels, original.pixels);
+    assert_eq!(warn.pixels(), original.pixels());
 }
 
 /// B4 (Auflage Kern-Verifizierung 2026-09-16): the artifact checksum the

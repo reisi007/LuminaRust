@@ -275,7 +275,7 @@ fn portrait_decode_applies_orientation_after_user_flip_zero() {
     assert_eq!(image.metadata.orientation, 8);
     assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
     assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
-    assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+    assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
 
     let landscape =
         lumina_raw::decode_bytes(LANDSCAPE, "aircraft-landscape.cr3").expect("decode failed");
@@ -447,11 +447,11 @@ fn portrait_decode_is_byte_identical_to_libraw_own_rotation() {
             let src = (y * reference.width + x) * colors;
             let dst = (y * image.frame.width as usize + x) * 4;
             assert_eq!(
-                &image.frame.pixels[dst..dst + 3],
+                &image.frame.pixels()[dst..dst + 3],
                 &reference.data[src..src + colors],
                 "production decode diverges from LibRaw's own rotation at ({x}, {y})"
             );
-            assert_eq!(image.frame.pixels[dst + 3], 255, "alpha must stay opaque");
+            assert_eq!(image.frame.pixels()[dst + 3], 255, "alpha must stay opaque");
         }
     }
 }

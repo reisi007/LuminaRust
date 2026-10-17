@@ -138,7 +138,8 @@ mod tests {
             "GUI matrix must not feed the R3-capped source to the shared pipeline"
         );
         assert_eq!(
-            full_preview.pixels, core.pixels,
+            full_preview.pixels(),
+            core.pixels(),
             "GUI matrix must use the same full-resolution core render context"
         );
 
@@ -159,7 +160,7 @@ mod tests {
         assert_eq!(report.pairs[0].expected_route, "gpu");
 
         let mut perturbed = preview.clone();
-        for (index, byte) in perturbed.pixels.iter_mut().enumerate() {
+        for (index, byte) in perturbed.pixels_mut().iter_mut().enumerate() {
             if index % 4 != 3 {
                 *byte = 255 - *byte;
             }

@@ -327,7 +327,8 @@ fn the_gui_and_the_shared_writer_agree_on_the_measured_domain_including_the_fing
     // domain: without it, the fingerprint would equal the un-cropped one.
     let uncropped = auto_analysis_frame(&source_frame, &EditRecipe::default(), &[]).unwrap();
     assert_ne!(
-        analysis.pixels, uncropped.pixels,
+        analysis.pixels(),
+        uncropped.pixels(),
         "the parity comparison must run on a cropped domain, or it proves nothing"
     );
 }

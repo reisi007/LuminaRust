@@ -398,14 +398,14 @@ fn display_sampler_matches_core_render() {
     for v in 0u16..=255 {
         let expected =
             (tone_curve_display_output(&points, v as f32 / 255.0) * 255.0).round() as i32;
-        let actual = i32::from(rendered.pixels[(v as usize) * 4]);
+        let actual = i32::from(rendered.pixels()[(v as usize) * 4]);
         assert!(
             (expected - actual).abs() <= 1,
             "display sampler diverged from render at {v}: display {expected}, render {actual}"
         );
     }
     // A non-identity curve must actually differ from the ramp (non-vacuous).
-    assert_ne!(rendered.pixels[64 * 4], 64, "curve must change midtones");
+    assert_ne!(rendered.pixels()[64 * 4], 64, "curve must change midtones");
 }
 
 /// Crash-Fix Runde 2 (F6): a positive `shadows` delta would put the first

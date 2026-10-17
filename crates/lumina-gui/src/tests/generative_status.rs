@@ -118,7 +118,7 @@ fn generative_double_role_record_renders() {
     assert_eq!((preview.width, preview.height), (12, 12));
     assert!(
         preview
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -129,7 +129,7 @@ fn generative_double_role_record_renders() {
     // the source pixel at the canvas offset is opaque (the composited frame
     // can never be served as the original transparent pixel).
     let offset_idx = (2 * 12 + 2) * 4;
-    assert_eq!(preview.pixels[offset_idx + 3], 255);
+    assert_eq!(preview.pixels()[offset_idx + 3], 255);
     // Byte-identical to a direct core render with both resolved artifacts.
     let g = app.generative_artifacts.clone();
     let ctx = RenderContext {
@@ -143,7 +143,7 @@ fn generative_double_role_record_renders() {
     let direct = lumina_core::render_frame_with_generative(&frame, &ctx, g.input())
         .unwrap()
         .frame;
-    assert_eq!(preview.pixels, direct.pixels);
+    assert_eq!(preview.pixels(), direct.pixels());
     // Both canvases persist; the recipe links the canvas-defining expand
     // record.
     assert!(zdata_path_for(&dir.path().join("double-role.png")).exists());
@@ -236,7 +236,7 @@ fn generative_auto_fill_hook_and_caller_convention() {
     assert_eq!((preview.width, preview.height), (8, 8));
     assert!(
         preview
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -256,7 +256,7 @@ fn generative_auto_fill_hook_and_caller_convention() {
     let direct = lumina_core::render_frame_with_generative(&frame, &ctx, g.input())
         .unwrap()
         .frame;
-    assert_eq!(preview.pixels, direct.pixels);
+    assert_eq!(preview.pixels(), direct.pixels());
 
     // Caller convention (normative): `auto_fill_transparent` active on an
     // opaque frame → `auto_fill = None` (identity); the render succeeds
@@ -292,12 +292,12 @@ fn generative_auto_fill_hook_and_caller_convention() {
         lumina_core::render_frame_with_generative(&opaque, &ctx, GenerativeCanvasInput::default())
             .unwrap()
             .frame;
-    assert_eq!(out.pixels, opaque.pixels);
+    assert_eq!(out.pixels(), opaque.pixels());
     // Defense in depth: a transparent frame with auto_fill and no artifact
     // is rejected by core itself (the GPU trusts the caller signal, the CPU
     // re-checks transparency — never a silent unfilled render).
     let mut transparent = opaque.clone();
-    transparent.pixels[3] = 0;
+    transparent.pixels_mut()[3] = 0;
     assert!(lumina_core::render_frame_with_generative(
         &transparent,
         &ctx,

@@ -127,10 +127,10 @@ impl LuminaApp {
                 } else {
                     "preview"
                 };
-                let bytes = frame.pixels.len();
+                let bytes = frame.pixels().len();
                 // Build the full-frame image while `frame` still borrows
                 // `self`; the handle mutation below needs `&mut self.texture`.
-                let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels());
                 if let Some(handle) = self.texture.as_mut() {
                     handle.set(image, egui::TextureOptions::LINEAR);
                 } else {
@@ -147,7 +147,7 @@ impl LuminaApp {
                 // R3-LOG-1 / R2-JANK-1 F3: the GPU present path is active and a
                 // CPU handle already exists — the upload is skipped; name the
                 // saved bytes instead (measurement only, pixels unchanged).
-                timing::emit(|| timing::texture_upload_skip_line("preview", frame.pixels.len()));
+                timing::emit(|| timing::texture_upload_skip_line("preview", frame.pixels().len()));
             }
         }
     }

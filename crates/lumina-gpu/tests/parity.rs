@@ -1119,7 +1119,7 @@ fn tone_only_is_byte_identical() {
         .expect("CPU oracle render")
         .frame;
         let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
-        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
         eprintln!("tone[{name}]: maxAbsDiff={diff}");
         assert_eq!(
             diff, 0,
@@ -1187,9 +1187,9 @@ fn implemented_stages_match_cpu_oracle() {
                 (gpu.width, gpu.height),
                 "{frame_name}/{recipe_name}: GPU output dimensions must equal the CPU oracle"
             );
-            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+            let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+            let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "parity[{frame_name}/{recipe_name}] {}x{}: maxAbsDiff={diff} psnr={psnr:.2} dB \
                  meanSignedErr={bias:+.4}",
@@ -1303,7 +1303,7 @@ fn default_content_crop_routes_to_cpu_with_parity() {
                 (gpu.width, gpu.height),
                 "{frame_name}/{name}: the CPU-routed default crop must match the oracle",
             );
-            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+            let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "default_crop[{frame_name}/{name}]: {}x{} (uncropped {}x{}) maxAbsDiff={diff}",
                 cpu.width, cpu.height, uncropped.output_width, uncropped.output_height
@@ -1453,9 +1453,9 @@ fn implemented_red_eye_matches_cpu_oracle() {
             let gpu = ctx
                 .render_with_gpu(frame, recipe)
                 .unwrap_or_else(|error| panic!("{frame_name}/{name}: GPU render: {error}"));
-            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+            let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+            let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "red_eye[{frame_name}/{name}]: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}"
             );
@@ -1543,7 +1543,7 @@ fn as_shot_wb_context_is_carried_and_validated() {
     .expect("CPU oracle render")
     .frame;
     let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("wb_context: maxAbsDiff={diff}");
     assert_eq!(
         diff, 0,
@@ -1650,9 +1650,9 @@ fn as_shot_wb_gains_match_cpu_oracle_across_recipe_wb() {
             let gpu = ctx
                 .render_with_gpu(&frame, recipe)
                 .unwrap_or_else(|error| panic!("{recipe_name}/{gains_name}: GPU render: {error}"));
-            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-            let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+            let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+            let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+            let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "as_shot_wb[{recipe_name}/{gains_name}]: maxAbsDiff={diff} psnr={psnr:.2} \
                  bias={bias:+.4}"
@@ -1914,9 +1914,9 @@ fn vram_path_applies_post_stages() {
         )
         .expect("CPU oracle render")
         .frame;
-        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-        let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-        let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+        let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+        let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+        let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
         eprintln!("vram[{name}]: maxAbsDiff={diff} psnr={psnr:.2} dB meanSignedErr={bias:+.4}");
         match equivalence {
             Equivalence::ByteIdentical => assert_eq!(
@@ -1969,7 +1969,7 @@ fn vram_path_applies_red_eye() {
     )
     .expect("CPU oracle render")
     .frame;
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("vram[red_eye]: maxAbsDiff={diff}");
     assert_eq!(diff, 0, "VRAM red-eye pass must match the CPU oracle");
 }
@@ -2292,7 +2292,7 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
             "{name}: fallback must match the reference frame dimensions"
         );
         assert_eq!(
-            max_abs_diff(&oracle.pixels, &gpu.pixels),
+            max_abs_diff(oracle.pixels(), &gpu.pixels),
             0,
             "{name}: fallback must be byte-identical to the full CPU reference"
         );
@@ -2504,7 +2504,7 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
         (gpu.width, gpu.height),
         "VRAM geometry must keep the source dimensions"
     );
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("vram_geometry[mirror]: maxAbsDiff={diff}");
     assert_eq!(
         diff, 0,
@@ -2538,7 +2538,7 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
     .expect("CPU oracle render")
     .frame;
     assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("vram_geometry[mirror+curves]: maxAbsDiff={diff}");
     assert!(
         diff <= 1,
@@ -2648,7 +2648,7 @@ fn lens_blur_external_depth_matches_cpu_oracle() {
         let gpu = ctx
             .render_with_gpu(&frame, &recipe)
             .expect("CPU fallback renders the bound depth plane");
-        assert_eq!(max_abs_diff(&cpu.pixels, &gpu.pixels), 0);
+        assert_eq!(max_abs_diff(cpu.pixels(), &gpu.pixels), 0);
         return;
     }
 
@@ -2656,9 +2656,9 @@ fn lens_blur_external_depth_matches_cpu_oracle() {
         .render_with_gpu(&frame, &recipe)
         .expect("GPU render with external depth");
     assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-    let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-    let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+    let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+    let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
     eprintln!("lens_blur_external_depth: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}");
     assert!(
         diff <= 1 && psnr >= MIN_PSNR_DB && bias.abs() <= MAX_ABS_MEAN_SIGNED_ERROR,
@@ -2766,9 +2766,9 @@ fn vram_path_applies_lens_blur() {
         .expect("CPU oracle render")
         .frame;
         assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
-        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-        let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-        let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+        let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+        let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
+        let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
         eprintln!("vram_lens_blur[{name}]: maxAbsDiff={diff} psnr={psnr:.2} bias={bias:+.4}");
         match equivalence {
             Equivalence::ByteIdentical => {
@@ -2808,7 +2808,7 @@ fn vram_path_applies_lens_blur() {
     )
     .expect("CPU oracle render")
     .frame;
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("vram_lens_blur[external_depth]: maxAbsDiff={diff}");
     assert!(
         diff <= 1,
@@ -3261,7 +3261,7 @@ fn source_action_batch_matches_oracle() {
     let gpu = ctx
         .render_with_gpu(&frame, &recipe)
         .expect("GPU render with batched source actions");
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("source_action_batch[{count}]: maxAbsDiff={diff}");
     assert_eq!(
         diff, 0,
@@ -3341,7 +3341,7 @@ fn legacy_spot_heal_matches_cpu_oracle() {
         let gpu = ctx
             .render_with_gpu(frame, &recipe)
             .unwrap_or_else(|error| panic!("{name}: GPU spot render: {error}"));
-        let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+        let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
         eprintln!("spot_heal[{name}]: maxAbsDiff={diff}");
         if diff != 0 {
             failures.push(format!("{name}: maxAbsDiff={diff}"));
@@ -3366,7 +3366,7 @@ fn legacy_spot_heal_matches_cpu_oracle() {
     )
     .expect("CPU oracle render")
     .frame;
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("spot_heal[vram_48x48]: maxAbsDiff={diff}");
     assert_eq!(diff, 0, "VRAM spot-heal pass must match the CPU oracle");
 
@@ -3504,8 +3504,8 @@ fn lensfun_corrector_map_matches_cpu_oracle() {
                 (gpu.width, gpu.height),
                 "{variant}/{frame_name}: dimensions"
             );
-            let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-            let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
+            let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
+            let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
             eprintln!("lensfun[{variant}/{frame_name}]: maxAbsDiff={diff} psnr={psnr:.2} dB");
             assert_eq!(
                 diff, 0,

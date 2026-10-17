@@ -95,10 +95,10 @@ fn optics_manual_distortion_changes_render() {
     let mut app = new_app();
     app.load_bytes(png, "gradient.png").unwrap();
     app.render().unwrap();
-    let before = app.preview().unwrap().pixels.clone();
+    let before = app.preview().unwrap().pixels().to_vec();
     app.set_lens_correction_value("distortion_k1", 0.5);
     app.render().unwrap();
-    let after = app.preview().unwrap().pixels.clone();
+    let after = app.preview().unwrap().pixels().to_vec();
     assert_ne!(
         before, after,
         "distortion_k1=0.5 must visibly change the preview"
@@ -123,10 +123,10 @@ fn optics_each_manual_field_changes_render() {
         let mut app = new_app();
         app.load_bytes(png, "gradient.png").unwrap();
         app.render().unwrap();
-        let before = app.preview().unwrap().pixels.clone();
+        let before = app.preview().unwrap().pixels().to_vec();
         app.set_lens_correction_value(field, value);
         app.render().unwrap();
-        let after = app.preview().unwrap().pixels.clone();
+        let after = app.preview().unwrap().pixels().to_vec();
         assert_ne!(
             before, after,
             "{field}={value} must visibly change the preview"
@@ -265,7 +265,7 @@ fn auto_optics_without_profile_leaves_render_untouched() {
     let mut app = new_app();
     app.load_bytes(png, "gradient.png").unwrap();
     app.render().unwrap();
-    let base = app.preview().unwrap().pixels.clone();
+    let base = app.preview().unwrap().pixels().to_vec();
     let empty = LensCorrection {
         version: 1,
         profile: None,
@@ -281,7 +281,7 @@ fn auto_optics_without_profile_leaves_render_untouched() {
     app.recipe.lens_correction = Some(empty);
     app.render().unwrap();
     assert_eq!(
-        app.preview().unwrap().pixels,
+        app.preview().unwrap().pixels(),
         base,
         "a profile-less lens block must not touch the render"
     );

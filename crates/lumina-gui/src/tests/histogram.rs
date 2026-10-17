@@ -236,7 +236,7 @@ fn g10_display_toggles_leave_recipe_sidecar_and_pixels_untouched() {
     let sidecar = lumina_sidecar::sidecar_path_for(&source);
     let recipe_before = app.recipe().adjustments.clone();
     let sidecar_before = std::fs::read(&sidecar).expect("sidecar committed");
-    let pixels_before = app.preview().expect("preview rendered").pixels.clone();
+    let pixels_before = app.preview().expect("preview rendered").pixels().to_vec();
     let generation_before = app.preview_generation();
     app.toggle_softproof_preview();
     app.toggle_original_histogram();
@@ -253,7 +253,7 @@ fn g10_display_toggles_leave_recipe_sidecar_and_pixels_untouched() {
         "display toggles never rewrite the sidecar"
     );
     assert_eq!(
-        app.preview().expect("preview kept").pixels,
+        app.preview().expect("preview kept").pixels(),
         pixels_before,
         "display toggles never re-render"
     );
@@ -266,7 +266,7 @@ fn g10_display_toggles_leave_recipe_sidecar_and_pixels_untouched() {
     // badge never leaks into the pipeline.
     app.render().unwrap();
     assert_eq!(
-        app.preview().expect("preview re-rendered").pixels,
+        app.preview().expect("preview re-rendered").pixels(),
         pixels_before,
         "softproof must not leak into the render"
     );
@@ -335,7 +335,7 @@ fn fit_preview_histogram_matches_thumbnail() {
     // Thumbnail pipeline (mirrors `decode_thumbnail_frame` sans disk
     // cache): downscale + default-recipe render.
     let (small, w, h) = crate::filmstrip::downscale_rgba(
-        &original.pixels,
+        original.pixels(),
         original.width,
         original.height,
         crate::filmstrip::THUMBNAIL_MAX_DIM,
@@ -445,7 +445,7 @@ fn fit_preview_portrait_histogram_matches_thumbnail() {
     let preview = app.preview().expect("preview after load").clone();
     assert_eq!((preview.width, preview.height), (40, 64));
     let (small, sw, sh) = crate::filmstrip::downscale_rgba(
-        &original.pixels,
+        original.pixels(),
         original.width,
         original.height,
         crate::filmstrip::THUMBNAIL_MAX_DIM,

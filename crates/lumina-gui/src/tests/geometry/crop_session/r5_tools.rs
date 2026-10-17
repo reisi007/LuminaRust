@@ -200,8 +200,8 @@ fn crop_bar_straighten_changes_render_and_survives_reload() {
     app.render().unwrap();
     let after = app.preview().expect("rotated render").clone();
     assert_ne!(
-        (before.width, before.height, &before.pixels),
-        (after.width, after.height, &after.pixels),
+        (before.width, before.height, &before.pixels()),
+        (after.width, after.height, &after.pixels()),
         "the render must change once the straighten value is committed"
     );
 

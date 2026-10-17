@@ -1066,7 +1066,8 @@ mod native {
                     let frame = rgba_from_bytes(&src, w, h, channels, orientation).unwrap();
                     let expected = reference_rgba(&src, w, h, channels, orientation);
                     assert_eq!(
-                        frame.pixels, expected,
+                        frame.pixels(),
+                        expected,
                         "8-bit orientation {orientation}, channels {channels}"
                     );
                     let (ew, eh) = if (5..=8).contains(&orientation) {
@@ -1090,7 +1091,7 @@ mod native {
                 let frame = rgba_from_words(&src, w, h, 3, orientation).unwrap();
                 let hi: Vec<u8> = src.iter().map(|v| (v >> 8) as u8).collect();
                 let expected = reference_rgba(&hi, w, h, 3, orientation);
-                assert_eq!(frame.pixels, expected, "16-bit orientation {orientation}");
+                assert_eq!(frame.pixels(), expected, "16-bit orientation {orientation}");
             }
         }
 
@@ -1100,7 +1101,7 @@ mod native {
             // frame must be fully opaque.
             let src = synthetic(3, 4, 3);
             let frame = rgba_from_bytes(&src, 4, 3, 3, 1).unwrap();
-            assert!(frame.pixels.iter().skip(3).step_by(4).all(|&a| a == 255));
+            assert!(frame.pixels().iter().skip(3).step_by(4).all(|&a| a == 255));
         }
 
         /// Verbatim port of LibRaw 0.22.2 `LibRaw::flip_index`
@@ -1358,7 +1359,7 @@ mod tests {
             let len = w as usize * h as usize * 4;
             assert_eq!(metadata.orientation, orientation, "{name} orientation");
             assert_eq!((frame.width, frame.height), (w, h), "{name} frame");
-            assert_eq!(frame.pixels.len(), len, "{name} buffer");
+            assert_eq!(frame.pixels().len(), len, "{name} buffer");
         };
         check(("aircraft-landscape.cr3", landscape, 1, 6032, 4024));
         check(("aircraft-portrait.cr3", portrait, 8, 4024, 6032));
@@ -1371,7 +1372,7 @@ mod tests {
         assert_eq!(image.metadata.orientation, 1);
         assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
         assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
-        assert_eq!(image.frame.pixels.len(), 6032 * 4024 * 4);
+        assert_eq!(image.frame.pixels().len(), 6032 * 4024 * 4);
     }
 
     /// Content-driven verification note (REVIEW-RAW-FLIP-1): a planned
@@ -1397,7 +1398,7 @@ mod tests {
         assert_eq!(image.metadata.orientation, 8);
         assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
-        assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+        assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
     }
 
     #[test]
@@ -1447,13 +1448,13 @@ mod tests {
         assert_eq!(image.metadata.orientation, 1);
         assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
         assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
-        assert_eq!(image.frame.pixels.len(), 6032 * 4024 * 4);
+        assert_eq!(image.frame.pixels().len(), 6032 * 4024 * 4);
         // The committed fixtures decode as 3-channel RGB; the promoted RGBA
         // frame must be fully opaque on this path too.
         assert!(
             image
                 .frame
-                .pixels
+                .pixels()
                 .iter()
                 .skip(3)
                 .step_by(4)
@@ -1477,7 +1478,7 @@ mod tests {
         assert_eq!(image.metadata.orientation, 8);
         assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
-        assert_eq!(image.frame.pixels.len(), 4024 * 6032 * 4);
+        assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
 
         let missing = decode_file("/nonexistent/lumina-streaming-probe.cr3").unwrap_err();
         assert!(

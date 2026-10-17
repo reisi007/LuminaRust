@@ -31,9 +31,9 @@ pub fn preprocess_rgb_to_model(image: &lumina_core::ImageFrame, target: Resoluti
             let sx = if dw <= 1 { 0 } else { (x * sw) / dw };
             let src = (sy * sw + sx) * 4;
             let dst = (y * dw + x) * 3;
-            out[dst] = image.pixels[src];
-            out[dst + 1] = image.pixels[src + 1];
-            out[dst + 2] = image.pixels[src + 2];
+            out[dst] = image.pixels()[src];
+            out[dst + 1] = image.pixels()[src + 1];
+            out[dst + 2] = image.pixels()[src + 2];
         }
     }
     out

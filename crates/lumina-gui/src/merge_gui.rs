@@ -73,6 +73,14 @@ impl std::fmt::Debug for MergeJob {
 
 /// RGBA8 (`0..=255`, alpha ignored) → linear `f32` RGB frame. Delegates to the
 /// shared [`linear_from_rgba`]; pure and loud on a malformed buffer (`None`).
+/// Converts an [`ImageFrame`] to a [`LinearImage`].
+///
+/// Returns `None` on a malformed buffer. `new` enforces `len == width*height*4`,
+/// but `width`/`height` are public and settable, so a frame whose dimensions
+/// no longer match its buffer is still constructable — reject it here instead
+/// of reshaping, and it short-circuits before the `width*height*3` allocation,
+/// which is why it stays even though the outcome matches `LinearImage::new`'s
+/// length check.
 pub fn linear_from_frame(frame: &lumina_core::ImageFrame) -> Option<LinearImage> {
     linear_from_rgba(frame)
 }
@@ -120,7 +128,7 @@ fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
         MergeRunError::Unsupported(format!(
             "source `{}` has {} bytes for a {}x{} RGBA8 frame",
             input.display(),
-            frame.pixels.len(),
+            frame.pixels().len(),
             frame.width,
             frame.height
         ))
@@ -764,8 +772,19 @@ mod tests {
         let linear = linear_from_frame(&frame).unwrap();
         assert_eq!(linear.width(), 2);
         assert_eq!(&linear.pixels()[0..3], &[1.0, 0.0, 0.0]);
+        // Q5: the buffer side of the invariant is sealed — `pixels_mut()`
+        // returns `&mut [u8]`, which cannot change the allocation length.
+        // But `width`/`height` remain public and settable, so the relation
+        // can still be broken by mutating a dimension; the guard rejects
+        // such a frame instead of reshaping it.
         let mut broken = frame.clone();
-        broken.pixels.pop();
-        assert!(linear_from_frame(&broken).is_none());
+        broken.width = 3;
+        assert!(
+            linear_from_frame(&broken).is_none(),
+            "a frame whose dimensions no longer match its buffer must be rejected, not reshaped"
+        );
+        // `new` still rejects a mismatched length outright.
+        let broken = ImageFrame::new(2, 1, vec![255, 0, 0, 128, 0, 128, 0]);
+        assert!(broken.is_err());
     }
 }

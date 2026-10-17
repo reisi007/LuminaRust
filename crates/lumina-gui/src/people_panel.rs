@@ -191,7 +191,7 @@ impl LuminaApp {
                         key.clone(),
                         crate::egui::ColorImage::from_rgba_unmultiplied(
                             [crop.width as usize, crop.height as usize],
-                            &crop.pixels,
+                            crop.pixels(),
                         ),
                         crate::egui::TextureOptions::LINEAR,
                     ))

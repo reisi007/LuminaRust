@@ -231,7 +231,7 @@ fn assert_parity(
 ) {
     assert_eq!(gpu.width, cpu.width);
     assert_eq!(gpu.height, cpu.height);
-    let diff = max_abs_diff(&gpu.pixels, &cpu.pixels);
+    let diff = max_abs_diff(&gpu.pixels, cpu.pixels());
     match equivalence {
         Equivalence::ByteIdentical => assert_eq!(
             diff, 0,
@@ -247,7 +247,7 @@ fn assert_parity(
             let range = index * 4..index * 4 + 4;
             assert_eq!(
                 &gpu.pixels[range.clone()],
-                &cpu.pixels[range],
+                &cpu.pixels()[range],
                 "outside the mask (alpha == 0) pixel {index} must be byte-identical"
             );
         }

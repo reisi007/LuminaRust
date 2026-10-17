@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(disk.store(&digest, &webp).unwrap(), webp.len());
 
         // Hit.
-        assert_eq!(disk.load(&digest).unwrap().map(|f| f.pixels[0]), Some(9));
+        assert_eq!(disk.load(&digest).unwrap().map(|f| f.pixels()[0]), Some(9));
 
         // A non-existent digest is a miss.
         assert!(disk.load("missing").unwrap().is_none());
@@ -156,7 +156,7 @@ mod tests {
         // A partial write (interrupted temp) is a miss and is pruned.
         disk.prune_orphans(std::slice::from_ref(&digest)).unwrap();
         assert_eq!(
-            disk.load(&digest).unwrap().map(|f| f.pixels[0]),
+            disk.load(&digest).unwrap().map(|f| f.pixels()[0]),
             Some(9),
             "live digest survives prune"
         );

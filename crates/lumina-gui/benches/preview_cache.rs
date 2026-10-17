@@ -95,7 +95,7 @@ fn preview_cache_benches(c: &mut Criterion) {
             b.iter(|| {
                 let decoded = lumina_core::preview_cache::decode_webp(black_box(&webp))
                     .expect("cached preview must decode");
-                black_box(decoded.pixels[0]);
+                black_box(decoded.pixels()[0]);
             })
         });
 
@@ -124,7 +124,7 @@ fn preview_cache_benches(c: &mut Criterion) {
     group.bench_function("lru_hit__7", |b| {
         b.iter(|| {
             let frame = lru.get(black_box(&hit_key)).expect("resident key is a hit");
-            black_box(frame.pixels[0]);
+            black_box(frame.pixels()[0]);
         })
     });
 

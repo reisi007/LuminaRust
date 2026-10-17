@@ -223,7 +223,7 @@ fn run_perspective(frame: &mut ImageFrame, perspective: &Perspective) {
 /// exercises its real clone path instead of the identity short-circuit.
 fn frame_with_transparent_border(size: u32) -> ImageFrame {
     let frame = make_frame(size);
-    let mut pixels = frame.pixels.clone();
+    let mut pixels = frame.pixels().to_vec();
     let border = (size / 8).max(1);
     for y in 0..size {
         for x in 0..size {
@@ -274,7 +274,7 @@ fn geometry_stage_benches(c: &mut Criterion) {
                 || frame.clone(),
                 |mut f| {
                     run_lens(&mut f, &lens);
-                    black_box(f.pixels[0])
+                    black_box(f.pixels()[0])
                 },
                 BatchSize::SmallInput,
             )
@@ -285,7 +285,7 @@ fn geometry_stage_benches(c: &mut Criterion) {
                 || frame.clone(),
                 |mut f| {
                     run_perspective(&mut f, &perspective);
-                    black_box(f.pixels[0])
+                    black_box(f.pixels()[0])
                 },
                 BatchSize::SmallInput,
             )

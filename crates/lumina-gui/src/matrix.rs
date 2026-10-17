@@ -413,9 +413,9 @@ fn compare_against_golden(
 
 /// Maximum per-channel (RGB) absolute difference (diagnostic, matches the CLI).
 fn max_abs_diff(a: &ImageFrame, b: &ImageFrame) -> u8 {
-    a.pixels
+    a.pixels()
         .iter()
-        .zip(&b.pixels)
+        .zip(b.pixels())
         .enumerate()
         .filter(|(index, _)| index % 4 != 3)
         .map(|(_, (x, y))| x.abs_diff(*y))

@@ -348,7 +348,7 @@ pub fn produce_canvas(
                 },
             };
             let pixels = backend.expand_with_manifest(
-                &frame.pixels,
+                frame.pixels(),
                 frame.width,
                 frame.height,
                 &request,
@@ -387,7 +387,8 @@ pub fn produce_canvas(
                 seed,
                 region: None,
             };
-            let pixels = backend.heal(&frame.pixels, frame.width, frame.height, &mask, &request)?;
+            let pixels =
+                backend.heal(frame.pixels(), frame.width, frame.height, &mask, &request)?;
             let identity_digest = GenerativeCacheKey::auto_fill(
                 frame,
                 seed,
@@ -414,7 +415,7 @@ pub fn produce_canvas(
 #[must_use]
 pub fn transparent_mask(frame: &ImageFrame) -> Vec<u8> {
     let mut mask = vec![0u8; (frame.width as usize) * (frame.height as usize)];
-    for (index, px) in frame.pixels.as_chunks::<4>().0.iter().enumerate() {
+    for (index, px) in frame.pixels().as_chunks::<4>().0.iter().enumerate() {
         if px[3] < 255 || (px[0] == 0 && px[1] == 0 && px[2] == 0) {
             mask[index] = 255;
         }
@@ -644,7 +645,7 @@ mod tests {
             for x in 0..frame.width as usize {
                 let src = (y * frame.width as usize + x) * 4;
                 let dst = ((y + 1) * out_w + (x + 1)) * 4;
-                assert_eq!(&out.pixels[dst..dst + 4], &frame.pixels[src..src + 4]);
+                assert_eq!(&out.pixels[dst..dst + 4], &frame.pixels()[src..src + 4]);
             }
         }
     }

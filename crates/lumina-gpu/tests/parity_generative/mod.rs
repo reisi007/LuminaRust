@@ -143,7 +143,7 @@ fn generative_canvas_compositing_is_gpu_parity() {
         "composited dimensions must match on both backends"
     );
     assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
         "the expand compositing + downstream crop must be GPU-parity"
     );
@@ -225,7 +225,7 @@ fn generative_auto_fill_compositing_is_gpu_parity() {
         .expect("GPU auto-fill render");
     assert_eq!((cpu.width, cpu.height), (32, 32));
     assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
         "the auto-fill compositing must be GPU-parity"
     );
@@ -320,7 +320,7 @@ fn generative_trailing_substitute_after_render_pass_is_gpu_parity() {
         "the GPU must return the trailing artifact, not the lens pass output"
     );
     assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
         "a render pass before a trailing substitute must not be served as the result"
     );

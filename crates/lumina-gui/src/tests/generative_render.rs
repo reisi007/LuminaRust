@@ -82,18 +82,18 @@ fn generative_expand_golden_preview_headless() {
     let src_origin_idx = (6 + 1) * 4;
     let src_idx = 0;
     assert_eq!(
-        &expanded.pixels[src_origin_idx..src_origin_idx + 4],
-        &frame.pixels[src_idx..src_idx + 4]
+        &expanded.pixels()[src_origin_idx..src_origin_idx + 4],
+        &frame.pixels()[src_idx..src_idx + 4]
     );
     let center_idx = (2 * 6 + 2) * 4;
     let src_1_1_idx = (4 + 1) * 4;
     assert_eq!(
-        &expanded.pixels[center_idx..center_idx + 4],
-        &frame.pixels[src_1_1_idx..src_1_1_idx + 4]
+        &expanded.pixels()[center_idx..center_idx + 4],
+        &frame.pixels()[src_1_1_idx..src_1_1_idx + 4]
     );
     assert!(
         expanded
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -104,7 +104,7 @@ fn generative_expand_golden_preview_headless() {
     let again = lumina_core::render_frame_with_generative(&frame, &ctx, g)
         .unwrap()
         .frame;
-    assert_eq!(expanded.pixels, again.pixels);
+    assert_eq!(expanded.pixels(), again.pixels());
     // Visual analysis: the composited canvas differs from the source
     // (generated border) and identical inputs are byte-identical.
     let psnr_val = lumina_core::psnr(&expanded, &again);
@@ -160,8 +160,8 @@ fn generative_expand_preview_uses_single_core_expand() {
             let src_idx = (y * 8 + x) * 4;
             let dst_idx = ((y + 2) * 12 + (x + 2)) * 4;
             assert_eq!(
-                &preview.pixels[dst_idx..dst_idx + 4],
-                &frame.pixels[src_idx..src_idx + 4]
+                &preview.pixels()[dst_idx..dst_idx + 4],
+                &frame.pixels()[src_idx..src_idx + 4]
             );
         }
     }
@@ -195,7 +195,8 @@ fn generative_expand_preview_uses_single_core_expand() {
         .unwrap()
         .frame;
     assert_eq!(
-        preview.pixels, direct.pixels,
+        preview.pixels(),
+        direct.pixels(),
         "app preview must equal a single core render with the resolved canvas"
     );
 }
@@ -222,7 +223,8 @@ fn generative_expand_export_is_single_core_expand() {
     let decoded = ImageFrame::decode(&gui_bytes).unwrap();
     assert_eq!((decoded.width, decoded.height), (12, 12));
     assert_eq!(
-        decoded.pixels, preview.pixels,
+        decoded.pixels(),
+        preview.pixels(),
         "export must match the app preview"
     );
     let g = app.generative_artifacts.clone();
@@ -276,8 +278,8 @@ fn generative_expand_preview_reuses_resolved_canvas_without_bfs() {
     std::fs::remove_file(&zdata).unwrap();
     app.render_full([800, 600], None).unwrap();
     assert_eq!(
-        app.preview().unwrap().pixels,
-        first_preview.pixels,
+        app.preview().unwrap().pixels(),
+        first_preview.pixels(),
         "reused canvas is byte-identical to the first render"
     );
     assert_eq!(

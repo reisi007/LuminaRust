@@ -183,7 +183,7 @@ fn record_status_and_render_roundtrip_and_checksum_agrees_across_crates() {
     let frame = ImageFrame::decode(&fs::read(&out).unwrap()).unwrap();
     assert_eq!((frame.width, frame.height), (W, H));
     for (pixel, rgb) in frame
-        .pixels
+        .pixels()
         .as_chunks::<4>()
         .0
         .iter()

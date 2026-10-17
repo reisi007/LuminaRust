@@ -160,7 +160,7 @@ fn process_auto_tone_persists_the_full_six_set_and_renders_the_golden() {
 
     // Byte-level golden of the render (exact RGBA bytes of the exported file).
     let bytes = fs::read(&output).unwrap();
-    let rendered = ImageFrame::decode(&bytes).unwrap().pixels;
+    let rendered = ImageFrame::decode(&bytes).unwrap().into_pixels();
     assert_eq!(
         rendered
             .iter()
@@ -392,7 +392,7 @@ fn render_and_export_are_byte_identical_without_auto_tone() {
     );
     let pixels = ImageFrame::decode(&fs::read(&exported).unwrap())
         .unwrap()
-        .pixels;
+        .into_pixels();
     assert_eq!(
         pixels
             .iter()

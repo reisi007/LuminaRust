@@ -148,7 +148,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
         width: definition.region_width,
         height: definition.region_height,
         region: definition.region_values.clone(),
-        replacement: replacement_frame.pixels.clone(),
+        replacement: replacement_frame.pixels().to_vec(),
     };
     region
         .validate()

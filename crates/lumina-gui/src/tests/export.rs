@@ -144,7 +144,7 @@ fn gui_source_action_export_is_byte_identical_to_cli_shared_path() {
     app.export_to(output.clone()).unwrap();
     assert_eq!(std::fs::read(&output).unwrap(), cli_bytes);
     assert_eq!(
-        &ImageFrame::decode(&cli_bytes).unwrap().pixels[..4],
+        &ImageFrame::decode(&cli_bytes).unwrap().pixels()[..4],
         &[201, 0, 0, 255]
     );
 

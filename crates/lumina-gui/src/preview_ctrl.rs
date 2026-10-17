@@ -777,7 +777,7 @@ mod tests {
         let f = make_frame(3, 3, 42);
         let webp = encode_webp_pub(&f).unwrap();
         let back = decode_webp_pub(&webp).unwrap();
-        assert_eq!(back.pixels, f.pixels);
+        assert_eq!(back.pixels(), f.pixels());
     }
 
     #[test]

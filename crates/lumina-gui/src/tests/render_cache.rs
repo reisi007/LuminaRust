@@ -124,7 +124,7 @@ fn exposure_change_hits_base_cache_and_stays_pixel_identical_to_cold_render() {
         1,
         "recipe-only changes must not create new base entries"
     );
-    let warm_pixels = app.preview().unwrap().pixels.clone();
+    let warm_pixels = app.preview().unwrap().pixels().to_vec();
 
     // Pixel identity proof: forcing the cold path (cache cleared) for the
     // same recipe reproduces the warm output byte-for-byte.
@@ -134,7 +134,7 @@ fn exposure_change_hits_base_cache_and_stays_pixel_identical_to_cold_render() {
     assert!(!forced_cold.base_cache_hit);
     assert_eq!(
         warm_pixels,
-        app.preview().unwrap().pixels,
+        app.preview().unwrap().pixels(),
         "the base-stage shortcut must not change a single pixel"
     );
 }
@@ -334,7 +334,7 @@ fn source_action_artifact_and_action_changes_invalidate_gui_cache_keys() {
     );
     assert!(!app.last_stage_work().unwrap().base_cache_hit);
     assert_eq!(app.base_stage_cache_len(), initial_cache_len + 1);
-    assert_eq!(&app.preview().unwrap().pixels[..4], &[7, 8, 9, 255]);
+    assert_eq!(&app.preview().unwrap().pixels()[..4], &[7, 8, 9, 255]);
 
     // The operation kind is part of recipe identity but not the composited
     // bytes. Preview/export must still miss; the artifact-aware base may hit.

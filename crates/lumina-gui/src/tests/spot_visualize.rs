@@ -78,7 +78,8 @@ fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
     let tinted = app.preview().expect("preview after commit").clone();
     assert_eq!((tinted.width, tinted.height), (clean.width, clean.height));
     assert_ne!(
-        tinted.pixels, clean.pixels,
+        tinted.pixels(),
+        clean.pixels(),
         "the overlay must visibly change the preview"
     );
     // Only candidate pixels (the dark 8x8 block) follow the deterministic
@@ -87,29 +88,33 @@ fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
         for x in 0..16 {
             let i = (y * 16 + x) as usize * 4;
             if x < 8 && y < 8 {
-                let (r, g, b) = (clean.pixels[i], clean.pixels[i + 1], clean.pixels[i + 2]);
+                let (r, g, b) = (
+                    clean.pixels()[i],
+                    clean.pixels()[i + 1],
+                    clean.pixels()[i + 2],
+                );
                 assert_eq!(
-                    tinted.pixels[i],
+                    tinted.pixels()[i],
                     ((u16::from(r) + 255) / 2).min(255) as u8,
                     "candidate red at {x},{y}"
                 );
-                assert_eq!(tinted.pixels[i + 1], (u16::from(g) / 2) as u8);
-                assert_eq!(tinted.pixels[i + 2], (u16::from(b) / 2) as u8);
+                assert_eq!(tinted.pixels()[i + 1], (u16::from(g) / 2) as u8);
+                assert_eq!(tinted.pixels()[i + 2], (u16::from(b) / 2) as u8);
                 assert_ne!(
-                    &tinted.pixels[i..i + 3],
-                    &clean.pixels[i..i + 3],
+                    &tinted.pixels()[i..i + 3],
+                    &clean.pixels()[i..i + 3],
                     "candidate must change at {x},{y}"
                 );
             } else {
                 assert_eq!(
-                    &tinted.pixels[i..i + 4],
-                    &clean.pixels[i..i + 4],
+                    &tinted.pixels()[i..i + 4],
+                    &clean.pixels()[i..i + 4],
                     "non-candidate byte-identical at {x},{y}"
                 );
             }
             assert_eq!(
-                tinted.pixels[i + 3],
-                clean.pixels[i + 3],
+                tinted.pixels()[i + 3],
+                clean.pixels()[i + 3],
                 "alpha untouched at {x},{y}"
             );
         }
@@ -129,7 +134,8 @@ fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
     assert_eq!(reopened.spot_detect_effective_threshold(), 0.3);
     let reloaded = reopened.preview().expect("preview after reload").clone();
     assert_eq!(
-        reloaded.pixels, tinted.pixels,
+        reloaded.pixels(),
+        tinted.pixels(),
         "overlay deterministic across reload"
     );
     // `Never` hides the overlay without touching the recipe (no silent
@@ -138,7 +144,7 @@ fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
     assert_eq!(reopened.spot_visualize_overlay_threshold(), None);
     reopened.render().unwrap();
     let hidden = reopened.preview().expect("preview in Never mode").clone();
-    assert_eq!(hidden.pixels, clean.pixels);
+    assert_eq!(hidden.pixels(), clean.pixels());
     assert_eq!(reopened.spot_visualize_threshold(), Some(0.3));
     // `Auto` hides while no tool is armed and shows once the spot tool
     // (Q) is armed — the G-11 rule, headless-pinned.

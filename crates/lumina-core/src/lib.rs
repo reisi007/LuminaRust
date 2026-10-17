@@ -276,12 +276,20 @@ impl ExportOptions {
     }
 }
 
+/// Row-major RGBA8 frame.
+///
+/// Invariant: `pixels.len() == width * height * 4` (checked multiplication).
+/// [`ImageFrame::new`] enforces it; [`ImageFrame::pixels`], [`ImageFrame::pixels_mut`]
+/// and [`ImageFrame::into_pixels`] can never change the buffer length, so the
+/// buffer side of the invariant is sealed from outside the crate.
+/// `width` and `height` remain public and settable, however, so the relation
+/// can still be broken after construction by mutating the dimensions — callers
+/// that do so are responsible for re-validating (e.g. via [`ImageFrame::new`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageFrame {
     pub width: u32,
     pub height: u32,
-    /// Row-major RGBA8 bytes, four bytes per pixel.
-    pub pixels: Vec<u8>,
+    pixels: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -403,6 +411,32 @@ impl ImageFrame {
             height,
             pixels,
         })
+    }
+
+    /// Row-major RGBA8 bytes, four bytes per pixel.
+    ///
+    /// The length is always `width * height * 4`; [`ImageFrame::new`]
+    /// enforces it and the mutable view returned by
+    /// [`ImageFrame::pixels_mut`] cannot change it.
+    #[must_use]
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// Mutable view onto the row-major RGBA8 bytes, four bytes per pixel.
+    ///
+    /// The length stays `width * height * 4` because a `&mut [u8]` view
+    /// cannot change the allocation's length — this is what protects the
+    /// invariant from outside the crate.
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        &mut self.pixels
+    }
+
+    /// Consumes the frame and returns the row-major RGBA8 bytes, four bytes
+    /// per pixel (length `width * height * 4`).
+    #[must_use]
+    pub fn into_pixels(self) -> Vec<u8> {
+        self.pixels
     }
 
     /// Decodes an encoded raster image (PNG/JPEG/WebP) into an RGBA8 frame.

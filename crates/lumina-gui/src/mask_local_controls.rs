@@ -353,7 +353,7 @@ impl LuminaApp {
         }
         let pixel_index = alpha_index * 4;
         let pixel = stage
-            .pixels
+            .pixels()
             .get(pixel_index..pixel_index + 4)
             .ok_or_else(|| {
                 GuiError::Io("local WB sample is stale: source pixel is unavailable".into())

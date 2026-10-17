@@ -85,7 +85,7 @@ fn the_gui_writes_exactly_what_the_shared_writer_writes() {
         frame.width, writer_frame.width,
         "both writers must see the same input, or this comparison is vacuous"
     );
-    assert_eq!(frame.pixels, writer_frame.pixels, "same input pixels");
+    assert_eq!(frame.pixels(), writer_frame.pixels(), "same input pixels");
 
     for key in AUTO_TONE_ADJUSTMENT_KEYS {
         let from_gui = via_gui

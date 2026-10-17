@@ -106,7 +106,7 @@ fn gpu_benches(c: &mut Criterion) {
                 || frame.clone(),
                 |mut f| {
                     f.apply_recipe(black_box(&recipe)).unwrap();
-                    black_box(f.pixels[0])
+                    black_box(f.pixels()[0])
                 },
                 BatchSize::SmallInput,
             )

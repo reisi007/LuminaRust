@@ -96,7 +96,8 @@ fn sidecar_restore_from_file_applies_to_sliders_and_preview() {
     };
     let direct = render_frame(&original, &restored_ctx).unwrap().frame;
     assert_eq!(
-        preview.pixels, direct.pixels,
+        preview.pixels(),
+        direct.pixels(),
         "reopened preview must render the restored recipe"
     );
     let default_ctx = RenderContext {
@@ -109,7 +110,8 @@ fn sidecar_restore_from_file_applies_to_sliders_and_preview() {
     };
     let default_frame = render_frame(&original, &default_ctx).unwrap().frame;
     assert_ne!(
-        preview.pixels, default_frame.pixels,
+        preview.pixels(),
+        default_frame.pixels(),
         "restored exposure must visibly change the preview"
     );
     assert!(
@@ -161,7 +163,7 @@ fn sidecar_restore_all_basic_sliders_reopen() {
     let mut app = new_app();
     open_and_decode(&mut app, source.display().to_string());
     app.render().unwrap();
-    let baseline = app.preview().unwrap().pixels.clone();
+    let baseline = app.preview().unwrap().pixels().to_vec();
     // Sidecar-Datei materialisieren, dann EXTERN (am App vorbei, wie ein
     // fremder Prozess) alle sechs Regler setzen.
     app.set_adjustment("exposure", 0.1);
@@ -192,7 +194,7 @@ fn sidecar_restore_all_basic_sliders_reopen() {
             "readout für {key}: gezeigt {shown}, erwartet {readout}"
         );
     }
-    let pixels = reopened.preview().unwrap().pixels.clone();
+    let pixels = reopened.preview().unwrap().pixels().to_vec();
     assert_ne!(
         pixels, baseline,
         "preview muss sich nach dem externen 6-Regler-Edit ändern"

@@ -374,7 +374,7 @@ fn file_decode_keeps_previous_source_when_sidecar_identity_conflicts() {
     assert!(app.error().unwrap().contains("source identity conflict"));
     assert_eq!(app.path, old_path, "the active path must be preserved");
     assert_eq!(app.source_bytes.as_deref(), Some(old_bytes.as_slice()));
-    assert_eq!(app.original.as_ref().unwrap().pixels, old_frame.pixels);
+    assert_eq!(app.original.as_ref().unwrap().pixels(), old_frame.pixels());
     assert!(
         app.preview().is_none(),
         "stale render pixels must be cleared"
@@ -441,7 +441,7 @@ fn navigator_zoom_key_changes_for_same_dimension_source_replacement() {
     let replacement_overview = app.navigator_zoomed_overview().unwrap();
 
     assert_ne!(first_key, app.navigator_overview_key);
-    assert_ne!(first_overview.pixels, replacement_overview.pixels);
+    assert_ne!(first_overview.pixels(), replacement_overview.pixels());
 }
 
 #[test]

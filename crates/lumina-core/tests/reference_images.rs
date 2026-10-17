@@ -79,8 +79,11 @@ fn gradient_analyze_tone_matches_formula() {
     let frame = load_gradient();
     assert_eq!((frame.width, frame.height), (8, 8));
     // Structural fixture guard (formula spot check): first and last pixel.
-    assert_eq!(&frame.pixels[0..4], &[0, 0, 0, 255]);
-    assert_eq!(&frame.pixels[frame.pixels.len() - 4..], &[63, 63, 63, 255]);
+    assert_eq!(&frame.pixels()[0..4], &[0, 0, 0, 255]);
+    assert_eq!(
+        &frame.pixels()[frame.pixels().len() - 4..],
+        &[63, 63, 63, 255]
+    );
 
     let analysis = analyze_tone(&frame);
     assert_eq!(analysis.sample_count, 64);
@@ -193,9 +196,9 @@ fn gradient_auto_tone_and_matching_follow_formula() {
 fn checker_analyze_tone_matches_formula() {
     let frame = load_checker();
     assert_eq!((frame.width, frame.height), (8, 8));
-    assert_eq!(&frame.pixels[0..4], &[255, 255, 255, 255]); // (0,0) even -> white
+    assert_eq!(&frame.pixels()[0..4], &[255, 255, 255, 255]); // (0,0) even -> white
     assert_eq!(
-        &frame.pixels[frame.pixels.len() - 4..],
+        &frame.pixels()[frame.pixels().len() - 4..],
         &[255, 255, 255, 255]
     ); // (7,7) even
 
@@ -285,9 +288,9 @@ fn checker_auto_tone_and_matching_follow_formula() {
 fn zone_analyze_tone_matches_formula() {
     let frame = load_zone();
     assert_eq!((frame.width, frame.height), (8, 8));
-    assert_eq!(&frame.pixels[0..4], &[20, 20, 20, 255]); // top-left zone
+    assert_eq!(&frame.pixels()[0..4], &[20, 20, 20, 255]); // top-left zone
     assert_eq!(
-        &frame.pixels[frame.pixels.len() - 4..],
+        &frame.pixels()[frame.pixels().len() - 4..],
         &[230, 230, 230, 255]
     ); // bottom-right
 

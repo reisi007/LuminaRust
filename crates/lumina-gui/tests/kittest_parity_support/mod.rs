@@ -131,9 +131,9 @@ pub(crate) fn assert_path_parity(scene: &str, cpu: &ImageFrame, gpu: &ImageFrame
         (gpu.width, gpu.height),
         "parity frames must share geometry (scene {scene})"
     );
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
-    let psnr = psnr_db(&cpu.pixels, &gpu.pixels);
-    let bias = mean_signed_error(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), gpu.pixels());
+    let psnr = psnr_db(cpu.pixels(), gpu.pixels());
+    let bias = mean_signed_error(cpu.pixels(), gpu.pixels());
     eprintln!(
         "parity[{scene}]: maxAbsDiff={diff} psnr={psnr:.2} dB meanSignedErr={bias:+.4} \
          (bound maxAbsDiff <= {bound})"

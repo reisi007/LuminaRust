@@ -25,7 +25,8 @@ fn preview_correctly_rendered() {
     };
     let direct = lumina_core::render_frame(&original, &ctx).unwrap().frame;
     assert_eq!(
-        preview.pixels, direct.pixels,
+        preview.pixels(),
+        direct.pixels(),
         "LuminaApp preview must match direct pipeline render at exposure 0"
     );
     // Exposure +1 → heller, nicht identisch, innerhalb Toleranz (kein Clipping auf 255 für alle)
@@ -34,7 +35,8 @@ fn preview_correctly_rendered() {
     app.render().unwrap();
     let bright = app.preview().unwrap().clone();
     assert_ne!(
-        preview.pixels, bright.pixels,
+        preview.pixels(),
+        bright.pixels(),
         "exposure +1 must change pixels"
     );
     let bright_avg = avg_luminance(&bright);
@@ -64,7 +66,7 @@ fn slider_changes_preview() {
     app.render().unwrap();
     let baseline_key = app.render_key().cloned().unwrap();
     let baseline_gen = app.preview_generation();
-    let baseline_pixels = app.preview().unwrap().pixels.clone();
+    let baseline_pixels = app.preview().unwrap().pixels().to_vec();
     let baseline_avg = avg_luminance(app.preview().unwrap());
 
     let cases: &[(&str, f64)] = &[
@@ -81,7 +83,7 @@ fn slider_changes_preview() {
         app2.render().unwrap();
         let before_key = app2.render_key().cloned().unwrap();
         let before_gen = app2.preview_generation();
-        let before_pixels = app2.preview().unwrap().pixels.clone();
+        let before_pixels = app2.preview().unwrap().pixels().to_vec();
 
         app2.set_adjustment(key, *value);
         // Debounce/ROI stabil: vor render ist key invalidiert, aber noch kein
@@ -104,7 +106,7 @@ fn slider_changes_preview() {
         );
         // Bild unterscheidet sich: byte != ODER Histogram-Delta (beides gilt;
         // byte != ist strenger und für diese synthetischen Frames erfüllt)
-        let after_pixels = app2.preview().unwrap().pixels.clone();
+        let after_pixels = app2.preview().unwrap().pixels().to_vec();
         assert_ne!(
             before_pixels, after_pixels,
             "pixels must differ after {key}={value}"
@@ -115,7 +117,7 @@ fn slider_changes_preview() {
         app2.render().unwrap();
         // Second render without edit may still re-render but pixels must stay identical
         assert_eq!(
-            app2.preview().unwrap().pixels,
+            app2.preview().unwrap().pixels(),
             after_pixels,
             "stable pixels on re-render without edit for {key}"
         );
@@ -132,7 +134,7 @@ fn slider_changes_preview() {
     app3.set_adjustment("exposure", 0.7);
     app3.render().unwrap();
     let key_before = app3.render_key().cloned().unwrap();
-    let pixels_before = app3.preview().unwrap().pixels.clone();
+    let pixels_before = app3.preview().unwrap().pixels().to_vec();
     app3.set_adjustment("exposure", 0.7);
     app3.render().unwrap();
     assert_eq!(
@@ -142,7 +144,7 @@ fn slider_changes_preview() {
     );
     assert_eq!(
         pixels_before,
-        app3.preview().unwrap().pixels,
+        app3.preview().unwrap().pixels(),
         "same value must yield identical pixels"
     );
     // Unterdrückte Warnung für baseline_* die oben für Vollständigkeit existieren

@@ -13,12 +13,12 @@ use super::*;
 /// never feeds back into the recipe or render. Empty frames report `(0, 0)`.
 pub fn clip_fractions(frame: &ImageFrame) -> (f64, f64) {
     let total = (frame.width as usize) * (frame.height as usize);
-    if total == 0 || frame.pixels.len() < total * 4 {
+    if total == 0 || frame.pixels().len() < total * 4 {
         return (0.0, 0.0);
     }
     let mut shadow = 0usize;
     let mut highlight = 0usize;
-    for px in frame.pixels.as_chunks::<4>().0 {
+    for px in frame.pixels().as_chunks::<4>().0 {
         if px[0] == 0 && px[1] == 0 && px[2] == 0 {
             shadow += 1;
         } else if px[0] == 255 && px[1] == 255 && px[2] == 255 {

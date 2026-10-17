@@ -105,7 +105,7 @@ pub fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
         MergeRunError::Unsupported(format!(
             "source `{}` has {} bytes for a {}x{} RGBA8 frame",
             input.display(),
-            frame.pixels.len(),
+            frame.pixels().len(),
             frame.width,
             frame.height
         ))

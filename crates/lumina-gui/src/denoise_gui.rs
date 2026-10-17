@@ -771,20 +771,20 @@ mod tests {
         make_ready(&mut app);
         app.set_denoise_strength(1.0).unwrap();
         app.render_full([0, 0], None).unwrap();
-        let denoised = app.preview().unwrap().pixels.clone();
+        let denoised = app.preview().unwrap().pixels().to_vec();
         // The artifact is all-zero pixels, so a strength-1 blend must darken.
         let neutral = {
             let mut neutral = new_app();
             open_and_decode(&mut neutral, &source);
             neutral.render_full([0, 0], None).unwrap();
-            neutral.preview().unwrap().pixels.clone()
+            neutral.preview().unwrap().pixels().to_vec()
         };
         assert_ne!(denoised, neutral, "ready artifact must change the pixels");
 
         app.set_denoise_strength(0.0).unwrap();
         app.render_full([0, 0], None).unwrap();
         assert_eq!(
-            app.preview().unwrap().pixels,
+            app.preview().unwrap().pixels(),
             neutral,
             "strength 0 must be byte-identical to the identity recipe"
         );

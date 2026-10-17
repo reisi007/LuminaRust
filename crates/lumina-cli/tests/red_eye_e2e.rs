@@ -43,7 +43,7 @@ fn write_red_pupil_png(
         for y in y0..y1 {
             for x in x0..x1 {
                 let index = ((y * width + x) as usize) * 4;
-                frame.pixels[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
+                frame.pixels_mut()[index..index + 4].copy_from_slice(&[220, 30, 40, 255]);
             }
         }
     }

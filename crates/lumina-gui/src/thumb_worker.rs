@@ -166,7 +166,7 @@ fn decode_thumbnail_frame_with_identity(
     // Source actions precede the thumbnail downscale, preserving their native
     // full-frame dimensions and compositing semantics.
     let (small, w, h) = downscale_rgba(
-        &prepared.pixels,
+        prepared.pixels(),
         prepared.width,
         prepared.height,
         THUMBNAIL_MAX_DIM,

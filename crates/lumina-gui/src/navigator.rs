@@ -198,7 +198,7 @@ impl LuminaApp {
             let key = (self.path.clone(), src_w, src_h);
             let texture = self.navigator_zoomed_overview().map(|frame| {
                 let size = [frame.width as usize, frame.height as usize];
-                let image = egui::ColorImage::from_rgba_unmultiplied(size, &frame.pixels);
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels());
                 ctx.load_texture("lumina-navigator", image, egui::TextureOptions::LINEAR)
             });
             match texture {

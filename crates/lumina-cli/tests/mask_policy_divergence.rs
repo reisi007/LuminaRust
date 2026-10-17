@@ -237,7 +237,8 @@ fn process_applies_the_persisted_mask_that_the_mcp_preview_skips() {
     // The fixture's mask must actually do something, otherwise a
     // "cli == masked oracle" comparison would pass vacuously.
     assert_ne!(
-        no_mask.pixels, masked.pixels,
+        no_mask.pixels(),
+        masked.pixels(),
         "the half-covered mask must change the masked half of the render"
     );
 
@@ -262,13 +263,15 @@ fn process_applies_the_persisted_mask_that_the_mcp_preview_skips() {
 
     let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(
-        rendered.pixels, masked.pixels,
+        rendered.pixels(),
+        masked.pixels(),
         "MCP-MASKPOLICY (CLI half): the CLI must APPLY the persisted mask — \
          the output equals the warn-masked oracle built through the public \
          render_frame entry point"
     );
     assert_ne!(
-        rendered.pixels, no_mask.pixels,
+        rendered.pixels(),
+        no_mask.pixels(),
         "the CLI render must differ from the no-mask (MCP) render of the \
          same fixture — that difference is the documented divergence"
     );

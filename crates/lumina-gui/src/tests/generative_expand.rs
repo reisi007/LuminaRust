@@ -66,14 +66,14 @@ fn generative_expand_synthetic_8x8_expand_true_creates_larger_canvas() {
             let src_idx = (y * 8 + x) * 4;
             let dst_idx = ((y + 2) * 12 + (x + 2)) * 4;
             assert_eq!(
-                &expanded.pixels[dst_idx..dst_idx + 4],
-                &frame.pixels[src_idx..src_idx + 4]
+                &expanded.pixels()[dst_idx..dst_idx + 4],
+                &frame.pixels()[src_idx..src_idx + 4]
             );
         }
     }
     assert!(
         expanded
-            .pixels
+            .pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -112,7 +112,7 @@ fn generative_expand_false_is_cropped_to_image() {
     let out = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
     assert_eq!(out.width, 8);
     assert_eq!(out.height, 8);
-    assert_eq!(out.pixels, frame.pixels);
+    assert_eq!(out.pixels(), frame.pixels());
 }
 
 #[test]

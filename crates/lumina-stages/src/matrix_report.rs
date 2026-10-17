@@ -89,8 +89,8 @@ pub(crate) fn write_diff(
     golden: &ImageFrame,
 ) -> Result<(), StageError> {
     let target = work_dir.join(format!("{name}.diff.png"));
-    let mut pixels = Vec::with_capacity(actual.pixels.len());
-    for (index, (a, b)) in actual.pixels.iter().zip(&golden.pixels).enumerate() {
+    let mut pixels = Vec::with_capacity(actual.pixels().len());
+    for (index, (a, b)) in actual.pixels().iter().zip(golden.pixels()).enumerate() {
         if index % 4 == 3 {
             pixels.push(255);
         } else {
@@ -103,9 +103,9 @@ pub(crate) fn write_diff(
 
 /// Maximum per-channel (RGB) absolute difference between two same-size frames.
 pub(crate) fn max_abs_diff(a: &ImageFrame, b: &ImageFrame) -> u8 {
-    a.pixels
+    a.pixels()
         .iter()
-        .zip(&b.pixels)
+        .zip(b.pixels())
         .enumerate()
         .filter(|(index, _)| index % 4 != 3)
         .map(|(_, (x, y))| x.abs_diff(*y))

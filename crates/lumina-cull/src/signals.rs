@@ -43,7 +43,7 @@ pub fn luma_plane(frame: &ImageFrame) -> Result<LumaPlane, CullError> {
         });
     }
     let values = frame
-        .pixels
+        .pixels()
         .as_chunks::<4>()
         .0
         .iter()

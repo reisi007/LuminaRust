@@ -60,7 +60,7 @@ fn core_benches(c: &mut Criterion) {
                     // cannot elide the adjustment pass.
                     f.apply_recipe_with_white_balance(black_box(&recipe), None)
                         .unwrap();
-                    black_box(f.pixels[0])
+                    black_box(f.pixels()[0])
                 },
                 BatchSize::SmallInput,
             )

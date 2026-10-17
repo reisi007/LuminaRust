@@ -72,7 +72,7 @@ pub fn solid_frame(width: u32, height: u32, value: u8) -> ImageFrame {
 /// horizontal smear (motion-blur surrogate).
 pub fn box_blur(frame: &ImageFrame, radius_x: u32, radius_y: u32) -> ImageFrame {
     let (width, height) = (frame.width, frame.height);
-    let gray = |x: u32, y: u32| f64::from(frame.pixels[((y * width + x) * 4) as usize]);
+    let gray = |x: u32, y: u32| f64::from(frame.pixels()[((y * width + x) * 4) as usize]);
     let mut horizontal = vec![0f64; (width * height) as usize];
     for y in 0..height {
         for x in 0..width {

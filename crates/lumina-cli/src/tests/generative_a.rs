@@ -56,11 +56,11 @@ fn generative_expand_generate_status_and_render_end_to_end() {
     );
     // The generated border differs from the flat source, and the source
     // block is preserved at the offset (top-left here).
-    assert_eq!(&rendered.pixels[..4], &source.pixels[..4]);
+    assert_eq!(&rendered.pixels()[..4], &source.pixels()[..4]);
     let border = ((3 * 4 + 3) * 4) as usize;
     assert_ne!(
-        &rendered.pixels[border..border + 3],
-        &source.pixels[..3],
+        &rendered.pixels()[border..border + 3],
+        &source.pixels()[..3],
         "the generated canvas border must differ from the flat source"
     );
 }

@@ -167,7 +167,7 @@ fn source_action_stage_matches_cpu_reference() {
         .render_with_gpu(&frame, &neutral)
         .expect("GPU render");
     assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
         "pure source-action compositing must be byte-identical to the CPU oracle"
     );
@@ -194,7 +194,7 @@ fn source_action_stage_matches_cpu_reference() {
     let gpu = gpu_ctx
         .render_with_gpu(&frame, &exposure)
         .expect("GPU render");
-    let diff = max_abs_diff(&cpu.pixels, &gpu.pixels);
+    let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     assert!(
         diff <= MAX_ABS_DIFF_TOLERANCE,
         "compositing + tone must stay within tolerance (got {diff})"
@@ -247,7 +247,7 @@ fn unbound_source_actions_still_route_to_cpu() {
     .frame;
     let gpu = ctx.render_with_gpu(&frame, &recipe).expect("GPU render");
     assert_eq!(
-        max_abs_diff(&cpu.pixels, &gpu.pixels),
+        max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
         "CPU-routed renders must stay byte-identical to the CPU oracle"
     );

@@ -9,7 +9,7 @@ fn recipe_change_and_render() {
     app.set_adjustment("exposure", 1.0);
     app.render().unwrap();
     assert_eq!(app.recipe().adjustments["exposure"], 1.0);
-    assert_eq!(app.preview().unwrap().pixels[0], 20);
+    assert_eq!(app.preview().unwrap().pixels()[0], 20);
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn reset_restores_original_preview() {
     app.render().unwrap();
     app.reset();
     assert!(app.recipe().adjustments.is_empty());
-    assert_eq!(app.preview().unwrap().pixels[0], 10);
+    assert_eq!(app.preview().unwrap().pixels()[0], 10);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn black_white_treatment_sets_and_restores_saturation() {
         "B&W toggle must re-render the preview"
     );
     let preview = app.preview().unwrap();
-    for px in preview.pixels.as_chunks::<4>().0 {
+    for px in preview.pixels().as_chunks::<4>().0 {
         let (lo, hi) = (px[0].min(px[1]).min(px[2]), px[0].max(px[1]).max(px[2]));
         assert!(hi - lo <= 1, "B&W preview must be (near-)grayscale");
     }

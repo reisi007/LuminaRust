@@ -219,5 +219,5 @@ pub(crate) fn render_png(path: &Path, out: &Path) -> Vec<u8> {
     assert_success(&output, "export");
     ImageFrame::decode(&fs::read(out).unwrap())
         .expect("decodable png")
-        .pixels
+        .into_pixels()
 }

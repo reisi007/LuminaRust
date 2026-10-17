@@ -126,7 +126,7 @@ fn lensfun_corrector_cell_presents_gpu_without_badge() {
     // profile keeps the frame geometry unchanged, so this is a pure pixel
     // difference on the CPU reference.
     assert!(
-        max_abs_diff(&without_corrector.pixels, &cpu_frame.pixels) > 0,
+        max_abs_diff(without_corrector.pixels(), cpu_frame.pixels()) > 0,
         "the active Lensfun corrector must actually change CPU pixels"
     );
     assert_eq!(
@@ -174,8 +174,8 @@ fn lensfun_corrector_cell_presents_gpu_without_badge() {
             .state()
             .preview()
             .expect("corrected cpu frame")
-            .pixels,
-        cpu_frame.pixels,
+            .pixels(),
+        cpu_frame.pixels(),
         "the CPU reference preview must stay the corrected frame"
     );
 
@@ -197,9 +197,9 @@ fn lensfun_corrector_cell_presents_gpu_without_badge() {
     assert_preview_pixels_present(&mut harness, "lensfun_corrector");
     harness.snapshot("parity_paths_lensfun_corrector_gpu");
 
-    let diff = max_abs_diff(&cpu_frame.pixels, &gpu_frame.pixels);
-    let psnr = psnr_db(&cpu_frame.pixels, &gpu_frame.pixels);
-    let bias = mean_signed_error(&cpu_frame.pixels, &gpu_frame.pixels);
+    let diff = max_abs_diff(cpu_frame.pixels(), gpu_frame.pixels());
+    let psnr = psnr_db(cpu_frame.pixels(), gpu_frame.pixels());
+    let bias = mean_signed_error(cpu_frame.pixels(), gpu_frame.pixels());
     eprintln!(
         "parity[lensfun_corrector]: maxAbsDiff={diff} psnr={psnr:.2} dB meanSignedErr={bias:+.4} \
          (bound maxAbsDiff <= 0)"

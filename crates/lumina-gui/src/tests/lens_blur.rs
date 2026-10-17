@@ -91,12 +91,12 @@ fn g05_lens_blur_preview_changes_and_missing_depth_fails_loudly() {
     std::fs::write(&source, lens_blur_striped_png()).unwrap();
     let mut app = new_app();
     open_and_decode(&mut app, source.display().to_string());
-    let before = app.preview().expect("preview after load").pixels.clone();
+    let before = app.preview().expect("preview after load").pixels().to_vec();
     app.set_lens_blur_enabled(true);
     app.set_lens_blur_amount(0.75).unwrap();
     app.commit_pending_slider_save([0, 0]);
     assert!(app.error().is_none());
-    let after = app.preview().expect("preview after blur").pixels.clone();
+    let after = app.preview().expect("preview after blur").pixels().to_vec();
     assert_ne!(before, after, "enabled blur must change the preview");
     // Missing depth artifact: the committed render aborts loudly and the
     // error stays visible (never a silent heuristic render).

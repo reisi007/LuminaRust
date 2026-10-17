@@ -306,7 +306,7 @@ fn point_color_add_set_remove_commit_and_reload() {
     let original_bytes = std::fs::read(&source).unwrap();
     let mut app = new_app();
     open_and_decode(&mut app, source.display().to_string());
-    let preview_before = app.preview().expect("preview after load").pixels.clone();
+    let preview_before = app.preview().expect("preview after load").pixels().to_vec();
     app.add_point_color();
     app.set_point_color_value("pc-1", "hue_center", 30.0);
     app.set_point_color_value("pc-1", "hue_range", 20.0);
@@ -318,7 +318,11 @@ fn point_color_add_set_remove_commit_and_reload() {
         Some(("point_color.pc-1.luminance_shift".to_string(), 0.1))
     );
     let document = commit_and_load_doc(&mut app, &source);
-    let preview_after = app.preview().expect("preview after commit").pixels.clone();
+    let preview_after = app
+        .preview()
+        .expect("preview after commit")
+        .pixels()
+        .to_vec();
     assert_ne!(
         preview_before, preview_after,
         "point color desaturation must change the preview"
