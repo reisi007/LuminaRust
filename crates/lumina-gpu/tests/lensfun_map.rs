@@ -300,7 +300,7 @@ fn f2_vignetting_only_corrector_matches_cpu_oracle() {
             "{frame_name}: dimensions"
         );
         let diff = cpu
-            .pixels
+            .pixels()
             .iter()
             .zip(gpu.pixels.iter())
             .map(|(a, b)| a.abs_diff(*b))

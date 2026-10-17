@@ -642,7 +642,10 @@ mod routing_tests {
         let recipe = EditRecipe::default();
         let routed =
             render_best_effort(None, &frame, &recipe, Some(wb), None).expect("CPU branch renders");
-        assert_eq!(routed.pixels, cpu_oracle(&frame, &recipe, Some(wb)).pixels);
+        assert_eq!(
+            routed.pixels(),
+            cpu_oracle(&frame, &recipe, Some(wb)).pixels()
+        );
     }
 
     /// R2-MCP-01 (CAMERA-WB-WELLE): invalid As-Shot gains must fail loudly
@@ -696,7 +699,8 @@ mod routing_tests {
         let routed = render_best_effort(Some(&ctx), &frame, &recipe, Some(wb), None)
             .expect("WB-context render must succeed");
         assert_eq!(
-            routed.pixels, expected.pixels,
+            routed.pixels(),
+            expected.pixels(),
             "a carried As-Shot context must match the CPU reference pixels"
         );
     }

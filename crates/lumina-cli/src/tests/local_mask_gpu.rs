@@ -394,7 +394,8 @@ fn mask_recipe_renders_byte_identically_on_gpu_and_cpu() {
         render_frame_with_generative(&frame, &render_ctx, GenerativeCanvasInput::default())
             .expect("CPU oracle render");
     assert_eq!(
-        gpu_output.frame.pixels, cpu_output.frame.pixels,
+        gpu_output.frame.pixels(),
+        cpu_output.frame.pixels(),
         "the GPU local-mask pass must be byte-identical to the CPU oracle"
     );
     assert_eq!(
@@ -410,7 +411,8 @@ fn mask_recipe_renders_byte_identically_on_gpu_and_cpu() {
         .expect("global GPU render")
         .to_image_frame();
     assert_ne!(
-        gpu_output.frame.pixels, global.pixels,
+        gpu_output.frame.pixels(),
+        global.pixels(),
         "the local mask pass changed no pixel - the parity assertion is vacuous"
     );
 }

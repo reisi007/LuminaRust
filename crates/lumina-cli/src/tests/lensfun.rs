@@ -140,7 +140,8 @@ fn render_with_corrector_changes_pixels() {
     )
     .unwrap();
     assert_ne!(
-        rendered_none.frame.pixels, rendered_some.frame.pixels,
+        rendered_none.frame.pixels(),
+        rendered_some.frame.pixels(),
         "a Lensfun corrector must change the rendered pixels"
     );
 }

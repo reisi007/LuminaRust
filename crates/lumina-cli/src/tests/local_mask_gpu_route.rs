@@ -67,8 +67,8 @@ fn mask_free_composite_is_a_no_op_not_a_refusal() {
     );
     assert!(output.mask_warnings.is_empty());
     assert_eq!(
-        output.frame.pixels,
-        global.to_image_frame().pixels,
+        output.frame.pixels(),
+        global.to_image_frame().pixels(),
         "the no-op must return the global frame unchanged"
     );
 }

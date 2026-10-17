@@ -177,7 +177,7 @@ impl OrtDenoiser {
         // Interleaved RGB at native tile geometry (no resize: the denoiser is
         // fully-convolutional and must keep the pixel grid).
         let mut rgb = Vec::with_capacity(image.width as usize * image.height as usize * 3);
-        for pixel in image.pixels.as_chunks::<4>().0 {
+        for pixel in image.pixels().as_chunks::<4>().0 {
             rgb.extend_from_slice(&pixel[..3]);
         }
         let data = normalize_rgb_to_nchw(
