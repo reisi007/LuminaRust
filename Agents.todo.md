@@ -490,6 +490,8 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 
 - [ ] **[PRIO: niedrig] HARNESS-GATES-73 (Architektur-Review 2026-10-16)** `agent-harness/` ist ein **zweiter** Cargo-Workspace (`agent-harness/Cargo.toml`, eigenes `Cargo.lock`) und läuft außerhalb von `cargo test --workspace`. In die Standard-Gates/CI einbeziehen oder die Ausnahme sichtbar begründen. **Abnahme:** entweder ein grüner Gate-Lauf, der `agent-harness` einschließt, oder eine dokumentierte, begründete Ausnahme. **Abgrenzung:** keine Änderung am Harness-Verhalten.
 
+- [ ] **[PRIO: niedrig] CI-GOLDEN-GATE-75 (Befund 2026-10-17; der geplante Lauf ist seit 2026-10-14 durchgehend rot)** Der Job `GUI goldens (ignored)` in `.github/workflows/golden-gate.yml` startet im Container `ghcr.io/reisi007/luminarust/lumina-ci:latest` und scheitert bei **jedem** Termin (14.10., 15.10., 16.10., 17.10.2026) an `cargo: command not found` (exit 127, Laufzeit ~30 s); die anschließende Ergebnisprüfung (`exit_code` leer ≠ 0) färbt den Lauf zusätzlich rot. Kein Golden-Test-Fehler, sondern die Lauffähigkeit des Gates. **Abnahme:** ein geplanter **oder** per `workflow_dispatch` gestarteter Lauf endet grün mit `exit_code=0` und `test count > 0`, **oder** die Ausnahme ist sichtbar begründet. **Abgrenzung:** keine Änderung an den Golden-Tests oder ihren Snapshots. **Offene Wahl (Eigentümer):** Toolchain im Job nachinstallieren · das Test-Image mit Cargo verwenden (Regel `docker-test-image`) · den Job-Container fallenlassen und auf dem Runner bauen.
+
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 
 
