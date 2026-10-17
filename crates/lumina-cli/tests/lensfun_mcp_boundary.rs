@@ -209,7 +209,11 @@ fn profile_resolves_on_this_host(metadata: &RawMetadata) -> bool {
 // ---------------------------------------------------------------------------
 
 fn divergence_stats(a: &[u8], b: &[u8]) -> (usize, u8) {
-    assert_eq!(a.len(), b.len(), "the two renders must have the same length");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "the two renders must have the same length"
+    );
     let mut bytes = 0usize;
     let mut max_delta = 0u8;
     for (x, y) in a.iter().zip(b) {
