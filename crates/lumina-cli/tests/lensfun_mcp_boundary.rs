@@ -38,7 +38,7 @@
 //!   uses and proves resolves against the system database): the sides differ
 //!   **iff** this host's Lensfun database actually resolves the profile. The
 //!   probe (`build_corrector`, i.e. `lumina_lensfun::LensfunDb::load_system_with`
-//!   + `for_camera`) decides which arm applies, so the test is
+//!   plus `for_camera`) decides which arm applies, so the test is
 //!   machine-independent: on a host with the database it asserts the
 //!   divergence, on a host without it the identity.
 //!
