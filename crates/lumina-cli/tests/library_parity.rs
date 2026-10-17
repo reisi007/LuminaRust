@@ -30,6 +30,11 @@
 // Each parity test binary uses a part of the shared harness, so the module is
 // declared with `dead_code` allowed: an unused helper here is a helper another
 // file in this slice uses, not dead code.
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[allow(dead_code)]
 #[path = "library_parity_common/mod.rs"]
 mod common;

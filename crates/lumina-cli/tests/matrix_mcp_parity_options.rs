@@ -19,6 +19,11 @@
 //! transports render into a fresh tempdir that is removed afterwards, so the
 //! two addresses cannot agree — only the state under them can.
 
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[path = "matrix_mcp_parity_common/mod.rs"]
 mod common;
 use common::{fixtures::*, graders::*, green::*, job::*};

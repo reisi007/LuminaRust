@@ -38,6 +38,11 @@
 //! a panorama series. The real-RAW acceptance gate stays open until an owner-
 //! documented series exists; this file proves the *path*, not the *series*.
 
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[path = "merge_mcp_parity_common/mod.rs"]
 mod common;
 use common::{fixtures::*, graders::*, job::*};

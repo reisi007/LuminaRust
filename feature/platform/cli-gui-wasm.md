@@ -201,7 +201,10 @@ Feature-Listen aus den Manifesten, kein Hardcoding); CI-Schritt „Check every
 workspace crate's declared feature sets compile" (`rust-fast`). Pro Crate mit
 Features: ein `cargo check -p <crate> --all-targets --all-features` (Union)
 plus ein `cargo check -p <crate> --all-targets --features <F>` je deklariertem
-nicht-`default`-Feature. Crates ohne `[features]`-Tabelle werden benannt
+nicht-`default`-Feature, seit CLI-NO-DEFAULT-TESTBUILD-80 (2026-10-17) zusaetzlich
+ein `cargo check -p <crate> --all-targets --no-default-features` (leere Feature-
+Menge; gemessen gruen fuer alle neun Crates mit `[features]`-Tabelle). Crates ohne
+`[features]`-Tabelle werden benannt
 übersprungen (`lumina-gui-harness` wird auf Linux als Stub kompiliert).
 `cargo check` (kein Link), daher kann das benannte onnx-rt-Host-Gate
 (glibc 2.36 < 2.38) diesen Schritt nicht rot machen.
@@ -210,7 +213,10 @@ funktioniert — das ist die Achse des CLI-Gates oben. Compile-only, kein
 Adapter, kein Laufzeit-Test, keine Golden-Änderung. Mutationsbeleg: ein
 eingefügtes `routed.pixels` (ohne Klammern) in
 `crates/lumina-mcp/src/util.rs` (im `#[cfg(all(test, feature = "gpu"))]`-
-Modul) macht das Skript rot mit `file:line`.
+Modul) macht das Skript rot mit `file:line`; fuer die leere Menge entfernt
+das Löschen einer `#![cfg(feature = "mcp")]`-Zeile in einer der 17
+CLI-Paritaets-Testdateien die Achse `lumina-cli --all-targets
+--no-default-features` (gemessen rot, danach byte-identisch restauriert).
 
 **Umgesetzter Stand (Review-R2-CLI-Fixes, 2026-08-26):**
 

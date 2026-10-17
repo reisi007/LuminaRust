@@ -6,6 +6,11 @@
 //! The fixtures below are new test fixtures (64×48, in-file): no committed
 //! golden or testdata set is touched.
 
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[path = "merge_mcp_parity_common/mod.rs"]
 mod common;
 

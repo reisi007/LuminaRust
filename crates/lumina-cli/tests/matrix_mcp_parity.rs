@@ -31,6 +31,11 @@
 //! Everything else — the `psnr_db` **strings**, `max_abs_diff`, `status`,
 //! `message`, `route`, `route_reasons`, `expected_route` — is compared raw.
 
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[path = "matrix_mcp_parity_common/mod.rs"]
 mod common;
 use common::{fixtures::*, graders::*, green::*, job::*};

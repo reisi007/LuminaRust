@@ -28,6 +28,11 @@
 //! thing these tests cannot exercise is the RAW decode path (T21 stays
 //! `#[ignore]`, `merge_mcp_parity.rs`).
 
+// CLI-NO-DEFAULT-TESTBUILD-80: the whole target is CLI<->MCP parity work; the
+// shared harness needs `lumina_mcp`, which only exists under the default `mcp`
+// feature, so the file is gated on that feature as a whole.
+#![cfg(feature = "mcp")]
+
 #[path = "merge_mcp_parity_common/mod.rs"]
 mod common;
 use common::{fixtures::*, graders::*, job::*};

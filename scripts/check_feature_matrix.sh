@@ -21,6 +21,13 @@
 #                    for every declared non-`default` feature F, so a feature
 #                    that only compiles next to another one is caught (the
 #                    defect class of `scripts/check_cli_features.sh`).
+#   Axis 3 — EMPTY:  `cargo check -p <crate> --all-targets --no-default-features`
+#                    compiles the EMPTY feature set (every optional dependency
+#                    dropped). Measured green for all NINE feature-declaring
+#                    crates on 2026-10-17 after CLI-NO-DEFAULT-TESTBUILD-80
+#                    gated the CLI's MCP-parity test targets; the other eight
+#                    crates already passed the empty set, so the axis covers
+#                    every feature-declaring crate, not just `lumina-cli`.
 # Crates without a `[features]` table declare no feature set; they are skipped
 # by name (the default build is covered by `cargo check --workspace
 # --all-targets`), except `lumina-gui-harness`, which is named below.
@@ -32,13 +39,14 @@
 #     this is the same named limit `scripts/check_cli_features.sh` carries.
 #   * The gate is COMPILE-ONLY (`cargo check`): no adapter, no runtime test, no
 #     golden. Behavioural coverage stays with the workspace test shards.
-#   * `--no-default-features` is deliberately NOT checked. Measured on HEAD
-#     60dc794: `cargo check -p lumina-cli --all-targets --no-default-features`
-#     exits 101 — the test target `tests/stage_parity_common/mod.rs` uses
-#     `lumina_mcp` unconditionally, but `lumina_mcp` is only a dependency under
-#     the default `mcp` feature. The empty feature set is not a DECLARED
-#     feature set, so it is out of scope for this gate — but it is a real,
-#     separately reportable gap, not a covered claim.
+#   * Axis 3 DOES check the empty set (`--no-default-features`), although the
+#     empty set is not a DECLARED feature set. Measured before
+#     CLI-NO-DEFAULT-TESTBUILD-80 (HEAD 60dc794): `cargo check -p lumina-cli
+#     --all-targets --no-default-features` exited 101 — the shared test-support
+#     modules used `lumina_mcp` unconditionally while that crate sits only
+#     under the default `mcp` feature. The fix gated the affected test
+#     targets; measured after, all nine feature-declaring crates pass the
+#     empty set, so no crate is excluded from this axis.
 #   * `lumina-gui-harness` is macOS-only at the code level (`#[cfg(target_os =
 #     "macos")]`). It IS buildable on Linux (it compiles to the documented stub
 #     main), so the gate compiles it; it does NOT claim to cover the macOS
@@ -61,6 +69,13 @@
 #   # `cpu_branch_matches_render_frame_byte_identically` (line 646)
 #   sh scripts/check_feature_matrix.sh   # must exit 1 and print the file:line
 #   # restore byte-identically (sha256sum before/after); never git checkout
+#
+# Mutation proof for Axis 3 (the empty-set axis; measured 2026-10-17):
+#   # remove the `#![cfg(feature = "mcp")]` line from one of the 17 gated CLI
+#   # parity test files, e.g. crates/lumina-cli/tests/stage_parity.rs
+#   sh scripts/check_feature_matrix.sh   # must exit 1 and print
+#   #   FAIL lumina-cli --all-targets --no-default-features
+#   # restore byte-identically (sha256sum before/after); never git checkout
 set -eu
 
 started_at=$(date +%s)
@@ -77,6 +92,7 @@ fi
 failed=0
 checked_crates=0
 checked_sets=0
+checked_empty=0
 skipped_no_features=0
 
 tmpout=$(mktemp)
@@ -158,6 +174,13 @@ for member in $members; do
         esac
         run_check "$crate --all-targets --features $f" -p "$crate" --all-targets --features "$f"
     done
+
+    # Axis 3: the EMPTY feature set — every optional dependency dropped. All
+    # nine feature-declaring crates are checked (measured green 2026-10-17,
+    # see the header); crates without features have nothing to disable and
+    # stay on the named skip above.
+    run_check "$crate --all-targets --no-default-features" -p "$crate" --all-targets --no-default-features
+    checked_empty=$((checked_empty + 1))
 done
 
 if [ "$failed" -ne 0 ]; then
@@ -166,4 +189,4 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 elapsed=$(($(date +%s) - started_at))
-echo "feature_matrix OK ($checked_crates crates, $checked_sets feature sets, $skipped_no_features crates skipped: no declared features, ${elapsed}s)"
+echo "feature_matrix OK ($checked_crates crates, $checked_sets feature sets incl. $checked_empty empty-set, $skipped_no_features crates skipped: no declared features, ${elapsed}s)"
