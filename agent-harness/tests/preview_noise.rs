@@ -32,7 +32,7 @@ fn preview_noise() {
 
     // In-app preview frame (independent of the composited UI pixels).
     let app_frame = probe.app().preview().map(|frame| {
-        let (chunks, _) = frame.pixels.as_chunks::<4>();
+        let (chunks, _) = frame.pixels().as_chunks::<4>();
         let n = chunks.len().max(1) as f64;
         let mean = chunks
             .iter()
@@ -102,7 +102,7 @@ fn preview_noise() {
     // headless), so content proofs live on the in-app RGBA frame instead.
     if let Some(frame) = probe.app().preview() {
         let (fw, fh) = (frame.width, frame.height);
-        match app_frame_stats(fw, fh, &frame.pixels) {
+        match app_frame_stats(fw, fh, frame.pixels()) {
             Some(s) if s.opaque_fraction >= 1.0 => verdicts.push(Verdict::pass(
                 "app preview frame is opaque",
                 format!("{fw}x{fh} opaque_fraction=1.0"),
@@ -116,10 +116,10 @@ fn preview_noise() {
             )),
             None => verdicts.push(Verdict::fail(
                 "app preview frame is opaque",
-                format!("{fw}x{fh} len={} mismatches RGBA8", frame.pixels.len()),
+                format!("{fw}x{fh} len={} mismatches RGBA8", frame.pixels().len()),
             )),
         }
-        match app_frame_center_stats(fw, fh, &frame.pixels, 0.5) {
+        match app_frame_center_stats(fw, fh, frame.pixels(), 0.5) {
             Some(c) if c.std_luma > 0.05 && c.mean_luma > 0.05 && c.mean_luma < 0.95 => {
                 verdicts.push(Verdict::pass(
                     "app preview center holds image content",
@@ -139,10 +139,10 @@ fn preview_noise() {
             )),
         }
         // Determinism: consecutive frames without edits must be byte-identical.
-        let before = frame.pixels.clone();
+        let before = frame.pixels().to_vec();
         let gen_before = probe.app().preview_generation();
         probe.run_steps(5);
-        let after = probe.app().preview().map(|f| f.pixels.clone());
+        let after = probe.app().preview().map(|f| f.pixels().to_vec());
         match after {
             Some(after) => match frame_psnr(&before, &after) {
                 Some(psnr) if psnr.is_infinite() => verdicts.push(Verdict::pass(
@@ -168,7 +168,7 @@ fn preview_noise() {
         probe.app_mut().set_adjustment("exposure", 2.0);
         probe.run_steps(150);
         probe.wait_quiescent(150, 8);
-        let edited = probe.app().preview().map(|f| f.pixels.clone());
+        let edited = probe.app().preview().map(|f| f.pixels().to_vec());
         match edited {
             Some(edited) => match frame_psnr(&before, &edited) {
                 Some(psnr) if psnr.is_finite() => verdicts.push(Verdict::pass(

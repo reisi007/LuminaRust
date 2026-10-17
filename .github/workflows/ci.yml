@@ -20,7 +20,10 @@ on:
       #   * scripts/golden_ref_test.sh derives its two class-R pixel
       #     thresholds from feature/quality/golden-fixtures.md.
       # Those, plus feature/** and docs/adr/** as a whole, are therefore
-      # deliberately absent below.
+      # deliberately absent below. `agent-harness/**` is deliberately absent
+      # too: the `rust-harness` job (HARNESS-GATES-73) consumes the second
+      # workspace as an input, so harness-only commits must still trigger
+      # this workflow.
       #
       # `paths-ignore` (subtract), not `paths` (include-list): GitHub's AND
       # semantics mean a commit touching one of these AND a .rs file still
@@ -34,7 +37,6 @@ on:
       - 'docs/skills/**'
       - 'docs/*.md'
       - 'licenses/**'
-      - 'agent-harness/**'
       - 'crates/**/*.md'
       - 'vendor/**/*.md'
       - 'scripts/**/*.md'
@@ -57,7 +59,6 @@ on:
       - 'docs/skills/**'
       - 'docs/*.md'
       - 'licenses/**'
-      - 'agent-harness/**'
       - 'crates/**/*.md'
       - 'vendor/**/*.md'
       - 'scripts/**/*.md'
@@ -408,6 +409,81 @@ jobs:
       # unit tests live in `src/tests/` and compile into the bin target.
       - name: Run CLI GPU tests (adapter-free cells)
         run: cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun
+
+  # HARNESS-GATES-73: `agent-harness/` is a SECOND Cargo workspace — its
+  # Cargo.toml starts with its own [workspace] table and it has its own
+  # Cargo.lock — and it is NOT a member of the root workspace (the root
+  # `members` list has 17 crates, agent-harness is not one of them). Every
+  # root gate (`cargo test --workspace`, clippy, fmt) therefore never entered
+  # it, and its bit-rot stayed invisible. Measured while wiring this job
+  # (2026-10-17, HEAD 7cec73c): the harness gates are RED — in agent-harness/,
+  # `cargo clippy --all-targets -- -D warnings` fails with 8x E0616 in
+  # tests/preview_fidelity.rs and `cargo test` stops in tests/preview_noise.rs
+  # with 11 errors (7x E0616 + 4x E0277 cascade): both `#[ignore]`d GPU test
+  # targets still read the private field lumina_core::ImageFrame::pixels
+  # (encapsulated in 635ac9a; the accessor `pixels()` exists) and must compile
+  # even though their tests never run. The fix belongs to the harness
+  # tests, which this job deliberately does not touch — the gate's purpose is
+  # to make exactly this rot visible instead of silent. The job runs the
+  # harness's own three gates (agent-harness/README.md §Gates) inside
+  # agent-harness/: fmt, clippy -D warnings, and the adapter-free tests.
+  # BOUNDARY: the GPU scenarios in tests/ stay `#[ignore]`d — the container
+  # has no wgpu adapter/GPU runner, so they are compile-gated here but never
+  # executed (tracked in GOLDEN-REF-30 / GOLDEN-BASELINE-32). Own cache
+  # input: the second workspace's own Cargo.lock means its own dependency
+  # graph and target directory; `workspaces: agent-harness` (documented
+  # input: "Paths to multiple Cargo workspaces and their target directories")
+  # keeps a separate cache entry — a wrong input would only cost cache hits,
+  # never a green run. No `paths` filter: after the first cache hit the job
+  # is cheap, and a filterless job cannot become a "pending check" trap.
+  rust-harness:
+    name: Rust agent-harness
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    # Same pinned image as the other Rust jobs; it already builds the
+    # egui/eframe/wgpu stack for rust-test-gui, so the harness dependencies
+    # (egui_kittest 0.36 with wgpu/snapshot/eframe) compile in it unchanged.
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reisi007/luminarust/lumina-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The image deliberately ships no Rust toolchain (docker/Dockerfile);
+      # dtolnay installs current stable inside the container.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo (agent-harness workspace)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Second workspace, own Cargo.lock → own cache entry (see job comment).
+          workspaces: agent-harness
+          shared-key: lumina-rust-harness
+
+      - name: Check formatting
+        working-directory: agent-harness
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        working-directory: agent-harness
+        run: cargo clippy --all-targets -- -D warnings
+
+      # GPU scenarios stay #[ignore]d (no adapter in the container); the
+      # adapter-free tests run: the src/ unit helpers plus the no-GPU
+      # integration cells (click-matrix, gamma/threshold math).
+      - name: Run tests (GPU scenarios ignored)
+        working-directory: agent-harness
+        run: cargo test
 
   bench:
     name: Benchmarks (optional)

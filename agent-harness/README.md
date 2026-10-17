@@ -343,3 +343,5 @@ cargo test                # unit helpers (GPU scenarios ignored)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+Dieselben drei Kommandos laufen in CI (Job `rust-harness` in `.github/workflows/ci.yml`); die GPU-Szenarien bleiben dort `#[ignore]`d.

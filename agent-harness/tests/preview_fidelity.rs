@@ -191,7 +191,7 @@ fn preview_fidelity() {
 
     // 1a. Opaque-Alpha (Preview-Frame, NICHT Composit-Readback — Texturen
     // malen headless schwarz, s. HARNESS-2-Entscheid).
-    match app_frame_stats(fw, fh, &frame.pixels) {
+    match app_frame_stats(fw, fh, frame.pixels()) {
         Some(s) if s.opaque_fraction >= 1.0 => verdicts.push(Verdict::pass(
             "app preview frame is opaque",
             format!("{fw}x{fh} opaque_fraction=1.0"),
@@ -207,7 +207,7 @@ fn preview_fidelity() {
     }
 
     // 1b. Center-Pixel-Delta geladen vs. leer (Schwelle s. oben).
-    let center = app_frame_center_stats(fw, fh, &frame.pixels, 0.5).expect("center stats");
+    let center = app_frame_center_stats(fw, fh, frame.pixels(), 0.5).expect("center stats");
     let delta = (center.mean_luma - empty_center_mean).abs();
     if delta >= CENTER_DELTA_MIN {
         verdicts.push(Verdict::pass(
@@ -250,7 +250,7 @@ fn preview_fidelity() {
     // 1d. Preview-Frame-Ecken: per Design Content (kein Letterbox im
     // Pipeline-Output) — dokumentiert statt als Background-Fehlschlag.
     let corner_px: Vec<[u8; 3]> = {
-        let rgba = frame_to_rgba(fw, fh, &frame.pixels).expect("frame to rgba");
+        let rgba = frame_to_rgba(fw, fh, frame.pixels()).expect("frame to rgba");
         let (w, h) = (rgba.width(), rgba.height());
         [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
             .iter()
@@ -285,7 +285,7 @@ fn preview_fidelity() {
     let (sw, sh) = (src_rgba.width(), src_rgba.height());
     let src_resized =
         image::imageops::resize(&src_rgba, fw, fh, image::imageops::FilterType::Triangle);
-    let psnr_full = frame_psnr(&src_resized.as_raw()[..], &frame.pixels);
+    let psnr_full = frame_psnr(&src_resized.as_raw()[..], frame.pixels());
     match psnr_full {
         Some(psnr) if psnr.is_infinite() => verdicts.push(Verdict::pass(
             "preview matches sRGB source (PSNR)",
@@ -320,14 +320,14 @@ fn preview_fidelity() {
     ));
 
     // ---- Phase 3: Thumbnail-Hash/PSNR --------------------------------------
-    let frame_rgba = frame_to_rgba(fw, fh, &frame.pixels).expect("frame to rgba");
+    let frame_rgba = frame_to_rgba(fw, fh, frame.pixels()).expect("frame to rgba");
     let thumb = thumbnail_32(&frame_rgba);
     let thumb_hash = frame_hash_fnv1a(thumb.as_raw());
     // Determinismus auf Thumbnail-Ebene (HARNESS-2-Determinismus reused).
     probe.run_steps(5);
     let frame2 = probe.app().preview().expect("preview stable").clone();
     let thumb2 =
-        thumbnail_32(&frame_to_rgba(frame2.width, frame2.height, &frame2.pixels).expect("rgba"));
+        thumbnail_32(&frame_to_rgba(frame2.width, frame2.height, frame2.pixels()).expect("rgba"));
     let thumb_psnr = frame_psnr(thumb.as_raw(), thumb2.as_raw());
     match thumb_psnr {
         Some(psnr) if psnr.is_infinite() => verdicts.push(Verdict::pass(
@@ -448,7 +448,7 @@ fn preview_fidelity() {
     );
     let gen_a = swap.app().preview_generation();
     let frame_a = swap.app().preview().expect("frame A").clone();
-    let hash_a = frame_hash_fnv1a(&frame_a.pixels);
+    let hash_a = frame_hash_fnv1a(frame_a.pixels());
     swap.app_mut().open_file(file_b.display().to_string());
     swap.run_steps(80);
     swap.wait_quiescent(120, 8);
@@ -459,7 +459,7 @@ fn preview_fidelity() {
     );
     let gen_b = swap.app().preview_generation();
     let frame_b = swap.app().preview().expect("frame B").clone();
-    let hash_b = frame_hash_fnv1a(&frame_b.pixels);
+    let hash_b = frame_hash_fnv1a(frame_b.pixels());
     if gen_b > gen_a {
         verdicts.push(Verdict::pass(
             "generation switches on image change",

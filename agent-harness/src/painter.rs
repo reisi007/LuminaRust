@@ -100,7 +100,7 @@ pub fn nav_accent_pixels(img: &RgbaImage) -> u64 {
     count_near_color(img, NAV_RECT_ACCENT_RGB, NAV_ACCENT_TOL)
 }
 
-/// Statistics of an in-app RGBA8 frame (`preview().pixels`, row-major).
+/// Statistics of an in-app RGBA8 frame (`preview().pixels()`, row-major).
 #[derive(Debug, Clone)]
 pub struct AppFrameStats {
     pub width: u32,
