@@ -10,7 +10,7 @@ fn preview_correctly_rendered() {
     app.load_bytes(png.clone(), "synthetic.png").unwrap();
     // Preview vorhanden, generation gebumpt, render_key vorhanden
     let preview = app.preview().expect("preview after load").clone();
-    assert_eq!((preview.width, preview.height), (8, 8));
+    assert_eq!((preview.width(), preview.height()), (8, 8));
     assert!(app.preview_generation() > 0, "preview_generation must bump");
     assert!(app.render_key().is_some(), "render_key after load");
     assert!(!app.preview_is_draft(), "load produces full render");

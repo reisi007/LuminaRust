@@ -280,7 +280,7 @@ fn merge_hdr_produces_dng_bundle_and_reimportable_dng() {
 
     // Re-import: the DNG decodes via lumina-raw with merged geometry.
     let decoded = lumina_raw::decode_bytes(&fs::read(&dng).unwrap(), "a-HDR.dng").unwrap();
-    assert_eq!((decoded.frame.width, decoded.frame.height), (W, H));
+    assert_eq!((decoded.frame.width(), decoded.frame.height()), (W, H));
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn merge_pano_produces_wider_dng() {
     let dx = matrix[2].as_f64().unwrap().round() as i32;
     assert!(dx.abs() > 0, "an offset was estimated, got {matrix:?}");
     assert_eq!(
-        (decoded.frame.width, decoded.frame.height),
+        (decoded.frame.width(), decoded.frame.height()),
         (W + dx.unsigned_abs(), H),
         "side-by-side canvas grows by the estimated offset"
     );
@@ -685,7 +685,7 @@ fn merge_pano_rotated_pair_applies_full_matrix_end_to_end() {
     );
     let decoded = lumina_raw::decode_bytes(&fs::read(&dng).unwrap(), "a-Pano.dng").unwrap();
     assert_eq!(
-        (decoded.frame.width, decoded.frame.height),
+        (decoded.frame.width(), decoded.frame.height()),
         (full.width(), full.height()),
         "DNG canvas must come from the full-matrix blend"
     );

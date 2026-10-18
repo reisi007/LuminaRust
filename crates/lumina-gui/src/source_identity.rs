@@ -86,8 +86,8 @@ pub(crate) fn build_source_identity(
             extras: BTreeMap::new(),
         },
         geometry_fingerprint: GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
             orientation,
             pixel_aspect_ratio: 1.0,
             extras: BTreeMap::new(),

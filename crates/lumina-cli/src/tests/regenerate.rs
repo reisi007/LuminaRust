@@ -367,9 +367,9 @@ fn regenerate_collective_marks_only_stale_masks() {
         mask_id: zdata_mask_tile_id("vc-original", "subject"),
         tile_x: 0,
         tile_y: 0,
-        width: frame.width,
-        height: frame.height,
-        values: vec![0; (frame.width * frame.height) as usize],
+        width: frame.width(),
+        height: frame.height(),
+        values: vec![0; (frame.width() * frame.height()) as usize],
     };
     let container = lumina_sidecar::ZDataContainer::new(vec![tile]).unwrap();
     lumina_sidecar::save_zdata(&directory.path().join("x.zdata"), &container).unwrap();

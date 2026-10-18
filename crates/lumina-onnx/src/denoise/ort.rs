@@ -166,17 +166,17 @@ impl OrtDenoiser {
     fn denoise_inner(&self, image: &ImageFrame) -> Result<Vec<u8>, OnnxError> {
         self.hash_status
             .enforce_inference_allowed(&self.manifest.model_name)?;
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         // Interleaved RGB at native tile geometry (no resize: the denoiser is
         // fully-convolutional and must keep the pixel grid).
-        let mut rgb = Vec::with_capacity(image.width as usize * image.height as usize * 3);
+        let mut rgb = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
         for pixel in image.pixels().as_chunks::<4>().0 {
             rgb.extend_from_slice(&pixel[..3]);
         }
@@ -186,7 +186,7 @@ impl OrtDenoiser {
             &self.manifest.input.normalization,
         )?;
         let tensor = ort::value::Tensor::from_array((
-            vec![1i64, 3, image.height as i64, image.width as i64],
+            vec![1i64, 3, image.height() as i64, image.width() as i64],
             data,
         ))
         .map_err(|error| OnnxError::InferenceFailed {

@@ -132,13 +132,13 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     let replacement_frame = ImageFrame::decode(&replacement_bytes).map_err(|error| {
         McpError::Decode(format!("could not decode replacement image: {error}"))
     })?;
-    if replacement_frame.width != definition.region_width
-        || replacement_frame.height != definition.region_height
+    if replacement_frame.width() != definition.region_width
+        || replacement_frame.height() != definition.region_height
     {
         return Err(McpError::InvalidParams(format!(
             "replacement image {}x{} does not match region {}x{}",
-            replacement_frame.width,
-            replacement_frame.height,
+            replacement_frame.width(),
+            replacement_frame.height(),
             definition.region_width,
             definition.region_height
         )));
@@ -154,10 +154,10 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .validate()
         .map_err(|error| McpError::InvalidParams(format!("invalid repair region: {error}")))?;
     // Source actions apply at source resolution (identical to the CLI).
-    if region.width != frame.width || region.height != frame.height {
+    if region.width != frame.width() || region.height != frame.height() {
         return Err(McpError::InvalidParams(format!(
             "repair region {}x{} does not match source frame {}x{}; source actions apply at source resolution",
-            region.width, region.height, frame.width, frame.height
+            region.width, region.height, frame.width(), frame.height()
         )));
     }
 

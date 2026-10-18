@@ -131,12 +131,12 @@ impl SubjectInference for StubBackend {
                 name: self.manifest.model_name.clone(),
             });
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         // R2-ONNX-02: no throwaway full-frame resize here. The stub's matte is
@@ -149,7 +149,7 @@ impl SubjectInference for StubBackend {
         rescale_model_matte(
             &model_matte,
             self.manifest.input.resolution,
-            (image.width, image.height),
+            (image.width(), image.height()),
         )
     }
 }

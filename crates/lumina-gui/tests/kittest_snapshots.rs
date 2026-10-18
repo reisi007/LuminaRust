@@ -2294,7 +2294,7 @@ fn develop_overlay_crop() {
     assert_preview_loaded(&mut harness);
     {
         let frame = ImageFrame::decode(&LuminaApp::sample_image_png()).expect("sample decodes");
-        assert_eq!((frame.width, frame.height), (4, 3));
+        assert_eq!((frame.width(), frame.height()), (4, 3));
         let app = harness.state_mut();
         let crop = app
             .recipe()
@@ -2310,7 +2310,7 @@ fn develop_overlay_crop() {
             eframe::egui::pos2(0.0, 0.0),
             eframe::egui::pos2(400.0, 300.0),
         );
-        let overlay = LuminaApp::crop_overlay_rect(rect, Some(crop), frame.width, frame.height)
+        let overlay = LuminaApp::crop_overlay_rect(rect, Some(crop), frame.width(), frame.height())
             .expect("free crop must map");
         assert_pos_near(overlay.min, eframe::egui::pos2(40.0, 30.0));
         assert_pos_near(overlay.max, eframe::egui::pos2(360.0, 210.0));

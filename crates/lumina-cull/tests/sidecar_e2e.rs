@@ -72,7 +72,7 @@ fn analyze_record_save_load_evaluate_roundtrip() {
         iso: None,
     };
     let analysis = analyze_heuristic(&input, &config).expect("analysis");
-    let source = source_identity("blake3:abc", frame.width, frame.height);
+    let source = source_identity("blake3:abc", frame.width(), frame.height());
     let source_fingerprint = fingerprint(&source);
     let identity = analysis.core.identity(
         source_fingerprint.clone(),
@@ -173,7 +173,7 @@ fn missing_sidecar_file_is_loud() {
         &config,
     )
     .expect("analysis");
-    let source = source_identity("blake3:abc", frame.width, frame.height);
+    let source = source_identity("blake3:abc", frame.width(), frame.height());
     let identity = analysis
         .core
         .identity(fingerprint(&source), decode(), geometry(32, 32));
@@ -195,7 +195,7 @@ fn persisted_non_valid_status_is_unusable_and_not_writable() {
         &config,
     )
     .expect("analysis");
-    let source = source_identity("blake3:abc", frame.width, frame.height);
+    let source = source_identity("blake3:abc", frame.width(), frame.height());
     let source_fingerprint = fingerprint(&source);
     let identity = analysis.core.identity(
         source_fingerprint.clone(),
@@ -239,7 +239,7 @@ fn analyzer_or_preprocessing_change_marks_stale() {
         &config,
     )
     .expect("analysis");
-    let source = source_identity("blake3:abc", frame.width, frame.height);
+    let source = source_identity("blake3:abc", frame.width(), frame.height());
     let source_fingerprint = fingerprint(&source);
     let section = analysis
         .core

@@ -76,8 +76,8 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     Ok(json!({
         "ok": true,
         "preview_path": preview_path.to_string_lossy(),
-        "width": preview_frame.width,
-        "height": preview_frame.height,
+        "width": preview_frame.width(),
+        "height": preview_frame.height(),
         "size_bytes": png.len() as u64,
     }))
 }

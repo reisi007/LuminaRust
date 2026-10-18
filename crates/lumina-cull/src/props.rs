@@ -103,8 +103,8 @@ proptest! {
             extras: Default::default(),
         };
         let geometry = GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
             orientation: 1,
             pixel_aspect_ratio: 1.0,
             extras: Default::default(),

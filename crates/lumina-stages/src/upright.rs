@@ -97,8 +97,8 @@ pub fn run(request: &UprightRequest, persist: Persist) -> Result<StageRun, Stage
                 source_identity(Path::new(&request.input), &bytes, &frame, raw.as_ref())?;
             let fingerprint = upright_input_fingerprint(
                 &identity.content_hash,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 identity.orientation,
             );
             let suggestion = analyze_upright(&frame);

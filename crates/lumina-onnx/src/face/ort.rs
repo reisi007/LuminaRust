@@ -116,12 +116,12 @@ impl OrtFaceDetector {
     fn detect_inner(&self, image: &ImageFrame) -> Result<Vec<DetectedFace>, OnnxError> {
         self.hash_status
             .enforce_inference_allowed(&self.manifest.model_name)?;
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         let mut session = self.session.borrow_mut();
@@ -242,12 +242,12 @@ impl OrtFaceEmbedder {
         if detections.is_empty() {
             return Ok(Vec::new());
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         let resolution = (

@@ -75,7 +75,7 @@ fn writer_roundtrip_hash_stable_and_reimportable() {
 
     let img1 = lumina_raw::decode_file(&path).unwrap();
     let img2 = lumina_raw::decode_file(&path).unwrap();
-    assert_eq!((img1.frame.width, img1.frame.height), (32, 24));
+    assert_eq!((img1.frame.width(), img1.frame.height()), (32, 24));
     assert_eq!(
         img1.frame.pixels(),
         img2.frame.pixels(),

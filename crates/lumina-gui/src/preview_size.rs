@@ -168,8 +168,8 @@ impl crate::LuminaApp {
     ) -> crate::ImageFrame {
         if let Some((built_for, frame)) = self.preview_cap_state.capped_src.as_ref() {
             if *built_for == max_dim
-                && frame.width == original.width
-                && frame.height == original.height
+                && frame.width() == original.width()
+                && frame.height() == original.height()
             {
                 return frame.clone();
             }
@@ -193,9 +193,9 @@ impl crate::LuminaApp {
         let Some(original) = self.original.as_ref() else {
             return;
         };
-        let window = (original.width, original.height);
+        let window = (original.width(), original.height());
         let Some(max_dim) =
-            capped_source_max_dim(original.width, original.height, window.0, window.1, cap)
+            capped_source_max_dim(original.width(), original.height(), window.0, window.1, cap)
         else {
             return; // source already fits the cap: nothing to rebuild
         };
@@ -361,7 +361,13 @@ mod tests {
         let frame = png_2x1();
         let cap = preview_size_cap(800.0, 600.0, 1.0).unwrap();
         assert_eq!(
-            capped_source_max_dim(frame.width, frame.height, frame.width, frame.height, cap),
+            capped_source_max_dim(
+                frame.width(),
+                frame.height(),
+                frame.width(),
+                frame.height(),
+                cap
+            ),
             None
         );
     }

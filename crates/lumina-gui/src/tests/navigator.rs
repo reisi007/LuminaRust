@@ -179,12 +179,12 @@ fn navigator_overview_is_full_source_despite_roi_crop() {
         "zoomed render must carry an ROI crop"
     );
     assert!(
-        (preview.width, preview.height) != (64, 40),
+        (preview.width(), preview.height()) != (64, 40),
         "the preview texture is a crop, not the full frame"
     );
     let overview = app.navigator_frame().expect("navigator source").clone();
     assert_eq!(
-        (overview.width, overview.height),
+        (overview.width(), overview.height()),
         (64, 40),
         "navigator overview must stay full-frame under zoom"
     );

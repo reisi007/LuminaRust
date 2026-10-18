@@ -113,7 +113,7 @@ impl LuminaApp {
             .draft_original
             .as_ref()
             .or(self.original.as_ref())
-            .map(|source| (source.width, source.height))
+            .map(|source| (source.width(), source.height()))
         else {
             return Ok(None);
         };
@@ -176,7 +176,7 @@ impl LuminaApp {
             .draft_original
             .as_ref()
             .or(self.original.as_ref())
-            .map(|source| (source.width, source.height))
+            .map(|source| (source.width(), source.height()))
         else {
             return false;
         };
@@ -220,7 +220,7 @@ impl LuminaApp {
             return true;
         }
         match self.preview.as_ref() {
-            Some(preview) => preview.width == dims.0 && preview.height == dims.1,
+            Some(preview) => preview.width() == dims.0 && preview.height() == dims.1,
             None => false,
         }
     }

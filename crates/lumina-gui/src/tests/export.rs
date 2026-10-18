@@ -103,7 +103,10 @@ fn gui_jpeg_export_is_functional_and_byte_identical_to_shared_path() {
     );
     // And the decoded JPEG has the same pixel dimensions as the source.
     let decoded = ImageFrame::decode(&gui_bytes).unwrap();
-    assert_eq!((decoded.width, decoded.height), (frame.width, frame.height));
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (frame.width(), frame.height())
+    );
 }
 
 /// GUI-SRCACC-1: a persisted repair region must be applied by the GUI export

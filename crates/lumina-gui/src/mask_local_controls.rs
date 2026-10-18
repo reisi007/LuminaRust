@@ -296,7 +296,7 @@ impl LuminaApp {
                 layer.id
             )));
         };
-        if mask.plane.width != stage.width || mask.plane.height != stage.height {
+        if mask.plane.width != stage.width() || mask.plane.height != stage.height() {
             return Err(GuiError::Io(
                 "local WB sample is stale: evaluated matte and effective source stage differ"
                     .into(),
@@ -304,7 +304,10 @@ impl LuminaApp {
         }
         Ok(format!(
             "effective_source_stage:{}x{};selected_layer:{};render_digest:{}",
-            stage.width, stage.height, layer.id, digest
+            stage.width(),
+            stage.height(),
+            layer.id,
+            digest
         ))
     }
 
@@ -337,11 +340,11 @@ impl LuminaApp {
             .iter()
             .find(|result| result.layer_id == layer.id)
             .ok_or_else(|| GuiError::Io("local WB sample is stale: matte disappeared".into()))?;
-        let x = (nx * stage.width as f64) as u32;
-        let y = (ny * stage.height as f64) as u32;
-        let x = x.min(stage.width.saturating_sub(1));
-        let y = y.min(stage.height.saturating_sub(1));
-        let alpha_index = (y as usize) * (stage.width as usize) + x as usize;
+        let x = (nx * stage.width() as f64) as u32;
+        let y = (ny * stage.height() as f64) as u32;
+        let x = x.min(stage.width().saturating_sub(1));
+        let y = y.min(stage.height().saturating_sub(1));
+        let alpha_index = (y as usize) * (stage.width() as usize) + x as usize;
         let alpha = mask.plane.values.get(alpha_index).copied().ok_or_else(|| {
             GuiError::Io("local WB sample is stale: matte index is unavailable".into())
         })?;

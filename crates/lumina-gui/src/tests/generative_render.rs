@@ -78,7 +78,7 @@ fn generative_expand_golden_preview_headless() {
     let expanded = lumina_core::render_frame_with_generative(&frame, &ctx, g)
         .unwrap()
         .frame;
-    assert_eq!((expanded.width, expanded.height), (6, 6));
+    assert_eq!((expanded.width(), expanded.height()), (6, 6));
     let src_origin_idx = (6 + 1) * 4;
     let src_idx = 0;
     assert_eq!(
@@ -154,7 +154,7 @@ fn generative_expand_preview_uses_single_core_expand() {
     app.set_expand_beyond_image(true).unwrap_err();
     app.generate_generative_canvas().unwrap();
     let preview = app.preview().unwrap().clone();
-    assert_eq!((preview.width, preview.height), (12, 12));
+    assert_eq!((preview.width(), preview.height()), (12, 12));
     for y in 0..8 {
         for x in 0..8 {
             let src_idx = (y * 8 + x) * 4;
@@ -215,13 +215,13 @@ fn generative_expand_export_is_single_core_expand() {
     app.set_expand_beyond_image(true).unwrap_err();
     app.generate_generative_canvas().unwrap();
     let preview = app.preview().unwrap().clone();
-    assert_eq!((preview.width, preview.height), (12, 12));
+    assert_eq!((preview.width(), preview.height()), (12, 12));
     app.export_format = ImageFileFormat::Png;
     let out = directory.path().join("expand_export.png");
     app.export_to(out.clone()).unwrap();
     let gui_bytes = std::fs::read(&out).unwrap();
     let decoded = ImageFrame::decode(&gui_bytes).unwrap();
-    assert_eq!((decoded.width, decoded.height), (12, 12));
+    assert_eq!((decoded.width(), decoded.height()), (12, 12));
     assert_eq!(
         decoded.pixels(),
         preview.pixels(),
@@ -319,6 +319,6 @@ fn generative_draft_render_upgrades_to_full_render() {
         gen_before + 1,
         "the upgrade must run exactly one full render"
     );
-    assert_eq!(app.preview().unwrap().width, 12);
+    assert_eq!(app.preview().unwrap().width(), 12);
     assert!(app.error().is_none(), "got {:?}", app.error());
 }

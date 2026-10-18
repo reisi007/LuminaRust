@@ -76,15 +76,15 @@ fn full_preview_is_capped_to_the_viewport() {
 
     let preview = app.preview().unwrap();
     assert!(
-        preview.width <= 1040 && preview.height <= 780,
+        preview.width() <= 1040 && preview.height() <= 780,
         "full preview must not exceed the 800×600@dpr1 cap: {}×{}",
-        preview.width,
-        preview.height
+        preview.width(),
+        preview.height()
     );
     assert!(
-        preview.width < 2000,
+        preview.width() < 2000,
         "the 2000-px source must be visibly capped, got {}",
-        preview.width
+        preview.width()
     );
     let src = app.preview_render_src.expect("render source recorded");
     assert!(
@@ -101,7 +101,7 @@ fn dpr_scales_the_preview_budget() {
     app.load_bytes(big_source(2000, 1500), "dpr.png").unwrap();
     set_viewport(&mut app, (800.0, 600.0), 1.0);
     app.render_full([800, 600], None).unwrap();
-    let dpr1 = app.preview().unwrap().width;
+    let dpr1 = app.preview().unwrap().width();
 
     let mut retina = new_app();
     retina
@@ -109,7 +109,7 @@ fn dpr_scales_the_preview_budget() {
         .unwrap();
     set_viewport(&mut retina, (800.0, 600.0), 2.0);
     retina.render_full([800, 600], None).unwrap();
-    let dpr2 = retina.preview().unwrap().width;
+    let dpr2 = retina.preview().unwrap().width();
 
     assert!(
         dpr2 > dpr1,
@@ -132,12 +132,12 @@ fn draft_is_built_at_the_viewport_cap_not_a_fixed_edge() {
     app.refresh_preview_cap(1.0);
     let draft = app.draft_original.as_ref().unwrap();
     assert_eq!(
-        (draft.width, draft.height),
+        (draft.width(), draft.height()),
         (1040, 780),
         "draft source must be built at the viewport cap"
     );
     app.render_draft([800, 600], None).unwrap();
-    assert!(app.preview().unwrap().width <= 1040);
+    assert!(app.preview().unwrap().width() <= 1040);
 }
 
 /// Export is explicitly exempt: it renders the full source resolution, never
@@ -156,7 +156,7 @@ fn export_renders_full_source_resolution() {
     let bytes = std::fs::read(&out).unwrap();
     let exported = ImageFrame::decode(&bytes).unwrap();
     assert_eq!(
-        (exported.width, exported.height),
+        (exported.width(), exported.height()),
         (2000, 1500),
         "export must stay full source resolution (viewport cap is preview-only)"
     );
@@ -237,7 +237,10 @@ fn small_sources_are_left_untouched_by_the_cap() {
         "a source below the cap must stay at its own resolution"
     );
     assert_eq!(
-        (app.preview().unwrap().width, app.preview().unwrap().height),
+        (
+            app.preview().unwrap().width(),
+            app.preview().unwrap().height()
+        ),
         (2, 1)
     );
 }
@@ -358,7 +361,10 @@ fn absolute_stage_denoise_suspends_the_cap() {
         "the cap must be suspended for an absolute (denoise) stage"
     );
     assert_eq!(
-        (app.preview().unwrap().width, app.preview().unwrap().height),
+        (
+            app.preview().unwrap().width(),
+            app.preview().unwrap().height()
+        ),
         (400, 300),
         "the denoise preview must stay at full source resolution"
     );
@@ -408,7 +414,10 @@ fn absolute_stage_generative_auto_fill_suspends_the_cap() {
         "the cap must be suspended for an absolute (auto-fill) stage"
     );
     assert_eq!(
-        (app.preview().unwrap().width, app.preview().unwrap().height),
+        (
+            app.preview().unwrap().width(),
+            app.preview().unwrap().height()
+        ),
         (400, 300),
         "the auto-fill preview must stay at full source resolution"
     );
@@ -458,7 +467,7 @@ fn absolute_stage_generative_expand_suspends_the_cap() {
     );
     let preview = app.preview().unwrap();
     assert_eq!(
-        (preview.width, preview.height),
+        (preview.width(), preview.height()),
         (480, 380),
         "the expanded canvas must be adopted at full geometry, not capped"
     );

@@ -170,12 +170,12 @@ impl OrtBackend {
         // against a loadable artifact in `tests/ort_backend.rs`.
         self.hash_status
             .enforce_inference_allowed(&self.manifest.model_name)?;
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         let res = self.manifest.input.resolution;
@@ -246,7 +246,7 @@ impl OrtBackend {
                 actual_height: res.height,
             }
         })?;
-        rescale_model_matte(&model_matte, res, (image.width, image.height))
+        rescale_model_matte(&model_matte, res, (image.width(), image.height()))
     }
 }
 

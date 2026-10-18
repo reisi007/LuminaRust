@@ -173,8 +173,11 @@ fn pan_drag_schedules_draft_and_final_roi_render() {
     assert_eq!(
         app.preview_roi,
         LuminaApp::roi_from_zoom(
-            app.original.as_ref().map(|o| o.width).unwrap_or_default(),
-            app.original.as_ref().map(|o| o.height).unwrap_or_default(),
+            app.original.as_ref().map(|o| o.width()).unwrap_or_default(),
+            app.original
+                .as_ref()
+                .map(|o| o.height())
+                .unwrap_or_default(),
             2.0,
             pan,
             pw,

@@ -201,10 +201,14 @@ pub(crate) fn resolve_repair_region(
             reference.id, region.id
         )));
     }
-    if region.width != source.width || region.height != source.height {
+    if region.width != source.width() || region.height != source.height() {
         return Err(error(format!(
             "source action `{}` dimensions {}x{} do not match source frame {}x{}",
-            reference.id, region.width, region.height, source.width, source.height
+            reference.id,
+            region.width,
+            region.height,
+            source.width(),
+            source.height()
         )));
     }
     region.validate().map_err(|err| {

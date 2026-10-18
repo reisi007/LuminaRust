@@ -130,7 +130,7 @@ fn lensfun_corrector_cell_presents_gpu_without_badge() {
         "the active Lensfun corrector must actually change CPU pixels"
     );
     assert_eq!(
-        (cpu_frame.width, cpu_frame.height),
+        (cpu_frame.width(), cpu_frame.height()),
         (SRC_W, SRC_H),
         "a vignetting-only corrector must not change the frame geometry"
     );

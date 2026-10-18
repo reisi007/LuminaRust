@@ -268,7 +268,7 @@ fn manual_ca_skipped_under_tca_map_and_applied_without() {
     );
     let cpu_ca = cpu_render(&frame, &ca_recipe, Some(&tca));
     assert_eq!(
-        max_abs_diff(&cpu_ca.pixels(), &gpu_ca.pixels),
+        max_abs_diff(cpu_ca.pixels(), &gpu_ca.pixels),
         0,
         "TCA map + manual CA must be byte-identical to the CPU oracle that skips CA too"
     );
@@ -307,10 +307,13 @@ fn manual_ca_skipped_under_tca_map_and_applied_without() {
         "manual CA must still apply when the bound map carries no TCA"
     );
     let cpu_ca = cpu_render(&frame, &ca_recipe, Some(&plain));
-    assert_eq!((cpu_ca.width, cpu_ca.height), (gpu_ca.width, gpu_ca.height));
+    assert_eq!(
+        (cpu_ca.width(), cpu_ca.height()),
+        (gpu_ca.width, gpu_ca.height)
+    );
     assert_bounded_match(
         "non_tca_map/manual_ca",
-        &cpu_ca.pixels(),
+        cpu_ca.pixels(),
         &gpu_ca.pixels,
         (gpu_ca.width, gpu_ca.height),
     );
@@ -334,10 +337,13 @@ fn manual_ca_skipped_under_tca_map_and_applied_without() {
         cpu_no_ca.pixels(),
         "the CPU oracle must apply manual CA without a corrector"
     );
-    assert_eq!((cpu_ca.width, cpu_ca.height), (gpu_ca.width, gpu_ca.height));
+    assert_eq!(
+        (cpu_ca.width(), cpu_ca.height()),
+        (gpu_ca.width, gpu_ca.height)
+    );
     assert_bounded_match(
         "no_map/manual_ca",
-        &cpu_ca.pixels(),
+        cpu_ca.pixels(),
         &gpu_ca.pixels,
         (gpu_ca.width, gpu_ca.height),
     );

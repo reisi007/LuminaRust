@@ -51,7 +51,7 @@ fn crop_mode_renders_full_frame_over_a_committed_crop() {
     app.render().unwrap();
     let cropped = app.preview().expect("committed render");
     assert_eq!(
-        (cropped.width, cropped.height),
+        (cropped.width(), cropped.height()),
         (64, 48),
         "a committed crop must render the cropped frame"
     );
@@ -60,7 +60,7 @@ fn crop_mode_renders_full_frame_over_a_committed_crop() {
     app.render().unwrap();
     let full = app.preview().expect("crop-mode render");
     assert_eq!(
-        (full.width, full.height),
+        (full.width(), full.height()),
         (128, 96),
         "the crop tool must render the full frame (Runde-2 fixed)"
     );

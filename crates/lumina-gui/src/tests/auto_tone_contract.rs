@@ -82,7 +82,8 @@ fn the_gui_writes_exactly_what_the_shared_writer_writes() {
     // The GUI's own frame must be the one the writer saw, or the comparison
     // below would be between two different inputs and would prove nothing.
     assert_eq!(
-        frame.width, writer_frame.width,
+        frame.width(),
+        writer_frame.width(),
         "both writers must see the same input, or this comparison is vacuous"
     );
     assert_eq!(frame.pixels(), writer_frame.pixels(), "same input pixels");

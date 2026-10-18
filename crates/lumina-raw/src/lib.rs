@@ -706,8 +706,8 @@ mod native {
             )?
         };
         let mut metadata = metadata;
-        metadata.width = frame.width;
-        metadata.height = frame.height;
+        metadata.width = frame.width();
+        metadata.height = frame.height();
         Ok(RawImage { frame, metadata })
     }
 
@@ -1075,7 +1075,7 @@ mod native {
                     } else {
                         (w, h)
                     };
-                    assert_eq!((frame.width, frame.height), (ew, eh));
+                    assert_eq!((frame.width(), frame.height()), (ew, eh));
                 }
             }
         }
@@ -1358,7 +1358,7 @@ mod tests {
             let RawImage { metadata, frame } = decode_bytes(bytes, name).unwrap();
             let len = w as usize * h as usize * 4;
             assert_eq!(metadata.orientation, orientation, "{name} orientation");
-            assert_eq!((frame.width, frame.height), (w, h), "{name} frame");
+            assert_eq!((frame.width(), frame.height()), (w, h), "{name} frame");
             assert_eq!(frame.pixels().len(), len, "{name} buffer");
         };
         check(("aircraft-landscape.cr3", landscape, 1, 6032, 4024));
@@ -1370,7 +1370,7 @@ mod tests {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-landscape.cr3");
         let image = decode_bytes(bytes, "aircraft-landscape.cr3").unwrap();
         assert_eq!(image.metadata.orientation, 1);
-        assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
+        assert_eq!((image.frame.width(), image.frame.height()), (6032, 4024));
         assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
         assert_eq!(image.frame.pixels().len(), 6032 * 4024 * 4);
     }
@@ -1396,7 +1396,7 @@ mod tests {
         let bytes = include_bytes!("../../../sample-data/raw/aircraft-portrait.cr3");
         let image = decode_bytes(bytes, "aircraft-portrait.cr3").unwrap();
         assert_eq!(image.metadata.orientation, 8);
-        assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
+        assert_eq!((image.frame.width(), image.frame.height()), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
         assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
     }
@@ -1446,7 +1446,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(image.metadata.orientation, 1);
-        assert_eq!((image.frame.width, image.frame.height), (6032, 4024));
+        assert_eq!((image.frame.width(), image.frame.height()), (6032, 4024));
         assert_eq!((image.metadata.width, image.metadata.height), (6032, 4024));
         assert_eq!(image.frame.pixels().len(), 6032 * 4024 * 4);
         // The committed fixtures decode as 3-channel RGB; the promoted RGBA
@@ -1476,7 +1476,7 @@ mod tests {
 
         let image = decode_file(fixture.path()).unwrap();
         assert_eq!(image.metadata.orientation, 8);
-        assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
+        assert_eq!((image.frame.width(), image.frame.height()), (4024, 6032));
         assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
         assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
 

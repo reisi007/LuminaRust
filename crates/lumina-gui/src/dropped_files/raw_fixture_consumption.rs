@@ -87,7 +87,7 @@ fn assert_raw_drop_preserves_orientation_and_identity(
     assert_eq!(app.raw_orientation, metadata.orientation);
     let frame = app.original.as_ref().expect("RAW frame");
     assert_eq!(
-        (frame.width, frame.height),
+        (frame.width(), frame.height()),
         (metadata.width, metadata.height)
     );
     // … the inventory literals are the second, independent one: they pin the
@@ -97,7 +97,7 @@ fn assert_raw_drop_preserves_orientation_and_identity(
     // announced by `accept_operator_fixture`.
     if let Some(documented) = documented {
         assert_eq!(
-            (app.raw_orientation, frame.width, frame.height),
+            (app.raw_orientation, frame.width(), frame.height()),
             (documented.orientation, documented.width, documented.height),
             "{} must decode to the geometry documented in sample-data/raw/README.md",
             path.display()

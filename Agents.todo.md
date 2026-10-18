@@ -482,12 +482,6 @@ CLI- **und** GUI-Ebene getestet. Quelle: `.goal/Goal.md` G-01…G-16, Beleg:
 ### PRIO: niedrig
 
 
-
-
-
-
-- [ ] **[PRIO: niedrig] FRAME-INVARIANT-SEAL-77 (Befund 2026-10-17, aus der Q5-Abnahme zu `ImageFrame::pixels`)** Q5 hat die **Pufferseite** der Frame-Invariante versiegelt (`pixels` privat, `pixels()`/`pixels_mut()`/`into_pixels()`), aber **nicht** die Dimensionsseite: `width`/`height` bleiben `pub` und setzbar, ein Aufrufer kann `len == width*height*4` nach der Konstruktion weiterhin brechen. Der Ist-Zustand ist dokumentiert (`crates/lumina-core/src/lib.rs`, Typ-Doc) und grün — dies ist **keine** Defektmeldung, sondern die offene Frage der **vollständigen** Versiegelung. **Belegte Nebenfolge:** das Löschen der Guards `linear_from_rgba`/`linear_from_frame` lässt die Tests grün (Mutationsexperiment in der Q5-Verifikation, byte-identisch restauriert, SHA-256 gleich) — die Guards pinnen „ungültiger Frame wird abgelehnt", nicht „der Guard feuert"; ihr echter Zusatznutzen ist der Short-Circuit vor der `width*height*3`-Allokation (steht jetzt am Guard). **Abnahme:** entweder `width`/`height` kapseln (Accessoren, Konsumenten außerhalb `lumina-core` migriert, die Relation danach nur über `new` herstellbar) — **oder** eine bewusste, benannte Entscheidung, sie öffentlich zu lassen, mit dann *nachgewiesener* Mutation (ein Guard-Löschen macht einen Test rot). **Abgrenzung:** keine Render-/Rezept-/Schema-Änderung, kein zweiter Konstruktor. **Offene Wahl (Eigentümer):** vollständige Kapselung (Folgearbeit: alle `frame.width`/`frame.height`-Lesestellen außerhalb `lumina-core` migrieren) oder öffentlich lassen und die Guards als benannte Doppelabsicherung führen (heutiger, dokumentierter Stand).
-
 ### PRIO: niedrig (Block A, nicht-LRPAR)
 
 

@@ -106,8 +106,8 @@ pub fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
             "source `{}` has {} bytes for a {}x{} RGBA8 frame",
             input.display(),
             frame.pixels().len(),
-            frame.width,
-            frame.height
+            frame.width(),
+            frame.height()
         ))
     })?;
     Ok(MergeSourceFrame {

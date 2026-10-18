@@ -55,7 +55,7 @@ fn install_preview_texture(app: &mut LuminaApp, ctx: &egui::Context) {
     app.texture = Some(ctx.load_texture(
         "brush-test-preview",
         egui::ColorImage::filled(
-            [frame.width as usize, frame.height as usize],
+            [frame.width() as usize, frame.height() as usize],
             egui::Color32::BLACK,
         ),
         egui::TextureOptions::LINEAR,

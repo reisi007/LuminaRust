@@ -178,7 +178,7 @@ fn a_png_is_decoded_and_a_raw_extension_is_recognised() {
     assert!(!is_raw_path(std::path::Path::new("frame.png")));
     let bytes = std::fs::read(&input).unwrap();
     let (frame, raw) = decode_input(&input, &bytes).unwrap();
-    assert_eq!((frame.width, frame.height), (16, 16));
+    assert_eq!((frame.width(), frame.height()), (16, 16));
     assert!(raw.is_none(), "a PNG has no RAW metadata");
 }
 

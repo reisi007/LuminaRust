@@ -149,8 +149,8 @@ impl LuminaApp {
         current.source.content_hash = source_hash;
         current.source.byte_length = byte_length;
         current.decode = decode;
-        current.geometry.width = frame.width;
-        current.geometry.height = frame.height;
+        current.geometry.width = frame.width();
+        current.geometry.height = frame.height();
         current.geometry.orientation = self.raw_orientation;
         let bundle_root = Path::new(&self.path)
             .parent()
@@ -355,19 +355,19 @@ pub fn face_crop_frame(
     bbox: &FaceBoundingBox,
     max_dim: u32,
 ) -> Option<lumina_core::ImageFrame> {
-    if frame.width == 0 || frame.height == 0 {
+    if frame.width() == 0 || frame.height() == 0 {
         return None;
     }
     let clamp01 = |value: f32| value.clamp(0.0, 1.0);
-    let x = (clamp01(bbox.x) * frame.width as f32).floor() as u32;
-    let y = (clamp01(bbox.y) * frame.height as f32).floor() as u32;
-    let width = (clamp01(bbox.width) * frame.width as f32).ceil() as u32;
-    let height = (clamp01(bbox.height) * frame.height as f32).ceil() as u32;
-    if width == 0 || height == 0 || x >= frame.width || y >= frame.height {
+    let x = (clamp01(bbox.x) * frame.width() as f32).floor() as u32;
+    let y = (clamp01(bbox.y) * frame.height() as f32).floor() as u32;
+    let width = (clamp01(bbox.width) * frame.width() as f32).ceil() as u32;
+    let height = (clamp01(bbox.height) * frame.height() as f32).ceil() as u32;
+    if width == 0 || height == 0 || x >= frame.width() || y >= frame.height() {
         return None;
     }
-    let width = width.min(frame.width - x);
-    let height = height.min(frame.height - y);
+    let width = width.min(frame.width() - x);
+    let height = height.min(frame.height() - y);
     let cropped = frame.crop_region(x, y, width, height).ok()?;
     lumina_core::downscale_bilinear(&cropped, max_dim).ok()
 }
@@ -886,7 +886,7 @@ pub(crate) mod tests {
             height: 0.5,
         };
         let crop = face_crop_frame(&frame, &bbox, 96).unwrap();
-        assert_eq!((crop.width, crop.height), (32, 24));
+        assert_eq!((crop.width(), crop.height()), (32, 24));
         let degenerate = FaceBoundingBox {
             x: 0.0,
             y: 0.0,

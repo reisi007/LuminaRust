@@ -164,7 +164,7 @@ fn recipe_hash_is_idempotent() {
 fn downscale_never_upsizes_and_is_deterministic() {
     let frame = ImageFrame::new(64, 48, vec![10u8; 64 * 48 * 4]).unwrap();
     let small = downscale_bilinear(&frame, 1024).unwrap();
-    assert_eq!((small.width, small.height), (64, 48));
+    assert_eq!((small.width(), small.height()), (64, 48));
     assert_eq!(
         small.pixels(),
         frame.pixels(),
@@ -172,8 +172,8 @@ fn downscale_never_upsizes_and_is_deterministic() {
     );
 
     let scaled = downscale_bilinear(&frame, 32).unwrap();
-    assert_eq!(scaled.width, 32);
-    assert_eq!(scaled.height, 24);
+    assert_eq!(scaled.width(), 32);
+    assert_eq!(scaled.height(), 24);
 
     let again = downscale_bilinear(&frame, 32).unwrap();
     assert_eq!(scaled.pixels(), again.pixels());
@@ -345,7 +345,7 @@ fn roundtrip_load_edit_preview_save() {
     assert!(output.exists());
     let saved = fs::read(&output).unwrap();
     let saved_frame = ImageFrame::decode(&saved).unwrap();
-    assert_eq!((saved_frame.width, saved_frame.height), (64, 48));
+    assert_eq!((saved_frame.width(), saved_frame.height()), (64, 48));
 
     // Recipe reflects the edits.
     let recipe = tool_ok(
@@ -798,7 +798,7 @@ fn save_overwrites_existing_output_and_leaves_no_temporaries() {
     tool_ok(&mut server, "lumina_save", args());
 
     let saved = ImageFrame::decode(&fs::read(dir.path().join("out.png")).unwrap()).unwrap();
-    assert_eq!((saved.width, saved.height), (24, 24));
+    assert_eq!((saved.width(), saved.height()), (24, 24));
     let temporaries: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|entry| entry.ok())

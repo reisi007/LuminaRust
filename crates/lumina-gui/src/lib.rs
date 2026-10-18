@@ -4859,8 +4859,8 @@ impl LuminaApp {
                     extras: BTreeMap::new(),
                 },
                 geometry_context: GeometryFingerprint {
-                    width: frame.width,
-                    height: frame.height,
+                    width: frame.width(),
+                    height: frame.height(),
                     orientation: self.raw_orientation,
                     pixel_aspect_ratio: 1.0,
                     extras: BTreeMap::new(),
@@ -4872,8 +4872,8 @@ impl LuminaApp {
                     extras: BTreeMap::new(),
                 },
                 inference_resolution: Resolution {
-                    width: frame.width,
-                    height: frame.height,
+                    width: frame.width(),
+                    height: frame.height(),
                     extras: BTreeMap::new(),
                 },
                 preprocessing: Preprocessing {
@@ -4979,8 +4979,8 @@ impl LuminaApp {
                 extras: BTreeMap::new(),
             },
             geometry_context: GeometryFingerprint {
-                width: frame.width,
-                height: frame.height,
+                width: frame.width(),
+                height: frame.height(),
                 orientation: self.raw_orientation,
                 pixel_aspect_ratio: 1.0,
                 extras: BTreeMap::new(),
@@ -4992,8 +4992,8 @@ impl LuminaApp {
                 extras: BTreeMap::new(),
             },
             inference_resolution: Resolution {
-                width: frame.width,
-                height: frame.height,
+                width: frame.width(),
+                height: frame.height(),
                 extras: BTreeMap::new(),
             },
             preprocessing: Preprocessing {
@@ -6003,7 +6003,7 @@ impl LuminaApp {
             let (w, h) = self
                 .original
                 .as_ref()
-                .map(|f| (f.width, f.height))
+                .map(|f| (f.width(), f.height()))
                 .unwrap_or((8, 8));
             ge.canvas = Some(GenerativeCanvas {
                 output_width: w + 4,
@@ -6046,7 +6046,7 @@ impl LuminaApp {
             if let Some(canvas) = &ge.canvas {
                 if let Some(frame) = &self.original {
                     canvas
-                        .validate_with_source(frame.width, frame.height)
+                        .validate_with_source(frame.width(), frame.height())
                         .map_err(|e| GuiError::Io(e.to_string()))?;
                 }
             }
@@ -6089,7 +6089,7 @@ impl LuminaApp {
             });
         if let Some(frame) = &self.original {
             canvas
-                .validate_with_source(frame.width, frame.height)
+                .validate_with_source(frame.width(), frame.height())
                 .map_err(|e| GuiError::Io(e.to_string()))?;
         } else {
             canvas.validate().map_err(|e| GuiError::Io(e.to_string()))?;
@@ -6374,7 +6374,7 @@ impl LuminaApp {
         // The frames entering each role, computed exactly like the render does
         // (same corrector, white balance, and resolved source actions).
         #[cfg(feature = "lensfun")]
-        self.ensure_lensfun_cache(frame.width, frame.height);
+        self.ensure_lensfun_cache(frame.width(), frame.height());
         #[cfg(feature = "lensfun")]
         let lensfun = self.lensfun_render_ref();
         #[cfg(not(feature = "lensfun"))]
@@ -6521,7 +6521,7 @@ impl LuminaApp {
             return Ok(self.generative_artifacts.clone());
         }
         #[cfg(feature = "lensfun")]
-        self.ensure_lensfun_cache(full_source.width, full_source.height);
+        self.ensure_lensfun_cache(full_source.width(), full_source.height());
         #[cfg(feature = "lensfun")]
         let lensfun = self.lensfun_render_ref();
         #[cfg(not(feature = "lensfun"))]
@@ -8256,8 +8256,8 @@ impl LuminaApp {
         let source_hash = self.resolved_source_hash();
         let fingerprint = upright_input_fingerprint(
             &source_hash,
-            frame.width,
-            frame.height,
+            frame.width(),
+            frame.height(),
             self.raw_orientation,
         );
         let suggestion = analyze_upright(&frame);
@@ -8336,7 +8336,7 @@ impl LuminaApp {
         let Some((width, height)) = self
             .original
             .as_ref()
-            .map(|frame| (frame.width, frame.height))
+            .map(|frame| (frame.width(), frame.height()))
         else {
             return "none";
         };
@@ -9122,7 +9122,7 @@ impl LuminaApp {
         self.pending_load_path = None;
         match result {
             Ok(frame) => {
-                self.note_decode_finish(frame.frame.width, frame.frame.height);
+                self.note_decode_finish(frame.frame.width(), frame.frame.height());
                 // Validate the sidecar against the exact bytes just decoded
                 // before changing the active source. A stale sidecar must not
                 // be adopted merely because its recipe happens to be valid.
@@ -9421,7 +9421,7 @@ impl LuminaApp {
     /// upscaled low-res image with a "Preview current" status while the
     /// navigator thumbnail (separate pipeline) stayed correct.
     fn adopt_neighbor_preview_frame(&mut self, frame: ImageFrame) {
-        let (width, height) = (frame.width, frame.height);
+        let (width, height) = (frame.width(), frame.height());
         self.preview = Some(frame);
         self.preview_generation += 1;
         // Force `update_texture` to (re-)upload the new pixels this frame.
@@ -9761,9 +9761,9 @@ impl LuminaApp {
         let Some(frame) = &self.original else {
             return;
         };
-        let x = ((nx * frame.width as f64) as u32).min(frame.width.saturating_sub(1));
-        let y = ((ny * frame.height as f64) as u32).min(frame.height.saturating_sub(1));
-        let idx = ((y * frame.width + x) * 4) as usize;
+        let x = ((nx * frame.width() as f64) as u32).min(frame.width().saturating_sub(1));
+        let y = ((ny * frame.height() as f64) as u32).min(frame.height().saturating_sub(1));
+        let idx = ((y * frame.width() + x) * 4) as usize;
         let px = &frame.pixels()[idx..idx + 4];
         let r = px[0] as f64 / 255.0;
         let g = px[1] as f64 / 255.0;
@@ -10955,7 +10955,7 @@ mod tests {
             .iter()
             .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
             .sum();
-        sum as f64 / (frame.width as f64 * frame.height as f64 * 3.0)
+        sum as f64 / (frame.width() as f64 * frame.height() as f64 * 3.0)
     }
 
     // ---- GEN-FILL-02 / GEN-ONNX-1 Welle 2b: Artefakt-Compositing ----

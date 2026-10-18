@@ -112,8 +112,8 @@ impl LuminaApp {
         };
         let roi = roi.or_else(|| {
             Self::roi_from_zoom(
-                source.width,
-                source.height,
+                source.width(),
+                source.height(),
                 self.preview_zoom,
                 self.preview_pan,
                 self.preview_pane_w,
@@ -237,7 +237,7 @@ impl LuminaApp {
                     .draft_original
                     .as_ref()
                     .or(self.original.as_ref())
-                    .map(|source| (source.width, source.height))
+                    .map(|source| (source.width(), source.height()))
                 {
                     // GPU-LENSFUN-PARITY-1: bind the corrector's precomputed
                     // warp/gain map before the VRAM render. An active corrector

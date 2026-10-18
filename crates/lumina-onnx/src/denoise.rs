@@ -520,15 +520,19 @@ impl DenoiseInference for StubDenoiseBackend {
                 name: self.manifest.model_name.clone(),
             });
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
-        Ok(stub_denoise_rgb(image.pixels(), image.width, image.height))
+        Ok(stub_denoise_rgb(
+            image.pixels(),
+            image.width(),
+            image.height(),
+        ))
     }
 }
 
@@ -684,23 +688,23 @@ pub fn produce_denoise_artifact(
             )));
         }
     }
-    if frame.width == 0 || frame.height == 0 {
+    if frame.width() == 0 || frame.height() == 0 {
         return Err(OnnxError::InvalidDimensions {
             expected_width: suite.tiles.tile_width,
             expected_height: suite.tiles.tile_height,
-            actual_width: frame.width,
-            actual_height: frame.height,
+            actual_width: frame.width(),
+            actual_height: frame.height(),
         });
     }
 
     // Row-major RGB8 tiles covering the whole frame.
     let mut tile_pixels: Vec<Vec<u8>> = Vec::new();
     let mut y = 0u32;
-    while y < frame.height {
-        let tile_height = suite.tiles.tile_height.min(frame.height - y);
+    while y < frame.height() {
+        let tile_height = suite.tiles.tile_height.min(frame.height() - y);
         let mut x = 0u32;
-        while x < frame.width {
-            let tile_width = suite.tiles.tile_width.min(frame.width - x);
+        while x < frame.width() {
+            let tile_width = suite.tiles.tile_width.min(frame.width() - x);
             let tile = tile_frame(frame, x, y, tile_width, tile_height);
             let produced = backend.denoise(&tile)?;
             let expected = tile_width as usize * tile_height as usize * 3;
@@ -722,11 +726,11 @@ pub fn produce_denoise_artifact(
         let mut descriptors = Vec::with_capacity(tile_pixels.len());
         let mut index = 0usize;
         let mut y = 0u32;
-        while y < frame.height {
-            let tile_height = suite.tiles.tile_height.min(frame.height - y);
+        while y < frame.height() {
+            let tile_height = suite.tiles.tile_height.min(frame.height() - y);
             let mut x = 0u32;
-            while x < frame.width {
-                let tile_width = suite.tiles.tile_width.min(frame.width - x);
+            while x < frame.width() {
+                let tile_width = suite.tiles.tile_width.min(frame.width() - x);
                 descriptors.push(DenoiseTile {
                     x,
                     y,
@@ -742,12 +746,15 @@ pub fn produce_denoise_artifact(
         descriptors
     };
 
-    let artifact = assemble_denoise_tiles(frame.width, frame.height, &tiles)
+    let artifact = assemble_denoise_tiles(frame.width(), frame.height(), &tiles)
         .map_err(|error| OnnxError::InvalidDenoiseData(error.to_string()))?;
-    if artifact.width != frame.width || artifact.height != frame.height {
+    if artifact.width != frame.width() || artifact.height != frame.height() {
         return Err(OnnxError::InvalidDenoiseData(format!(
             "assembled denoise artifact is {}x{}, expected {}x{}",
-            artifact.width, artifact.height, frame.width, frame.height
+            artifact.width,
+            artifact.height,
+            frame.width(),
+            frame.height()
         )));
     }
 
@@ -796,7 +803,7 @@ fn tile_frame(
     width: u32,
     height: u32,
 ) -> lumina_core::ImageFrame {
-    let frame_width = frame.width as usize;
+    let frame_width = frame.width() as usize;
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
     for row in 0..height as usize {
         for column in 0..width as usize {

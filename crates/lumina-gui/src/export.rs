@@ -85,7 +85,7 @@ impl LuminaApp {
         let (export_w, export_h) = self
             .original
             .as_ref()
-            .map(|frame| (frame.width, frame.height))
+            .map(|frame| (frame.width(), frame.height()))
             .unwrap_or((0, 0));
         // LRPAR-G14-DENOISE-IMPL-20: loud export gate before any work. The
         // shared export entry point has no denoise-stage input yet, so a

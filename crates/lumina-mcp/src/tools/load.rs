@@ -97,8 +97,8 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .iter()
         .map(|copy| copy.name.clone())
         .collect();
-    let width = frame.width;
-    let height = frame.height;
+    let width = frame.width();
+    let height = frame.height();
     let sidecar_status = status.clone();
 
     server.session.current = Some(ImageState {

@@ -1183,7 +1183,7 @@ fn implemented_stages_match_cpu_oracle() {
             // different output size must fail here, not be masked by a pixel
             // compare.
             assert_eq!(
-                (cpu.width, cpu.height),
+                (cpu.width(), cpu.height()),
                 (gpu.width, gpu.height),
                 "{frame_name}/{recipe_name}: GPU output dimensions must equal the CPU oracle"
             );
@@ -1193,7 +1193,8 @@ fn implemented_stages_match_cpu_oracle() {
             eprintln!(
                 "parity[{frame_name}/{recipe_name}] {}x{}: maxAbsDiff={diff} psnr={psnr:.2} dB \
                  meanSignedErr={bias:+.4}",
-                cpu.width, cpu.height
+                cpu.width(),
+                cpu.height()
             );
             match equivalence_for(recipe_name) {
                 Equivalence::ByteIdentical => {
@@ -1283,7 +1284,7 @@ fn default_content_crop_routes_to_cpu_with_parity() {
                     recipe.perspective.as_ref(),
                 )
                 .expect("uncropped measurement domain");
-            let cpu_area = cpu.width * cpu.height;
+            let cpu_area = cpu.width() * cpu.height();
             let uncropped_area = uncropped.output_width * uncropped.output_height;
             if shrinks.contains(&name) {
                 assert!(
@@ -1299,14 +1300,17 @@ fn default_content_crop_routes_to_cpu_with_parity() {
                 .render_with_gpu(frame, &recipe)
                 .unwrap_or_else(|error| panic!("{frame_name}/{name}: GPU render: {error}"));
             assert_eq!(
-                (cpu.width, cpu.height),
+                (cpu.width(), cpu.height()),
                 (gpu.width, gpu.height),
                 "{frame_name}/{name}: the CPU-routed default crop must match the oracle",
             );
             let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
             eprintln!(
                 "default_crop[{frame_name}/{name}]: {}x{} (uncropped {}x{}) maxAbsDiff={diff}",
-                cpu.width, cpu.height, uncropped.output_width, uncropped.output_height
+                cpu.width(),
+                cpu.height(),
+                uncropped.output_width,
+                uncropped.output_height
             );
             assert_eq!(
                 diff, 0,
@@ -2288,7 +2292,7 @@ fn cpu_only_recipe_stages_render_through_full_cpu_reference() {
             .unwrap_or_else(|e| panic!("{name}: fallback render failed: {e}"));
         assert_eq!(
             (gpu.width, gpu.height),
-            (oracle.width, oracle.height),
+            (oracle.width(), oracle.height()),
             "{name}: fallback must match the reference frame dimensions"
         );
         assert_eq!(
@@ -2500,7 +2504,7 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
     .expect("CPU oracle render")
     .frame;
     assert_eq!(
-        (cpu.width, cpu.height),
+        (cpu.width(), cpu.height()),
         (gpu.width, gpu.height),
         "VRAM geometry must keep the source dimensions"
     );
@@ -2537,7 +2541,7 @@ fn vram_geometry_dimension_change_is_refused_loudly() {
     )
     .expect("CPU oracle render")
     .frame;
-    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+    assert_eq!((cpu.width(), cpu.height()), (gpu.width, gpu.height));
     let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     eprintln!("vram_geometry[mirror+curves]: maxAbsDiff={diff}");
     assert!(
@@ -2655,7 +2659,7 @@ fn lens_blur_external_depth_matches_cpu_oracle() {
     let gpu = ctx
         .render_with_gpu(&frame, &recipe)
         .expect("GPU render with external depth");
-    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+    assert_eq!((cpu.width(), cpu.height()), (gpu.width, gpu.height));
     let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
     let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
     let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
@@ -2765,7 +2769,7 @@ fn vram_path_applies_lens_blur() {
         )
         .expect("CPU oracle render")
         .frame;
-        assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+        assert_eq!((cpu.width(), cpu.height()), (gpu.width, gpu.height));
         let diff = max_abs_diff(cpu.pixels(), &gpu.pixels);
         let psnr = psnr_db(cpu.pixels(), &gpu.pixels);
         let bias = mean_signed_error(cpu.pixels(), &gpu.pixels);
@@ -3500,7 +3504,7 @@ fn lensfun_corrector_map_matches_cpu_oracle() {
                 .render_with_gpu(&frame, &recipe)
                 .unwrap_or_else(|e| panic!("{variant}/{frame_name}: GPU render: {e}"));
             assert_eq!(
-                (cpu.width, cpu.height),
+                (cpu.width(), cpu.height()),
                 (gpu.width, gpu.height),
                 "{variant}/{frame_name}: dimensions"
             );

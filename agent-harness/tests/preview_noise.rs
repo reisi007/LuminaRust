@@ -47,7 +47,7 @@ fn preview_noise() {
             })
             .sum::<f64>()
             / n;
-        (frame.width, frame.height, mean, var.sqrt())
+        (frame.width(), frame.height(), mean, var.sqrt())
     });
     let app_stats = app_frame
         .as_ref()
@@ -101,7 +101,7 @@ fn preview_noise() {
     // Painter-home (HARNESS-2): the composited photo is a GPU texture (black
     // headless), so content proofs live on the in-app RGBA frame instead.
     if let Some(frame) = probe.app().preview() {
-        let (fw, fh) = (frame.width, frame.height);
+        let (fw, fh) = (frame.width(), frame.height());
         match app_frame_stats(fw, fh, frame.pixels()) {
             Some(s) if s.opaque_fraction >= 1.0 => verdicts.push(Verdict::pass(
                 "app preview frame is opaque",

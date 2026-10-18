@@ -75,12 +75,13 @@ impl std::fmt::Debug for MergeJob {
 /// shared [`linear_from_rgba`]; pure and loud on a malformed buffer (`None`).
 /// Converts an [`ImageFrame`] to a [`LinearImage`].
 ///
-/// Returns `None` on a malformed buffer. `new` enforces `len == width*height*4`,
-/// but `width`/`height` are public and settable, so a frame whose dimensions
-/// no longer match its buffer is still constructable — reject it here instead
-/// of reshaping, and it short-circuits before the `width*height*3` allocation,
-/// which is why it stays even though the outcome matches `LinearImage::new`'s
-/// length check.
+/// Returns `None` on a malformed buffer. FRAME-INVARIANT-SEAL-77: `new`
+/// enforces `len == width*height*4` and both sides of the relation are sealed,
+/// so a frame whose dimensions no longer match its buffer is no longer
+/// constructable from outside the crate — the delegated guard stays as defense
+/// in depth: reject instead of reshape, and it short-circuits before the
+/// `width*height*3` allocation, which is why it stays even though the outcome
+/// matches `LinearImage::new`'s length check.
 pub fn linear_from_frame(frame: &lumina_core::ImageFrame) -> Option<LinearImage> {
     linear_from_rgba(frame)
 }
@@ -129,8 +130,8 @@ fn decode_source(input: &Path) -> Result<MergeSourceFrame, MergeRunError> {
             "source `{}` has {} bytes for a {}x{} RGBA8 frame",
             input.display(),
             frame.pixels().len(),
-            frame.width,
-            frame.height
+            frame.width(),
+            frame.height()
         ))
     })?;
     Ok(MergeSourceFrame {
@@ -461,7 +462,7 @@ mod tests {
 
         // Re-import anchor through the pinned decoder.
         let (_, frame, _) = crate::decode_selection_frame(&outcome.dng_path).unwrap();
-        assert_eq!((frame.width, frame.height), (64, 48));
+        assert_eq!((frame.width(), frame.height()), (64, 48));
 
         // Deterministic re-run with `force` (same machine → byte-identical).
         let again = run_merge_sync(
@@ -772,16 +773,15 @@ mod tests {
         let linear = linear_from_frame(&frame).unwrap();
         assert_eq!(linear.width(), 2);
         assert_eq!(&linear.pixels()[0..3], &[1.0, 0.0, 0.0]);
-        // Q5: the buffer side of the invariant is sealed — `pixels_mut()`
-        // returns `&mut [u8]`, which cannot change the allocation length.
-        // But `width`/`height` remain public and settable, so the relation
-        // can still be broken by mutating a dimension; the guard rejects
-        // such a frame instead of reshaping it.
-        let mut broken = frame.clone();
-        broken.width = 3;
+        // FRAME-INVARIANT-SEAL-77: the dimensions side of the invariant is
+        // sealed too — `width`/`height` are private, so a frame whose
+        // dimensions no longer match its buffer can no longer be produced
+        // by mutation from outside the crate; `new` rejects the mismatch
+        // outright instead of the conversion guard ever seeing it.
+        let broken = ImageFrame::new(3, 1, vec![255, 0, 0, 128, 0, 128, 0, 255]);
         assert!(
-            linear_from_frame(&broken).is_none(),
-            "a frame whose dimensions no longer match its buffer must be rejected, not reshaped"
+            broken.is_err(),
+            "a frame whose dimensions do not match its buffer must be rejected, not reshaped"
         );
         // `new` still rejects a mismatched length outright.
         let broken = ImageFrame::new(2, 1, vec![255, 0, 0, 128, 0, 128, 0]);

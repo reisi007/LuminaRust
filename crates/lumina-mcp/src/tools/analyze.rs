@@ -62,8 +62,8 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
     };
 
     Ok(json!({
-        "width": rendered.width,
-        "height": rendered.height,
+        "width": rendered.width(),
+        "height": rendered.height(),
         "exposure_estimate": {
             "ev": exposure_ev,
             "median_luminance": tone.median,
@@ -108,7 +108,7 @@ struct FrameAnalysis {
 /// helpers — only the number of passes changes, so the emitted JSON is
 /// unchanged.
 fn frame_analysis(frame: &ImageFrame, mean_luminance: f64) -> FrameAnalysis {
-    let total = (frame.width as usize * frame.height as usize).max(1) as f64;
+    let total = (frame.width() as usize * frame.height() as usize).max(1) as f64;
     let mut red = vec![0u64; 256];
     let mut green = vec![0u64; 256];
     let mut blue = vec![0u64; 256];

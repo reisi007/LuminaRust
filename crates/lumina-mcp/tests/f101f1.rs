@@ -224,8 +224,8 @@ fn batch_renders_directory_with_sidecar_recipe_and_writes_nothing_extra() {
     // visible: exposure +5 EV pushes pixels away from the source values.
     let out_plain = ImageFrame::decode(&fs::read(output_dir.join("plain.png")).unwrap()).unwrap();
     let out_edited = ImageFrame::decode(&fs::read(output_dir.join("edited.png")).unwrap()).unwrap();
-    assert_eq!((out_plain.width, out_plain.height), (8, 8));
-    assert_eq!((out_edited.width, out_edited.height), (8, 8));
+    assert_eq!((out_plain.width(), out_plain.height()), (8, 8));
+    assert_eq!((out_edited.width(), out_edited.height()), (8, 8));
     let source_pixels = ImageFrame::decode(&fs::read(&edited).unwrap()).unwrap();
     assert_ne!(
         out_edited.pixels()[..4],
@@ -554,7 +554,7 @@ fn dust_removal_persists_action_and_verifies_via_render_out() {
 
     // Verification render replaced every masked pixel with the red plate.
     let verified = ImageFrame::decode(&fs::read(&render_out).unwrap()).unwrap();
-    assert_eq!((verified.width, verified.height), (2, 2));
+    assert_eq!((verified.width(), verified.height()), (2, 2));
     for pixel in verified.pixels().as_chunks::<4>().0 {
         assert_eq!(&pixel[..3], &[255, 0, 0], "region pixel must be replaced");
     }

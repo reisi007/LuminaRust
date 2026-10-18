@@ -132,8 +132,8 @@ pub(crate) fn composite(
     // routing there keeps the message and the exit code unchanged.
     let (evaluated, mask_warnings) = evaluate_local_mask_layers(
         render_ctx,
-        frame.width,
-        frame.height,
+        frame.width(),
+        frame.height(),
         global.width,
         global.height,
     )

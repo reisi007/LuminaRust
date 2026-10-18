@@ -194,8 +194,8 @@ impl LuminaApp {
         }
         let fingerprint = upright_input_fingerprint(
             &self.resolved_source_hash(),
-            frame.width,
-            frame.height,
+            frame.width(),
+            frame.height(),
             self.raw_orientation,
         );
         let analysis = upright_analysis(suggestion, fingerprint);

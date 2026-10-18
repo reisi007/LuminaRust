@@ -86,8 +86,8 @@ impl LuminaApp {
         // always honours masks.
         let roi = roi.or_else(|| {
             Self::roi_from_zoom(
-                original.width,
-                original.height,
+                original.width(),
+                original.height(),
                 self.preview_zoom,
                 self.preview_pan,
                 self.preview_pane_w,
@@ -99,10 +99,10 @@ impl LuminaApp {
         // never guesses it from the displayed texture dimensions.
         let normalized_mask_roi = roi.map(|rect| {
             [
-                rect[0] as f32 / original.width.max(1) as f32,
-                rect[1] as f32 / original.height.max(1) as f32,
-                rect[2] as f32 / original.width.max(1) as f32,
-                rect[3] as f32 / original.height.max(1) as f32,
+                rect[0] as f32 / original.width().max(1) as f32,
+                rect[1] as f32 / original.height().max(1) as f32,
+                rect[2] as f32 / original.width().max(1) as f32,
+                rect[3] as f32 / original.height().max(1) as f32,
             ]
         });
         // GEN-ONNX-1 Welle 2b: a generative canvas is absolute geometry on the
@@ -165,10 +165,10 @@ impl LuminaApp {
             match self.preview_cap() {
                 Some(cap) => {
                     match capped_source_max_dim(
-                        original.width,
-                        original.height,
-                        roi.map_or(original.width, |r| r[2]),
-                        roi.map_or(original.height, |r| r[3]),
+                        original.width(),
+                        original.height(),
+                        roi.map_or(original.width(), |r| r[2]),
+                        roi.map_or(original.height(), |r| r[3]),
                         cap,
                     ) {
                         Some(max_dim) => {
@@ -176,14 +176,14 @@ impl LuminaApp {
                             let scaled_roi = roi.map(|r| {
                                 scale_roi_to_source(
                                     r,
-                                    (original.width, original.height),
-                                    (capped.width, capped.height),
+                                    (original.width(), original.height()),
+                                    (capped.width(), capped.height()),
                                 )
                             });
                             trace!(
                                 "GUI render: full preview capped to {}x{} (viewport {}x{} @ dpr {:.2}, roi {:?} -> {:?})",
-                                capped.width,
-                                capped.height,
+                                capped.width(),
+                                capped.height(),
                                 self.preview_pane_w,
                                 self.preview_pane_h,
                                 self.preview_cap_state.dpr,
@@ -226,7 +226,9 @@ impl LuminaApp {
         self.original = Some(original);
         if result.is_ok() {
             if let Some(preview) = self.preview.as_ref() {
-                timing::emit(|| timing::full_render_line(render_ms, preview.width, preview.height));
+                timing::emit(|| {
+                    timing::full_render_line(render_ms, preview.width(), preview.height())
+                });
             }
         }
         // GUI-JANKLOG-19: the full render's analysis pass flows into the same

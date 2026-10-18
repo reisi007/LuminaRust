@@ -181,15 +181,15 @@ impl LuminaApp {
             },
             decode_fingerprint,
             lumina_sidecar::GeometryFingerprint {
-                width: frame.width,
-                height: frame.height,
+                width: frame.width(),
+                height: frame.height(),
                 orientation: self.raw_orientation,
                 pixel_aspect_ratio: 1.0,
                 extras: Default::default(),
             },
             Resolution {
-                width: analysis.width,
-                height: analysis.height,
+                width: analysis.width(),
+                height: analysis.height(),
                 extras: Default::default(),
             },
         ))

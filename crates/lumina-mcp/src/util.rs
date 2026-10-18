@@ -159,13 +159,13 @@ pub fn build_source_identity(
             },
             parameters: BTreeMap::from([(
                 "geometry".into(),
-                format!("{}x{}", frame.width, frame.height),
+                format!("{}x{}", frame.width(), frame.height()),
             )]),
             extras: BTreeMap::from([("orientation_applied".into(), "true".into())]),
         },
         geometry_fingerprint: GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
             orientation,
             pixel_aspect_ratio: 1.0,
             extras: BTreeMap::new(),

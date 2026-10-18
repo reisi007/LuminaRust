@@ -97,7 +97,7 @@ pub(crate) fn write_diff(
             pixels.push(a.abs_diff(*b));
         }
     }
-    let diff = ImageFrame::new(actual.width, actual.height, pixels)?;
+    let diff = ImageFrame::new(actual.width(), actual.height(), pixels)?;
     encode_and_stage(&diff, &target)
 }
 

@@ -379,11 +379,14 @@ fn compare_against_golden(
             return;
         }
     };
-    if (expected.width, expected.height) != (comparison.width, comparison.height) {
+    if (expected.width(), expected.height()) != (comparison.width(), comparison.height()) {
         report.status = "fail";
         report.message = Some(format!(
             "golden dimension mismatch: golden {}x{} vs comparison {}x{}",
-            expected.width, expected.height, comparison.width, comparison.height
+            expected.width(),
+            expected.height(),
+            comparison.width(),
+            comparison.height()
         ));
         return;
     }

@@ -56,7 +56,7 @@ fn nav_app(harness: &mut NavHarness) -> LuminaApp {
     app.texture = Some(harness.ctx.load_texture(
         "preview",
         egui::ColorImage::filled(
-            [frame.width as usize, frame.height as usize],
+            [frame.width() as usize, frame.height() as usize],
             egui::Color32::GRAY,
         ),
         egui::TextureOptions::LINEAR,

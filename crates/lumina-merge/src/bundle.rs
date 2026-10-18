@@ -99,22 +99,24 @@ pub fn merge_checksum(bytes: &[u8]) -> String {
 /// Pure; `None` on a malformed buffer (never a guessed reshape).
 #[must_use]
 pub fn linear_from_rgba(frame: &lumina_core::ImageFrame) -> Option<LinearImage> {
-    let expected = frame.width as usize * frame.height as usize * 4;
-    // `new` enforces `len == width*height*4` (checked_mul), but `width`/`height`
-    // are public and settable, so a frame whose dimensions no longer match its
-    // buffer is still constructable — reject it here instead of reshaping, and
-    // it short-circuits before the `width*height*3` allocation, which is why it
-    // stays even though the outcome matches `LinearImage::new`'s length check.
+    let expected = frame.width() as usize * frame.height() as usize * 4;
+    // FRAME-INVARIANT-SEAL-77: `new` enforces `len == width*height*4`
+    // (checked_mul) and both sides of the relation are sealed, so a frame
+    // whose dimensions no longer match its buffer is no longer constructable
+    // from outside the crate — this guard stays as defense in depth: reject
+    // instead of reshape, and it short-circuits before the `width*height*3`
+    // allocation, which is why it stays even though the outcome matches
+    // `LinearImage::new`'s length check.
     if frame.pixels().len() != expected {
         return None;
     }
-    let mut pixels = Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
+    let mut pixels = Vec::with_capacity(frame.width() as usize * frame.height() as usize * 3);
     for rgba in frame.pixels().as_chunks::<4>().0 {
         pixels.push(rgba[0] as f32 / 255.0);
         pixels.push(rgba[1] as f32 / 255.0);
         pixels.push(rgba[2] as f32 / 255.0);
     }
-    LinearImage::new(frame.width, frame.height, pixels).ok()
+    LinearImage::new(frame.width(), frame.height(), pixels).ok()
 }
 
 /// Neutral EXIF subset a frontend decode adapter hands to the orchestrator:
@@ -1331,16 +1333,15 @@ mod tests {
         let linear = linear_from_rgba(&frame).unwrap();
         assert_eq!((linear.width(), linear.height()), (2, 1));
         assert_eq!(&linear.pixels()[0..3], &[1.0, 0.0, 0.0]);
-        // Q5: the buffer side of the invariant is sealed — `pixels_mut()`
-        // returns `&mut [u8]`, which cannot change the allocation length.
-        // But `width`/`height` remain public and settable, so the relation
-        // can still be broken by mutating a dimension; the guard above
-        // rejects such a frame instead of reshaping it.
-        let mut broken = frame.clone();
-        broken.width = 3;
+        // FRAME-INVARIANT-SEAL-77: the dimensions side of the invariant is
+        // sealed too — `width`/`height` are private, so a frame whose
+        // dimensions no longer match its buffer can no longer be produced
+        // by mutation from outside the crate; `new` rejects the mismatch
+        // outright instead of the conversion guard ever seeing it.
+        let broken = lumina_core::ImageFrame::new(3, 1, vec![255, 0, 0, 128, 0, 128, 0, 255]);
         assert!(
-            linear_from_rgba(&broken).is_none(),
-            "a frame whose dimensions no longer match its buffer must be rejected, not reshaped"
+            broken.is_err(),
+            "a frame whose dimensions do not match its buffer must be rejected, not reshaped"
         );
         // `new` still rejects a mismatched length outright.
         let broken = lumina_core::ImageFrame::new(2, 1, vec![255, 0, 0, 128, 0, 128, 0]);

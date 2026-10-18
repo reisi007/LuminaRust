@@ -180,17 +180,17 @@ fn analyze_one(
     config: &CullConfig,
 ) -> Result<(HeuristicAnalysis, SimilaritySignature), CullError> {
     config.validate()?;
-    if input.frame.width == 0 || input.frame.height == 0 {
+    if input.frame.width() == 0 || input.frame.height() == 0 {
         return Err(CullError::EmptyFrame {
-            width: input.frame.width,
-            height: input.frame.height,
+            width: input.frame.width(),
+            height: input.frame.height(),
         });
     }
     let analysis_frame = downscale_bilinear(input.frame, config.analysis_max_width)?;
-    if analysis_frame.width == 0 || analysis_frame.height == 0 {
+    if analysis_frame.width() == 0 || analysis_frame.height() == 0 {
         return Err(CullError::EmptyFrame {
-            width: analysis_frame.width,
-            height: analysis_frame.height,
+            width: analysis_frame.width(),
+            height: analysis_frame.height(),
         });
     }
 
@@ -217,8 +217,8 @@ fn analyze_one(
         reasons,
         analyzer: heuristic_analyzer(),
         analysis_resolution: Resolution {
-            width: analysis_frame.width,
-            height: analysis_frame.height,
+            width: analysis_frame.width(),
+            height: analysis_frame.height(),
             extras: Default::default(),
         },
         preprocessing: heuristic_preprocessing(),
@@ -240,8 +240,8 @@ fn analyze_one(
         highlight_clip_fraction: exposure.highlight_clip_fraction,
         mean_luminance: exposure.mean,
         median_luminance: exposure.median,
-        analysis_width: analysis_frame.width,
-        analysis_height: analysis_frame.height,
+        analysis_width: analysis_frame.width(),
+        analysis_height: analysis_frame.height(),
     };
     Ok((
         HeuristicAnalysis {

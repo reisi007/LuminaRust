@@ -462,5 +462,5 @@ fn a_successful_hdr_call_returns_exactly_the_cli_json_fields() {
     // The written DNG re-imports at the anchor geometry (64×48).
     let decoded = lumina_raw::decode_bytes(&std::fs::read(&dng).unwrap(), "a-HDR.dng")
         .expect("DNG re-import");
-    assert_eq!((decoded.frame.width, decoded.frame.height), (64, 48));
+    assert_eq!((decoded.frame.width(), decoded.frame.height()), (64, 48));
 }

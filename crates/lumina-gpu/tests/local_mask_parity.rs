@@ -229,8 +229,8 @@ fn assert_parity(
     plane: &MaskPlane,
     equivalence: Equivalence,
 ) {
-    assert_eq!(gpu.width, cpu.width);
-    assert_eq!(gpu.height, cpu.height);
+    assert_eq!(gpu.width, cpu.width());
+    assert_eq!(gpu.height, cpu.height());
     let diff = max_abs_diff(&gpu.pixels, cpu.pixels());
     match equivalence {
         Equivalence::ByteIdentical => assert_eq!(
@@ -469,7 +469,8 @@ fn local_mask_validation_rejects_mismatched_planes() {
             ..LocalAdjustments::default()
         },
     };
-    let error = validate_local_mask_layers(frame.width, frame.height, std::slice::from_ref(&layer))
-        .expect_err("a mismatched plane must be refused loudly");
+    let error =
+        validate_local_mask_layers(frame.width(), frame.height(), std::slice::from_ref(&layer))
+            .expect_err("a mismatched plane must be refused loudly");
     assert!(error.to_string().contains("does not match the output"));
 }

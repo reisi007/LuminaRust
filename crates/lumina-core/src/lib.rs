@@ -278,17 +278,17 @@ impl ExportOptions {
 
 /// Row-major RGBA8 frame.
 ///
-/// Invariant: `pixels.len() == width * height * 4` (checked multiplication).
-/// [`ImageFrame::new`] enforces it; [`ImageFrame::pixels`], [`ImageFrame::pixels_mut`]
-/// and [`ImageFrame::into_pixels`] can never change the buffer length, so the
-/// buffer side of the invariant is sealed from outside the crate.
-/// `width` and `height` remain public and settable, however, so the relation
-/// can still be broken after construction by mutating the dimensions — callers
-/// that do so are responsible for re-validating (e.g. via [`ImageFrame::new`]).
+/// Invariant: `pixels().len() == width() * height() * 4` (checked
+/// multiplication), sealed by construction. [`ImageFrame::new`] is the only
+/// constructor and enforces the relation up front; [`ImageFrame::pixels`],
+/// [`ImageFrame::pixels_mut`] and [`ImageFrame::into_pixels`] can never change
+/// the buffer length, and `width`/`height` are private with read-only
+/// accessors — so neither the buffer side nor the dimensions side of the
+/// relation can be broken from outside the crate after construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageFrame {
-    pub width: u32,
-    pub height: u32,
+    width: u32,
+    height: u32,
     pixels: Vec<u8>,
 }
 
@@ -411,6 +411,16 @@ impl ImageFrame {
             height,
             pixels,
         })
+    }
+
+    #[must_use]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[must_use]
+    pub fn height(&self) -> u32 {
+        self.height
     }
 
     /// Row-major RGBA8 bytes, four bytes per pixel.

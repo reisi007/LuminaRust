@@ -52,7 +52,7 @@ fn process_writes_jpeg_output_and_sidecar() {
     assert!(output.is_file());
     assert!(sidecar_path_for(&input).is_file());
     let decoded = ImageFrame::decode(&fs::read(output).unwrap()).unwrap();
-    assert_eq!((decoded.width, decoded.height), (1, 1));
+    assert_eq!((decoded.width(), decoded.height()), (1, 1));
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn write_repair_region(
 }
 
 fn pixel_at(frame: &ImageFrame, x: u32, y: u32) -> (u8, u8, u8, u8) {
-    let index = ((y * frame.width + x) * 4) as usize;
+    let index = ((y * frame.width() + x) * 4) as usize;
     (
         frame.pixels()[index],
         frame.pixels()[index + 1],

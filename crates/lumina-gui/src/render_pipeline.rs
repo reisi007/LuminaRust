@@ -54,10 +54,10 @@ impl LuminaApp {
         // full frame is rendered and `preview_roi` is cleared instead of
         // silently keeping the rejected request.
         let effective_roi = roi.map(|[x, y, w, h]| {
-            let x = x.min(source.width.saturating_sub(1));
-            let y = y.min(source.height.saturating_sub(1));
-            let w = w.min(source.width - x);
-            let h = h.min(source.height - y);
+            let x = x.min(source.width().saturating_sub(1));
+            let y = y.min(source.height().saturating_sub(1));
+            let w = w.min(source.width() - x);
+            let h = h.min(source.height() - y);
             [x, y, w, h]
         });
         // Identity inputs shared by the base-stage key and the final render key.
@@ -98,7 +98,7 @@ impl LuminaApp {
         // makes a slider drag hit the cached demosaiced base.
         let (base_w, base_h) = match effective_roi {
             Some([_, _, w, h]) => (w, h),
-            None => (source.width, source.height),
+            None => (source.width(), source.height()),
         };
         let base_digest = RenderKey::new(
             source_hash.clone(),
@@ -186,7 +186,7 @@ impl LuminaApp {
         // BEFORE the shared `masks_context` borrow below (`&mut` first,
         // shared borrows after).
         #[cfg(feature = "lensfun")]
-        self.ensure_lensfun_cache(base_frame.width, base_frame.height);
+        self.ensure_lensfun_cache(base_frame.width(), base_frame.height());
         #[cfg(feature = "lensfun")]
         let lensfun = self.lensfun_render_ref();
         #[cfg(not(feature = "lensfun"))]
@@ -267,8 +267,8 @@ impl LuminaApp {
                     Vec::new(),
                     OutputSpec {
                         profile: "sRGB".into(),
-                        width: source.width,
-                        height: source.height,
+                        width: source.width(),
+                        height: source.height(),
                         format: "rgba8".into(),
                     },
                 )
@@ -293,8 +293,8 @@ impl LuminaApp {
                 mask_hashes,
                 OutputSpec {
                     profile: "sRGB".into(),
-                    width: preview.width,
-                    height: preview.height,
+                    width: preview.width(),
+                    height: preview.height(),
                     format: "rgba8".into(),
                 },
             )
@@ -351,8 +351,8 @@ impl LuminaApp {
                             analysis_work.base_cache_hit = true;
                             trace!(
                                 "GUI render: full-frame analysis base cache HIT ({}x{})",
-                                source.width,
-                                source.height
+                                source.width(),
+                                source.height()
                             );
                             hit
                         }
@@ -367,8 +367,8 @@ impl LuminaApp {
                             analysis_work.base_cache_hit = false;
                             trace!(
                                 "GUI render: full-frame analysis base cache MISS — rebuilt ({}x{})",
-                                source.width,
-                                source.height
+                                source.width(),
+                                source.height()
                             );
                             prepared
                         }
@@ -377,7 +377,7 @@ impl LuminaApp {
                     // (same cached lookup as the preview render above). Runs
                     // BEFORE the shared `full_masks` borrow below.
                     #[cfg(feature = "lensfun")]
-                    self.ensure_lensfun_cache(full_base.width, full_base.height);
+                    self.ensure_lensfun_cache(full_base.width(), full_base.height());
                     #[cfg(feature = "lensfun")]
                     let full_lensfun = self.lensfun_render_ref();
                     #[cfg(not(feature = "lensfun"))]
@@ -472,7 +472,7 @@ impl LuminaApp {
         // fell back to the full `source`, whose dims are recorded here just
         // the same — the texture always matches `source`, never the rejected
         // request.
-        self.preview_render_src = Some((source.width, source.height));
+        self.preview_render_src = Some((source.width(), source.height()));
         self.render_mask_layers = output.mask_layers;
         // GUI-WGPU-PRESENT-1 / GPU-STAGE-1: make the *pipeline-evaluated* mask
         // coverage visible in the GPU present composite, or clear the plane when

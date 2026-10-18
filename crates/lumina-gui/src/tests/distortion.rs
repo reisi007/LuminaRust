@@ -219,7 +219,7 @@ fn crop_maxrect_default_applies_through_gui_preview() {
     // No correction: identity full frame (no crop without a reason).
     app.render().unwrap();
     let identity = app.preview().unwrap().clone();
-    assert_eq!((identity.width, identity.height), (w, h));
+    assert_eq!((identity.width(), identity.height()), (w, h));
     assert!(!identity
         .pixels()
         .as_chunks::<4>()
@@ -242,7 +242,7 @@ fn crop_maxrect_default_applies_through_gui_preview() {
         "GUI preview must contain only content after perspective correction"
     );
     assert!(
-        preview.width <= w && preview.height <= h,
+        preview.width() <= w && preview.height() <= h,
         "default crop must stay constrained to the image"
     );
 
@@ -260,6 +260,9 @@ fn crop_maxrect_default_applies_through_gui_preview() {
     )
     .unwrap()
     .frame;
-    assert_eq!((preview.width, preview.height), (core.width, core.height));
+    assert_eq!(
+        (preview.width(), preview.height()),
+        (core.width(), core.height())
+    );
     assert_eq!(preview.pixels(), core.pixels());
 }

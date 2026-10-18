@@ -59,8 +59,8 @@ fn generative_expand_synthetic_8x8_expand_true_creates_larger_canvas() {
     let expanded = lumina_core::render_frame_with_generative(&frame, &ctx, g)
         .unwrap()
         .frame;
-    assert_eq!(expanded.width, 12);
-    assert_eq!(expanded.height, 12);
+    assert_eq!(expanded.width(), 12);
+    assert_eq!(expanded.height(), 12);
     for y in 0..8 {
         for x in 0..8 {
             let src_idx = (y * 8 + x) * 4;
@@ -110,8 +110,8 @@ fn generative_expand_false_is_cropped_to_image() {
         depth: None,
     };
     let out = lumina_core::render_frame(&frame, &ctx).unwrap().frame;
-    assert_eq!(out.width, 8);
-    assert_eq!(out.height, 8);
+    assert_eq!(out.width(), 8);
+    assert_eq!(out.height(), 8);
     assert_eq!(out.pixels(), frame.pixels());
 }
 

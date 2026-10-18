@@ -205,8 +205,8 @@ impl Frame {
     /// Build a [`Frame`] from a core [`ImageFrame`] (no copy of pixel semantics;
     /// the buffer is moved).
     pub fn from_image_frame(frame: ImageFrame) -> Self {
-        let width = frame.width;
-        let height = frame.height;
+        let width = frame.width();
+        let height = frame.height();
         let pixels = frame.into_pixels();
         Self {
             width,
@@ -2154,10 +2154,13 @@ impl GpuContext {
         for (index, action) in artifacts.iter().enumerate() {
             let region = &action.region;
             let replacement = &action.replacement;
-            if region.width != replacement.width || region.height != replacement.height {
+            if region.width != replacement.width() || region.height != replacement.height() {
                 return Err(GpuError::RenderFailed(format!(
                     "source-action artifact {index}: region {}x{} does not match replacement {}x{}",
-                    region.width, region.height, replacement.width, replacement.height
+                    region.width,
+                    region.height,
+                    replacement.width(),
+                    replacement.height()
                 )));
             }
             if index > 0 {
@@ -2194,8 +2197,8 @@ impl GpuContext {
                 let region_view = region_tex.create_view(&wgpu::TextureViewDescriptor::default());
                 let repl_tex = shaders::create_input_texture(
                     &resources.device,
-                    action.replacement.width,
-                    action.replacement.height,
+                    action.replacement.width(),
+                    action.replacement.height(),
                     &format!("lumina-gpu-sa-repl-{index}"),
                 );
                 resources.queue.write_texture(
@@ -2208,12 +2211,12 @@ impl GpuContext {
                     action.replacement.pixels(),
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(action.replacement.width * 4),
-                        rows_per_image: Some(action.replacement.height),
+                        bytes_per_row: Some(action.replacement.width() * 4),
+                        rows_per_image: Some(action.replacement.height()),
                     },
                     wgpu::Extent3d {
-                        width: action.replacement.width,
-                        height: action.replacement.height,
+                        width: action.replacement.width(),
+                        height: action.replacement.height(),
                         depth_or_array_layers: 1,
                     },
                 );
@@ -2347,7 +2350,7 @@ impl GpuContext {
         // "unsupported" — the dedicated GPU stage composites them.
         validate_gpu_recipe(recipe)?;
         let sa_bound = self
-            .matching_source_actions(frame.width, frame.height)
+            .matching_source_actions(frame.width(), frame.height())
             .is_some();
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
@@ -2366,16 +2369,16 @@ impl GpuContext {
         let geometry_plan = match self.lensfun_map.as_ref() {
             Some(bound) => geometry::GeometryPlan::from_recipe_with(
                 recipe,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 &geometry::GenerativePlanInput::default(),
                 false,
                 Some(&bound.map),
             )?,
-            None => geometry::GeometryPlan::from_recipe(recipe, frame.width, frame.height)?,
+            None => geometry::GeometryPlan::from_recipe(recipe, frame.width(), frame.height())?,
         };
         let vram_geometry = geometry_plan.as_ref().is_some_and(|plan| {
-            plan.output_width == frame.width && plan.output_height == frame.height
+            plan.output_width == frame.width() && plan.output_height == frame.height()
         });
         if geometry_plan.is_some() && !vram_geometry {
             let reason =
@@ -2399,10 +2402,10 @@ impl GpuContext {
             recipe,
             geometry_plan
                 .as_ref()
-                .map_or(frame.width, |plan| plan.output_width),
+                .map_or(frame.width(), |plan| plan.output_width),
             geometry_plan
                 .as_ref()
-                .map_or(frame.height, |plan| plan.output_height),
+                .map_or(frame.height(), |plan| plan.output_height),
         )?;
         let needs_lens_blur = lens_blur_recipe.is_some_and(|blur| {
             lens_blur::radius_for(blur.blur_amount) > 0 && !lens_blur::has_no_effect(blur)
@@ -2421,7 +2424,7 @@ impl GpuContext {
             return Err(GpuError::AdapterUnavailable("GPU device lost".into()));
         }
         self.ensure_pipeline()?;
-        self.ensure_vram(frame.width, frame.height)?;
+        self.ensure_vram(frame.width(), frame.height())?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
             return Err(GpuError::RenderFailed("pipeline not built".into()));
@@ -2453,12 +2456,12 @@ impl GpuContext {
                 frame.pixels(),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(frame.width * 4),
-                    rows_per_image: Some(frame.height),
+                    bytes_per_row: Some(frame.width() * 4),
+                    rows_per_image: Some(frame.height()),
                 },
                 wgpu::Extent3d {
-                    width: frame.width,
-                    height: frame.height,
+                    width: frame.width(),
+                    height: frame.height(),
                     depth_or_array_layers: 1,
                 },
             );
@@ -2477,7 +2480,7 @@ impl GpuContext {
         // samples the result. Without bound artifacts the tone pass reads the
         // uploaded frame directly.
         let sa_batches: Option<SourceActionBatches> = if self
-            .matching_source_actions(frame.width, frame.height)
+            .matching_source_actions(frame.width(), frame.height())
             .is_some()
         {
             self.ensure_source_action_pipeline()?;
@@ -2499,8 +2502,8 @@ impl GpuContext {
                 sa,
                 sa_cache,
                 input_view,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 &mut enc,
             )?)
         } else {
@@ -2518,8 +2521,8 @@ impl GpuContext {
         } else {
             Some(shaders::create_output_texture(
                 &resources.device,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 "lumina-gpu-vram-spot-out",
             ))
         };
@@ -2556,8 +2559,8 @@ impl GpuContext {
         {
             Some(shaders::create_output_texture(
                 &resources.device,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 "lumina-gpu-vram-tone-intermediate",
             ))
         } else {
@@ -2575,8 +2578,8 @@ impl GpuContext {
         {
             Some(shaders::create_output_texture(
                 &resources.device,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 "lumina-gpu-vram-post-intermediate",
             ))
         } else {
@@ -2616,8 +2619,8 @@ impl GpuContext {
             let post_dst: &wgpu::TextureView = post_target_view.as_ref().unwrap_or(&v.output_view);
             self.render_post_stages(
                 resources,
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 recipe,
                 tone_target_view,
                 post_dst,
@@ -2642,8 +2645,8 @@ impl GpuContext {
             if needs_lens_blur {
                 let texture = shaders::create_output_texture(
                     &resources.device,
-                    frame.width,
-                    frame.height,
+                    frame.width(),
+                    frame.height(),
                     "lumina-gpu-vram-geometry-intermediate",
                 );
                 geometry_lens_intermediate_view =
@@ -2714,16 +2717,16 @@ impl GpuContext {
         if let Some(t0) = start {
             log::info!(
                 "lumina perf: render_to_vram {}x{} {:.2} ms",
-                frame.width,
-                frame.height,
+                frame.width(),
+                frame.height(),
                 t0.elapsed().as_secs_f64() * 1000.0
             );
             if Self::perf_log_enabled() {
                 eprintln!(
                     "LUMINA_PERF render_to_vram={:.2}ms {}x{}",
                     t0.elapsed().as_secs_f64() * 1000.0,
-                    frame.width,
-                    frame.height
+                    frame.width(),
+                    frame.height()
                 );
             }
         }
@@ -3203,7 +3206,7 @@ impl GpuContext {
         // composites them and `source_actions` is no longer unsupported.
         validate_gpu_recipe(recipe)?;
         let sa_bound = self
-            .matching_source_actions(frame.width, frame.height)
+            .matching_source_actions(frame.width(), frame.height())
             .is_some();
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
@@ -3216,8 +3219,8 @@ impl GpuContext {
             return cpu_fallback(frame);
         };
 
-        let width = frame.width;
-        let height = frame.height;
+        let width = frame.width();
+        let height = frame.height();
 
         // Upload the recipe sliders into the uniform buffer.
         let uniforms = shaders::Uniforms::from_recipe(recipe);
@@ -3299,8 +3302,8 @@ impl GpuContext {
         // silent unexpanded render).
         let plan_input = generative
             .map(|g| geometry::GenerativePlanInput {
-                auto_fill: g.auto_fill.map(|a| (a.frame.width, a.frame.height)),
-                expand: g.expand.map(|a| (a.frame.width, a.frame.height)),
+                auto_fill: g.auto_fill.map(|a| (a.frame.width(), a.frame.height())),
+                expand: g.expand.map(|a| (a.frame.width(), a.frame.height())),
             })
             .unwrap_or_default();
         let geometry_plan = geometry::GeometryPlan::from_recipe_with(
@@ -3672,8 +3675,8 @@ impl GpuContext {
                 shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
             }
         }
-        let zoom = (frame.width as f32 / viewport.width.max(1.0)).clamp(0.01, 100.0);
-        let pyramid = crate::tiling::DraftPyramid::new(frame.width, frame.height);
+        let zoom = (frame.width() as f32 / viewport.width.max(1.0)).clamp(0.01, 100.0);
+        let pyramid = crate::tiling::DraftPyramid::new(frame.width(), frame.height());
         let lvl = pyramid.level_for_zoom(zoom);
         // REVIEW-GPU-LEVELS-1: the ROI expansion routes through the pyramid, so
         // the logged level and the produced tile keys can no longer diverge.
@@ -4317,17 +4320,18 @@ fn upload_generative_artifacts(
             )));
         }
         let frame = &artifact.frame;
-        if frame.pixels().len() != (frame.width as usize) * (frame.height as usize) * 4 {
+        if frame.pixels().len() != (frame.width() as usize) * (frame.height() as usize) * 4 {
             return Err(GpuError::RenderFailed(format!(
                 "{label}: generative artifact pixel length does not match {}x{}",
-                frame.width, frame.height
+                frame.width(),
+                frame.height()
             )));
         }
         let texture = resources.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
+                width: frame.width(),
+                height: frame.height(),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -4349,12 +4353,12 @@ fn upload_generative_artifacts(
             frame.pixels(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
+                bytes_per_row: Some(frame.width() * 4),
+                rows_per_image: Some(frame.height()),
             },
             wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
+                width: frame.width(),
+                height: frame.height(),
                 depth_or_array_layers: 1,
             },
         );

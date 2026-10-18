@@ -319,12 +319,12 @@ impl FaceDetectionInference for StubFaceDetector {
                 name: self.manifest.model_name.clone(),
             });
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         Ok(self
@@ -443,12 +443,12 @@ impl FaceEmbeddingInference for StubFaceEmbedder {
         if detections.is_empty() {
             return Ok(Vec::new());
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(OnnxError::InvalidDimensions {
                 expected_width: self.manifest.input.resolution.width,
                 expected_height: self.manifest.input.resolution.height,
-                actual_width: image.width,
-                actual_height: image.height,
+                actual_width: image.width(),
+                actual_height: image.height(),
             });
         }
         if let Some(vectors) = &self.vectors {
@@ -652,12 +652,12 @@ pub fn align_face_to_template(
         name: super::FACE_PREPROCESSING_NAME.to_owned(),
         reason,
     };
-    if image.width == 0 || image.height == 0 || resolution.0 == 0 || resolution.1 == 0 {
+    if image.width() == 0 || image.height() == 0 || resolution.0 == 0 || resolution.1 == 0 {
         return Err(OnnxError::InvalidDimensions {
             expected_width: resolution.0,
             expected_height: resolution.1,
-            actual_width: image.width,
-            actual_height: image.height,
+            actual_width: image.width(),
+            actual_height: image.height(),
         });
     }
     if landmarks.len() != FACE_ALIGN_TEMPLATE_5PT.len() {
@@ -676,8 +676,8 @@ pub fn align_face_to_template(
             .find(|landmark| landmark.name == *name)
             .ok_or_else(|| fail(format!("alignment requires the landmark `{name}`")))?;
         source[index] = (
-            landmark.x * image.width as f32,
-            landmark.y * image.height as f32,
+            landmark.x * image.width() as f32,
+            landmark.y * image.height() as f32,
         );
     }
     let scale_x = resolution.0 as f32 / FACE_ALIGN_TEMPLATE_BASE;
@@ -726,7 +726,7 @@ pub fn align_face_to_template(
         f64::from(target_mean.1) - (b * f64::from(source_mean.0) + a * f64::from(source_mean.1));
 
     let (width, height) = (resolution.0 as usize, resolution.1 as usize);
-    let (source_width, source_height) = (image.width as i64, image.height as i64);
+    let (source_width, source_height) = (image.width() as i64, image.height() as i64);
     let mut pixels = vec![0u8; width * height * 4];
     for y in 0..height {
         for x in 0..width {
@@ -1004,7 +1004,7 @@ mod tests {
         let frame = ImageFrame::new(112, 112, pixels).unwrap();
         let landmarks = template_landmarks();
         let aligned = align_face_to_template(&frame, &landmarks, (112, 112)).unwrap();
-        assert_eq!((aligned.width, aligned.height), (112, 112));
+        assert_eq!((aligned.width(), aligned.height()), (112, 112));
         assert_eq!(
             aligned.pixels(),
             frame.pixels(),
@@ -1034,7 +1034,7 @@ mod tests {
             })
             .collect();
         let aligned = align_face_to_template(&frame, &landmarks, (112, 112)).unwrap();
-        assert_eq!((aligned.width, aligned.height), (112, 112));
+        assert_eq!((aligned.width(), aligned.height()), (112, 112));
 
         // Missing landmark → loud.
         let mut missing = landmarks.clone();

@@ -266,7 +266,7 @@ fn assert_thumbnail_is_real(cache: &DiskFolderCache, file_name: &str, hash: &str
         .unwrap_or_else(|| panic!("worker preview disappeared for {file_name}"));
     let frame = ImageFrame::decode(&bytes).expect("worker preview decodes");
     assert_eq!(
-        (frame.width, frame.height),
+        (frame.width(), frame.height()),
         expected,
         "{file_name} thumbnail must be the production downscale of {source}"
     );

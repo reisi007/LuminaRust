@@ -190,7 +190,7 @@ impl LuminaApp {
                     Some(ctx.load_texture(
                         key.clone(),
                         crate::egui::ColorImage::from_rgba_unmultiplied(
-                            [crop.width as usize, crop.height as usize],
+                            [crop.width() as usize, crop.height() as usize],
                             crop.pixels(),
                         ),
                         crate::egui::TextureOptions::LINEAR,

@@ -4,7 +4,7 @@ use super::*;
 fn generative_expand_generate_status_and_render_end_to_end() {
     let directory = tempfile::tempdir().unwrap();
     let (input, source) = png_input(directory.path(), "input.png", 100);
-    assert_eq!((source.width, source.height), (2, 2));
+    assert_eq!((source.width(), source.height()), (2, 2));
 
     // Produce and persist the composited canvas (fixture model, offline).
     generative(GenerativeArgs {
@@ -50,7 +50,7 @@ fn generative_expand_generate_status_and_render_end_to_end() {
     assert!(output.is_file());
     let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(
-        (rendered.width, rendered.height),
+        (rendered.width(), rendered.height()),
         (4, 4),
         "the rendered frame is the expanded canvas"
     );

@@ -167,8 +167,8 @@ fn decode_thumbnail_frame_with_identity(
     // full-frame dimensions and compositing semantics.
     let (small, w, h) = downscale_rgba(
         prepared.pixels(),
-        prepared.width,
-        prepared.height,
+        prepared.width(),
+        prepared.height(),
         THUMBNAIL_MAX_DIM,
     );
     let small_frame = ImageFrame::new(w, h, small).map_err(|error| error.to_string())?;

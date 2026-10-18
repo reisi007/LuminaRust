@@ -65,7 +65,7 @@ fn histogram_uses_full_frame_despite_zoom_pan() {
     app.render().unwrap();
     assert!(app.preview_roi.is_none());
     let fit_preview = app.preview().expect("preview after load").clone();
-    assert_eq!((fit_preview.width, fit_preview.height), (w, h));
+    assert_eq!((fit_preview.width(), fit_preview.height()), (w, h));
     let fit_histogram = app.current_histogram().expect("stored histogram at Fit");
     assert_eq!((fit_histogram.width, fit_histogram.height), (w, h));
     assert_eq!(fit_histogram.bins.iter().sum::<u64>(), u64::from(w * h));
@@ -84,7 +84,7 @@ fn histogram_uses_full_frame_despite_zoom_pan() {
     );
     let zoomed_preview = app.preview().expect("zoomed preview").clone();
     assert_eq!(
-        (zoomed_preview.width, zoomed_preview.height),
+        (zoomed_preview.width(), zoomed_preview.height()),
         (roi[2], roi[3]),
         "the display texture stays ROI-cropped (viewport render)"
     );
@@ -331,13 +331,13 @@ fn fit_preview_histogram_matches_thumbnail() {
         "a settled Fit render is never a draft"
     );
     let preview = app.preview().expect("preview after load").clone();
-    assert_eq!((preview.width, preview.height), (64, 40));
+    assert_eq!((preview.width(), preview.height()), (64, 40));
     // Thumbnail pipeline (mirrors `decode_thumbnail_frame` sans disk
     // cache): downscale + default-recipe render.
     let (small, w, h) = crate::filmstrip::downscale_rgba(
         original.pixels(),
-        original.width,
-        original.height,
+        original.width(),
+        original.height(),
         crate::filmstrip::THUMBNAIL_MAX_DIM,
     );
     let small_frame = ImageFrame::new(w, h, small).unwrap();
@@ -443,11 +443,11 @@ fn fit_preview_portrait_histogram_matches_thumbnail() {
         "a settled Fit render is never a draft"
     );
     let preview = app.preview().expect("preview after load").clone();
-    assert_eq!((preview.width, preview.height), (40, 64));
+    assert_eq!((preview.width(), preview.height()), (40, 64));
     let (small, sw, sh) = crate::filmstrip::downscale_rgba(
         original.pixels(),
-        original.width,
-        original.height,
+        original.width(),
+        original.height(),
         crate::filmstrip::THUMBNAIL_MAX_DIM,
     );
     let small_frame = ImageFrame::new(sw, sh, small).unwrap();

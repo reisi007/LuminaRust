@@ -187,7 +187,7 @@ fn preview_fidelity() {
         .preview()
         .expect("preview frame present after load")
         .clone();
-    let (fw, fh) = (frame.width, frame.height);
+    let (fw, fh) = (frame.width(), frame.height());
 
     // 1a. Opaque-Alpha (Preview-Frame, NICHT Composit-Readback — Texturen
     // malen headless schwarz, s. HARNESS-2-Entscheid).
@@ -326,8 +326,9 @@ fn preview_fidelity() {
     // Determinismus auf Thumbnail-Ebene (HARNESS-2-Determinismus reused).
     probe.run_steps(5);
     let frame2 = probe.app().preview().expect("preview stable").clone();
-    let thumb2 =
-        thumbnail_32(&frame_to_rgba(frame2.width, frame2.height, frame2.pixels()).expect("rgba"));
+    let thumb2 = thumbnail_32(
+        &frame_to_rgba(frame2.width(), frame2.height(), frame2.pixels()).expect("rgba"),
+    );
     let thumb_psnr = frame_psnr(thumb.as_raw(), thumb2.as_raw());
     match thumb_psnr {
         Some(psnr) if psnr.is_infinite() => verdicts.push(Verdict::pass(
@@ -476,7 +477,10 @@ fn preview_fidelity() {
             "stale frame is not valued as new",
             format!(
                 "hash {hash_a:#x} -> {hash_b:#x} ({}x{} -> {}x{})",
-                frame_a.width, frame_a.height, frame_b.width, frame_b.height
+                frame_a.width(),
+                frame_a.height(),
+                frame_b.width(),
+                frame_b.height()
             ),
         ));
     } else {

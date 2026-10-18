@@ -18,13 +18,13 @@ pub(super) fn full_resolution(app: &mut LuminaApp) -> Result<(), GuiError> {
         .original
         .as_ref()
         .ok_or_else(|| GuiError::Io("GUI matrix has no decoded source".into()))?;
-    let expected = (source.width, source.height);
+    let expected = (source.width(), source.height());
 
     // `preview_size_cap` multiplies this test viewport by DPR and the preview
     // margin, so a source-sized pane cannot trigger the R3 downscale. Keep DPR
     // deterministic and discard any stale capped source before rendering.
-    app.preview_pane_w = source.width as f32;
-    app.preview_pane_h = source.height as f32;
+    app.preview_pane_w = source.width() as f32;
+    app.preview_pane_h = source.height() as f32;
     app.preview_cap_state.dpr = 1.0;
     app.preview_cap_state.capped_src = None;
     app.render()?;
@@ -128,7 +128,7 @@ mod tests {
         full_resolution(&mut app).unwrap();
         let full_preview = app.preview().unwrap();
         assert_eq!(
-            (full_preview.width, full_preview.height),
+            (full_preview.width(), full_preview.height()),
             (SAMPLE_WIDTH, SAMPLE_HEIGHT),
             "GUI matrix must render before comparison downscaling"
         );

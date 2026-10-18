@@ -297,8 +297,9 @@ impl LuminaApp {
             .collect();
         match lumina_gpu::combine_mask_planes(&planes) {
             Ok(Some(combined))
-                if combined.width == self.preview.as_ref().map(|p| p.width).unwrap_or(0)
-                    && combined.height == self.preview.as_ref().map(|p| p.height).unwrap_or(0) =>
+                if combined.width == self.preview.as_ref().map(|p| p.width()).unwrap_or(0)
+                    && combined.height
+                        == self.preview.as_ref().map(|p| p.height()).unwrap_or(0) =>
             {
                 if let Some(gpu) = self.gpu.as_ref() {
                     if gpu.is_available()

@@ -12,7 +12,7 @@ use super::*;
 /// all are `255`. Pure display diagnostic for the `J` overlay badge — it
 /// never feeds back into the recipe or render. Empty frames report `(0, 0)`.
 pub fn clip_fractions(frame: &ImageFrame) -> (f64, f64) {
-    let total = (frame.width as usize) * (frame.height as usize);
+    let total = (frame.width() as usize) * (frame.height() as usize);
     if total == 0 || frame.pixels().len() < total * 4 {
         return (0.0, 0.0);
     }

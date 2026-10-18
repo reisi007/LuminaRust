@@ -273,7 +273,7 @@ fn exif_and_matrix_metadata_are_sane_for_cr3_fixture() {
 fn portrait_decode_applies_orientation_after_user_flip_zero() {
     let image = lumina_raw::decode_bytes(PORTRAIT, "aircraft-portrait.cr3").expect("decode failed");
     assert_eq!(image.metadata.orientation, 8);
-    assert_eq!((image.frame.width, image.frame.height), (4024, 6032));
+    assert_eq!((image.frame.width(), image.frame.height()), (4024, 6032));
     assert_eq!((image.metadata.width, image.metadata.height), (4024, 6032));
     assert_eq!(image.frame.pixels().len(), 4024 * 6032 * 4);
 
@@ -281,7 +281,7 @@ fn portrait_decode_applies_orientation_after_user_flip_zero() {
         lumina_raw::decode_bytes(LANDSCAPE, "aircraft-landscape.cr3").expect("decode failed");
     assert_eq!(landscape.metadata.orientation, 1);
     assert_eq!(
-        (landscape.frame.width, landscape.frame.height),
+        (landscape.frame.width(), landscape.frame.height()),
         (6032, 4024)
     );
 }
@@ -437,7 +437,7 @@ fn portrait_decode_is_byte_identical_to_libraw_own_rotation() {
     let image = lumina_raw::decode_bytes(PORTRAIT, "aircraft-portrait.cr3").expect("decode failed");
     assert_eq!(image.metadata.orientation, 8);
     assert_eq!(
-        (image.frame.width as usize, image.frame.height as usize),
+        (image.frame.width() as usize, image.frame.height() as usize),
         (reference.width, reference.height)
     );
 
@@ -445,7 +445,7 @@ fn portrait_decode_is_byte_identical_to_libraw_own_rotation() {
     for y in 0..reference.height {
         for x in 0..reference.width {
             let src = (y * reference.width + x) * colors;
-            let dst = (y * image.frame.width as usize + x) * 4;
+            let dst = (y * image.frame.width() as usize + x) * 4;
             assert_eq!(
                 &image.frame.pixels()[dst..dst + 3],
                 &reference.data[src..src + colors],

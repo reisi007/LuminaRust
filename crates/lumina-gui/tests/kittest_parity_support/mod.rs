@@ -127,8 +127,8 @@ pub(crate) fn mean_signed_error(a: &[u8], b: &[u8]) -> f64 {
 /// CPU-draft ↔ GPU/VRAM engine parity at the declared F-043 bound.
 pub(crate) fn assert_path_parity(scene: &str, cpu: &ImageFrame, gpu: &ImageFrame, bound: u8) {
     assert_eq!(
-        (cpu.width, cpu.height),
-        (gpu.width, gpu.height),
+        (cpu.width(), cpu.height()),
+        (gpu.width(), gpu.height()),
         "parity frames must share geometry (scene {scene})"
     );
     let diff = max_abs_diff(cpu.pixels(), gpu.pixels());

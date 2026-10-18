@@ -199,8 +199,8 @@ fn f4_malformed_map_is_rejected_on_bind() {
     let out = ctx
         .render_with_gpu(&frame, &EditRecipe::default())
         .expect("no map must remain bound after the rejected bind");
-    assert_eq!(out.width, frame.width);
-    assert_eq!(out.height, frame.height);
+    assert_eq!(out.width, frame.width());
+    assert_eq!(out.height, frame.height());
 }
 
 #[cfg(feature = "lensfun")]
@@ -295,7 +295,7 @@ fn f2_vignetting_only_corrector_matches_cpu_oracle() {
             .render_with_gpu(&frame, &recipe)
             .unwrap_or_else(|e| panic!("{frame_name}: GPU render: {e}"));
         assert_eq!(
-            (cpu.width, cpu.height),
+            (cpu.width(), cpu.height()),
             (gpu.width, gpu.height),
             "{frame_name}: dimensions"
         );

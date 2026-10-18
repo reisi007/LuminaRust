@@ -133,7 +133,7 @@ fn the_crop_is_applied_after_the_source_actions() {
     let cropped_repaired = auto_analysis_frame(&source, &recipe, &[repair_bright_half()]).unwrap();
 
     assert_eq!(
-        (cropped.width, cropped.height),
+        (cropped.width(), cropped.height()),
         (8, 4),
         "the crop must be applied to the analysis frame"
     );
@@ -195,8 +195,8 @@ fn an_implicit_content_default_crop_does_not_shrink_the_analysis_frame() {
     };
     let frame = auto_analysis_frame(&source, &recipe, &[]).unwrap();
     assert_eq!(
-        (frame.width, frame.height),
-        (source.width, source.height),
+        (frame.width(), frame.height()),
+        (source.width(), source.height()),
         "the documented boundary: the implicit content-default crop stays out of the Auto domain"
     );
 }

@@ -115,7 +115,7 @@ fn generative_double_role_record_renders() {
         "the double role must produce the expand canvas"
     );
     let preview = app.preview().unwrap().clone();
-    assert_eq!((preview.width, preview.height), (12, 12));
+    assert_eq!((preview.width(), preview.height()), (12, 12));
     assert!(
         preview
             .pixels()
@@ -233,7 +233,7 @@ fn generative_auto_fill_hook_and_caller_convention() {
     );
     app.generate_generative_canvas().unwrap();
     let preview = app.preview().unwrap().clone();
-    assert_eq!((preview.width, preview.height), (8, 8));
+    assert_eq!((preview.width(), preview.height()), (8, 8));
     assert!(
         preview
             .pixels()

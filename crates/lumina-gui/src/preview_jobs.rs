@@ -200,10 +200,14 @@ pub(crate) fn worker_preview_with_identity(
         decode_context: "decode-v1".to_owned(),
         pipeline_version: env!("CARGO_PKG_VERSION").to_owned(),
         virtual_copy_id: job.virtual_copy.clone(),
-        render_key: render_key_of(&recipe, (rendered.width, rendered.height), &source_actions),
+        render_key: render_key_of(
+            &recipe,
+            (rendered.width(), rendered.height()),
+            &source_actions,
+        ),
         kind: job.kind,
-        width: rendered.width,
-        height: rendered.height,
+        width: rendered.width(),
+        height: rendered.height(),
         encode: Default::default(),
     };
     let digest = key.digest();
@@ -237,7 +241,7 @@ pub(crate) fn worker_preview_with_identity(
 /// Downscale `frame` so it fits the target long edge (returns unchanged when
 /// already within).
 fn downscale_to_target(frame: &ImageFrame, target: (u32, u32)) -> ImageFrame {
-    let long = frame.width.max(frame.height);
+    let long = frame.width().max(frame.height());
     let max_edge = target.0.max(target.1);
     if max_edge == 0 || long <= max_edge {
         return frame.clone();

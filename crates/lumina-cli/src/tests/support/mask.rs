@@ -92,8 +92,8 @@ pub(crate) fn write_sidecar_with_valid_layer(
         lumina_sidecar::MaskOperation::Source,
         vec![],
         &identity,
-        frame.width,
-        frame.height,
+        frame.width(),
+        frame.height(),
     )];
     copy.mask_layers = vec![lumina_sidecar::MaskLayer {
         id: "layer-1".into(),

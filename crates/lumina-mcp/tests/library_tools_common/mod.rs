@@ -89,8 +89,8 @@ pub fn write_fixture(dir: &Path) -> PathBuf {
             extras: Default::default(),
         },
         geometry_fingerprint: lumina_sidecar::GeometryFingerprint {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
             orientation: 1,
             pixel_aspect_ratio: 1.0,
             extras: Default::default(),

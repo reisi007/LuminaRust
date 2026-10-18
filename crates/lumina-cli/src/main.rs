@@ -362,7 +362,8 @@ fn render_best_effort(
             // for this source/dimensions before the GPU entry. An unbound map or
             // a distortion corrector without an explicit crop keeps the exact CPU
             // reference and surfaces the reason — never a silent corrector loss.
-            if let Some(reason) = lensfun_gpu::bind(ctx, render_ctx, frame.width, frame.height) {
+            if let Some(reason) = lensfun_gpu::bind(ctx, render_ctx, frame.width(), frame.height())
+            {
                 reasons.push(reason.to_string());
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
                 let output = render_frame_with_generative(frame, render_ctx, generative)
@@ -1918,7 +1919,7 @@ fn mask(args: MaskArgs) -> Result<(), CliError> {
     {
         let bytes = fs::read(&args.input).map_err(|error| io_error(&args.input, error))?;
         let (frame, _) = decode_input(&args.input, &bytes)?;
-        Some((frame.width, frame.height))
+        Some((frame.width(), frame.height()))
     } else {
         None
     };
@@ -5195,13 +5196,13 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     let replacement_frame = ImageFrame::decode(&replacement_bytes).map_err(|error| {
         CliError::Message(format!("could not decode replacement image: {error}"))
     })?;
-    if replacement_frame.width != definition.region_width
-        || replacement_frame.height != definition.region_height
+    if replacement_frame.width() != definition.region_width
+        || replacement_frame.height() != definition.region_height
     {
         return Err(CliError::Message(format!(
             "replacement image {}x{} does not match region {}x{}",
-            replacement_frame.width,
-            replacement_frame.height,
+            replacement_frame.width(),
+            replacement_frame.height(),
             definition.region_width,
             definition.region_height
         )));
@@ -5216,10 +5217,10 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     region
         .validate()
         .map_err(|error| CliError::Message(format!("invalid repair region: {error}")))?;
-    if region.width != frame.width || region.height != frame.height {
+    if region.width != frame.width() || region.height != frame.height() {
         return Err(CliError::Message(format!(
             "repair region {}x{} does not match source frame {}x{}; source actions apply at source resolution",
-            region.width, region.height, frame.width, frame.height
+            region.width, region.height, frame.width(), frame.height()
         )));
     }
 
@@ -7180,18 +7181,21 @@ fn denoise_record_rgb(
     let (frame, _raw) = decode_input(&args.input, &source_bytes)?;
     let rgb_bytes = fs::read(rgb_path).map_err(|error| io_error(rgb_path, error))?;
     let rgb_frame = ImageFrame::decode(&rgb_bytes)?;
-    if rgb_frame.width != frame.width || rgb_frame.height != frame.height {
+    if rgb_frame.width() != frame.width() || rgb_frame.height() != frame.height() {
         return Err(CliError::Message(format!(
             "--record-rgb artifact is {}x{} but the source is {}x{}; a denoise artifact must \
              describe exactly the source geometry",
-            rgb_frame.width, rgb_frame.height, frame.width, frame.height
+            rgb_frame.width(),
+            rgb_frame.height(),
+            frame.width(),
+            frame.height()
         )));
     }
     let mut pixels = Vec::with_capacity(rgb_frame.pixels().len() / 4 * 3);
     for pixel in rgb_frame.pixels().as_chunks::<4>().0 {
         pixels.extend_from_slice(&pixel[..3]);
     }
-    let core_artifact = CoreDenoiseRgbArtifact::new(rgb_frame.width, rgb_frame.height, pixels)?;
+    let core_artifact = CoreDenoiseRgbArtifact::new(rgb_frame.width(), rgb_frame.height(), pixels)?;
     let checksum = core_artifact.checksum();
     let record_id = denoise_record_id(&checksum);
     let zdata = zdata_path_for(&args.input);
@@ -7392,8 +7396,8 @@ fn cull_status_one(input: &Path, config: &CullConfig) -> Result<serde_json::Valu
         document.source.decode_fingerprint.clone(),
         document.source.geometry_fingerprint.clone(),
         Resolution {
-            width: analysis_frame.width,
-            height: analysis_frame.height,
+            width: analysis_frame.width(),
+            height: analysis_frame.height(),
             extras: Default::default(),
         },
     );

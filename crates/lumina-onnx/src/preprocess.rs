@@ -22,7 +22,7 @@ use lumina_core::MaskPlane;
 /// dependency-free test surface. A real backend uses the model's own
 /// preprocessing; this is the documented adapter boundary.
 pub fn preprocess_rgb_to_model(image: &lumina_core::ImageFrame, target: Resolution) -> Vec<u8> {
-    let (sw, sh) = (image.width as usize, image.height as usize);
+    let (sw, sh) = (image.width() as usize, image.height() as usize);
     let (dw, dh) = (target.width as usize, target.height as usize);
     let mut out = vec![0u8; dw * dh * 3];
     for y in 0..dh {

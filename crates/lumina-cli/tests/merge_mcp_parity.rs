@@ -166,7 +166,7 @@ fn t12_the_anchor_dng_is_byte_identical_and_re_imports_at_64x48() {
     let decoded = lumina_raw::decode_bytes(&bytes(&mcp_dng), "a-HDR.dng")
         .expect("the written DNG re-imports");
     assert_eq!(
-        (decoded.frame.width, decoded.frame.height),
+        (decoded.frame.width(), decoded.frame.height()),
         (ANCHOR_W, ANCHOR_H),
         "the DNG re-imports at the anchor geometry"
     );
@@ -258,7 +258,7 @@ fn t14_pano_parity_with_neutral_defaults_and_a_canvas_that_grows() {
     assert!(dx.abs() > 0, "an offset was estimated, got {matrix:?}");
     let decoded = lumina_raw::decode_bytes(&bytes(&mcp_dng), "a-Pano.dng").unwrap();
     assert_eq!(
-        (decoded.frame.width, decoded.frame.height),
+        (decoded.frame.width(), decoded.frame.height()),
         (GRADIENT_W + dx.unsigned_abs(), GRADIENT_H),
         "side-by-side canvas grows by the estimated offset"
     );

@@ -849,7 +849,7 @@ mod tests {
             .neighbor_preview("neighbor", &source)
             .expect("RAM lookup succeeds")
             .expect("neighbor preview is resident after prep");
-        assert_eq!((hit.width, hit.height), (8, 8), "RAM cache-hit (A1)");
+        assert_eq!((hit.width(), hit.height()), (8, 8), "RAM cache-hit (A1)");
 
         // A4: evicting the RAM entry still serves the neighbor from the disk
         // tier (the worker persisted the WebP) — no full source re-render.
@@ -879,7 +879,7 @@ mod tests {
         let webp = std::fs::read(&stored[0]).unwrap();
         let back = decode_webp_pub(&webp).unwrap();
         assert_eq!(
-            (back.width, back.height),
+            (back.width(), back.height()),
             (8, 8),
             "stored WebP keeps the downscaled geometry"
         );
@@ -997,7 +997,7 @@ mod tests {
             .neighbor_preview("neighbor2", &source)
             .expect("lookup ok")
             .expect("hit before clear");
-        assert_eq!((hit_before.width, hit_before.height), (8, 8));
+        assert_eq!((hit_before.width(), hit_before.height()), (8, 8));
 
         // Clear disk tier: file under .lumina/previews must be removed.
         let disk = PreviewDiskCache::in_folder(dir.path()).unwrap();
@@ -1012,7 +1012,7 @@ mod tests {
             .neighbor_preview("neighbor2", &source)
             .expect("lookup ok")
             .expect("GUI-PREV-01: LRU hit must survive disk clear");
-        assert_eq!((hit_after.width, hit_after.height), (8, 8));
+        assert_eq!((hit_after.width(), hit_after.height()), (8, 8));
         assert_eq!(ctrl.probe_state("neighbor2"), PreviewProbeState::Ready);
         assert!(!ctrl.needs_job("neighbor2"));
     }
@@ -1241,7 +1241,7 @@ mod tests {
             .load(digest)
             .unwrap()
             .expect("GUI-PREV-05: stored must hit");
-        assert_eq!((hit.width, hit.height), (4, 4));
+        assert_eq!((hit.width(), hit.height()), (4, 4));
 
         // Corrupt bytes => Miss, not Err
         let path = dir
@@ -1391,7 +1391,7 @@ mod tests {
             .unwrap()
             .expect("one-to-one hit");
         assert_eq!(
-            (frame.width, frame.height),
+            (frame.width(), frame.height()),
             (16, 16),
             "GUI-PREV-08: OneToOne must keep full resolution"
         );

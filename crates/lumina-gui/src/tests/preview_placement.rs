@@ -73,11 +73,11 @@ fn draft_and_full_share_on_screen_placement() {
     app.load_bytes(frame.encode(ImageFileFormat::Png).unwrap(), "draft.png")
         .unwrap();
     let (full_w, full_h) = (
-        app.original.as_ref().unwrap().width,
-        app.original.as_ref().unwrap().height,
+        app.original.as_ref().unwrap().width(),
+        app.original.as_ref().unwrap().height(),
     );
     assert_eq!((full_w, full_h), (2000, 1500));
-    let draft_w = app.draft_original.as_ref().unwrap().width;
+    let draft_w = app.draft_original.as_ref().unwrap().width();
     assert!(
         draft_w < full_w,
         "draft source must be downscaled for this test, got {draft_w}"
@@ -91,8 +91,8 @@ fn draft_and_full_share_on_screen_placement() {
     let draft_src = app.preview_render_src.expect("draft source recorded");
     assert_ne!(draft_src, (full_w, full_h));
     let draft_tex = (
-        app.preview.as_ref().unwrap().width as f32,
-        app.preview.as_ref().unwrap().height as f32,
+        app.preview.as_ref().unwrap().width() as f32,
+        app.preview.as_ref().unwrap().height() as f32,
     );
     app.render_full([800, 600], None).unwrap();
     let full_roi = app.preview_roi.expect("zoomed full ROI");
@@ -107,8 +107,8 @@ fn draft_and_full_share_on_screen_placement() {
         "capped full source must be smaller than the original: {full_src:?}"
     );
     let full_tex = (
-        app.preview.as_ref().unwrap().width as f32,
-        app.preview.as_ref().unwrap().height as f32,
+        app.preview.as_ref().unwrap().width() as f32,
+        app.preview.as_ref().unwrap().height() as f32,
     );
     // Same on-screen draw size from both textures at the same scale.
     let scale = 0.4_f32 * 2.0; // fit(800×600 against 2000×1500) × zoom

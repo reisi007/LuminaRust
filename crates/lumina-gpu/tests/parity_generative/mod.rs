@@ -138,7 +138,7 @@ fn generative_canvas_compositing_is_gpu_parity() {
         .expect("GPU generative render");
 
     assert_eq!(
-        (cpu.width, cpu.height),
+        (cpu.width(), cpu.height()),
         (gpu.width, gpu.height),
         "composited dimensions must match on both backends"
     );
@@ -223,7 +223,7 @@ fn generative_auto_fill_compositing_is_gpu_parity() {
     let gpu = ctx
         .render_with_gpu_and_generative(&frame, &recipe, &input)
         .expect("GPU auto-fill render");
-    assert_eq!((cpu.width, cpu.height), (32, 32));
+    assert_eq!((cpu.width(), cpu.height()), (32, 32));
     assert_eq!(
         max_abs_diff(cpu.pixels(), &gpu.pixels),
         0,
@@ -310,7 +310,7 @@ fn generative_trailing_substitute_after_render_pass_is_gpu_parity() {
         .expect("GPU trailing-substitute render");
 
     assert_eq!(
-        (cpu.width, cpu.height),
+        (cpu.width(), cpu.height()),
         (128, 96),
         "the CPU oracle result is the expand canvas"
     );

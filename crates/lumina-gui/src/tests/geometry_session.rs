@@ -101,8 +101,8 @@ fn geometry_rotation_renders_persists_and_reloads() {
     );
     app.render().unwrap();
     let (rw, rh) = (
-        app.preview.as_ref().unwrap().width,
-        app.preview.as_ref().unwrap().height,
+        app.preview.as_ref().unwrap().width(),
+        app.preview.as_ref().unwrap().height(),
     );
     assert_eq!((rw, rh), (1, 2), "90° rotation must swap dimensions");
 

@@ -456,7 +456,7 @@ fn same_frame_pair_merges_byte_identically(command: &str, tool: &str) {
     let decoded =
         lumina_raw::decode_bytes(&bytes(&mcp_dng), "merged.dng").expect("the RAW DNG re-imports");
     assert_eq!(
-        (decoded.frame.width, decoded.frame.height),
+        (decoded.frame.width(), decoded.frame.height()),
         (expected.width, expected.height),
         "the DNG re-imports at the RAW's visible geometry"
     );

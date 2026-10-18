@@ -342,13 +342,13 @@ pub fn run<R: MatrixRender + ?Sized>(
                         })
                     }) {
                     Ok(expected) => {
-                        if (expected.width, expected.height)
-                            != (comparison.width, comparison.height)
+                        if (expected.width(), expected.height())
+                            != (comparison.width(), comparison.height())
                         {
                             outcome.status = "fail";
                             outcome.message = Some(format!(
                                 "golden dimension mismatch: golden {}x{} vs comparison {}x{} (re-baseline)",
-                                expected.width, expected.height, comparison.width, comparison.height
+                                expected.width(), expected.height(), comparison.width(), comparison.height()
                             ));
                         } else {
                             let value = psnr(&comparison, &expected);

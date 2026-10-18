@@ -540,8 +540,8 @@ mod tests {
     /// per-copy record id and returns its checksum.
     fn write_artifact(app: &LuminaApp, pixels: u8) -> String {
         let (width, height) = (
-            app.original.as_ref().unwrap().width,
-            app.original.as_ref().unwrap().height,
+            app.original.as_ref().unwrap().width(),
+            app.original.as_ref().unwrap().height(),
         );
         let data = vec![pixels; width as usize * height as usize * 3];
         let artifact = SidecarDenoiseArtifact {
@@ -575,8 +575,8 @@ mod tests {
             relative_path: "photo.png.lumina.zdata".into(),
             format: "lumina-zdata".into(),
             checksum: checksum.clone(),
-            width: app.original.as_ref().unwrap().width,
-            height: app.original.as_ref().unwrap().height,
+            width: app.original.as_ref().unwrap().width(),
+            height: app.original.as_ref().unwrap().height(),
             channels: "rgb8".into(),
             data_version: "1".into(),
             extras: Default::default(),

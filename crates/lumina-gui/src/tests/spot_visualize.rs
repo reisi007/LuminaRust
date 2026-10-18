@@ -76,7 +76,10 @@ fn g04_spot_visualize_overlay_visible_in_preview_after_reload() {
     assert_eq!(app.spot_visualize_overlay_threshold(), Some(0.3));
     assert_eq!(app.spot_detect_effective_threshold(), 0.3);
     let tinted = app.preview().expect("preview after commit").clone();
-    assert_eq!((tinted.width, tinted.height), (clean.width, clean.height));
+    assert_eq!(
+        (tinted.width(), tinted.height()),
+        (clean.width(), clean.height())
+    );
     assert_ne!(
         tinted.pixels(),
         clean.pixels(),

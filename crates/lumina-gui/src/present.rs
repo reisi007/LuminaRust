@@ -116,7 +116,7 @@ impl LuminaApp {
             self.preview.as_ref()
         };
         if let Some(frame) = frame {
-            let size = [frame.width as usize, frame.height as usize];
+            let size = [frame.width() as usize, frame.height() as usize];
             let identity = (self.preview_generation, self.before_after, size);
             let keep_for_navigator = self.texture.is_none();
             if self.texture_identity != Some(identity)

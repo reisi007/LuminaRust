@@ -209,8 +209,8 @@ fn neighbor_stand_in_rejects_same_dimension_source_replacement() {
     // A dimension-only cache key would therefore be vulnerable to stale pixels.
     let replacement = ImageFrame::new(2, 1, vec![1, 2, 3, 255, 4, 5, 6, 255]).unwrap();
     let replacement_bytes = replacement.encode(ImageFileFormat::Png).unwrap();
-    assert_eq!(replacement.width, initial_frame.width);
-    assert_eq!(replacement.height, initial_frame.height);
+    assert_eq!(replacement.width(), initial_frame.width());
+    assert_eq!(replacement.height(), initial_frame.height());
     std::fs::write(&fixture.source, replacement_bytes).unwrap();
 
     let error = match crate::preview_jobs::worker_preview(job()) {

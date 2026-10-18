@@ -79,7 +79,7 @@ impl LuminaApp {
             return None;
         }
         let source = self.navigator_frame()?;
-        let (width, height) = (source.width, source.height);
+        let (width, height) = (source.width(), source.height());
         // GUI-SRCACC-1: the zoomed overview is a stand-in, not an exemption.
         // Resolve and apply repair regions at full source geometry before the
         // overview downscale; resolver/composite errors are logged and yield
@@ -132,7 +132,7 @@ impl LuminaApp {
         // G-06: Lensfun auto-corrector for the navigator overview (same
         // cached lookup as the preview render).
         #[cfg(feature = "lensfun")]
-        self.ensure_lensfun_cache(small.width, small.height);
+        self.ensure_lensfun_cache(small.width(), small.height());
         #[cfg(feature = "lensfun")]
         let nav_lensfun = self.lensfun_render_ref();
         #[cfg(not(feature = "lensfun"))]
@@ -197,7 +197,7 @@ impl LuminaApp {
         } else {
             let key = (self.path.clone(), src_w, src_h);
             let texture = self.navigator_zoomed_overview().map(|frame| {
-                let size = [frame.width as usize, frame.height as usize];
+                let size = [frame.width() as usize, frame.height() as usize];
                 let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels());
                 ctx.load_texture("lumina-navigator", image, egui::TextureOptions::LINEAR)
             });

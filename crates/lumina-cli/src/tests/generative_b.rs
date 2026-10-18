@@ -82,7 +82,7 @@ fn generative_double_role_generate_render_and_status() {
     )
     .unwrap();
     let rendered = ImageFrame::decode(&fs::read(&output).unwrap()).unwrap();
-    assert_eq!((rendered.width, rendered.height), (4, 4));
+    assert_eq!((rendered.width(), rendered.height()), (4, 4));
     assert!(
         rendered
             .pixels()

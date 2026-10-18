@@ -200,7 +200,7 @@ impl LuminaApp {
             .original
             .as_ref()
             .ok_or_else(|| GuiError::Io(Str::NoImageLoaded.t().to_string()))?;
-        Ok((frame.width, frame.height))
+        Ok((frame.width(), frame.height()))
     }
 
     /// Clear only the transient mask gesture. The arming setters use this

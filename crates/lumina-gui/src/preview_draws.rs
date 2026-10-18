@@ -70,11 +70,11 @@ impl LuminaApp {
             let (src_w, src_h) = self
                 .original
                 .as_ref()
-                .map(|o| (o.width as f32, o.height as f32))
+                .map(|o| (o.width() as f32, o.height() as f32))
                 .or_else(|| {
                     self.draft_original
                         .as_ref()
-                        .map(|d| (d.width as f32, d.height as f32))
+                        .map(|d| (d.width() as f32, d.height() as f32))
                 })
                 .unwrap_or((tw, th));
             if src_w > 0.0 && src_h > 0.0 {

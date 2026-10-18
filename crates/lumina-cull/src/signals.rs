@@ -36,10 +36,10 @@ impl LumaPlane {
 /// Builds the Rec.709 luminance plane of a frame. Alpha is ignored. An empty
 /// frame is a loud error, not a zero measurement.
 pub fn luma_plane(frame: &ImageFrame) -> Result<LumaPlane, CullError> {
-    if frame.width == 0 || frame.height == 0 {
+    if frame.width() == 0 || frame.height() == 0 {
         return Err(CullError::EmptyFrame {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
         });
     }
     let values = frame
@@ -55,8 +55,8 @@ pub fn luma_plane(frame: &ImageFrame) -> Result<LumaPlane, CullError> {
         })
         .collect();
     Ok(LumaPlane {
-        width: frame.width,
-        height: frame.height,
+        width: frame.width(),
+        height: frame.height(),
         values,
     })
 }
@@ -266,10 +266,10 @@ pub struct ExposureMetrics {
 
 /// Measures exposure/clipping on `frame` via the existing core path.
 pub fn exposure_metrics(frame: &ImageFrame) -> Result<ExposureMetrics, CullError> {
-    if frame.width == 0 || frame.height == 0 {
+    if frame.width() == 0 || frame.height() == 0 {
         return Err(CullError::EmptyFrame {
-            width: frame.width,
-            height: frame.height,
+            width: frame.width(),
+            height: frame.height(),
         });
     }
     let (analysis, histogram) = analyze_tone_with_histogram(frame);

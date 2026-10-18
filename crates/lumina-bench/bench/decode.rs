@@ -49,7 +49,7 @@ fn decode_benches(c: &mut Criterion) {
         group.bench_function(format!("raw__{id}"), |b| {
             b.iter(|| {
                 let image = decode_bytes(black_box(&bytes), black_box(&name)).unwrap();
-                black_box(image.frame.width)
+                black_box(image.frame.width())
             })
         });
     }

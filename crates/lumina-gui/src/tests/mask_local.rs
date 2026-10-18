@@ -54,8 +54,8 @@ fn local_wb_setter_and_picker_use_selected_layer_without_global_mutation() {
         Vec::new(),
         OutputSpec {
             profile: "sRGB".into(),
-            width: stage.width,
-            height: stage.height,
+            width: stage.width(),
+            height: stage.height(),
             format: "rgba8".into(),
         },
     );
@@ -65,9 +65,9 @@ fn local_wb_setter_and_picker_use_selected_layer_without_global_mutation() {
     app.render_mask_layers = vec![MaskLayerResult {
         layer_id: layer_id.clone(),
         plane: MaskPlane::new(
-            stage.width,
-            stage.height,
-            vec![u16::MAX; (stage.width * stage.height) as usize],
+            stage.width(),
+            stage.height(),
+            vec![u16::MAX; (stage.width() * stage.height()) as usize],
         )
         .unwrap(),
     }];
@@ -163,8 +163,8 @@ fn captured_local_wb_stage_is_pinned_to_its_render_identity_and_cleared_on_edit(
         Vec::new(),
         OutputSpec {
             profile: "sRGB".into(),
-            width: stage.width,
-            height: stage.height,
+            width: stage.width(),
+            height: stage.height(),
             format: "rgba8".into(),
         },
     ));
@@ -187,8 +187,8 @@ fn captured_local_wb_stage_is_pinned_to_its_render_identity_and_cleared_on_edit(
         Vec::new(),
         OutputSpec {
             profile: "sRGB".into(),
-            width: stage.width,
-            height: stage.height,
+            width: stage.width(),
+            height: stage.height(),
             format: "rgba8".into(),
         },
     );
@@ -233,7 +233,7 @@ fn no_local_work_means_no_effective_source_stage_capture() {
     app.render().unwrap();
     let stage = app.effective_source_stage.as_ref().expect("stage captured");
     assert_eq!(
-        (stage.width, stage.height),
+        (stage.width(), stage.height()),
         app.image_dims().expect("image loaded")
     );
     let digest = app.render_key.as_ref().expect("render identity").digest();

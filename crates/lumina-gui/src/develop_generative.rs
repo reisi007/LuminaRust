@@ -125,8 +125,8 @@ impl LuminaApp {
                         }
                     }
                     if ui.button("Apply Frame (drag) → Canvas").clicked() {
-                        let src_w = self.original.as_ref().map(|f| f.width).unwrap_or(8);
-                        let src_h = self.original.as_ref().map(|f| f.height).unwrap_or(8);
+                        let src_w = self.original.as_ref().map(|f| f.width()).unwrap_or(8);
+                        let src_h = self.original.as_ref().map(|f| f.height()).unwrap_or(8);
                         let new_canvas = lumina_sidecar::GenerativeCanvas {
                             output_width: src_w + 4,
                             output_height: src_h + 4,
@@ -144,8 +144,8 @@ impl LuminaApp {
                 } else {
                     ui.label("Canvas not set — use frame drag to define.");
                     if ui.button("Set default 12x12 canvas (8→12)").clicked() {
-                        let src_w = self.original.as_ref().map(|f| f.width).unwrap_or(8);
-                        let src_h = self.original.as_ref().map(|f| f.height).unwrap_or(8);
+                        let src_w = self.original.as_ref().map(|f| f.width()).unwrap_or(8);
+                        let src_h = self.original.as_ref().map(|f| f.height()).unwrap_or(8);
                         let new_canvas = lumina_sidecar::GenerativeCanvas {
                             output_width: src_w + 4,
                             output_height: src_h + 4,
