@@ -137,6 +137,12 @@ Sidecars vollständig wiederherstellbar sein.
   sofortiges Scrollen — GPU-Textur (VRAM) fürs aktive Bild, WebP-Cache
   (Screen/1:1, Disk/RAM, Alpha) für Nachbarn, asymmetrisches +4/−2-Prefetch
   (PREVIEW-CACHE-FEATURE)
+- [downscale-ein-pfad-soll.md](quality/downscale-ein-pfad-soll.md):
+  Konsolidierung der drei Downscale-Implementierungen (plus redundantem
+  Wrapper) auf **einen** Pfad in `lumina-core` — genau ein f64-bilinearer
+  Resampling-Kernel, zwei Zielformen (`MaxWidth`/`LongEdge`),
+  Nearest-Neighbour entfaellt (Qualitaetsverbesserung), Byte-Anker und
+  benanntes Goldens-Gate (DOWNSCALER-UNIFY-71)
 
 ## Feature-Matrix
 
