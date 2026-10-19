@@ -7,7 +7,7 @@ geprüft am: 2026-10-12
 
 | Skill | angewendet? | wo im Projekt | offene Position |
 |---|---|---|---|
-| `build-verify` | ja | `Agents.md:137-138` (Skill-Zeiger + always-on-Kernel); Flow in der Git-Historie (`Verify:`-Footer je Runde) | |
+| `build-verify` | ja | `Agents.md:149-152` (Skill-Zeiger + always-on-Kernel); Flow in der Git-Historie (`Verify:`-Footer je Runde) | |
 | `skills-marker` | ja | diese Datei (`AGENTS.skills.md`) | |
 | `github-ci-filters` | ja | `.github/workflows/ci.yml` — `paths-ignore` für Docs-only-Pushes (Commit `c4e2fd8`) | |
 | `codegraph-project-setup` | ja | `AGENTS.md` CodeGraph-Abschnitt; `.codegraph/` vorhanden | |
@@ -16,7 +16,7 @@ geprüft am: 2026-10-12
 | `vision-agents` | ja | `Agents.todo.md` `F-103-N6-GUI-COVERAGE-27` („plus Vision-Review" für visuelle Änderungen) | |
 | Konvention: 500-Zeilen-Ratetch | ja | `scripts/check_file_sizes.sh:2-7`, `scripts/file_size_baseline.txt`, `Agents.md` | |
 | Konvention: Projektsprache Deutsch (Doku + UI) | ja | `Agents.md`, `Agents.todo.md`, `feature/` | |
-| Konvention: eingebettete Always-on-Regel | ja | `Agents.md:137-138` → `/projects/agents-skills/.agents/rules/build-verify.md` (Pfad-Verweis, keine Kopie) | |
+| Konvention: eingebettete Always-on-Regel | ja | `Agents.md:149-152` → `/projects/agents-skills/.agents/rules/build-verify.md` (Pfad-Verweis, keine Kopie) | |
 | `agent-config` | nein | | Maschinenkonfiguration (`opencode.jsonc`), nicht Projektstand |
 | `laravel` | nein | | Rust-Workspace, kein PHP |
 | `node-deps` | nein | | keine `package.json`/pn-Pins; Abhängigkeiten laufen über Cargo |
