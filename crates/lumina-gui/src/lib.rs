@@ -429,7 +429,8 @@ pub use library_helpers::{color_label_of, compare_mode_for_key, library_move_ind
 
 // GUI-LIB-SPLIT-65 Slice 12: the F-100 Develop-section index constants,
 // the Basic-section recipe keys, and the `section_name` lookup are
-// extracted (file-size ratchet).
+// extracted (file-size ratchet). Slice 18 moved the G-11 section open state
+// (solo mode) into the same module.
 mod develop_sections;
 pub(crate) use develop_sections::BASIC_TONE_KEYS;
 pub use develop_sections::{
@@ -2987,61 +2988,6 @@ impl LuminaApp {
     /// its historical meaning (without the G-11 flag) for compatibility.
     pub fn side_chrome_hidden(&self) -> bool {
         self.chrome_hidden() || self.all_panels_hidden
-    }
-
-    /// Whether solo mode is armed (G-11, read-only accessor).
-    pub fn solo_mode(&self) -> bool {
-        self.solo_mode
-    }
-
-    /// Set solo mode (G-11). Display-only session state. Enabling with several
-    /// open sections deterministically keeps the first (lowest index) and
-    /// closes the rest.
-    pub fn set_solo_mode(&mut self, enabled: bool) {
-        instrument_gui_action!(self, GuiAction::SetSoloMode);
-        if self.solo_mode == enabled {
-            return;
-        }
-        self.solo_mode = enabled;
-        if enabled {
-            if let Some(first) = (0..SECTION_COUNT).find(|&i| self.section_open[i]) {
-                for i in 0..SECTION_COUNT {
-                    self.section_open[i] = i == first;
-                }
-            }
-        }
-        log::info!("GUI interaction: set_solo_mode -> {enabled}");
-        self.status = if enabled {
-            Str::SoloModeOn.t().into()
-        } else {
-            Str::SoloModeOff.t().into()
-        };
-    }
-
-    /// Whether Develop section `index` is open (G-11, read-only accessor).
-    /// Out-of-range indices read as closed.
-    pub fn is_section_open(&self, index: usize) -> bool {
-        self.section_open.get(index).copied().unwrap_or(false)
-    }
-
-    /// Set a Develop section open state (G-11). With solo mode on, opening one
-    /// section closes the other seven. Out-of-range indices are refused loudly
-    /// (warn, no state change). Display-only session state: never touches the
-    /// recipe or the sidecar.
-    pub fn set_section_open(&mut self, index: usize, open: bool) {
-        if index >= SECTION_COUNT {
-            log::warn!("GUI interaction: set_section_open refused for index {index}");
-            return;
-        }
-        if open && self.solo_mode {
-            for i in 0..SECTION_COUNT {
-                self.section_open[i] = false;
-            }
-        }
-        if self.section_open[index] != open {
-            self.section_open[index] = open;
-            log::info!("GUI interaction: set_section_open {index} -> {open}");
-        }
     }
 
     /// Toggle the crop-mode badge (`R`, Welle 2). Display-only: while armed,
