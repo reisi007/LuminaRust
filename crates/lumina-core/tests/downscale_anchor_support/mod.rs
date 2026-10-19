@@ -1,8 +1,17 @@
 //! Support-Helfer des DOWNSCALER-UNIFY-71-Anker-Tests: SHA-256 (FIPS 180-4),
-//! die geloeschte Nearest-Nachbar-Replikation und der exakte
-//! Flaechenmittelwert-Referenzabstand. Kein Resampler, keine Kern-Logik —
+//! die geloeschte Nearest-Nachbar-Replikation, der exakte
+//! Flaechenmittelwert-Referenzabstand, die alte f32-Fassung des
+//! LongEdge-Downscales als Referenz und die deterministischen Fixtures des
+//! Pixel-Delta-Ankers. Kein Resampler, keine Kern-Logik —
 //! nur Mess- und Hash-Hilfsmittel, damit der Anker unter der
 //! Dateigroessen-Schranke bleibt.
+
+mod f32_reference;
+mod fixtures;
+
+pub use fixtures::{gradient_pixels, non_smooth_pixels, LONG_EDGE_ANCHOR_PINS};
+
+use lumina_core::ImageFrame;
 
 // ---------------------------------------------------------------------------
 // Minimal SHA-256 ( FIPS 180-4 ) — test-only, keine neue Abhaengigkeit.
@@ -142,6 +151,37 @@ pub fn nearest_replication(
         }
     }
     (out, new_width, new_height)
+}
+
+/// Die alte f32-Fassung des LongEdge-Downscales als testseitige
+/// Referenzfunktion (HEAD `cb2da59`, byte-identisch validiert).
+///
+/// Die Arithmetik rechnet durchgaengig in **f32** — Geometrie **und**
+/// Abtastpositionen/Gewichte — waehrend der kanonische Pfad in **f64**
+/// rechnet. Genau daraus entsteht das gemessene Pixel-Byte-Delta.
+///
+/// Der Frame entsteht ueber [`ImageFrame::new`]. Die alte Fassung war eine
+/// **Methode** auf `ImageFrame`; diese Replikation ist eine freie Funktion
+/// mit `&[u8]`-Eingang. Die drei strukturellen Anpassungen — alle drei
+/// semantisch byte-exakt — sind:
+///
+/// 1. **Methode -> freie Funktion:** der alte Rumpf war
+///    `ImageFrame::downscale(&self, max_dim)`; hier ist es
+///    `f32_long_edge_bytes(pixels, src_w, src_h, max_dim)`.
+/// 2. **Struct-Literal -> [`ImageFrame::new`]:** die alte Fassung baute das
+///    Ergebnis als `ImageFrame { width, height, pixels }` — seit
+///    FRAME-INVARIANT-SEAL-77 sind die Felder privat.
+/// 3. **Early-Return `self.clone()` -> `pixels.to_vec()`:** der Klon des
+///    Frames wird zum Klon des Byte-Puffers; die Bytes sind identisch.
+///
+/// Die Rechenarithmetik selbst ist unveraendert — die woertliche
+/// Transkription aus `f32_reference.rs`.
+#[must_use]
+pub fn f32_long_edge_replication(frame: &ImageFrame, max_dim: u32) -> ImageFrame {
+    let (pixels, width, height) =
+        f32_reference::f32_long_edge_bytes(frame.pixels(), frame.width(), frame.height(), max_dim);
+    ImageFrame::new(width, height, pixels)
+        .expect("the f32 replication allocates exactly width*height*4 bytes")
 }
 
 /// Exakter Flaechenmittelwert-Referenz eines `w x h` -> `nw x nh`-Downscales, f64.

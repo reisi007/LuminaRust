@@ -10,19 +10,59 @@
 //! * `DownscaleTarget::LongEdge` — gegen die neue f64-Fassung. Messwerte der
 //!   Konsolidierung: 82 von 1.120.249 reprasentativen `(w, h, d)`-Tripeln
 //!   rundeten in der alten f32-Geometrie anders als in der neuen f64-Geometrie
-//!   ( 0,0073 % ); an allen acht angekernten LongEdge-Fixtures sind die Bytes
-//!   der alten f32-Fassung und der neuen f64-Fassung identisch.
+//!   ( 0,0073 % ).
 //! * Nearest -> Bilinear: der exakte Flaechenmittelwert-Referenzabstand ( L1 )
 //!   des Thumbnail-Pfades 640x400 @ LongEdge(200) sinkt von 0.419052
 //!   ( Nearest, replizierte `filmstrip::downscale_rgba` ) auf 0.259108
 //!   ( bilinear, kanonischer Pfad ) — die Qualitaetsverbesserung ist hier
 //!   dauerhaft pinnend geprueft.
 //!
+//! **Was ueber die Pixel-Bytes der alten f32-Fassung belegt ist** ( Stand
+//! 2026-10-19, DOWSCALE-ANCHOR-PIXEL-DELTA-77 ): die alte f32-Fassung liegt
+//! als testseitige Referenz vor ( `downscale_anchor_support::f32_long_edge_replication`,
+//! woertlich transkribiert aus HEAD `cb2da59`, `crates/lumina-core/src/lib.rs:486-538` ).
+//!
+//! * **In-repo belegt (jeden Tag laufend):** die Kontrollgruppe in
+//!   `downscale_anchor/pixel_delta.rs` faehrt **alle zehn** gepinnten
+//!   LongEdge-Aufrufe des Byte-Ankers durch **beide** Fassungen. Fuer jeden
+//!   Pin traegt die f32-Replikation **denselben** gepinnten SHA-256 wie die
+//!   f64-Fassung und es gibt **null** abweichende Bytes. Die Aussage „die
+//!   Bytes der alten f32-Fassung und der neuen f64-Fassung sind identisch"
+//!   ist damit fuer die gepinnten Gradienten-Fixtures **gemessen, nicht
+//!   behauptet** — in-repo, ohne Wegwerf-Programm.
+//! * **Externer Prozessbeleg (2026-10-19, nicht im Repo reproduzierbar):**
+//!   die **Transkription** selbst wurde gegen die alte Implementierung an
+//!   HEAD `cb2da59` validiert — ein Wegwerf-Programm extrahierte den alten
+//!   Methodenrumpf woertlich aus `git show cb2da59:…` und verglich ihn in
+//!   **elf** Fixture/Target-Kombinationen (Gradient und nicht-glatt, inklusive
+//!   der Early-Returns) Byte fuer Byte mit der Transkription: identisch in
+//!   allen elf. Das Validierungsprogramm ist **nicht** committet; im Repo
+//!   bleibt die Transkription mit ihrer Herkunftsangabe.
+//! * **Nicht-glatte Bilder**: die Identitaet ist **nicht** allgemein wahr. Auf
+//!   dem nicht-glatten Fixture ( harte Kanten plus Textur ) weicht die
+//!   f64-Fassung von der f32-Fassung ab: **229 von 64.000 Bytes**
+//!   ( 0,3578125 % ) bei 320x200 @ LongEdge(160) und **2543 von 100.000
+//!   Bytes** ( 2,543 % ) bei 640x400 @ LongEdge(200) — jeweils **maximal
+//!   1 LSB**. Die Zahlen sind in `downscale_anchor/pixel_delta.rs` gepinnt.
+//!   Die **Geometrie** ist in beiden Fassungen identisch; weicht sie ab
+//!   ( 82 der 1.120.249 Tripel ), ist ein Byte-Vergleich unmoeglich und wird
+//!   getrennt behandelt und ebenfalls gepinnt.
+//!
 //! Kein `#[ignore]`, keine Kruecken: jeder Test laeuft headless mit.
 
 mod downscale_anchor_support;
+// Das Nested-Testmodul-Muster des Repos (vgl. `lumina-gui/src/tests/histogram.rs`
+// + `tests/histogram/…`): der Pixel-Delta-Anker liegt in einem eigenen
+// Unterverzeichnis, damit `downscale_anchor.rs` unter der 500-Zeilen-Schanke
+// bleibt. `#[path]` ist noetig, weil der Testkroot direkt in `tests/` liegt —
+// ein `mod` ohne `#[path]` wuerde `tests/pixel_delta.rs` suchen (ein eigenes
+// Testtarget) statt `tests/downscale_anchor/pixel_delta.rs`.
+#[path = "downscale_anchor/pixel_delta.rs"]
+mod pixel_delta;
 
-use downscale_anchor_support::{area_reference, mean_l1, nearest_replication, sha256};
+use downscale_anchor_support::{
+    area_reference, gradient_pixels, mean_l1, nearest_replication, sha256, LONG_EDGE_ANCHOR_PINS,
+};
 use lumina_core::{downscale, DownscaleTarget, ImageFrame};
 
 // ---------------------------------------------------------------------------
@@ -30,20 +70,11 @@ use lumina_core::{downscale, DownscaleTarget, ImageFrame};
 // ---------------------------------------------------------------------------
 
 fn gradient_frame(w: u32, h: u32) -> ImageFrame {
-    let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
-    let wx = (w - 1).max(1);
-    let hy = (h - 1).max(1);
-    for y in 0..h {
-        for x in 0..w {
-            pixels.extend_from_slice(&[
-                (x * 255 / wx) as u8,
-                (y * 255 / hy) as u8,
-                ((x + y) * 255 / (wx + hy)) as u8,
-                255,
-            ]);
-        }
-    }
-    ImageFrame::new(w, h, pixels).expect("gradient fixture")
+    // Die Formel steht im Support-Modul (`fixtures::gradient_pixels`), damit
+    // der Wegwerf-Validierungslauf gegen `cb2da59` und der Pixel-Delta-Anker
+    // exakt dieselben Fixture-Bytes benutzen.
+    let (pixels, width, height) = gradient_pixels(w, h);
+    ImageFrame::new(width, height, pixels).expect("gradient fixture")
 }
 
 fn assert_bytes(tag: &str, frame: &ImageFrame, dims: (u32, u32), expected: &str) {
@@ -103,82 +134,20 @@ fn downscale_max_width_byte_anchor_matches_pre_consolidation() {
 
 // ---------------------------------------------------------------------------
 // T1b — Byte-Anker `LongEdge` ( Bytes der neuen f64-Fassung; identisch mit
-// der alten f32-Fassung an allen acht Fixtures — siehe Modul-Doku ).
+// der alten f32-Fassung an den gepinnten Gradienten-Fixtures — siehe
+// Modul-Doku ).
 // ---------------------------------------------------------------------------
 
 #[test]
 fn downscale_long_edge_byte_anchor_frozen() {
-    let p48x64 = gradient_frame(48, 64);
-    assert_bytes(
-        "48x64 @32",
-        &downscale(&p48x64, DownscaleTarget::LongEdge(32)).unwrap(),
-        (24, 32),
-        "3120f9754600195d2d8e5723b8f5157b04123b1c39b308e330abeddfcf7aebd4",
-    );
-    assert_bytes(
-        "48x64 @0 (guard -> clone)",
-        &downscale(&p48x64, DownscaleTarget::LongEdge(0)).unwrap(),
-        (48, 64),
-        "5ff86acb8a435984fd3b8c8c8054eb3aab07889c69a6f055ee1d8516d4566d62",
-    );
-    assert_bytes(
-        "48x64 @64 (exact fit -> clone)",
-        &downscale(&p48x64, DownscaleTarget::LongEdge(64)).unwrap(),
-        (48, 64),
-        "5ff86acb8a435984fd3b8c8c8054eb3aab07889c69a6f055ee1d8516d4566d62",
-    );
-
-    let f320x200 = gradient_frame(320, 200);
-    assert_bytes(
-        "320x200 @160",
-        &downscale(&f320x200, DownscaleTarget::LongEdge(160)).unwrap(),
-        (160, 100),
-        "829cbadcf1dffc231bf95ff379bcd4786ce972f534ee50d2b8cec157bd7ac8a6",
-    );
-    assert_bytes(
-        "320x200 @320 (exact fit -> clone)",
-        &downscale(&f320x200, DownscaleTarget::LongEdge(320)).unwrap(),
-        (320, 200),
-        "5e92b39da49ff1ff2889c53d25daea6cae689ed98cc138ae7ef0f49c53b13f37",
-    );
-    assert_bytes(
-        "320x200 @321 (target > source -> clone)",
-        &downscale(&f320x200, DownscaleTarget::LongEdge(321)).unwrap(),
-        (320, 200),
-        "5e92b39da49ff1ff2889c53d25daea6cae689ed98cc138ae7ef0f49c53b13f37",
-    );
-
-    let f640x400 = gradient_frame(640, 400);
-    assert_bytes(
-        "640x400 @200 (thumbnail path)",
-        &downscale(&f640x400, DownscaleTarget::LongEdge(200)).unwrap(),
-        (200, 125),
-        "d69d5e0a150755ea306b796c56a8a378c52d48a9923085a1e20ece12e2dbdd8b",
-    );
-
-    let s1x100 = gradient_frame(1, 100);
-    assert_bytes(
-        "1x100 @1 (1px edge)",
-        &downscale(&s1x100, DownscaleTarget::LongEdge(1)).unwrap(),
-        (1, 1),
-        "a502826c9e4bb400b3479350945acf0a78ce737e1bf164f957ffab28aad9f6c1",
-    );
-
-    let f333x221 = gradient_frame(333, 221);
-    assert_bytes(
-        "333x221 @100 (knapp)",
-        &downscale(&f333x221, DownscaleTarget::LongEdge(100)).unwrap(),
-        (100, 66),
-        "72c9f88804e817a894ed53b16d1bcb3e6f9519ea51000194510a0212a25b69bf",
-    );
-
-    let f1000x2000 = gradient_frame(1000, 2000);
-    assert_bytes(
-        "1000x2000 @1999 (rounds to width, shrinks height)",
-        &downscale(&f1000x2000, DownscaleTarget::LongEdge(1999)).unwrap(),
-        (1000, 1999),
-        "f488a95252a19bc750270417eea99445e935f92c14a7663a6f1ff98a0b29171c",
-    );
+    // Die Pin-Werte stehen in `LONG_EDGE_ANCHOR_PINS` (Support-Modul) — eine
+    // Quelle fuer den Byte-Anker und die Kontrollgruppe des Pixel-Delta-
+    // Ankers.
+    for pin in LONG_EDGE_ANCHOR_PINS {
+        let source = gradient_frame(pin.width, pin.height);
+        let out = downscale(&source, DownscaleTarget::LongEdge(pin.max_dim)).unwrap();
+        assert_bytes(pin.tag, &out, pin.dims, pin.sha256);
+    }
 }
 
 // ---------------------------------------------------------------------------
