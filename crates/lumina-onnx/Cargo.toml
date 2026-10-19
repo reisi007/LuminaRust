@@ -23,7 +23,7 @@ sha2 = "0.11"
 # (including its prebuilt-binary download); see README.md for the landing plan.
 # Native-only crate: `ort` is a direct (non-target-gated) dependency.
 [dependencies.ort]
-version = "=2.0.0-rc.13"
+version = "=2.0.0-rc.14"
 optional = true
 
 [features]
