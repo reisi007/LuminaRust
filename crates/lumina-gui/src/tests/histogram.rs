@@ -5,6 +5,12 @@ use super::*;
 // `downscale_rgba` is gone; it runs on the canonical bilinear path.
 use lumina_core::{downscale, DownscaleTarget};
 
+// The preview↔thumbnail parity (fixture, non-vacuum guards, byte-exact
+// resample pin) moved to its own file so this one keeps headroom under the
+// 500-line ratchet; the shared helpers stay here, as documented in the child
+// file.
+mod preview_thumb_parity;
+
 /// GUI-HISTOGRAM-1: stored 256-bin histograms map onto non-empty plot
 /// points inside the plot rect, with the peak reaching the top.
 #[test]
@@ -312,78 +318,6 @@ fn g10_histogram_section_paints_switches_and_original_badge() {
     );
 }
 
-/// GUI-PREVIEW-NOISE-1: at Fit the main preview must show the full frame
-/// (ROI `None`, no draft) and its pixel histogram must match the
-/// navigator/filmstrip thumbnail histogram — the exact user finding (gray
-/// noise in the main preview while the thumbnail is correct).
-#[test]
-fn fit_preview_histogram_matches_thumbnail() {
-    let (png, original) = synthetic_gradient_png();
-    let mut app = new_app();
-    app.load_bytes(png, "gradient.png").unwrap();
-    app.render().unwrap();
-    // Fit state: full-frame render, no ROI crop, no draft.
-    assert_eq!(app.zoom_mode, ZoomMode::Fit);
-    assert!(
-        app.preview_roi.is_none(),
-        "Fit must render the full frame (ROI None), got {:?}",
-        app.preview_roi
-    );
-    assert!(
-        !app.preview_is_draft,
-        "a settled Fit render is never a draft"
-    );
-    let preview = app.preview().expect("preview after load").clone();
-    assert_eq!((preview.width(), preview.height()), (64, 40));
-    // Thumbnail pipeline (mirrors `decode_thumbnail_frame` sans disk
-    // cache): canonical-path downscale + default-recipe render.
-    let small_frame = downscale(
-        &original,
-        DownscaleTarget::LongEdge(crate::filmstrip::THUMBNAIL_MAX_DIM),
-    )
-    .unwrap();
-    let thumb_ctx = RenderContext {
-        recipe: &EditRecipe::default(),
-        camera_white_balance: None,
-        source_actions: &[],
-        masks: None,
-        lensfun: None,
-        depth: None,
-    };
-    let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
-    let (_, preview_hist) = analyze_tone_with_histogram(&preview);
-    let (_, thumb_hist) = analyze_tone_with_histogram(&thumb);
-    // The app's own stored histogram must describe the preview.
-    let stored = app.current_histogram().expect("stored preview histogram");
-    assert_eq!(
-        stored.bins, preview_hist.bins,
-        "stored histogram must describe the displayed preview"
-    );
-    // Same content at different scales: distributions must be close.
-    let distance = histogram_l1(&preview_hist.bins, &thumb_hist.bins);
-    assert!(
-        distance < 0.35,
-        "Fit preview histogram must match the thumbnail (L1 {distance:.3} >= 0.35)"
-    );
-    // Noise-flat guard: content spread over many bins, no dominant spike
-    // (gray noise / a flat field would concentrate into few bins).
-    let total: u64 = preview_hist.bins.iter().sum();
-    let populated = preview_hist
-        .bins
-        .iter()
-        .filter(|&&c| c as f64 > total as f64 * 0.001)
-        .count();
-    let peak = *preview_hist.bins.iter().max().unwrap() as f64 / total as f64;
-    assert!(
-        populated >= 16,
-        "preview histogram must spread over >= 16 bins, got {populated}"
-    );
-    assert!(
-        peak < 0.5,
-        "no single bin may dominate the preview histogram (peak {peak:.3})"
-    );
-}
-
 /// REVIEW-GUI-N5: a draft analysis render is flagged as draft and the
 /// histogram panel says so instead of posing as the final render state.
 #[test]
@@ -410,80 +344,5 @@ fn draft_analysis_render_marks_histogram_draft() {
     assert!(
         texts.iter().any(|t| t == Str::HistogramDraft.t()),
         "the draft histogram badge must be painted, got {texts:?}"
-    );
-}
-
-/// GUI-PREVIEW-NOISE-1 (portrait): the same full-frame guarantee as the
-/// landscape case — at Fit a portrait preview shows the whole frame and
-/// its histogram matches the thumbnail histogram.
-#[test]
-fn fit_preview_portrait_histogram_matches_thumbnail() {
-    let (w, h) = (40u32, 64u32);
-    let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
-    for y in 0..h {
-        for x in 0..w {
-            let r = (x * 255 / (w - 1)) as u8;
-            let g = (y * 255 / (h - 1)) as u8;
-            let b = ((x + y) * 255 / (w - 1 + h - 1)) as u8;
-            pixels.extend_from_slice(&[r, g, b, 255]);
-        }
-    }
-    let original = ImageFrame::new(w, h, pixels).unwrap();
-    let png = original.encode(ImageFileFormat::Png).unwrap();
-    let mut app = new_app();
-    app.load_bytes(png, "portrait.png").unwrap();
-    app.render().unwrap();
-    assert_eq!(app.zoom_mode, ZoomMode::Fit);
-    assert!(
-        app.preview_roi.is_none(),
-        "Fit must render the full frame (ROI None), got {:?}",
-        app.preview_roi
-    );
-    assert!(
-        !app.preview_is_draft,
-        "a settled Fit render is never a draft"
-    );
-    let preview = app.preview().expect("preview after load").clone();
-    assert_eq!((preview.width(), preview.height()), (40, 64));
-    let small_frame = downscale(
-        &original,
-        DownscaleTarget::LongEdge(crate::filmstrip::THUMBNAIL_MAX_DIM),
-    )
-    .unwrap();
-    let thumb_ctx = RenderContext {
-        recipe: &EditRecipe::default(),
-        camera_white_balance: None,
-        source_actions: &[],
-        masks: None,
-        lensfun: None,
-        depth: None,
-    };
-    let thumb = render_frame(&small_frame, &thumb_ctx).unwrap().frame;
-    let (_, preview_hist) = analyze_tone_with_histogram(&preview);
-    let (_, thumb_hist) = analyze_tone_with_histogram(&thumb);
-    let stored = app.current_histogram().expect("stored preview histogram");
-    assert_eq!(
-        stored.bins, preview_hist.bins,
-        "stored histogram must describe the displayed preview"
-    );
-    let distance = histogram_l1(&preview_hist.bins, &thumb_hist.bins);
-    assert!(
-        distance < 0.35,
-        "portrait Fit preview histogram must match the thumbnail (L1 {distance:.3} >= 0.35)"
-    );
-    let total: u64 = preview_hist.bins.iter().sum();
-    let populated = preview_hist
-        .bins
-        .iter()
-        .filter(|&&c| c as f64 > total as f64 * 0.001)
-        .count();
-    let peak = *preview_hist.bins.iter().max().unwrap() as f64 / total as f64;
-    assert!(
-        populated >= 16,
-        "preview histogram must spread over >= 16 bins, got {populated}"
-    );
-    assert!(
-        peak < 0.5,
-        "no single bin may dominate the preview histogram (peak {peak:.3})"
     );
 }

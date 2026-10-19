@@ -537,3 +537,22 @@ Design-Entscheidung ist offen. Die einzige Zahl, die nicht vollstaendig
 belegt ist, ist die Anzahl der Goldens (62 in der Aufgabenstellung vs. 66
 im Inventar); dieser SOLL verwendet die belegte Zahl **66** aus
 `golden-fixtures.md:177-179`.
+
+## 17. Nachtrag 2026-10-19 — PREVIEW-THUMB-PARITY-VACUOUS-76
+
+**Kein Eingriff in die normativen Abschnitte** — dieser Nachtrag haelt nur fest,
+wann und wie die Histogramm-Paritaet aus § 5.1 **ueberhaupt faehig** wurde.
+Die beiden Tests liegen heute in
+`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` (die Datei
+`crates/lumina-gui/src/tests/histogram.rs` fuehrt fuer diese beiden Tests nur
+noch die Modul-Verdrahtung und behaelt ihre sieben eigenen Tests); die Fixture
+ist **256x160** bzw. **160x256** (lange Kante
+256 > `THUMBNAIL_MAX_DIM` = 200, also ein **echter** Resample), die Schranken
+sind **L1 < 0.05** und **Mean-Luecke < 0.15** Luminanzstufen. Der alte
+Messplan aus § 5.1 und § 12 (T6: synthetisches 64x40- bzw. 40x64-PNG,
+`distance` < 0.35) hat das **Vakuum** geliefert: die lange Kante 64 lag unter
+der Kappe, `downscale` nahm den Early-Return-Klon, der Abstand war **exakt 0**
+und die Kernel-Mutation `.round()` -> `.floor()` blieb gruen. Die
+**normativen** Ziele dieses SOLL bleiben unveraendert gueltig und sind mit der
+neuen Fixture erstmals **tatsaechlich erfuellt** (§ 5.1: „Der Abstand wird
+**nicht** null").
