@@ -252,7 +252,7 @@ Befund aus den Quellen:
 **Einordnung (SOLL-Entscheid):** der MCP-Pfad braucht den GPU-Paritätsbeweis
 **nicht**, und er darf ihn auch nicht behaupten. Der Merge-Teil hat genau dieselbe
 Grenze gezogen (Merge-SOLL §8 „Gates, die ausdrücklich **nicht** behauptet
-werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `Agents.md:608-628:
+werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `Agents.md:374-383:
 ein GPU-Thema gilt ohne lokalen Lauf als nicht getestet`). Die Matrix ist
 CPU-reproduzierbar gebaut — das nightly beweist die CPU-Referenz-Regression
 (`.github/workflows/matrix-nightly.yml:14-18, :100-104`) und hält die

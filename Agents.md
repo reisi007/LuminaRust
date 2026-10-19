@@ -1,24 +1,33 @@
 # LuminaRust Agentenregeln
 
-Dieses Dokument definiert die verbindlichen Arbeitsregeln für alle Agenten im
-Projekt. `Agents.todo.md` ist der ausführbare Arbeitsplan. `feature/README.md`
-ist der Einstiegspunkt zum normativen Feature-SOLL. `DoD.md` ist die
-verbindliche Definition of Done mit den normativen Verifizierungsregeln. Die verlinkten Dokumente
-unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
-Änderungen zuerst aktualisiert werden.
+Dieses Dokument enthält die verbindlichen Arbeitsregeln für alle Agenten im
+Projekt. `Agents.todo.md` ist der ausführbare Arbeitsplan, `feature/README.md`
+der Einstiegspunkt zum normativen Feature-SOLL, `DoD.md` die verbindliche
+Definition of Done mit den normativen Verifizierungsregeln. Die verlinkten
+Dokumente unter `feature/` müssen vor der Implementierung eines Features gelesen
+und bei Änderungen zuerst aktualisiert werden.
+
+## Nur Regeln, keine Entscheidungen
+
+**Nur Regeln, keine Entscheidungen:** Diese Datei enthält ausschließlich Regeln
+— Anweisungen, die für jede Arbeit in diesem Repo gelten. Dauerhafte
+Entscheidungen, Begründungen, Messwerte und Historie gehören nicht hierher,
+sondern in `feature/`/`docs/` bzw. die Projekt-Doku; offene Punkte nach
+`Agents.todo.md`; Erledigtes in die Git-Historie.
 
 ## Inhaltsverzeichnis
 
+- [Nur Regeln, keine Entscheidungen](#nur-regeln-keine-entscheidungen)
 - [Produktprinzipien](#produktprinzipien)
 - [Persistenz und Sidecars](#persistenz-und-sidecars)
 - [Architekturgrenzen](#architekturgrenzen)
 - [Rollen und Delegation](#rollen-und-delegation)
-- [Branch- und Merge-Konvention](#branch--und-merge-konvention-user-regel-2026-09-26)
-- [Entscheidungen an den Projekteigentümer](#entscheidungen-an-den-projekteigentümer-user-regel-2026-09-28)
+- [Branch- und Merge-Konvention](#branch--merge-konvention)
+- [Entscheidungen an den Projekteigentümer](#entscheidungen-an-den-projekteigentümer)
 - [Verbindlicher Arbeitsablauf](#verbindlicher-arbeitsablauf)
 - [Verifizierung und Tests](#verifizierung-und-tests)
 - [Definition of Done](#definition-of-done) (normativ: [`DoD.md`](DoD.md))
-- [Dokumentations- und Todo-Regeln](#dokumentations--und-todo-regeln)
+- [Dokumentations- und Todo-Regeln](#dokumentations--todo-regeln)
 - [Änderungsregeln](#änderungsregeln)
 
 ## Produktprinzipien
@@ -53,10 +62,9 @@ unter `feature/` müssen vor der Implementierung eines Features gelesen und bei
 - Eine optionale SQLite-Datenbank darf nur einen wiederaufbaubaren Index,
   Suchdaten, Jobstatus und Cache-Metadaten enthalten. Sie ist niemals die
   einzige Quelle für Rezept, virtuelle Kopien oder Maskendefinitionen.
-- XMP wird in v1 nicht unterstützt. Ein späterer XMP-Adapter darf Lumina-
-  spezifische Daten niemals stillschweigend zur autoritativen Quelle machen.
-  Präzisierung (LRPAR-G15-IPTC, 2026-09-04): Das betrifft XMP als Lese- und
-  Sidecar-Format; das Opt-in-Schreiben von IPTC IIM + XMP in **neu erzeugte
+- XMP ist in v1 weder Lese- noch Sidecar-Format, und ein späterer XMP-Adapter
+  darf Lumina-spezifische Daten niemals stillschweigend zur autoritativen
+  Quelle machen. Das Opt-in-Schreiben von IPTC IIM + XMP in **neu erzeugte
   Exportdateien** (JPEG) ist erlaubt (siehe `feature/product/iptc-metadata.md`).
 
 ### Sidecar-Struktur
@@ -111,16 +119,14 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 
 ## Architekturgrenzen
 
-- `lumina-core` enthält plattformneutrale Domänen- und Renderlogik und darf
-  keine GUI-, Dateisystem-, native ONNX- oder native RAW-Abhängigkeiten
-  voraussetzen. Im Produktionscode ist `lumina-core` dateisystemfrei: der
-  native Ordner-Cache-/Preview-Disk-Tier liegt im Crate `lumina-cache`
-  (LUMINA-CACHE-EXTRACT-70), das die Core-Schema- und Pfadlayout-API
-  (`PreviewKind`, `FolderCacheSettings`, `preview_cache_key`, `entry_stem`)
-  liest und schreibt. `lumina-cache` ist der Adapter zwischen Core und den
-  Frontends und darf `std::fs` verwenden; Test-only-Vorkommen bleiben in Core;
-  geprüft über `scripts/check_core_prod_fs_free.sh` (CORE-PROD-FS-FREE-GATE-76);
-  Grenze: textueller Scan, kein `std as x`-Alias.
+- `lumina-core` enthält plattformneutrale Domänen- und Renderlogik. Im
+  Produktionscode ist es dateisystemfrei und darf keine GUI-, native ONNX- oder
+  native RAW-Abhängigkeiten voraussetzen.
+- Der native Ordner-Cache-/Preview-Disk-Tier liegt im Crate `lumina-cache`,
+  dem Adapter zwischen Core und den Frontends. `lumina-cache` darf `std::fs`
+  verwenden; Test-only-Vorkommen bleiben in Core. Geprüft über
+  `scripts/check_core_prod_fs_free.sh` (Grenze: textueller Scan, kein
+  `std as x`-Alias).
 - Ein verpflichtendes `lumina-sidecar`-Modul soll Schema, Validierung,
   Roundtrip-Serialisierung, Migrationen und atomare Sidecar-Operationen bündeln.
 - `lumina-raw` kapselt RAW-Decoder, Demosaicing, EXIF und Farbprofile.
@@ -131,8 +137,8 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
   zweite Implementierung der Renderpipeline.
 - Ein optionaler Index-/Katalogadapter darf später als eigenes Modul ergänzt
   werden. Er muss aus Sidecars vollständig neu aufgebaut werden können.
-- Native Abhängigkeiten werden über eine dokumentierte
-  Capability-Matrix getrennt behandelt (WASM/Browser ENTFERNT 2026-09-04).
+- Native Abhängigkeiten werden über eine dokumentierte Capability-Matrix
+  getrennt behandelt (WASM/Browser sind kein Ziel).
 - Jede Pipeline besitzt eine explizite Version. Rezeptversion und
   Pipelineversion werden getrennt migriert und validiert.
 
@@ -140,17 +146,15 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 
 ### Build-Agent
 
-Der Build-Agent ist der verantwortliche Orchestrator. **Der Build-/Verify-Flow
-steht nicht hier, sondern im Skill `build-verify`** (agents-skills), dessen
-always-on Kernel `.agents/rules/build-verify.md` in jeder Session im Kontext ist:
-Rollentrennung, `nach-verify`-Modus je Lauf, Commit nach **jedem** Verdict,
-Amend-Regel, Push + CI. Diese Datei nennt nur, was in **diesem** Repo wann grün
-sein muss — siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md).
+Der Build-Agent ist der verantwortliche Orchestrator. Der Build-/Verify-Flow
+steht im Skill `build-verify` (agents-skills, always-on Kernel
+`.agents/rules/build-verify.md`); diese Datei nennt nur, was in **diesem** Repo
+wann grün sein muss (siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md)).
 
 Er:
 
-- liest vor jeder Aufgabe `Agents.md`, `Agents.todo.md`,
-  `feature/README.md` und das betroffene Feature-Dokument;
+- liest vor jeder Aufgabe `Agents.md`, `Agents.todo.md`, `feature/README.md` und
+  das betroffene Feature-Dokument;
 - zerlegt Arbeit in kleine, unabhängig prüfbare Aufgaben und delegiert sie an
   passende Subagenten;
 - verhindert parallele Änderungen an gemeinsam genutzten APIs und Schemas (siehe
@@ -160,37 +164,30 @@ Er:
 
 ### Parallele Delegation und Konfliktvermeidung
 
-Um Block A möglichst parallel abzuarbeiten, ohne dass sich Agenten in die Quere
-kommen, gilt:
-
 - **Ein Crate = ein schreibender Agent.** Jeder Implementierungs-Agent erhält
   exklusiven Schreibzugriff auf genau ein Crate (bzw. ein klar abgegrenztes
   Docs-/Modulverzeichnis). Dateien desselben Crates werden nicht auf mehrere
-  parallele Agenten verteilt — sonst entstehen Edit- und Kompilierkonflikte.
+  parallele Agenten verteilt.
 - **Gemeinsame APIs/Schemas bleiben seriell.** Ändert eine Aufgabe eine
-  öffentliche Schnittstelle, die ein anderer Agent nutzt (z. B. Core-Pipeline
-  ↔ GUI), wird sie in einer eigenen Welle vor den abhängenden Agenten
-  umgesetzt; abhängige Agenten verwenden nur bereits existierende, stabile
-  Signaturen.
+  öffentliche Schnittstelle, die ein anderer Agent nutzt, wird sie in einer
+  eigenen Welle vor den abhängenden Agenten umgesetzt; abhängige Agenten
+  verwenden nur bereits existierende, stabile Signaturen.
 - **Build-Parallelität ist durch den Cargo-Lock begrenzt.** Mehrere Agenten
-  rufen `cargo` zeitgleich auf; Cargo serialisiert den Zugriff auf `target/`
-  per Lock. Das verlängert die Gesamtlaufzeit, erzeugt aber keine
-  Datenkorruption — parallelisierte Agenten sind sicher.
+  dürfen `cargo` zeitgleich aufrufen — Cargo serialisiert den Zugriff auf
+  `target/` per Lock.
 - **Abgestürzte/fehlerhafte Subagenten neu starten.** Ein Subagent, der mit
   einem Fehler zurückkehrt, wird über seine `sessionID` mit Fortsetzung
   (`continue`) neu gestartet, statt den Kontext neu aufzubauen.
-- **Fortsetzungen begrenzen (User-Regel 2026-09-15).** Pro Aufgabe höchstens
-  **einmal** `continue` auf derselben Session; danach wird frisch neu
-  gestartet (neue `sessionID`, voller Auftragskontext im Prompt). Das gilt für
-  Implementierungs- wie Verifizierungs-Agenten und verhindert
-  Kontext-Drift über lange Rework-Ketten.
+- **Fortsetzungen begrenzen.** Pro Aufgabe höchstens **einmal** `continue` auf
+  derselben Session; danach wird frisch neu gestartet (neue `sessionID`, voller
+  Auftragskontext im Prompt). Das gilt für Implementierungs- wie
+  Verifizierungs-Agenten.
 - **Kein Commit durch Subagenten.** Implementierungs-Agenten committen nicht;
   der Build-Agent committet (wie und wann: Skill `build-verify`).
 
 ### Direkte Änderungen des Build-Agenten
 
-Der Build-Agent darf kleine, risikoarme Änderungen selbst durchführen, ohne
-dafür einen Implementierungs-Agenten zu delegieren. Dazu gehören insbesondere:
+Der Build-Agent darf kleine, risikoarme Änderungen selbst durchführen:
 
 - reine Dokumentationskorrekturen ohne Änderung des Zielzustands;
 - das Aktualisieren von Inhaltsverzeichnissen und internen Links;
@@ -199,10 +196,9 @@ dafür einen Implementierungs-Agenten zu delegieren. Dazu gehören insbesondere:
 - mechanische Formatkorrekturen ohne Verhaltensänderung.
 
 Auch bei direkten Änderungen prüft der Build-Agent die betroffenen Dateien
-selbst. Sobald eine Änderung Codeverhalten, Datenformat, Migration,
-Persistenz, Pipeline, Sicherheitsverhalten oder Tests betrifft, muss sie wie
-eine normale Implementierungsaufgabe delegiert und **unabhängig verifiziert**
-werden (Flow: Skill `build-verify`, Pointer oben).
+selbst. Betrifft eine Änderung Codeverhalten, Datenformat, Migration,
+Persistenz, Pipeline, Sicherheitsverhalten oder Tests, wird sie wie eine normale
+Implementierungsaufgabe delegiert und **unabhängig verifiziert**.
 
 ### Implementierungs-Agent
 
@@ -216,8 +212,8 @@ Der Implementierungs-Agent:
 
 ### Verifizierungs-Agent
 
-Der Verifikations-Lauf folgt dem Skill `build-verify` (Pointer oben); hier steht
-nur der repo-spezifische Teil. Er:
+Der Verifikations-Lauf folgt dem Skill `build-verify`; hier steht nur der
+repo-spezifische Teil. Er:
 
 - prüft die tatsächliche Änderung gegen `feature/README.md` und das betroffene
   Feature-Dokument;
@@ -227,102 +223,68 @@ nur der repo-spezifische Teil. Er:
   (`cargo fmt`, Clippy, Tests, Builds) — ein nicht gelaufenes Gate gilt als
   **nicht geprüft**, nicht als grün;
 - prüft ausdrücklich, ob die Tests die neue Funktion tatsächlich abdecken;
-- prüft ausdrücklich die Dateigrößen-Regel (Anti-Gaming): `sh scripts/check_file_sizes.sh`
-  grün, neue Logik in neuen/kohärenten Dateien (kein Wachstum in >500-Zeilen-Dateien),
-  keine Kommentar-/Doku-/Test-Löschung zur Kompensation (Diff-Prüfung);
+- prüft ausdrücklich die Dateigrößen-Regel (Anti-Gaming):
+  `sh scripts/check_file_sizes.sh` grün, neue Logik in neuen/kohärenten Dateien
+  (kein Wachstum in >500-Zeilen-Dateien), keine Kommentar-/Doku-/Test-Löschung
+  zur Kompensation (Diff-Prüfung);
 - darf eine Aufgabe als **nicht bestanden** zurückweisen;
 - liefert einen kurzen Prüfbericht mit bestanden/nicht bestanden, Befunden,
   Testkommandos und verbleibenden Risiken (Verdict-Format und Schweregrade
   `critical`/`high`/`medium`/`low`: Skill `build-verify`).
 
-## Branch- und Merge-Konvention (User-Regel 2026-09-26)
+## Branch- und Merge-Konvention
 
-- **Es werden hier keine Pull Requests verwendet.** Der Build-Agent merged
-  direkt nach `main` (`git checkout main && git merge <branch> && git push
-  origin main`). Ein PR wird **nicht** eröffnet — auch nicht, um CI anzustoßen.
-- **`main` ist nicht branch-protected**, es gibt also keine required checks, auf
-  die ein Merge warten könnte. Die lokalen Gates des Build-Agents sind damit
-  das **einzige** Gate vor dem Merge und werden vor jedem Merge vollständig
-  gefahren. Ein Merge erfolgt erst, wenn die betroffenen Suites, `fmt`,
-  Clippy, das Ratchet und `golden_ref.sh check` grün sind.
+- **Es werden keine Pull Requests verwendet.** Der Build-Agent merged direkt
+  nach `main` (`git checkout main && git merge <branch> && git push origin
+  main`). Ein PR wird **nicht** eröffnet — auch nicht, um CI anzustoßen.
+- **`main` ist nicht branch-protected**, es gibt also keine required checks.
+  Die lokalen Gates des Build-Agents sind damit das **einzige** Gate vor dem
+  Merge und werden vor jedem Merge vollständig gefahren: betroffene Suites,
+  `fmt`, Clippy, Ratchet und `golden_ref.sh check` grün.
 - **Nach dem Merge wird die CI beobachtet, nicht vorher.** `main` löst per
-  `push` die CI aus; der Build-Agent prüft deren Ergebnis und behebt einen
-  roten Lauf **sofort**, weil er ihn selbst verursacht hat. Ein rotes `main`
-  gilt als offener Befund des Build-Agents, nicht als Flake.
+  `push` die CI aus; der Build-Agent prüft das Ergebnis und behebt einen roten
+  Lauf **sofort**. Ein rotes `main` gilt als offener Befund, nicht als Flake.
 - **Maßgeblich ist der Stand auf `main`.** Arbeit auf einem Feature-Branch ohne
   Merge zählt nicht als geliefert; der Abschlussbericht nennt den Merge-Commit
   und das CI-Ergebnis. Ein Task gilt erst mit dem Merge als erfüllt, die
   Verifikation bleibt davon unberührt.
-- Vor dem Merge ist `origin/main` zu holen und bei vorhandenen Upstream-
-  Commits zu mergen. Merge-Konflikte werden **nachgemessen** entschieden
+- Vor dem Merge ist `origin/main` zu holen und bei vorhandenen Upstream-Commits
+  zu mergen. Merge-Konflikte werden **nachgemessen** entschieden
   (Zeilenzahlen, Testzahlen), nicht nach Erinnerung.
 
-## Entscheidungen an den Projekteigentümer (User-Regel 2026-09-28)
+## Entscheidungen an den Projekteigentümer
 
-- **Entscheidungen stehen doppelt:** hier in `Agents.md` (dauerhafte Quelle für
-  Datenmodell, Event-Regeln, GUI-Verhalten) **und** als kurze Checkliste mit
-  Begründung pro Entscheidung in `Agents.todo.md`. **Nie nur im Chat.**
-- **Eine verifiziert abgeschlossene Entscheidung wird aus `Agents.todo.md`
-  entfernt** — genau wie eine Aufgabe (Eigentümer-Bestätigung 2026-09-28:
-  *„verifiziert abgeschlossene Sachen müssen aus der `agents.todo.md` entfernt
-  werden"*). Die Checkliste führt deshalb **keine** `- [x]`, sondern eine
-  Spalte `Stand`; der Wert `umgesetzt`/`erledigt`/`abgeschlossen` in der letzten
-  Zelle einer Tabellenzeile ist ein **Formverstoß** und wird von
-  `scripts/check_plan_format.sh` (Formprüfung 3) gemeldet. Erledigter Zustand
-  lebt in der Git-Historie und in den `feature/`-Dokumenten.
-  *Warum kein Checkbox-Format:* die globale Konfiguration verlangt `[x]`/`[ ]`,
-  das Gate dieser Repo-Ebene verbietet jede `- [x]`-Zeile in genau dieser Datei.
-  Eine Ausnahme für den Entscheidungsabschnitt hätte das Gate geschwächt statt
-  die Form gelöst — und die Form zu ändern, um eine Regel zu umgehen, ist
-  Regel-Umgehung.
-- **Zurückgezogene Ansätze stehen im Abschnitt `Verworfen`** in
-  `Agents.todo.md` — sie sind **keine** offenen Entscheidungen, sondern
-  Negativrecords, damit sie nicht erneut implementiert werden. Der Plan
-  enthält heute drei: die Umfangs-Zusicherung „der Nachweis decodiert **jede**
-  committete Fixture" (Regel 4 und 6), die Fassung von Regel 4 mit dem
-  Schlusssatz „der Zustand ist nicht mehr ausdrückbar" (durch Messung
-  widerlegt) und eine Ausnahme für abgehakte Entscheidungen im Plan-Format-Gate.
-  **Keine dieser drei darf erneut gebaut werden.**
+- **Entscheidungen werden nie nur im Chat getroffen.** Eine getroffene
+  Entscheidung wird vor dem nächsten Arbeitsschritt schriftlich festgehalten:
+  dauerhaft in `feature/`/`docs/` (Quelle der Wahrheit für Datenmodell,
+  Event-Regeln, GUI-Verhalten, Persistenz und SOLL-Zielsemantik) und, solange
+  offen, in `Agents.todo.md`. Entscheidungen, Begründungen und Messwerte stehen
+  **nicht** in `Agents.md`.
 - **Jede Entscheidung mit echten Wahlmöglichkeiten wird als interaktive Frage
   gestellt** (Werkzeug `question`), **niemals** als Frage im Fließtext. Echte
   Wahlmöglichkeiten sind z. B.: Alternative ja/nein, Datenmodell, Event-Form,
-  Abbruch-vs-weiter, Task-Reihenfolge. Die **Empfehlung steht als erste Option**,
-  die Varianten sind je **in einem Satz** begründet.
-  *Warum:* eine Entscheidung, die irgendwo im Chat-Text steht, wird beim nächsten
-  Turn übersehen; eine Frage mit Optionen nicht.
+  Abbruch-vs-weiter, Task-Reihenfolge. Die **Empfehlung steht als erste
+  Option**, die Varianten sind je **in einem Satz** begründet.
 - **Der Build-Agent entscheidet nicht allein.** Er sammelt die Optionen, misst
-  die Fakten, und legt sie dem Eigentümer vor. Er entscheidet **nur** dann ohne
+  die Fakten und legt sie dem Eigentümer vor. Er entscheidet **nur** dann ohne
   Frage, wenn es keine Wahl gibt — Messungen, Formprüfungen, Pflichtschritte
-  aus `DoD.md` und das Ausführen einer bereits getroffenen, im Repo
-  festgeschriebenen Entscheidung. Ein Auftrag, der sich auf eine Zusage stützt
-  („diese Runde ist die letzte"), wird **ausgeführt, nicht neu verhandelt**.
-- **Jede so getroffene Entscheidung wird in diesem Dokument festgeschrieben**,
-  zusätzlich im **projektspezifischen** Abschnitt, wenn sie Datenmodell,
-  Event-Regeln, GUI-Verhalten, Persistenz oder eine SOLL-Zielsemantik betrifft.
-  Dieses Repo-Dokument ist die dauerhafte Quelle der Wahrheit, nicht der
-  Chatverlauf.
-- **Zurückgezogene Ansätze werden nicht nachträglich implementiert.** Wenn ein
-  Ansatz verworfen wurde, wird die **geltende Regel** klar benannt und der alte
-  Stand als zurückgezogen gekennzeichnet — damit der nächste Agent (oder das
-  nächste Gespräch) ihn nicht für gültig hält. Eine Regel, die sich später als
-  falsch herausstellt, wird **ersetzt**, nicht daneben stehen gelassen.
-  Beispiel aus diesem Projekt: die Umfangs-Zusicherung „der Nachweis decodiert
-  **jede** committete Fixture" wurde am 2026-09-29 zurückgenommen und ist in
-  `feature/quality/fixtures-licensing.md` §3.2.1 als **ZURÜCKGENOMMEN**
-  gekennzeichnet; sie darf **nicht** als offene Lücke reimplementiert werden.
-- **Aufgabenreihenfolge: alle offenen Tasks werden abgearbeitet; der Build-Agent
-  wählt die Reihenfolge** (Eigentümer-Entscheid 2026-09-28: *„egal, alle müssen
-  abgearbeitet werden"*). Das ist **keine** carte blanche zur Priorisierung nach
-  Bequemlichkeit, sondern eine ausdrückliche Festlegung, **kein** Punkt fallen zu
-  lassen. Die Wahl der Reihenfolge wird **begründet** und folgt drei Kriterien,
-  in dieser Rangfolge:
+  aus `DoD.md` und das Ausführen einer bereits im Repo festgeschriebenen
+  Entscheidung. Ein Auftrag, der sich auf eine Zusage stützt, wird
+  **ausgeführt, nicht neu verhandelt**.
+- **Zurückgezogene Ansätze werden nicht nachträglich implementiert.** Wird ein
+  Ansatz verworfen, wird die **geltende Regel** klar benannt und der alte Stand
+  als zurückgezogen gekennzeichnet; der Negativrecord gehört nach
+  `Agents.todo.md` (Abschnitt „Verworfen"). Eine Regel, die sich als falsch
+  erweist, wird **ersetzt**, nicht daneben stehen gelassen.
+- **Aufgabenreihenfolge: alle offenen Tasks werden abgearbeitet; der
+  Build-Agent wählt die Reihenfolge.** Kein Punkt wird fallen gelassen. Die
+  Wahl wird begründet und folgt drei Kriterien in dieser Rangfolge:
   1. **Gate-Gefährdung** — was einen Merge blockieren oder ein `main`-Rot
-     verursachen kann (z. B. `KITT-SCAN-PREMISSE-58`: ein nicht-deterministisch
-     rotes CI trifft **jeden** künftigen Merge).
-  2. **Abhängigkeit** — was andere Tasks freigibt (z. B. `lumina-gui`-Änderungen
-     blockieren parallele Agenten in `lumina-raw`/`lumina-sidecar`).
+     verursachen kann (ein nicht-deterministisch rotes CI trifft **jeden**
+     künftigen Merge);
+  2. **Abhängigkeit** — was andere Tasks freigibt;
   3. **Hardware-Gate** — was ohne den manuellen Fahrplan (R5-LOG-1) nicht
-     bearbeitbar ist, wird **nicht** vorgezogen, sondern vorbereitet.
+     bearbeitbar ist, wird vorbereitet, nicht vorgezogen.
   Ein Task, der nur **Hardware oder einen Menschen** braucht, ist kein Grund
   anzuhalten: die übrigen Tasks werden abgearbeitet und der Fahrplan bleibt
   offen im Plan.
@@ -330,31 +292,23 @@ nur der repo-spezifische Teil. Er:
 ## Verbindlicher Arbeitsablauf
 
 **Auf headless Maschinen (kein Display, kein GPU-Adapter, geteilter Build-Host)
-gilt zusätzlich [`Agents.headless.md`](Agents.headless.md).** Dort steht die
-zentrale Regel dieser Datei in der Form, die am häufigsten falsch gelesen wird:
-**ein fehlender Adapter ist kein Grund, einen Task nicht umzusetzen.** Er wird
-implementiert, muss auf dieser Maschine kompilieren, alles headless Prüfbare wird
-geprüft, und der GPU-Teil wird als benanntes Gate geführt. Ergänzend dort die
-zwei Fehlerklassen, die diese Umgebung provoziert — „kompiliert" als
-„verifiziert" zu lesen, und vakuose Tests, die grün aussehen wie gute — sowie
-der reproduzierbare Verifikationslauf (`target/verify_cpu_tasks.sh`).
+gilt zusätzlich [`Agents.headless.md`](Agents.headless.md).** Dort stehen die
+Regeln zum Umgang mit einem fehlenden Adapter, die zwei Fehlerklassen dieser
+Umgebung und der reproduzierbare Verifikationslauf
+(`target/verify_cpu_tasks.sh`).
 
 - **Entscheidungen mit Wahlmöglichkeiten vorher als Frage stellen** (siehe
-  Abschnitt „Entscheidungen an den Projekteigentümer"), und die getroffene
-  Entscheidung vor dem nächsten Arbeitsschritt hier und im betroffenen
-  `feature/`-Dokument festschreiben.
+  Abschnitt „Entscheidungen an den Projekteigentümer") und die getroffene
+  Entscheidung vor dem nächsten Arbeitsschritt schriftlich festhalten.
 
-0. **Vor jedem Pull/Fetch/Merge/Rebase die lokale Arbeit committen
-   (User-Regel 2026-09-26).** Niemals in einen schmutzigen Arbeitsbaum
-   hinein aktualisieren. Der Commit dient der Sicherung — er wird auch
-   dann ausgeführt, wenn die Arbeit noch nicht verifiziert ist (der
-   Verifikationsstand steht dann im Commit-Text und in `Agents.todo.md`),
-   denn ein Merge mit ungesicherten Änderungen im Arbeitsbaum kann sie
-   stillschweigend zerstören. Reihenfolge: `git status` prüfen →
-   `scripts/check_file_sizes.sh` + die betroffenen Gates → committen →
-   holen → mergen. Nach dem Merge: die gelieferten Tests laufen lassen,
-   das Ratchet erneut prüfen und den Merge-Stand im Abschlussbericht
-   nennen.
+0. **Vor jedem Pull/Fetch/Merge/Rebase die lokale Arbeit committen.** Niemals
+   in einen schmutzigen Arbeitsbaum hinein aktualisieren. Der Commit dient der
+   Sicherung — er wird auch dann ausgeführt, wenn die Arbeit noch nicht
+   verifiziert ist (der Verifikationsstand steht dann im Commit-Text und in
+   `Agents.todo.md`). Reihenfolge: `git status` prüfen →
+   `scripts/check_file_sizes.sh` + die betroffenen Gates → committen → holen →
+   mergen. Nach dem Merge: die gelieferten Tests laufen lassen, das Ratchet
+   erneut prüfen und den Merge-Stand im Abschlussbericht nennen.
 1. `Agents.md`, `Agents.todo.md`, `feature/README.md`, das betroffene
    Feature-Dokument und relevante ADRs lesen.
 2. Die betroffene Funktion anhand einer stabilen Feature-ID identifizieren.
@@ -378,13 +332,19 @@ der reproduzierbare Verifikationslauf (`target/verify_cpu_tasks.sh`).
 
 ## Verifizierung und Tests
 
-Der generische Build-/Verify-Flow steht im Skill `build-verify` (agents-skills,
-always-on Kernel `.agents/rules/build-verify.md`, Pointer in „Rollen und
-Delegation"). Alles Folgende ist der **repo-spezifische** Teil — je nach Änderung
-sind mindestens diese Prüfungen zu verwenden:
+Der generische Build-/Verify-Flow steht im Skill `build-verify`; alles Folgende
+ist der **repo-spezifische** Teil. Je nach Änderung sind mindestens diese
+Prüfungen zu verwenden:
 
 - Formatierung und Clippy für Rust-Code
-- Feature-Matrix-Gate: `scripts/check_feature_matrix.sh` kompiliert je Workspace-Crate jede deklarierte Feature-Menge (Union `--all-features` + Einzelachse `--features <F>`), Feature-Listen aus den Manifesten; CI-Schritt in `rust-fast` („Check every workspace crate's declared feature sets compile"). Compile-only, kein Adapter, kein Laufzeit-Test. Benannte Grenzen: `--all-features` beweist nicht, dass ein Feature *allein* funktioniert; `lumina-gui-harness` ist macOS-only und wird auf Linux als Stub kompiliert; der onnx-rt-Link (glibc 2.36 < 2.38) ist ein Host-Gate, das `cargo check` nicht trifft.
+- Feature-Matrix-Gate: `scripts/check_feature_matrix.sh` kompiliert je
+  Workspace-Crate jede deklarierte Feature-Menge (Union `--all-features` +
+  Einzelachse `--features <F>`), Feature-Listen aus den Manifesten; CI-Schritt
+  in `rust-fast`. Compile-only, kein Adapter, kein Laufzeit-Test. Benannte
+  Grenzen: `--all-features` beweist nicht, dass ein Feature *allein*
+  funktioniert; `lumina-gui-harness` ist macOS-only und wird auf Linux als Stub
+  kompiliert; der onnx-rt-Link (glibc 2.36 < 2.38) ist ein Host-Gate, das
+  `cargo check` nicht trifft.
 - Unit-Tests für mathematische und serielle Logik
 - Property-Tests für Wertebereiche, Monotonie und Clipping
 - JSON-Roundtrip- und Schema-Migrationstests
@@ -393,77 +353,83 @@ sind mindestens diese Prüfungen zu verwenden:
 - Masken-Cache-Hit-, Miss- und Invalidierungstests
 - Golden-Image-Tests mit dokumentierten Toleranzen
 - CLI-End-to-End-Tests inklusive Exit-Codes
-- GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview, Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context + LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein manueller Test als einzige Absicherung. Tests laufen in `cargo test -p lumina-gui` grün ohne GPU.
-- **Manuelle Akzeptanz-Runs (R5-LOG-1, User-Regel 2026-09-20):** Jeder manuelle
-  GUI-Run startet mit `RUST_LOG=trace` (Trace-Timings für Switch/Drag/Warmup
-  sind sonst unsichtbar), genau EINER App-Instanz, Log-Redirect in
+- GUI-Features: Jede sichtbare GUI-Funktion (Regler, Module, Shortcuts, Preview,
+  Sidecar-Persistenz) wird mit automatischem headless GUI-Test (egui Context +
+  LuminaApp, tempdir) abgedeckt; visuelle Änderungen zusätzlich via kittest
+  Golden/PSNR/Histogram (byte-identisch/PSNR, kein stiller Fallback), kein
+  manueller Test als einzige Absicherung. `cargo test -p lumina-gui` läuft ohne
+  GPU grün.
+- **Manuelle Akzeptanz-Runs (R5-LOG-1):** Jeder manuelle GUI-Run startet mit
+  `RUST_LOG=trace` (Trace-Timings für Switch/Drag/Warmup sind sonst unsichtbar),
+  genau EINER App-Instanz, Log-Redirect in
   `/tmp/lumina_manual_<datum>.log`. Der User steuert die GUI nach Fahrplan, der
   Build-Agent verwaltet und analysiert den Log.
-- native Build-/Smoke-Tests (kein Browser-Build mehr)
+- native Build-/Smoke-Tests (kein Browser-Build)
 - Tests für fehlende Modelle, fehlende Maskenartefakte und veränderte Quellen
 - Performance-Methodik gemäß `feature/quality/performance-benchmarks.md`
   (F-074): Benchmarks laufen gegen die committeten Baseline-/Budget-Stores
   (`scripts/perf/compare.mjs`, Modi report/warn/gate); eine Budget-Anpassung
   wegen bewusstem Feature-Wachstum wird im selben Commit wie das Feature
   begründet
+- **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff;
+  die CI kann den GPU-Pfad nur kompilieren (`cargo check -p lumina-gpu
+  --features gpu`). Ein GPU-Thema gilt ohne lokalen Lauf der **relevanten
+  E2E-Tests** als **nicht getestet**, nicht als grün: verbindlich ist
+  `cargo test -p lumina-gpu --features gpu-adapter-tests` (`tests/support::
+  require_adapter` macht einen fehlenden Adapter zum harten Fehler) **plus** die
+  betroffenen GUI-GPU-Tests. `--features gpu` allein genügt **nicht**. Das
+  Testergebnis ist im Abschlussbericht mit Kommando, Zahlen und Fehlernamen zu
+  dokumentieren; das erste lokale Ergebnis dient als Regressions-Baseline. Die
+  CI-Lücke ist in `feature/platform/capability-matrix.md` dokumentiert.
 
 AI-Modelle, RAW-Fixtures und Referenzbilder müssen reproduzierbar versioniert
 und lizenzrechtlich dokumentiert sein. Tests dürfen nicht von einem spontanen
 Modell-Download oder externen Netzwerkzugriff abhängen.
 
-### Integration headless gelieferter Features (User-Regel 2026-09-26)
+### Integration headless gelieferter Features
 
 **Arbeitsteilung:** Ein anderer Agent entwickelt Features **headless** — also
 Schema, `lumina-core`, `lumina-cli`, `lumina-sidecar` — **ohne** GUI und
-**ohne** kittest. Der Build-Agent **integriert** sie danach in
-`lumina-gui` und in die kittest-Abdeckung. Das ist ein **regelmäßig
-wiederkehrender** Vorgang, kein Einzelfall.
+**ohne** kittest. Der Build-Agent **integriert** sie danach in `lumina-gui` und
+in die kittest-Abdeckung.
 
-**Grenze der GUI-Testbarkeit (User-Klarstellung 2026-09-26):** Der GUI-Pfad ist
-**ausschließlich headless** prüfbar — `egui Context` + `LuminaApp` im tempdir,
-ergänzt um `egui_kittest` mit wgpu-Adapter. Es gibt **keinen** echten
-Fenster-/Interaktions-Test, und es wird keiner versprochen: **keine
-Abnahmekriterien formulieren, die ein real gerendertes Fenster, echte
+**Grenze der GUI-Testbarkeit:** Der GUI-Pfad ist **ausschließlich headless**
+prüfbar — `egui Context` + `LuminaApp` im tempdir, ergänzt um `egui_kittest`
+mit wgpu-Adapter. Es gibt **keinen** echten Fenster-/Interaktions-Test.
+**Keine Abnahmekriterien formulieren, die ein real gerendertes Fenster, echte
 Maus-/Zeigerereignisse, DPI- oder Multi-Monitor-Verhalten oder einen sichtbaren
-GUI-Lauf durch einen Menschen voraussetzen.** Ist ein Feature nur so prüfbar, ist
-das eine **laut benannte Lücke** mit Hardware-Gate — kein Anlass, die Abnahme zu
-beschönigen oder den Test als „manuell geprüft" zu verbuchen. Die kittest-Goldens
-laufen headless über den wgpu-Adapter und sind ein **lokales** macOS-Gate; in CI
-werden sie **nie** verifiziert (kein GPU-Runner). Der **einzige** Weg zu einem real
-gestarteten Prozess ist der manuelle Akzeptanz-Run nach R5-LOG-1
-(`RUST_LOG=trace`, genau eine App-Instanz, Log-Redirect) — das ist eine
-User-Aktion und wird **nicht** durch einen headless Test ersetzt.
+GUI-Lauf durch einen Menschen voraussetzen.** Ist ein Feature nur so prüfbar,
+ist das eine **laut benannte Lücke** mit Hardware-Gate — kein Anlass, die
+Abnahme zu beschönigen oder den Test als „manuell geprüft" zu verbuchen. Die
+kittest-Goldens laufen headless über den wgpu-Adapter und sind ein **lokales**
+macOS-Gate; in CI werden sie **nie** verifiziert. Der **einzige** Weg zu einem
+real gestarteten Prozess ist der manuelle Akzeptanz-Run nach R5-LOG-1 — eine
+User-Aktion, die **nicht** durch einen headless Test ersetzt wird.
 
 Pro geliefertem Headless-Feature prüft und ergänzt der Build-Agent:
 
-1. **GUI-Verdrahtung.** Liegt für jede neue Fähigkeit ein `draw_*`-Pfad vor,
-   der vom tatsächlichen UI-Panel aufgerufen wird? Ein Modul mit Tests, das
-   nirgends gezeichnet wird, ist **nicht integriert**. Beispiel: `mask_local_curves`
-   lag mit 318 Zeilen plus 416 Testzeilen vor, ohne `draw_`-Aufruf in
-   `develop_masking.rs`.
+1. **GUI-Verdrahtung.** Für jede neue Fähigkeit muss ein `draw_*`-Pfad
+   existieren, der vom tatsächlichen UI-Panel aufgerufen wird; ein Modul mit
+   Tests ohne `draw_`-Aufruf ist **nicht integriert**.
 2. **Interaktive Bedienung.** Regler, Kurvengraphen, Picker und Buttons müssen
-   **anklickbar** sein und ihren Wert tatsächlich in das Rezept schreiben — nicht
-   nur paintbar. Für jede sichtbare Funktion ein klickbarer headless Test.
+   **anklickbar** sein und ihren Wert tatsächlich in das Rezept schreiben —
+   nicht nur paintbar. Für jede sichtbare Funktion ein klickbarer headless Test.
 3. **kittest-Goldens.** Jede neue sichtbare Editor-Fläche braucht einen Golden
    im passenden Ziel (`kittest_snapshots` oder ein neues, feature-spezifisches
-   `tests/kittest_*.rs`). Die Goldens sind in CI `#[ignore]`d und werden **nie**
-   dort verifiziert; sie sind ein **lokales** macOS-Gate (siehe
-   `feature/quality/golden-references.md`).
+   `tests/kittest_*.rs`).
 4. **Fixture-Klasse.** Neue Goldens brauchen eine echte Quelle. `R1` = echtes
    RAW/echte Bilddaten, `S1` = Layout-Sentinel, `S2` = Smoke-Raster
    (`feature/quality/golden-fixtures.md`). Ein Golden, das einen Decode-Fehler
-   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis — **die
-   Klassenabgrenzung ist in `golden-fixtures.md` Regel 5 verbindlich**
-   (verboten für Klasse R, erwarteter Inhalt für Klasse C). Die zwei Dokumente
-   waren bis 2026-09-26 im Widerspruch (absolute Formulierung vs.
-   Chrome-Ausnahme); die absolute Fassung ist zurückgenommen.
+   als Soll-Zustand festschreibt, ist **kein** Render-Nachweis — die
+   Klassenabgrenzung ist in `golden-fixtures.md` Regel 5 verbindlich.
 5. **Aktions-Audit.** Jede neue `GuiAction`-Variante oder Enum-Variante erzwingt
-   den `ALL_GUI_ACTIONS`-Audit (aktuell 110 Aktionen).
+   den `ALL_GUI_ACTIONS`-Audit.
 6. **SOLL-Zuordnung.** Das headless gelieferte SOLL-Dokument ist zu lesen und um
    den GUI-/kittest-Stand zu ergänzen; fehlt der GUI-Teil im SOLL, ist er **vor**
    dem Code zu schreiben.
-7. **Ratchet.** Neue GUI-Module bleiben ≤ 500 Zeilen; wächst `lumina-gui/src/lib.rs`,
-   ist echte Extraktion Pflicht und die Baseline danach zu senken.
+7. **Ratchet.** Neue GUI-Module bleiben ≤ 500 Zeilen; wächst
+   `lumina-gui/src/lib.rs`, ist echte Extraktion Pflicht und die Baseline danach
+   zu senken.
 
 **Abnahme einer Integration:** `cargo test -p lumina-gui --all-targets` grün,
 jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
@@ -471,169 +437,69 @@ jede neue Fläche hat einen klickbaren headless Test **und** einen Golden, der
 Baseline-Einträge, fmt/Clippy clean, und das Feature-Dokument nennt den GUI- und
 kittest-Stand ausdrücklich.
 
-### Golden-SOLL (Eigentümer-Entscheide 2026-09-28)
+### Golden-SOLL
 
-- **`develop_section_rating` friert künftig den abgewarteten Render-Zustand
-  ein** (`GOLDEN-STALE-55`): Der Mechanismus ist belegt — das alte Golden hielt
-  einen nicht abgewarteten Vorzustand fest (`render_key == None`, Status aus
-  `create_mask`), bei HEAD löst `push_mask_definition` → `mark_dirty` einen
-  Render aus, der die Statuszeile mit der ehrlichen Mask-Warnung überschreibt.
-  Der Test wartet künftig per geteiltem `settle_render`-Helfer
-  (Prädikat `render_key.is_some()`) auf Renderabschluss, das Golden wird für
-  genau diesen Zustand neu aufgenommen. Die Seed-Alternative (gültige Maske
-  statt Pending-Maske) ist verworfen: Die Warnung ist der ehrliche Endzustand
-  zur Fixture, kein Rauschen. Normativ: `feature/quality/golden-references.md`
-  §7.2.
-- **Kein fester Neuaufnahme-Rhythmus für Goldens.** Jedes `record` bleibt ein
-  einzeln begründeter Schritt (Modell `GOLDEN-BASELINE-32`): Ein Rhythmus
-  hätte den unbelegten Vorzustand aus `GOLDEN-STALE-55` nur neu eingefroren,
-  statt ihn zu definieren. Normativ: `feature/quality/golden-references.md`
+- Ein Golden friert den **abgewarteten** Render-Zustand ein (`settle_render`,
+  Prädikat `render_key.is_some()`), nicht einen Zwischenzustand. Normativ:
+  `feature/quality/golden-references.md` §7.2.
+- **Kein fester Neuaufnahme-Rhythmus.** Jedes `record` ist ein einzeln
+  begründeter Schritt. Normativ: `feature/quality/golden-references.md`
   §9 Punkt 7.
 
-### Produkt-Entscheide 2026-10-02 (Eigentümer)
+### Verifikations-Niederlagen und Modellwahl
 
-- **`AUTO-DOMAIN` — Auto-Tone rechnet nach SourceActions und nach Crop.** Der
-  Zuschnitt beeinflusst die Auto-Werte. Der Eigentümer hat die Domäne am
-  2026-10-02 so entschieden (wörtliche Anforderung „nach wegretuschieren UND
-  nach Zuschnitt"); Umsetzung in `AUTO-TONE-ANALYSIS-INPUT-8`.
-- **`JSON-ROUNDTRIP` — `serde_json` wird mit `float_roundtrip` gebaut.** Jeder
-  f64-Round-Trip ist damit exakt; die gemessenen 7,45 % 1-ULP-Verluste beim
-  Laden werden beseitigt. Kostet eine Neubewertung aller Sidecar-Bytes,
-  Rezept-Digests und Goldens; Umsetzung in `JSON-FLOAT-ROUNDTRIP`.
-- **`NAMING-F1 (2)` — der Anzeigename bleibt „Lumina".** Fenstertitel
-  (`crates/lumina-gui/src/main.rs:30`) und UI-Überschrift
-  (`crates/lumina-gui/src/lib.rs:11965`) bleiben unverändert; der
-  Formatbezeichner `.lumina.*` bleibt ohnehin (siehe `SIDECAR-SUFFIX-CONST`).
-- **`GPU-CLEAR-TRANSITION` — der Masken-Plane-Clear läuft nur beim Übergang.**
-  Der Null-Plane-`write_texture` wird nur ausgeführt, wenn zuvor eine
-  Nicht-Null-Plane resident war, nicht bei jedem Render ohne Maskenebene.
-  Grund (gemessen, F-074-N10): 37 µs / 722 µs / 15,21 ms für
-  160×120 / 1280×853 / 6000×4000, ~13× ein Vollrender @24 MP; Umsetzung in
-  `GPU-MASKPLANE-CLEAR-PERF-51` (lumina-gui, mutationsbewiesen).
-
-### Dreifache Verifikations-Niederlage ohne Modellwechsel (User-Regeln 2026-09-26/29)
-
-**Schlägt eine Aufgabe zum dritten Mal in Folge bei der unabhängigen
-Verifikation durch (`NICHT BESTANDEN` dreimal für dieselbe Findings-Gruppe),
-gibt es KEINEN Modellwechsel: Es werden ausschließlich freie Subagenten
-eingesetzt (User-Weisung 2026-09-29: „bitte kein deepseek verwenden, nur free
-subagenten nutzen"). Die deepseek-Eskalation vom 2026-09-26 ist damit ERSETZT
-— Zählung und Dokumentation bleiben, der Ausweg ist ein anderer.**
-
+- **Nach drei aufeinanderfolgenden `NICHT BESTANDEN` derselben Findings-Gruppe
+  gibt es KEINEN Modellwechsel.** Es werden ausschließlich freie Subagenten
+  eingesetzt — kein deepseek, kein Bezahlmodell, keine Ausnahme.
 - **Ausweg statt Modell:** Aufgabe weiter zerlegen (kleinere, unabhängig
   prüfbare Einheiten), höchstens einmal `continue` pro Aufgabe, danach frische
   Session mit vollem Auftragskontext. Hält die Serie an, gehen die Befunde als
   interaktive Frage an den Eigentümer — drei gleiche Fehlschläge sind ein
   Signal zum Perspektivwechsel, nicht zur vierten Wiederholung.
-- **Gilt für:** die Verifikation **und** alle weiteren Fix-Runden dieser
-  Aufgabe. Ein frisches `continue` oder eine neue Session ändert daran nichts:
-  Der Ausweg ist Zerlegung und Eskalation an den Eigentümer, nicht ein anderes
-  Modell.
+- **Gilt für die Verifikation und alle weiteren Fix-Runden derselben Aufgabe.**
+  Ein frisches `continue` oder eine neue Session ändert nichts daran.
 - **Zählung:** aufeinanderfolgende Runden **derselben** Aufgabe. Ein
-  zwischenzeitlich bestandener Task setzt die Zählung zurück; ein
-  dazwischen liegender, sachlich unabhängiger Task ebenfalls nicht.
-- **Dokumentation:** die dreifache Niederlage und der auslösende Befund stehen im
-  Commit-Text und im Task-Eintrag, damit die Historie nachvollziehbar
-  bleibt, **warum** zerlegt und an den Eigentümer eskaliert wurde.
+  zwischenzeitlich bestandener Task setzt die Zählung zurück.
+- **Dokumentation:** die dreifache Niederlage und der auslösende Befund stehen
+  im Commit-Text und im Task-Eintrag.
 
-Praxisbeispiel `LENSFUN-DB-33` (viermal durchgefallen, jeweils messbar falsche
-Paritätsbehauptung: aus der C++-Quelle geschlossen statt das exportierte Symbol
-gemessen) bleibt das Muster für Zählung und Dokumentation; die damalige
-Folgerung (Modellwechsel) gilt nicht mehr — heute wäre der vierte Anlauf
-Zerlegung plus Eigentümer-Frage gewesen.
+### Testabdeckungs-Politik
 
-### Nur freie Subagenten (User-Weisung 2026-09-29)
-
-**Es werden ausschließlich freie Subagenten eingesetzt — kein deepseek, kein
-Bezahlmodell, keine Ausnahme für schwere Probleme.** Dies ersetzt die
-Modellsparsamkeit vom 2026-09-28 (die deepseek-Kategorie für
-`LINT-BLANKET-1`, `KITT-WAIT-PIN-57`, `GOLDEN-BASELINE-32` entfällt ersatzlos)
-und die deepseek-Eskalation aus dem Abschnitt oben. Übergang: Die drei
-laufenden Aufträge (`SIDECAR-SUFFIX-CONST`, `LINT-BLANKET-1`, `MCP-PARITY-A`)
-wurden noch unter der alten Regel auf dem Standardmodell gestartet und laufen
-unverändert zu Ende — ein laufender Hintergrund-Agent kann nicht umgestellt
-werden. Jede NEUE Delegation nutzt den `free`-Typ.
-
-### Testabdeckungs-Politik (User-Regel 2026-09-26)
-
-- **Grundregel: Alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
+- **Grundregel: alles bekommt Tests.** Jede Änderung an Produktcode, Schema,
   Migration, Persistenz, Pipeline oder Agentenregeln wird mit Tests geliefert,
   die die **neue** Aussage tatsächlich abdecken. Ein Test, der die Aussage nicht
   belegt, zählt nicht (DoD §7.5). Diese Regel wird **nicht** aus Bequemlichkeit
-  oder Laufzeitgründen relativiert; ein Verweis auf „zu langsam" oder „reicht
-  auch so" ist ein Befund, keine Abnahme.
+  oder Laufzeitgründen relativiert.
 - **Gegenregel: Tests sind kein Selbstzweck.** Abdeckung ohne Informationswert
   ist ein Defekt. Ein Test, der eine Konstante auf sich selbst prüft, eine
-  bereits durch einen anderen Test abgedeckte Eigenschaft ein zweites Mal
-  durchläuft, eine Implementierungsentscheidung statt des Verhaltens pinnt
-  oder der bei Wegfall der Logik nichts verlieren würde, wird als
-  **unnötiger Test** geführt. Erschwerte Tests verlieren außerdem ihre
-  eigentliche Funktion als Netz: 745 GUI-Tests in einem einzigen 3:11-CI-Shard
-  sind ein Wartbarkeitsproblem, kein Qualitätsnachweis.
-- **Rhythmus: höchstens einmal pro Woche ein Build-Agent für den
-  Test-Redundanz-Audit** (`TEST-AUDIT-36`, fortlaufend). Der Build-Agent prüft
-  die Suite auf unnötige Tests und **berichtet**; er entfernt nichts eigenmächtig
-  und ohne Rücksprache. Für jede Löschung gilt der normale Weg: SOLL zuerst,
-  Delegation an einen Implementierungs-Agent, danach unabhängige
-  Verifikation. Beim Audit wird ausdrücklich geprüft, ob der Test eine
-  **Fehlalarm-resistente** Aussage trägt — der Tausch „Tests weg" gegen
-  „Regression unentdeckt" ist ausgeschlossen.
+  bereits abgedeckte Eigenschaft ein zweites Mal durchläuft, eine
+  Implementierungsentscheidung statt des Verhaltens pinnt oder bei Wegfall der
+  Logik nichts verlieren würde, ist ein **unnötiger Test**.
+- **Rhythmus: höchstens einmal pro Woche ein Test-Redundanz-Audit**
+  (`TEST-AUDIT-36`, fortlaufend). Der Build-Agent prüft die Suite auf unnötige
+  Tests und **berichtet**; er entfernt nichts eigenmächtig. Für jede Löschung
+  gilt der normale Weg: SOLL zuerst, Delegation an einen
+  Implementierungs-Agent, danach unabhängige Verifikation. Beim Audit wird
+  ausdrücklich geprüft, ob der Test eine **Fehlalarm-resistente** Aussage trägt.
 - **Der Audit darf keine Löschung als Abkürzung für fehlende Abdeckung
-  missbrauchen.** Wird beim Audit eine Lücke sichtbar (Feature, Klausel oder
-  Fehlerpfad ohne Anker), ist das eine **neue offene Aufgabe** — kein Anlass,
-  einen benachbarten Test zu streichen.
+  missbrauchen.** Wird eine Lücke sichtbar (Feature, Klausel oder Fehlerpfad
+  ohne Anker), ist das eine **neue offene Aufgabe**.
 - **Nachweispflicht:** Jeder umgesetzte Audit-Befund nennt Test-Name, Datei und
-  die konkrete Begründung (welche doppelte Aussage entfällt). Eine Löschung
-  ohne Begründung gilt als Regel-Umgehung.
-- **Eine extrahierte Testnaht ist noch kein Test der Produktion (User-Klarstellung
-  2026-09-26).** Wird eine Funktion extrahiert, um sie testbar zu machen, muss
-  der **Produktionspfad sie aufrufen**. Sonst existiert eine byte-gleiche
-  Zweitimplementierung, die nur der Test benutzt, während der echte Pfad
-  ungetestet bleibt. **Pflichtnachweis:** eine Mutation am Produktionspfad muss
-  den Test rot machen. Konkret belegt in `LENSFUN-DB-33` Runde 4: `report_with`
-  war eine Kopie von `resolve_system_with`, die nur `tests/production_seam.rs`
-  aufrief; das Löschen von `pin_displaced` **im echten Pfad** ließ alle 84 Tests
-  grün. Ein Test, der die falsche Funktion prüft, ist schlimmer als keiner —
-  er erzeugt genau die grüne Deckung, die er zu belegen vorgibt.
+  die konkrete Begründung. Eine Löschung ohne Begründung gilt als
+  Regel-Umgehung.
+- **Eine extrahierte Testnaht ist noch kein Test der Produktion.** Wird eine
+  Funktion extrahiert, um sie testbar zu machen, muss der **Produktionspfad sie
+  aufrufen**. **Pflichtnachweis:** eine Mutation am Produktionspfad muss den
+  Test rot machen. Ein Test, der die falsche Funktion prüft, ist schlimmer als
+  keiner.
 - **Eine Behauptung über „gemessen" ist ein Prüfauftrag, keine Aussage.** Werte,
-  die als gemessen bezeichnet werden, müssen aus einer Messung stammen. Ein
-  Build-Agent, der eine Zahl, Matrixgröße oder Abweichungsmenge angibt, hat sie
-  gegen die Quelle zu prüfen — nachgewiesen durch Nachrechnen oder eine
-  unabhängige Gegenmessung, nicht durch Behauptung.
-- **Vor dem Vergleich zweier Mengen wird die Definition beider geprüft**
-  (User-Regel 2026-09-27). Ein Mengenvergleich ohne geklärte Definition ist kein
-  Messergebnis, sondern ein Kategoriefehler — die häufigste Ursache einer
-  widerlegten Zahl. Für jede Menge ist vorab zu belegen: was ihre Elemente sind
-  (Klasse, Semantik, Quelle der Klassifikation), wer sie erzeugt und was sie
-  **nicht** enthält. Details und das Fehlmuster aus `GOLDEN-ALLOWLIST-48` stehen
-  in [`DoD.md`](DoD.md) §9.
-- **Git-Hygiene (User-Regel 2026-09-26):** Vor jedem Pull/Fetch/Merge/Rebase
-  wird die lokale Arbeit committet — auch wenn sie noch nicht verifiziert ist;
-  der Verifikationsstand steht dann im Commit-Text. Ein Merge in einen
-  schmutzigen Arbeitsbaum ist verboten, weil er ungesicherte Änderungen
-  stillschweigend zerstören kann.
-
-- **GPU-Tests (lumina-gpu):** GitHub-Actions-Runner haben keinen GPU-Zugriff
-  (kein Metal-Compute), daher kann die CI den GPU-Pfad nur kompilieren
-  (`cargo check -p lumina-gpu --features gpu`), nicht zur Laufzeit testen.
-  **Regel (User-Weisung 2026-10-02, verschärft):** Ein GPU-Thema gilt ohne
-  lokalen Lauf der **relevanten E2E-Tests** als **nicht getestet** — nicht als
-  „grün". Der Grund ist gemessen: die adapterabhängigen Integrationstests
-  (28 Tests in `crates/lumina-gpu/tests/`, u. a. `parity.rs`) tragen ohne das
-  Opt-in `gpu-adapter-tests` ein `#[ignore]`; ein `cargo test -p lumina-gpu
-  --features gpu` **überspringt** sie und liefert damit einen grünen Lauf ohne
-  Aussage. Bei jeder Änderung an `lumina-gpu/**`, am GPU-Pfad eines anderen
-  Crates oder an einem GUI-Thema, das eine GPU (den VRAM-/Present-/Masken-
-  Plane-Pfad oder ein `#[ignore]`tes wgpu-Golden) braucht, MÜSSEN **alle
-  relevanten E2E-Tests** lokal ausgeführt werden:
-  `cargo test -p lumina-gpu --features gpu-adapter-tests` (Mac mit
-  Metal-Adapter; `tests/support::require_adapter` macht einen fehlenden Adapter
-  zum harten Fehler, kein stiller Pass) sowie die betroffenen GUI-GPU-Tests.
-  Das Testergebnis ist im Abschlussbericht mit Kommando, Zahlen und
-  Fehlernamen zu dokumentieren. Erstes lokales Ergebnis dient als Baseline für
-  Regressionen. Ohne lokalen Lauf bleibt der GPU-Pfad CI-seitig ungetestet —
-  das ist bewusst in Kauf genommen und als CI-Gap in
-  `feature/platform/capability-matrix.md` dokumentiert.
+  die als gemessen bezeichnet werden, müssen aus einer Messung stammen und
+  gegen die Quelle geprüft sein — durch Nachrechnen oder eine unabhängige
+  Gegenmessung, nicht durch Behauptung.
+- **Vor dem Vergleich zweier Mengen wird die Definition beider geprüft.** Für
+  jede Menge ist vorab zu belegen: was ihre Elemente sind (Klasse, Semantik,
+  Quelle der Klassifikation), wer sie erzeugt und was sie **nicht** enthält.
+  Details und das Fehlmuster stehen in [`DoD.md`](DoD.md) §9.
 
 ## Definition of Done
 
@@ -649,11 +515,14 @@ erst fertig, wenn:
 - `Agents.todo.md` die erledigte Aufgabe nicht mehr enthält;
 - `feature/README.md` auf das richtige Dokument verweist und das betroffene
   Feature-Dokument den erreichten Zustand sowie verbleibende Grenzen kennt;
-- der Abschlussbericht reproduzierbare Prüfkommandos nennt.
-- ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und `cargo test -p lumina-gui` ohne GPU grün ist (konsistent mit Produktprinzip „Jede sichtbare Funktion muss im Feature-Dokument beschrieben sein“ und der Verifizierungs-Pflicht für GUI-Features).
+- der Abschlussbericht reproduzierbare Prüfkommandos nennt;
+- ein GUI-Feature nur als fertig gilt, wenn ein automatischer headless GUI-Test
+  (egui Context + LuminaApp, tempdir; visuelle Änderungen zusätzlich via kittest
+  Golden/PSNR/Histogram, byte-identisch/PSNR, kein stiller Fallback) vorliegt und
+  `cargo test -p lumina-gui` ohne GPU grün ist;
 - der Verifizierungsbericht die BESTANDEN-Checkliste aus [`DoD.md`](DoD.md) §7
   vollständig mit Belegen beantwortet (End-to-End-Kette, zeitbasierte Pfade,
-  Klassen-Vollständigkeit, Log-Level, Spez→Test-Mapping, Gates).
+  Klassen-Vollständigkeit, Log-Level, Spez→Test-Mapping, Gates);
 - jede **Abdeckungs- oder Ursachenaussage** entweder mutationsbewiesen am
   Produktionspfad oder ausdrücklich als ungeprüft gekennzeichnet ist
   ([`DoD.md`](DoD.md) §9); eine Aussage, die eine Messung widerlegt hat, wurde an
@@ -669,17 +538,21 @@ erst fertig, wenn:
 
 ## Dokumentations- und Todo-Regeln
 
-- `Agents.todo.md` enthält ausschließlich offene, umsetzbare Aufgaben.
+- `Agents.todo.md` enthält ausschließlich offene, umsetzbare Aufgaben und die
+  noch offenen Entscheidungen; Entscheidungen tragen dort ihre Begründung und
+  einen `Stand`.
 - Abgeschlossene Punkte werden nach bestätigter Verifizierung **komplett aus
   der Datei entfernt** — niemals nur abhaken und niemals in einen neuen
-  Bereich/Block (z. B. „Erledigt", „Verifiziert", „Done") verschieben. Es gibt
-  keine dauerhafte Liste abgehakter Aufgaben; erledigter Zustand lebt in der
-  Git-Historie und den Feature-Dokumenten weiter.
-- Eine Aufgabe darf nur entfernt werden, wenn der Verifizierungs-Agent die
-  Implementierung und Testabdeckung bestätigt hat.
+  Bereich/Block (z. B. „Erledigt", „Verifiziert", „Done") verschieben. Erledigter
+  Zustand lebt in der Git-Historie und den Feature-Dokumenten weiter. Das gilt
+  für Aufgaben und Entscheidungen gleichermaßen; der `Stand`-Wert
+  `umgesetzt`/`erledigt` ist ein Formverstoß, ebenso jede `- [x]`-Zeile
+  (`scripts/check_plan_format.sh`).
+- Eine Aufgabe oder Entscheidung darf nur entfernt werden, wenn der
+  Verifizierungs-Agent die Implementierung und Testabdeckung bestätigt hat.
 - Neue Erkenntnisse oder Folgearbeiten werden als neue offene Aufgaben ergänzt.
-- Änderungen an fachlichen Zielzuständen werden zuerst im betroffenen
-  Dokument unter `feature/` beschrieben und im `feature/README.md` verlinkt.
+- Änderungen an fachlichen Zielzuständen werden zuerst im betroffenen Dokument
+  unter `feature/` beschrieben und im `feature/README.md` verlinkt.
 - Wichtige Architekturentscheidungen werden als ADR oder klar markierter
   Entscheidungsabschnitt dokumentiert.
 - Der Plan darf niemals stillschweigend durch Codeänderungen veralten.
@@ -700,32 +573,27 @@ erst fertig, wenn:
 - Keine absolute Pfadangabe in einem portablen Sidecar.
 - Keine zentrale DB-Funktion, die ohne Sidecar-Datenverlust verursachen würde.
 - Keine GUI-spezifische Bildlogik außerhalb der gemeinsamen Pipeline.
-- Keine native Dependency ohne dokumentierte
-  Capability-Entscheidung.
-- Dateigröße (Ratchet, User-Vorgabe 2026-09-17, verschärft 2026-09-17): Eine `.rs`-Datei mit mehr als
-  500 Zeilen darf nicht wachsen (CI: `scripts/check_file_sizes.sh` gegen
+- Keine native Dependency ohne dokumentierte Capability-Entscheidung.
+- **Dateigröße (Ratchet):** Eine `.rs`-Datei mit mehr als 500 Zeilen darf nicht
+  wachsen (CI: `scripts/check_file_sizes.sh` gegen
   `scripts/file_size_baseline.txt`). Verkleinern und Extrahieren jederzeit;
   danach den Baseline-Eintrag senken (bzw. entfernen, sobald die Datei wieder
-  bei ≤ 500 Zeilen steht). Neue Dateien bleiben strikt bei ≤ 500 Zeilen
-  (User-Entscheid 2026-09-18: keine neuen Baseline-Einträge — größere Ziele
-  werden feiner gesplittet; bestehende Einträge bleiben bestehen). Kein willkürliches Splitten ohne Kohäsion — Extraktion
-  folgt Modulgrenzen. Für die größte Datei des Repos, `crates/lumina-gui/src/lib.rs`,
-  ist die kohäsionsgetriebene Extraktion seit dem Eigentümerentscheid 2026-10-15 ein
-  **eigener, fortlaufender Planpunkt** (`GUI-LIB-SPLIT-65`): Slice für Slice, jeder
-  Slice byte-identisch und mit **gesenktem** Baseline-Eintrag. Der Punkt ist nicht
-  1.0-blockierend und verdrängt keinen Gate-Task. **Anti-Gaming (Pflicht):** Kommt neue Logik hinzu, gehört
-  sie in neue oder passende kleine Dateien (Umdesign-Pflicht) — nicht in die
-  übergroße Bestandsdatei. Kleinstverdrahtung an bestehenden Aufrufstellen
-  (z. B. ein Makro-Aufruf je Methode) darf bleiben. Das Löschen von Kommentaren,
-  Doku oder Tests zur Kompensation von Wachstum gilt als Regel-Umgehung und wird
-  in der Verifizierung abgelehnt (Diff-Prüfung: Logik-Wachstum bei gleichzeitigem
-  Kommentar-Schwund = Befund).
-- Volle GPU-Parität (User-Entscheid 2026-09-12, GUI-Bedarf): Jede
-  Renderstufe muss auch GPU-tauglich sein — nichts darf CPU-only bleiben.
-  Ein Rezept, das wegen einer nicht implementierten GPU-Stufe auf CPU
-  zurückfällt („Render routed to CPU"), ist ein Fail mit Fix-Pflicht, kein
-  akzeptierter Zustand. Umgekehrt bleibt die CPU die vollständige Referenz:
-  Jede Renderung ist auf CPU erreichbar; GPU ist reine Beschleunigung, nie
-  Voraussetzung (kein GPU-only-Weg).
+  ≤ 500 Zeilen hat). Neue Dateien bleiben strikt bei ≤ 500 Zeilen — keine neuen
+  Baseline-Einträge; größere Ziele werden feiner gesplittet, bestehende Einträge
+  bleiben bestehen. Kein willkürliches Splitten ohne Kohäsion — Extraktion folgt
+  Modulgrenzen. Für `crates/lumina-gui/src/lib.rs` ist die kohäsionsgetriebene
+  Extraktion ein eigener, fortlaufender Planpunkt (`GUI-LIB-SPLIT-65`): Slice für
+  Slice, jeder byte-identisch und mit **gesenktem** Baseline-Eintrag. **Anti-
+  Gaming (Pflicht):** Neue Logik gehört in neue oder passende kleine Dateien —
+  nicht in die übergroße Bestandsdatei; Kleinstverdrahtung an bestehenden
+  Aufrufstellen darf bleiben. Das Löschen von Kommentaren, Doku oder Tests zur
+  Kompensation von Wachstum gilt als Regel-Umgehung und wird in der Verifizierung
+  abgelehnt (Diff-Prüfung).
+- **Volle GPU-Parität:** Jede Renderstufe muss auch GPU-tauglich sein — nichts
+  darf CPU-only bleiben. Ein Rezept, das wegen einer nicht implementierten
+  GPU-Stufe auf CPU zurückfällt („Render routed to CPU"), ist ein Fail mit
+  Fix-Pflicht, kein akzeptierter Zustand. Umgekehrt bleibt die CPU die
+  vollständige Referenz: Jede Renderung ist auf CPU erreichbar; GPU ist reine
+  Beschleunigung, nie Voraussetzung (kein GPU-only-Weg).
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor
   Integration geprüft und dokumentiert.
