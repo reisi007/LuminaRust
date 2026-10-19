@@ -48,6 +48,20 @@
 //!   ( 82 der 1.120.249 Tripel ), ist ein Byte-Vergleich unmoeglich und wird
 //!   getrennt behandelt und ebenfalls gepinnt.
 //!
+//! **Der Geltungsbereich des Resampler-Gates** ( Stand 2026-10-19,
+//! RESAMPLER-GATE-SCOPE-78 ): das Gate `exactly_one_resampler_exists` war eine
+//! **3-Datei-String-Blacklist** — es pruefte nur `lumina-core/src/lib.rs`,
+//! `lumina-gui/src/filmstrip.rs` und `lumina-gui/src/preview_jobs.rs`. Damit
+//! lag jeder Resampler **ausserhalb** dieser drei Dateien ausserhalb des
+//! Gates. Das Gate liegt jetzt in `downscale_anchor/resampler_gate.rs`:
+//! **workspaceweit** — alle Crates, je `src/`, `tests/`, `benches/`,
+//! `examples/`, `bench/`, nur `.rs`, ohne `target/` und `.git/`; **nicht**
+//! erfasst (jeweils namentlich begruendet in
+//! `downscale_anchor/resampler_scan.rs`): `build.rs` auf der Crate-Wurzel und
+//! `agent-harness/` (kein Workspace-Mitglied). Das Gate prueft zusaetzlich den
+//! kanonischen Pfad als Gegenpol (kein vakuum-gruenes Gate) und benennt die
+//! Frame-vs-Masken-Plane-Grenze **namentlich**.
+//!
 //! Kein `#[ignore]`, keine Kruecken: jeder Test laeuft headless mit.
 
 mod downscale_anchor_support;
@@ -59,6 +73,18 @@ mod downscale_anchor_support;
 // Testtarget) statt `tests/downscale_anchor/pixel_delta.rs`.
 #[path = "downscale_anchor/pixel_delta.rs"]
 mod pixel_delta;
+// Das Resampler-Gate (RESAMPLER-GATE-SCOPE-78) liegt in zwei eigenen
+// Unterverzeichnis-Dateien: es ist ein **workspaceweiter Quelltext-Scan** und
+// laesst sich nicht in die 500-Zeilen-Schranke dieses Testkroots legen. Der
+// `#[path]`-Zusatz ist noetig, weil der Testkroot direkt in `tests/` liegt.
+#[path = "downscale_anchor/resampler_gate.rs"]
+mod resampler_gate;
+#[path = "downscale_anchor/resampler_inventory.rs"]
+mod resampler_inventory;
+#[path = "downscale_anchor/resampler_lex.rs"]
+mod resampler_lex;
+#[path = "downscale_anchor/resampler_scan.rs"]
+mod resampler_scan;
 
 use downscale_anchor_support::{
     area_reference, gradient_pixels, mean_l1, nearest_replication, sha256, LONG_EDGE_ANCHOR_PINS,
@@ -154,39 +180,13 @@ fn downscale_long_edge_byte_anchor_frozen() {
 // T2 — Genau ein Resampler ( Quelltext-Gate ): die drei Altnamen existieren
 // nicht mehr; `ImageFrame::downscale` ist nur noch die dokumentierte
 // Delegation.
+//
+// Das Gate selbst liegt in `downscale_anchor/resampler_gate.rs`
+// (RESAMPLER-GATE-SCOPE-78): es ist **workspaceweit** (alle Crates, `src/`,
+// `tests/`, `benches/`, `examples/`, ohne `target/` und `.git/`) und benennt
+// die Frame-vs-Masken-Plane-Grenze ausdruecklich. Hier steht nur noch der
+// Verweis, damit die Dateigroessen-Schranke des Testkroots gehalten wird.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn exactly_one_resampler_exists() {
-    let core_src = include_str!("../src/lib.rs");
-    assert!(
-        core_src.contains("pub enum DownscaleTarget"),
-        "the canonical target enum must exist"
-    );
-    assert!(
-        core_src.contains("pub fn downscale(frame: &ImageFrame, target: DownscaleTarget)"),
-        "the canonical entry point must exist"
-    );
-    assert!(
-        core_src.contains("pub fn downscale(&self, max_dim: u32) -> ImageFrame"),
-        "ImageFrame::downscale must remain as the documented delegation"
-    );
-    assert!(
-        !core_src.contains("fn downscale_bilinear"),
-        "the former MaxWidth resampler must be gone"
-    );
-
-    let filmstrip_src = include_str!("../../lumina-gui/src/filmstrip.rs");
-    assert!(
-        !filmstrip_src.contains("fn downscale_rgba"),
-        "the former nearest-neighbour thumbnail resampler must be gone"
-    );
-    let preview_jobs_src = include_str!("../../lumina-gui/src/preview_jobs.rs");
-    assert!(
-        !preview_jobs_src.contains("fn downscale_to_target"),
-        "the former tuple wrapper must be gone"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // T3/T4 — Geometrie beider Zielformen inkl. Early-Returns, max=0,
