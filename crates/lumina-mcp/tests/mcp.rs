@@ -5,9 +5,9 @@
 //! testing. No network and no real RAW fixtures are required: a synthetic PNG
 //! drives the roundtrip, determinism, persistence and error-path coverage.
 
-use lumina_core::{ImageFileFormat, ImageFrame};
+use lumina_core::{downscale, DownscaleTarget, ImageFileFormat, ImageFrame};
 use lumina_mcp::tools::edit::validate_adjustments;
-use lumina_mcp::util::{detect_format, downscale_bilinear, recipe_hash};
+use lumina_mcp::util::{detect_format, recipe_hash};
 use lumina_mcp::Server;
 use serde_json::{json, Value};
 
@@ -163,7 +163,7 @@ fn recipe_hash_is_idempotent() {
 #[test]
 fn downscale_never_upsizes_and_is_deterministic() {
     let frame = ImageFrame::new(64, 48, vec![10u8; 64 * 48 * 4]).unwrap();
-    let small = downscale_bilinear(&frame, 1024).unwrap();
+    let small = downscale(&frame, DownscaleTarget::MaxWidth(1024)).unwrap();
     assert_eq!((small.width(), small.height()), (64, 48));
     assert_eq!(
         small.pixels(),
@@ -171,11 +171,11 @@ fn downscale_never_upsizes_and_is_deterministic() {
         "no-op downscale must preserve pixels byte-for-byte"
     );
 
-    let scaled = downscale_bilinear(&frame, 32).unwrap();
+    let scaled = downscale(&frame, DownscaleTarget::MaxWidth(32)).unwrap();
     assert_eq!(scaled.width(), 32);
     assert_eq!(scaled.height(), 24);
 
-    let again = downscale_bilinear(&frame, 32).unwrap();
+    let again = downscale(&frame, DownscaleTarget::MaxWidth(32)).unwrap();
     assert_eq!(scaled.pixels(), again.pixels());
 }
 

@@ -170,9 +170,11 @@ impl LuminaApp {
         let frame = self.original.as_ref()?.clone();
         let byte_length = self.source_bytes.as_ref()?.len() as u64;
         let decode_fingerprint = self.document.as_ref()?.source.decode_fingerprint.clone();
-        let analysis =
-            lumina_core::downscale_bilinear(&frame, CullConfig::default().analysis_max_width)
-                .ok()?;
+        let analysis = lumina_core::downscale(
+            &frame,
+            lumina_core::DownscaleTarget::MaxWidth(CullConfig::default().analysis_max_width),
+        )
+        .ok()?;
         Some(heuristic_identity(
             lumina_sidecar::SourceFingerprint {
                 content_hash: source_hash,

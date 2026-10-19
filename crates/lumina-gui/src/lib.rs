@@ -393,7 +393,7 @@ use log::{error, info, trace, warn};
 use theme::apply_lightroom_dark;
 
 // PERF-FILMSTRIP (thumbnail worker + navigator/preview paths).
-use filmstrip::{downscale_rgba, ThumbnailManager};
+use filmstrip::ThumbnailManager;
 use i18n::Str;
 // R3-DENOISE-1 (B4): the crate root no longer renders directly; the bare
 // `render_frame` re-export is only consumed by the headless test modules.

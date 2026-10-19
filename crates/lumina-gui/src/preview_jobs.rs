@@ -15,8 +15,8 @@ use crate::LuminaApp;
 use lumina_cache::preview_disk::PreviewDiskCache;
 use lumina_core::preview_cache::{encode_webp_lossless, PreviewKey, PreviewKind};
 use lumina_core::{
-    prepare_source_base, render_frame_with_denoise, DenoiseStageInput, DenoiseStageStatus,
-    ImageFrame, RenderContext, StageWork,
+    downscale, prepare_source_base, render_frame_with_denoise, DenoiseStageInput,
+    DenoiseStageStatus, DownscaleTarget, ImageFrame, RenderContext, StageWork,
 };
 use lumina_sidecar::EditRecipe;
 use std::path::{Path, PathBuf};
@@ -164,7 +164,13 @@ pub(crate) fn worker_preview_with_identity(
     let frame = if job.kind == PreviewKind::OneToOne {
         source_base
     } else {
-        downscale_to_target(&source_base, job.target)
+        // DOWNSCALER-UNIFY-71: the former `downscale_to_target` wrapper is
+        // gone; the canonical `LongEdge` path carries the same guard
+        // (`max_edge == 0 || long <= max_edge` -> unchanged clone), so the
+        // Screen target keeps its exact previous semantics.
+        let max_edge = job.target.0.max(job.target.1);
+        downscale(&source_base, DownscaleTarget::LongEdge(max_edge))
+            .map_err(|error| format!("downscale neighbor {}: {error}", job.name))?
     };
     let context = RenderContext {
         recipe: &recipe,
@@ -236,17 +242,6 @@ pub(crate) fn worker_preview_with_identity(
         prepared_identity: Some(prepared_identity),
         outcome: PreviewOutcome::Ready(rendered),
     })
-}
-
-/// Downscale `frame` so it fits the target long edge (returns unchanged when
-/// already within).
-fn downscale_to_target(frame: &ImageFrame, target: (u32, u32)) -> ImageFrame {
-    let long = frame.width().max(frame.height());
-    let max_edge = target.0.max(target.1);
-    if max_edge == 0 || long <= max_edge {
-        return frame.clone();
-    }
-    frame.downscale(max_edge)
 }
 
 /// Deterministic render digest for the neighbor recipe (content + target). Used

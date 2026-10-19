@@ -369,7 +369,7 @@ pub fn face_crop_frame(
     let width = width.min(frame.width() - x);
     let height = height.min(frame.height() - y);
     let cropped = frame.crop_region(x, y, width, height).ok()?;
-    lumina_core::downscale_bilinear(&cropped, max_dim).ok()
+    lumina_core::downscale(&cropped, lumina_core::DownscaleTarget::MaxWidth(max_dim)).ok()
 }
 
 // GUI-INSTRDBG-17c-Rest: `pub(crate)` so the F-100 People-surface audit

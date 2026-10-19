@@ -178,28 +178,74 @@ pub fn export_image_with_generative(
     rendered.frame.encode_with_options(options)
 }
 
-/// Bilinear downscale of an RGBA8 frame so that the output **width** does not
-/// exceed `max_width`. Aspect ratio is preserved and upscaling never occurs.
+/// Zielform des einen Downscale-Pfad des Workspace (DOWNSCALER-UNIFY-71).
+///
+/// Die beiden Zielformen unterscheiden sich **nur** in der Geometrie-Funktion
+/// vor dem gemeinsamen f64-bilinearen Kernel ([`downscale`]); der Kernel selbst
+/// ist identisch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownscaleTarget {
+    /// Laengste Kante hoechstens `max_dim` (Seitenverhaeltnis erhalten).
+    ///
+    /// Identisch zur bisherigen `ImageFrame::downscale`-Geometrie, aber in f64
+    /// gerechnet (bewusste Aenderung, Qualitaet zuerst; gemessen: 82 von
+    /// 1.120.249 reprasentativen `(width, height, max_dim)`-Tripeln rundeten
+    /// in f32 anders als in f64 — siehe der Anker-Test
+    /// `crates/lumina-core/tests/downscale_anchor.rs`).
+    LongEdge(u32),
+    /// Breite hoechstens `max_width` (Seitenverhaeltnis erhalten).
+    ///
+    /// Byte-identisch zur bisherigen `downscale_bilinear`-Geometrie inklusive
+    /// der Early-Returns — dieser Zielform ist der Byte-Anker des Tasks.
+    MaxWidth(u32),
+}
+
+/// Der eine Downscale-Pfad des Workspace.
+///
+/// Bilinear downscale of an RGBA8 frame onto [`DownscaleTarget`]:
+/// `DownscaleTarget::MaxWidth(w)` limits the output **width**, `LongEdge(d)`
+/// the **long edge**. Aspect ratio is preserved and upscaling never occurs.
 ///
 /// The operation is fully deterministic (pure math, no randomness), which makes
 /// previews and other width-limited renderings reproducible.
 ///
-/// Moved out of `lumina-mcp` (R2-MCP-06): this is platform-neutral image
+/// Moved out of `lumina-mcp` (R2-MCP-06) and consolidated with
+/// `ImageFrame::downscale` and `lumina-gui`'s nearest-neighbour thumbnails
+/// (DOWNSCALER-UNIFY-71): this is platform-neutral image
 /// processing and belongs with the rest of the shared pipeline in `lumina-core`
-/// for reuse and golden-testing, not in the MCP orchestration layer. Unlike the
-/// old mcp helper it returns a `Result` instead of panicking via `expect` when
+/// for reuse and golden-testing, not in the MCP orchestration layer. It returns
+/// a `Result` instead of panicking via `expect` when
 /// the derived dimensions are inconsistent (which cannot happen for the exact
 /// `new_width * new_height * 4` allocation used here, but the fallible
 /// [`ImageFrame::new`] contract is surfaced rather than swallowed).
-pub fn downscale_bilinear(frame: &ImageFrame, max_width: u32) -> Result<ImageFrame, CoreError> {
+pub fn downscale(frame: &ImageFrame, target: DownscaleTarget) -> Result<ImageFrame, CoreError> {
     let (width, height) = (frame.width, frame.height);
     if width == 0 || height == 0 {
         return Ok(frame.clone());
     }
-    let new_width = width.min(max_width).max(1);
-    let new_height = ((new_width as f64 / width as f64) * height as f64)
-        .round()
-        .max(1.0) as u32;
+    let (new_width, new_height) = match target {
+        DownscaleTarget::MaxWidth(max_width) => {
+            // Die Casts sind Teil des Byte-Ankers, nicht Kosmetik: ohne sie
+            // liefe die Ganzzahldivision `new_width / width` auf 0.
+            let new_width = width.min(max_width).max(1);
+            let new_height = ((new_width as f64 / width as f64) * height as f64)
+                .round()
+                .max(1.0) as u32;
+            (new_width, new_height)
+        }
+        DownscaleTarget::LongEdge(max_dim) => {
+            let long = width.max(height);
+            if max_dim == 0 || long <= max_dim {
+                return Ok(frame.clone());
+            }
+            // f64-Fassung der bisherigen f32-Rechnung (Qualitaet zuerst);
+            // `.round()` vor `.max(1.0)` wie in `ImageFrame::downscale`.
+            let scale = max_dim as f64 / long as f64;
+            let new_width = (width as f64 * scale).round().max(1.0) as u32;
+            let new_height = (height as f64 * scale).round().max(1.0) as u32;
+            (new_width, new_height)
+        }
+    };
     if new_width == width && new_height == height {
         return Ok(frame.clone());
     }
@@ -483,58 +529,19 @@ impl ImageFrame {
     /// instead of the full (e.g. 45 MP) source while a slider is dragged. The
     /// result is always a multiple of 4 bytes and `image`-decoded identical for
     /// `max_dim >= max(width, height)` (i.e. when no downscaling is needed).
+    ///
+    /// DOWNSCALER-UNIFY-71: this method is now a thin delegation on the
+    /// canonical path [`downscale`]`(self, DownscaleTarget::LongEdge(max_dim))`
+    /// — same kernel, same guard (`long <= max_dim` -> unchanged clone), same
+    /// f64 geometry. The former in-place f32 resampling loop is gone; no second
+    /// resampler remains. The `expect` documents a fact, not a fallback:
+    /// [`downscale`] can only fail inside [`ImageFrame::new`], and that
+    /// constructor cannot reject the exact `width * height * 4` pixel
+    /// allocation this kernel produces (the contract `lib.rs` documents for
+    /// [`ImageFrame::new`]).
     pub fn downscale(&self, max_dim: u32) -> ImageFrame {
-        let long = self.width.max(self.height);
-        if max_dim == 0 || long <= max_dim {
-            return self.clone();
-        }
-        let scale = max_dim as f32 / long as f32;
-        let width = (self.width as f32 * scale).round().max(1.0) as u32;
-        let height = (self.height as f32 * scale).round().max(1.0) as u32;
-        let mut pixels = vec![0u8; width as usize * height as usize * 4];
-        for y in 0..height {
-            let sy = ((y as f32 + 0.5) / height as f32 * self.height as f32 - 0.5)
-                .clamp(0.0, self.height as f32 - 1.0);
-            let y0 = sy.floor() as u32;
-            let y1 = (y0 + 1).min(self.height - 1);
-            let fy = sy - y0 as f32;
-            for x in 0..width {
-                let sx = ((x as f32 + 0.5) / width as f32 * self.width as f32 - 0.5)
-                    .clamp(0.0, self.width as f32 - 1.0);
-                let x0 = sx.floor() as u32;
-                let x1 = (x0 + 1).min(self.width - 1);
-                let fx = sx - x0 as f32;
-                let at = |xx: u32, yy: u32| -> [u8; 4] {
-                    let base = (yy * self.width + xx) as usize * 4;
-                    [
-                        self.pixels[base],
-                        self.pixels[base + 1],
-                        self.pixels[base + 2],
-                        self.pixels[base + 3],
-                    ]
-                };
-                let top = at(x0, y0);
-                let top_r = top[0] as f32 * (1.0 - fx) + at(x1, y0)[0] as f32 * fx;
-                let top_g = top[1] as f32 * (1.0 - fx) + at(x1, y0)[1] as f32 * fx;
-                let top_b = top[2] as f32 * (1.0 - fx) + at(x1, y0)[2] as f32 * fx;
-                let top_a = top[3] as f32 * (1.0 - fx) + at(x1, y0)[3] as f32 * fx;
-                let bot = at(x0, y1);
-                let bot_r = bot[0] as f32 * (1.0 - fx) + at(x1, y1)[0] as f32 * fx;
-                let bot_g = bot[1] as f32 * (1.0 - fx) + at(x1, y1)[1] as f32 * fx;
-                let bot_b = bot[2] as f32 * (1.0 - fx) + at(x1, y1)[2] as f32 * fx;
-                let bot_a = bot[3] as f32 * (1.0 - fx) + at(x1, y1)[3] as f32 * fx;
-                let dst = (y * width + x) as usize * 4;
-                pixels[dst] = (top_r * (1.0 - fy) + bot_r * fy).round() as u8;
-                pixels[dst + 1] = (top_g * (1.0 - fy) + bot_g * fy).round() as u8;
-                pixels[dst + 2] = (top_b * (1.0 - fy) + bot_b * fy).round() as u8;
-                pixels[dst + 3] = (top_a * (1.0 - fy) + bot_a * fy).round() as u8;
-            }
-        }
-        ImageFrame {
-            width,
-            height,
-            pixels,
-        }
+        downscale(self, DownscaleTarget::LongEdge(max_dim))
+            .expect("ImageFrame::new cannot fail for the exact width*height*4 pixel allocation")
     }
 
     /// PERF-GUI-5: crop a rectangular region `(x, y, w, h)` (in source pixels,

@@ -1,9 +1,9 @@
 //! `lumina_preview` — fast, cache-free, deterministic downscaled PNG preview.
 
 use crate::error::{map_core_error, McpError};
-use crate::util::{downscale_bilinear, get_str, parse_bounded_uint, render_copy};
+use crate::util::{get_str, parse_bounded_uint, render_copy};
 use crate::Server;
-use lumina_core::ImageFileFormat;
+use lumina_core::{downscale, DownscaleTarget, ImageFileFormat};
 use lumina_sidecar::write_atomically;
 use serde_json::{json, Value};
 use std::fs;
@@ -48,7 +48,8 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .as_ref()
         .map(|meta| meta.camera_white_balance);
     let rendered = render_copy(state, copy, white_balance)?;
-    let preview_frame = downscale_bilinear(&rendered, max_width).map_err(map_core_error)?;
+    let preview_frame =
+        downscale(&rendered, DownscaleTarget::MaxWidth(max_width)).map_err(map_core_error)?;
 
     let png = preview_frame
         .encode(ImageFileFormat::Png)

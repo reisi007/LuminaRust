@@ -201,7 +201,8 @@ verfügbar, sonst CPU-Referenz — keine zweite Renderlogik), im
 Baseline-Modus (`--update-goldens`) bewusst auf der CPU-Referenz
 (plattformneutral/reproduzierbar, kein GPU-Baseline) — und vergleicht ein
 deterministisch bilinear herunterskaliertes Bild (`comparison_width = 384`,
-`lumina-core::downscale_bilinear`, rein mathematisch, kein Zufall) gegen das
+`lumina-core::downscale(frame, DownscaleTarget::MaxWidth(384))`, rein
+mathematisch, kein Zufall) gegen das
 Golden. Das Downscaling ist eine Vergleichs-Normalisierung, kein Renderpfad.
 Toleranzklassen:
 

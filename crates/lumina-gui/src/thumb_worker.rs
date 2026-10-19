@@ -18,12 +18,12 @@
 //! fresh render instead of showing a wrong/blank cell.
 
 use super::*;
-use crate::filmstrip::{downscale_rgba, THUMBNAIL_MAX_DIM};
+use crate::filmstrip::THUMBNAIL_MAX_DIM;
 use crate::thumb_cache::THUMB_VIRTUAL_COPY;
 use log::{debug, info, trace, warn};
 use lumina_cache::DiskFolderCache;
 use lumina_core::cache::PreviewKind;
-use lumina_core::{prepare_source_base, render_frame, StageWork};
+use lumina_core::{downscale, prepare_source_base, render_frame, DownscaleTarget, StageWork};
 
 /// A request to generate a filmstrip thumbnail for one source on the dedicated
 /// background thread pool.
@@ -165,13 +165,12 @@ fn decode_thumbnail_frame_with_identity(
     };
     // Source actions precede the thumbnail downscale, preserving their native
     // full-frame dimensions and compositing semantics.
-    let (small, w, h) = downscale_rgba(
-        prepared.pixels(),
-        prepared.width(),
-        prepared.height(),
-        THUMBNAIL_MAX_DIM,
-    );
-    let small_frame = ImageFrame::new(w, h, small).map_err(|error| error.to_string())?;
+    // DOWNSCALER-UNIFY-71: the former nearest-neighbour `downscale_rgba` is
+    // gone; the thumbnail runs on the canonical bilinear path (quality win,
+    // pinned by the core byte anchor + the 6 named goldens on the reference
+    // platform).
+    let small_frame = downscale(&prepared, DownscaleTarget::LongEdge(THUMBNAIL_MAX_DIM))
+        .map_err(|error| error.to_string())?;
     // Preserve the historical default-recipe thumbnail when no source action is
     // active. For action fixtures, clone the referenced recipe but clear the
     // already-applied link so Core does not composite the same action twice.

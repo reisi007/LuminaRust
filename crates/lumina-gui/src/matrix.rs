@@ -23,7 +23,7 @@
 //! if the committed set no longer deserializes).
 
 use eframe::egui;
-use lumina_core::{downscale_bilinear, psnr, ImageFrame};
+use lumina_core::{downscale, psnr, DownscaleTarget, ImageFrame};
 use lumina_sidecar::EditRecipe;
 use serde::Deserialize;
 use std::fs;
@@ -320,7 +320,7 @@ pub(crate) fn run_matrix(
                 pairs.push(report);
                 continue;
             };
-            let comparison = match downscale_bilinear(preview, comparison_width) {
+            let comparison = match downscale(preview, DownscaleTarget::MaxWidth(comparison_width)) {
                 Ok(comparison) => comparison,
                 Err(error) => {
                     report.status = "error";

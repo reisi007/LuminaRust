@@ -1,15 +1,14 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use lumina_core::LensfunCorrectorRef;
 use lumina_core::{
-    denoise_producer_provenance, detect_red_eyes, export_image_with_generative,
+    denoise_producer_provenance, detect_red_eyes, downscale, export_image_with_generative,
     has_transparent_pixels, match_total_exposure_masked, render_frame, render_frame_with_denoise,
     render_frame_with_generative, resolve_denoise_status, resolve_mask_planes,
     set_denoise_producer_provenance, DenoiseIdentity, DenoisePolicy,
     DenoiseRgbArtifact as CoreDenoiseRgbArtifact, DenoiseStageInput, DenoiseStageStatus,
-    DetectedRedEye, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
+    DetectedRedEye, DownscaleTarget, ExportOptions, GenerativeCacheKey, GenerativeCanvasArtifact,
     GenerativeCanvasInput, GenerativeRole as CoreGenerativeRole, ImageFileFormat, ImageFrame,
-    MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy, RenderContext,
-    RenderOutput, SourceActionArtifact, RED_EYE_DETECT_ID_PREFIX,
+    LensfunCorrectorRef, MaskContext, MaskInference, MaskLoadContext, MaskPlane, MaskPolicy,
+    RenderContext, RenderOutput, SourceActionArtifact, RED_EYE_DETECT_ID_PREFIX,
 };
 // F-082-FOLLOWUP: under `onnx-rt` the CLI consumes the resolver surface
 // `lumina_onnx::resolve::try_load_onnx_engine` (real engine or a hard error,
@@ -7390,7 +7389,7 @@ fn cull_status_one(input: &Path, config: &CullConfig) -> Result<serde_json::Valu
     let bytes = fs::read(input).map_err(|error| io_error(input, error))?;
     let (frame, _raw) = decode_input(input, &bytes)?;
     let document = load_sidecar(&sidecar_path_for(input))?;
-    let analysis_frame = lumina_core::downscale_bilinear(&frame, config.analysis_max_width)?;
+    let analysis_frame = downscale(&frame, DownscaleTarget::MaxWidth(config.analysis_max_width))?;
     let current = heuristic_identity(
         cull_cli::source_fingerprint(&bytes),
         document.source.decode_fingerprint.clone(),

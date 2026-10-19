@@ -1,26 +1,27 @@
 use super::*;
 
 // ---- R2-MCP-06: downscale_bilinear moved into core ----
+// ---- DOWNSCALER-UNIFY-71: consolidated onto `downscale` + `DownscaleTarget` ----
 
 /// Pins the invariants the MCP preview relied on: never upscales, keeps the
 /// aspect ratio (width-driven), clamps to at least 1px, is deterministic,
 /// and preserves pixels unchanged when no downscale is needed.
 #[test]
-fn downscale_bilinear_never_upsizes_and_is_deterministic() {
+fn downscale_max_width_never_upsizes_and_is_deterministic() {
     let frame = ImageFrame::new(64, 48, vec![10u8; 64 * 48 * 4]).unwrap();
-    let small = downscale_bilinear(&frame, 1024).unwrap();
+    let small = downscale(&frame, DownscaleTarget::MaxWidth(1024)).unwrap();
     assert_eq!((small.width, small.height), (64, 48), "must never upscale");
     assert_eq!(small.pixels, frame.pixels, "no-op downscale keeps pixels");
 
-    let scaled = downscale_bilinear(&frame, 32).unwrap();
+    let scaled = downscale(&frame, DownscaleTarget::MaxWidth(32)).unwrap();
     assert_eq!(scaled.width, 32, "output width must honour max_width");
     assert_eq!(scaled.height, 24, "aspect ratio (64:48) preserved");
 
-    let again = downscale_bilinear(&frame, 32).unwrap();
+    let again = downscale(&frame, DownscaleTarget::MaxWidth(32)).unwrap();
     assert_eq!(scaled.pixels, again.pixels, "deterministic bytes");
 
     // Max-width smaller than one pixel still yields at least 1x1.
-    let tiny = downscale_bilinear(&frame, 0).unwrap();
+    let tiny = downscale(&frame, DownscaleTarget::MaxWidth(0)).unwrap();
     assert_eq!(tiny.width, 1);
     assert_eq!(tiny.height, 1);
 }
@@ -29,13 +30,13 @@ fn downscale_bilinear_never_upsizes_and_is_deterministic() {
 /// average stays inside the valid RGBA byte range even for maximal
 /// downscales (no overflow/underflow in the f64 interpolation path).
 #[test]
-fn downscale_bilinear_averages_flat_colour_identically() {
+fn downscale_max_width_averages_flat_colour_identically() {
     let mut flat = vec![0u8; 128 * 64 * 4];
     for px in flat.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[50, 100, 150, 200]);
     }
     let frame = ImageFrame::new(128, 64, flat).unwrap();
-    let scaled = downscale_bilinear(&frame, 7).unwrap();
+    let scaled = downscale(&frame, DownscaleTarget::MaxWidth(7)).unwrap();
     assert_eq!(scaled.width, 7);
     assert!(
         scaled

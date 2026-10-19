@@ -1,6 +1,9 @@
 //! histogram plot points, full-frame and draft marks tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
 use super::*;
+// DOWNSCALER-UNIFY-71: the thumbnail fixture's former nearest-neighbour
+// `downscale_rgba` is gone; it runs on the canonical bilinear path.
+use lumina_core::{downscale, DownscaleTarget};
 
 /// GUI-HISTOGRAM-1: stored 256-bin histograms map onto non-empty plot
 /// points inside the plot rect, with the peak reaching the top.
@@ -333,14 +336,12 @@ fn fit_preview_histogram_matches_thumbnail() {
     let preview = app.preview().expect("preview after load").clone();
     assert_eq!((preview.width(), preview.height()), (64, 40));
     // Thumbnail pipeline (mirrors `decode_thumbnail_frame` sans disk
-    // cache): downscale + default-recipe render.
-    let (small, w, h) = crate::filmstrip::downscale_rgba(
-        original.pixels(),
-        original.width(),
-        original.height(),
-        crate::filmstrip::THUMBNAIL_MAX_DIM,
-    );
-    let small_frame = ImageFrame::new(w, h, small).unwrap();
+    // cache): canonical-path downscale + default-recipe render.
+    let small_frame = downscale(
+        &original,
+        DownscaleTarget::LongEdge(crate::filmstrip::THUMBNAIL_MAX_DIM),
+    )
+    .unwrap();
     let thumb_ctx = RenderContext {
         recipe: &EditRecipe::default(),
         camera_white_balance: None,
@@ -444,13 +445,11 @@ fn fit_preview_portrait_histogram_matches_thumbnail() {
     );
     let preview = app.preview().expect("preview after load").clone();
     assert_eq!((preview.width(), preview.height()), (40, 64));
-    let (small, sw, sh) = crate::filmstrip::downscale_rgba(
-        original.pixels(),
-        original.width(),
-        original.height(),
-        crate::filmstrip::THUMBNAIL_MAX_DIM,
-    );
-    let small_frame = ImageFrame::new(sw, sh, small).unwrap();
+    let small_frame = downscale(
+        &original,
+        DownscaleTarget::LongEdge(crate::filmstrip::THUMBNAIL_MAX_DIM),
+    )
+    .unwrap();
     let thumb_ctx = RenderContext {
         recipe: &EditRecipe::default(),
         camera_white_balance: None,

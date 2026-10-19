@@ -62,7 +62,8 @@ const THUMBNAIL_MAX_DIM: u32 = 200;
 ///
 /// The removed synthetic fixture painted a vertical ramp around one base colour,
 /// which can only reach ~192 distinct triples (64 ramp steps x 3 channels). A
-/// nearest-neighbour downscale of a real photograph reaches thousands, so 400
+/// bilinear downscale of a real photograph reaches thousands (DOWNSCALER-UNIFY-71:
+/// the thumbnail runs on the canonical bilinear path), so 400
 /// separates "a real decode happened" from "synthetic placeholder" by two
 /// orders of magnitude and cannot flip on a renderer detail.
 const MIN_THUMBNAIL_COLORS: usize = 400;

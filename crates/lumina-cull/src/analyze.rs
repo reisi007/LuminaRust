@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use lumina_core::{downscale_bilinear, ImageFrame};
+use lumina_core::{downscale, DownscaleTarget, ImageFrame};
 use lumina_sidecar::{CullProposal, Resolution};
 use serde::{Deserialize, Serialize};
 
@@ -186,7 +186,10 @@ fn analyze_one(
             height: input.frame.height(),
         });
     }
-    let analysis_frame = downscale_bilinear(input.frame, config.analysis_max_width)?;
+    let analysis_frame = downscale(
+        input.frame,
+        DownscaleTarget::MaxWidth(config.analysis_max_width),
+    )?;
     if analysis_frame.width() == 0 || analysis_frame.height() == 0 {
         return Err(CullError::EmptyFrame {
             width: analysis_frame.width(),

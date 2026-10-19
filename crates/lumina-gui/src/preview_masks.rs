@@ -20,6 +20,7 @@
 use super::*;
 #[cfg(feature = "gpu")]
 use log::trace;
+use lumina_core::{downscale, DownscaleTarget};
 
 impl LuminaApp {
     /// Drive an interactive mask-tool drag on the preview widget. For Brush,
@@ -234,13 +235,11 @@ impl LuminaApp {
             let Some(original) = self.original.as_ref() else {
                 return;
             };
-            let (pixels, sw, sh) = downscale_rgba(
-                original.pixels(),
-                original.width(),
-                original.height(),
-                max_dim,
-            );
-            let small = lumina_core::ImageFrame::new(sw, sh, pixels).unwrap();
+            // DOWNSCALER-UNIFY-71: the former nearest-neighbour
+            // `downscale_rgba` is gone; range prompts evaluate against the
+            // canonical bilinear path (same guard: `long <= max_dim` ->
+            // unchanged clone, so small sources never resampled).
+            let small = downscale(original, DownscaleTarget::LongEdge(max_dim)).unwrap();
             match range_masks::evaluate_range_prompt(&small, &prompt) {
                 Ok(plane) => plane,
                 Err(_) => return,

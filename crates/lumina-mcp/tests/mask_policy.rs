@@ -321,7 +321,7 @@ fn preview_applies_the_persisted_mask_that_the_cli_applies() {
         .expect("lumina_load returns an image_id")
         .to_string();
 
-    // max_width == frame width: downscale_bilinear returns the render
+    // max_width == frame width: downscale(.., MaxWidth) returns the render
     // unchanged, so the preview pixels ARE the render pixels.
     let preview = roundtrip(
         &mut stdin,

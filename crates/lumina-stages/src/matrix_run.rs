@@ -22,7 +22,7 @@ use super::matrix_validate::{
     resolve_relative, GOLDEN_DIR,
 };
 use crate::error::StageError;
-use lumina_core::{downscale_bilinear, psnr, ExportOptions, ImageFileFormat, ImageFrame};
+use lumina_core::{downscale, psnr, DownscaleTarget, ExportOptions, ImageFileFormat, ImageFrame};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -295,7 +295,10 @@ pub fn run<R: MatrixRender + ?Sized>(
                 }
             }
 
-            let comparison = match downscale_bilinear(&render_output.frame, comparison_width) {
+            let comparison = match downscale(
+                &render_output.frame,
+                DownscaleTarget::MaxWidth(comparison_width),
+            ) {
                 Ok(comparison) => comparison,
                 Err(error) => {
                     outcome.status = "error";

@@ -45,7 +45,7 @@ mod tests {
     use crate::LuminaApp;
     use eframe::egui;
     use lumina_core::{
-        downscale_bilinear, render_frame, ImageFileFormat, ImageFrame, RenderContext,
+        downscale, render_frame, DownscaleTarget, ImageFileFormat, ImageFrame, RenderContext,
     };
     use lumina_sidecar::EditRecipe;
     use std::fs;
@@ -143,7 +143,7 @@ mod tests {
             "GUI matrix must use the same full-resolution core render context"
         );
 
-        let preview = downscale_bilinear(full_preview, 48).unwrap();
+        let preview = downscale(full_preview, DownscaleTarget::MaxWidth(48)).unwrap();
         fs::write(
             golden_dir.join("sample__tone.png"),
             preview.encode(ImageFileFormat::Png).unwrap(),

@@ -1,6 +1,9 @@
 //! thumbnail/preview pickers and filmstrip caches tests (GUI-REFACTOR-W3-20 split from the root `mod tests`).
 
 use super::*;
+// DOWNSCALER-UNIFY-71: the filmstrip's former nearest-neighbour
+// `downscale_rgba` is gone; the thumbnail fixture runs on the canonical path.
+use lumina_core::{downscale, DownscaleTarget};
 
 // ---- REVIEW-GUI-THUMB-1 / THUMB-2 / PATHDESYNC-1 (headless) ----
 
@@ -197,15 +200,26 @@ fn white_balance_eyedropper_sets_recipe_fields() {
 
 #[test]
 fn filmstrip_downscale_keeps_small_images_and_shrinks_large() {
+    // DOWNSCALER-UNIFY-71: migrated from the deleted nearest-neighbour
+    // `downscale_rgba` to the canonical bilinear path. The geometry
+    // assertions and the early-return byte identity stay pinned; the test no
+    // longer pins nearest-neighbour output bytes for the shrunk case.
     let small = vec![1u8, 2, 3, 255, 4, 5, 6, 255];
-    let (out, w, h) = crate::filmstrip::downscale_rgba(&small, 2, 1, 160);
-    assert_eq!((w, h), (2, 1));
-    assert_eq!(out, small);
+    let small_frame = ImageFrame::new(2, 1, small.clone()).unwrap();
+    let out = downscale(&small_frame, DownscaleTarget::LongEdge(160)).unwrap();
+    assert_eq!((out.width(), out.height()), (2, 1));
+    assert_eq!(
+        out.pixels(),
+        small_frame.pixels(),
+        "early return keeps pixels"
+    );
+    assert_eq!(out.into_pixels(), small);
 
     let big = vec![0u8; (4 * 320 * 200) as usize];
-    let (out2, w2, h2) = crate::filmstrip::downscale_rgba(&big, 320, 200, 160);
-    assert_eq!((w2, h2), (160, 100));
-    assert_eq!(out2.len(), 4 * 160 * 100);
+    let big_frame = ImageFrame::new(320, 200, big).unwrap();
+    let out2 = downscale(&big_frame, DownscaleTarget::LongEdge(160)).unwrap();
+    assert_eq!((out2.width(), out2.height()), (160, 100));
+    assert_eq!(out2.pixels().len(), 4 * 160 * 100);
 }
 
 #[test]

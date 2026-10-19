@@ -586,13 +586,6 @@ pub fn write_output_guarded(source: &Path, target: &Path, bytes: &[u8]) -> Resul
         .map_err(|error| McpError::Encode(format!("could not write `{target:?}`: {error}")))
 }
 
-/// Bilinear downscale of an RGBA8 frame so that the output width does not
-/// exceed `max_width`. Aspect ratio is preserved and upscaling never occurs.
-///
-/// Re-export of the canonical `lumina-core` implementation (R2-MCP-06): the
-/// MCP layer keeps the import path but holds no copy of the algorithm.
-pub use lumina_core::downscale_bilinear;
-
 #[cfg(all(test, feature = "gpu"))]
 mod routing_tests {
     use super::*;
