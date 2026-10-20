@@ -28,7 +28,7 @@ geprüft am: 2026-10-20
 | `web-audit` | nein | | kein Web-Frontend; LuminaRust ist Desktop-GUI + CLI |
 | Konvention: 500-Zeilen-Ratetch | ja | `scripts/check_file_sizes.sh` (`THRESHOLD=500`), `scripts/file_size_baseline.txt`, `Agents.md` §„Verifizierungs-Agent" | |
 | Konvention: Projektsprache Deutsch (Doku + UI) | ja | `Agents.md`, `Agents.todo.md`, `feature/` | |
-| Konvention: Regel referenziert, nicht kopiert | ja | `Agents.md` §„Build-Agent" → `.agents/rules/build-verify.md` (Pfad-Verweis, keine Kopie); global eingebettet ist nur die Frage-Regel (`~/.config/opencode/AGENTS.md`, Quelle `ask.md`) | `Agents.todo.md` → `ALWAYSON-REGEL-WORTLAUT` (nur die Bezeichnung „always-on Kernel" ist überholt: der `instructions`-Array ist leer, die Regeldatei allein liefert nichts) |
+| Konvention: Regel referenziert, nicht kopiert | ja | `Agents.md` §„Build-Agent" → Skill `build-verify` (Lieferweg: **Skill-Trigger**) und die Minimalregeln in `.agents/rules/build-verify.md` (agents-skills, Pfad-Verweis, keine Kopie); global eingebettet ist nur die Frage-Regel (`~/.config/opencode/AGENTS.md`, Quelle `ask.md`) | |
 | Konvention: visueller Review mit dem konfigurierten Modell (DoD §6) | ja | `DoD.md` §6 (KI-Validierungs-Loop, Schritt 2), `Agents.todo.md` `F-103-N6-GUI-COVERAGE-27` Punkt 11, `feature/platform/lightroom-ux-parity.md` (Abnahme), `crates/lumina-gui-harness/README.md` — alle vier Stellen nennen **das konfigurierte Modell selbst** (max. 10 Bilder je Durchgang); ein Vision-Subagent existiert nicht | |
 
 ## Offen aus dem Bereich `86d677e..787670a`

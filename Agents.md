@@ -147,9 +147,13 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 ### Build-Agent
 
 Der Build-Agent ist der verantwortliche Orchestrator. Der Build-/Verify-Flow
-steht im Skill `build-verify` (agents-skills, always-on Kernel
-`.agents/rules/build-verify.md`); diese Datei nennt nur, was in **diesem** Repo
-wann grün sein muss (siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md)).
+steht im Skill `build-verify` (agents-skills); der Skill wird über seinen
+Trigger in die Session geladen. Den verbindlichen Rahmen setzt das Projekt-
+`Agents.md` (dieses Dokument), das der Build-Agent vor jeder Aufgabe liest;
+der repo-spezifische Teil steht nur hier — was in **diesem** Repo wann grün
+sein muss (siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md)). Die
+Minimalregeln des Flows stehen in `.agents/rules/build-verify.md`
+(agents-skills) und werden von dort gelesen.
 
 Er:
 
@@ -345,10 +349,6 @@ Prüfungen zu verwenden:
   funktioniert; `lumina-gui-harness` ist macOS-only und wird auf Linux als Stub
   kompiliert; der onnx-rt-Link (glibc 2.36 < 2.38) ist ein Host-Gate, das
   `cargo check` nicht trifft.
-- Unit-Tests für mathematische und serielle Logik
-- Property-Tests für Wertebereiche, Monotonie und Clipping
-- JSON-Roundtrip- und Schema-Migrationstests
-- Sidecar-Recovery-, Atomic-Write- und Konflikttests
 - **Lokale Gate-Stufen:** `sh scripts/gates.sh fast` (Sekunden, ohne Codegen:
   Formatter plus vier Textgates) und `sh scripts/gates.sh slow` (Minuten,
   CI-Mirror, Fail fast). Die schnelle Stufe meldet grün nur, wenn mindestens
@@ -357,6 +357,10 @@ Prüfungen zu verwenden:
   Tier-Tabelle; die Lücken zwischen den Stufen (GPU-Adapter, onnx-rt-Link,
   macOS-Golden-Re-Pin, manuelle GUI-Läufe) stehen mit Grund, Owner und
   Task-ID in `feature/quality/local-gates.md`.
+- Unit-Tests für mathematische und serielle Logik
+- Property-Tests für Wertebereiche, Monotonie und Clipping
+- JSON-Roundtrip- und Schema-Migrationstests
+- Sidecar-Recovery-, Atomic-Write- und Konflikttests
 - Virtuelle-Kopien-Tests inklusive stabiler IDs und unabhängiger Rezepte
 - Masken-Cache-Hit-, Miss- und Invalidierungstests
 - Golden-Image-Tests mit dokumentierten Toleranzen
