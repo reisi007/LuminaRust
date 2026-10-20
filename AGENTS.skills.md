@@ -34,16 +34,25 @@ geprüft am: 2026-10-20
 ## Offen aus dem Bereich `86d677e..787670a`
 
 Geprüft am 2026-10-19 gegen `787670a` (27 Commits, 21 Skills berührt). Drei offene
-Positionen sind in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
-`SECURITY-REVIEW-REGISTER`, `ALWAYSON-REGEL-WORTLAUT`.
+Positionen waren in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
+`SECURITY-REVIEW-REGISTER`, `ALWAYSON-REGEL-WORTLAUT` — **keine davon ist heute
+noch offen**: `VISION-SUBAGENT-PFLEGE` ist am 2026-10-20 geschlossen und aus dem
+Plan entfernt (`cfc8ebd`), `ALWAYSON-REGEL-WORTLAUT` am 2026-10-20 (`d73f313`),
+`SECURITY-REVIEW-REGISTER` am 2026-10-20 durch die Eigentümerentscheidung (Flow
+übernommen, Register angelegt, `905f4b5`); offen ist daraus allein die Folge
+`SEC-REVIEW-WELLE-1-85` (erste Review-Welle) im Abschnitt „Folge aus
+`SECURITY-REVIEW-REGISTER`" des Plans.
 
 **Neu**
 
 - `security-review` (`82a9abb`, hidden) — trifft zu (erreichbare Oberflächen:
-  MCP-Server, CLI, Datei-/Sidecar-I/O) und ist **nicht drin**: das Repo hat weder
-  ein Sicherheits-/Risikoregister noch eine Security-Review-Pflicht in
-  `Agents.md`/`DoD.md`, der Skill verlangt in Stage 6 aber ein Register im Repo.
-  → offene Position `SECURITY-REVIEW-REGISTER`.
+  MCP-Server, CLI, Datei-/Sidecar-I/O). **Stand 2026-10-20: drin** — das Repo hat
+  das Sicherheits-/Risikoregister `feature/quality/security-review-register.md`
+  (Form nach Stage 6, Enumerationsbasis mit 19 erreichbaren Oberflächen, null
+  Befunde). Die offene Position `SECURITY-REVIEW-REGISTER` ist am 2026-10-20
+  geschlossen und aus dem Plan entfernt (`905f4b5`, Eigentümerentscheid „Flow
+  übernommen"); offen ist daraus allein die Folge `SEC-REVIEW-WELLE-1-85` — die
+  **erste** Review-Welle (Finden, dann Schließen in Wellen).
 - `models` (`1a096ba`), umbenannt in `update-models` (`fc28ea3`) — trifft nicht
   zu: Modell-Registry ist Maschinenstand (`opencode.jsonc`), nicht Projektstand.
 
@@ -56,8 +65,10 @@ Positionen sind in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
   (a) **Lieferweg der Regel** — upstream sagt jetzt, die Regeldatei werde
   **nicht** über den `instructions`-Array geliefert (der Array ist leer), sondern
   über den Skill-Trigger und den `AGENTS.md` des Projekts; die Formulierung
-  „always-on Kernel" in `Agents.md` deckt das nicht mehr → offene Position
-  `ALWAYSON-REGEL-WORTLAUT`;
+  „always-on Kernel" in `Agents.md` deckte das nicht mehr → offene Position
+  `ALWAYSON-REGEL-WORTLAUT` — **am 2026-10-20 geschlossen und aus dem Plan
+  entfernt** (`d73f313`): `Agents.md` §„Build-Agent" nennt jetzt den
+  Skill-Trigger als Lieferweg und verweist auf `.agents/rules/build-verify.md`;
   (b) der **optionale** Meilenstein-Review (nur bei Releases, N pro Projekt) —
   vom Projekt nicht festgelegt; der Pflicht-Loop bleibt unberührt, für dieses
   Projekt kein Fall.
@@ -87,8 +98,12 @@ Positionen sind in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
 - `ui-review` — als Playwright-Flow trifft es nicht zu (native egui-GUI). Die
   **geänderte** Regel derselben Runde (kein Vision-Subagent: das konfigurierte
   Modell ist vision-fähig und liest harte Fälle selbst nach, statt zu raten)
-  trifft die Projekt-Pflicht in `DoD.md` §6 → dort geführt (offene Position
-  `VISION-SUBAGENT-PFLEGE`).
+  traf die Projekt-Pflicht in `DoD.md` §6 → **dort umgesetzt**: die vier
+  Fundstellen (`DoD.md` §6, `Agents.todo.md` `F-103-N6-GUI-COVERAGE-27` Punkt 11,
+  `feature/platform/lightroom-ux-parity.md`, `crates/lumina-gui-harness/README.md`)
+  nennen jetzt **das konfigurierte Modell selbst** (max. 10 Bilder je Durchgang);
+  die offene Position `VISION-SUBAGENT-PFLEGE` ist am 2026-10-20 geschlossen und
+  aus dem Plan entfernt (`cfc8ebd`).
 - `skills-marker` — trifft zu und ist angewendet: diese Datei. Zwei Änderungen
   mit Projektbezug: der Ablauf-Abschnitt unten folgt jetzt der neuen
   Drift-Definition (Drift = **geänderte Pflicht**, kein Wortlaut-Diff), und der
@@ -98,12 +113,17 @@ Positionen sind in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
 **Entfernt** (die Zeile fällt mit diesem Fortschreiben weg, der Befund bleibt im Log)
 
 - `vision-agents` — **entfernt in `dccdd40`**, mit ihm der `vision-creative`-
-  Subagent. Das Projekt erwartet den Vision-Subagenten weiterhin: `DoD.md` §6
-  nennt `vision-technical` (max. 10 Bilder), `Agents.todo.md`
-  `F-103-N6-GUI-COVERAGE-27` Punkt 11 nennt „plus Vision-Review",
-  `feature/platform/lightroom-ux-parity.md` (Abnahme) verweist auf „DoD §6
-  Vision-Review". Folge: die Pflicht ist in der jetzigen Fassung **nicht
-  ausführbar** → offene Position `VISION-SUBAGENT-PFLEGE`.
+  Subagent. Das Projekt erwartete den Vision-Subagenten zum Zeitpunkt des
+  Marker-Runs: `DoD.md` §6 nannte `vision-technical` (max. 10 Bilder),
+  `Agents.todo.md` `F-103-N6-GUI-COVERAGE-27` Punkt 11 nannte „plus Vision-Review",
+  `feature/platform/lightroom-ux-parity.md` (Abnahme) verwies auf „DoD §6
+  Vision-Review". Folge war: die Pflicht war in der damaligen Fassung **nicht
+  ausführbar** → offene Position `VISION-SUBAGENT-PFLEGE` — **am 2026-10-20
+  geschlossen und aus dem Plan entfernt** (`cfc8ebd`): `DoD.md` §6 nennt jetzt
+  das konfigurierte Modell selbst und hält fest, dass es keinen Vision-Subagenten
+  gibt; dieselbe Umstellung tragen `Agents.todo.md` Punkt 11, die Abnahme in
+  `feature/platform/lightroom-ux-parity.md` (der Verweis „DoD §6 Vision-Review"
+  steht weiter) und `crates/lumina-gui-harness/README.md`.
 - `model-updater` — **entfernt in `1c51237`**, in `models` (→ `update-models`)
   aufgegangen; die Zeile ist durch die `update-models`-Zeile ersetzt.
 - `update-opencode-models` — **entfernt in `1c51237`**, in `models` (→
@@ -146,8 +166,9 @@ Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
 - `ui-review` (`fa2268f`) — die Findings-Vorlage nennt keinen „vision-agent"
   mehr. Als Playwright-Flow trifft der Skill dieses Projekt weiterhin nicht
   (native egui-GUI); die Projekt-Pflicht in `DoD.md` §6 wird von der
-  geänderten Regel berührt und bleibt dort geführt → offene Position
-  `VISION-SUBAGENT-PFLEGE` (unverändert, der Task läuft noch).
+  geänderten Regel berührt und ist dort umgesetzt → die offene Position
+  `VISION-SUBAGENT-PFLEGE` ist am 2026-10-20 geschlossen und aus dem Plan
+  entfernt (`cfc8ebd`).
 - `update-models` (`219171c`, `8c6b9af`) — die Namespace-Regel steht jetzt auf
   der Entscheidung (`opencode-go-only`) statt auf einem
   Kontext-/Preisargument, und der `$0`-Vermerk gilt dem konfigurierten
