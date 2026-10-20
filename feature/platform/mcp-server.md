@@ -1,8 +1,9 @@
 # F-101 MCP AI-Agent-Schnittstelle
 
 **Feature:** F-101 MCP AI-Agent-Schnittstelle
-**Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, 8 Tools inkl.
-`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; 45 Tests grün).
+**Status:** Umgesetzt und verifiziert (Crate `lumina-mcp`, Werkzeuge inkl.
+`lumina_analyze`, Agent-Skill `docs/skills/lumina.md`; die Zahl der
+registrierten Werkzeuge steht im generierten Block **mcp-tools** unten).
 **F-101-F1 erweiterter Scope (2026-08-26):** 4 zusätzliche CLI-Abdeckungs-
 Tools (`lumina_import`, `lumina_batch`, `lumina_reindex`,
 `lumina_dust_removal`) + `lumina mcp` als CLI-Subcommand (Feature `mcp`
@@ -10,18 +11,21 @@ in `lumina-cli`, Default an). F-101-F1 selbst brachte **12** Tools; mit den
 Metadaten-Tools aus LRPAR-G15-IPTC-S7 waren es **17**, mit den vier
 Stage-Editor-Tools aus **MCP-PARITY-A** **21**, mit den fünf pfadbasierten
 Tools aus **MCP-PARITY-B** (2026-09-26) sind es **26**, mit den beiden
-Merge-Tools aus **MCP-PARITY-C** (2026-10-14) **28**, mit dem Matrix-Tool
-aus **MCP-PARITY-C** (2026-10-15) **29**. Verträge,
-dokumentierte Grenzen und die **offene** CLI-Lücke (**3** von 32
-Subcommands: `previous`, `denoise`, `cull`): Abschnitt
+Merge-Tools aus **MCP-PARITY-C** (2026-10-14) **28**; mit dem Matrix-Tool
+aus **MCP-PARITY-C** (2026-10-15) ist der heutige Stand die im generierten
+Block **mcp-tools** genannte Zahl. Verträge,
+dokumentierte Grenzen und die **offene** CLI-Lücke (die Subcommands
+`previous`, `denoise`, `cull` — der Zählstand steht im generierten Block
+**mcp-tools**): Abschnitt
 „Erweiterter MVP-Scope“.
 **LRPAR-G15-IPTC-S7 (2026-09-04, umgesetzt, BESTANDEN):** 5 zusätzliche
 pfadbasierte Metadaten-Tools (`lumina_get_metadata_draft`,
 `lumina_update_metadata_draft`, `lumina_apply_meta_preset`,
 `lumina_batch_sync_metadata`, `lumina_trigger_export`, s. Abschnitt
 „Metadaten-Schnittstelle“) — Gesamtstand nach **MCP-PARITY-A** und
-**MCP-PARITY-B** und **MCP-PARITY-C**: **29 Tools** (29 registrierte Tools,
-davon 27 CLI-Subcommands abgedeckt — die Zählung ist nicht dieselbe Zahl).
+**MCP-PARITY-B** und **MCP-PARITY-C**: die Zahl der registrierten Tools steht
+im generierten Block **mcp-tools** (davon sind 27 CLI-Subcommands abgedeckt —
+die Zählung ist nicht dieselbe Zahl).
 Review-Verfeinerungen 2026-08-25: strenge serverseitige Parameter-Bounds
 (`quality` 1..=100, `max_width` ≥ 1 — kein truncierender Cast), atomarer
 Export/Preview-Write mit Extension/Format-Gate, CAS-gesichertes
@@ -55,6 +59,25 @@ Semantik: Fehlender Dateiname und `fs::metadata`-Fehler brechen laut ab
 Tools + `metadata://`-Resource — ist als SOLL im Abschnitt „Metadaten-
 Schnittstelle“ dokumentiert, Umsetzung über LRPAR-G15-IPTC-S7 in
 `Agents.todo.md`; bis dahin nicht implementiert)
+
+<!-- BEGIN GENERATED: mcp-tools -->
+**MCP-Werkzeuge und CLI-Kommandos (Population).**
+
+- **Registrierte MCP-Werkzeuge:** **29** (Zahlweg: die `tool_def(`-
+  Aufrufe in `crates/lumina-mcp/src/tools/mod.rs`;
+  `grep -c "^[[:space:]]*tool_def(" crates/lumina-mcp/src/tools/mod.rs` — der
+  Konstruktor `fn tool_def` steht ohne fuehrenden Leerraum und zaehlt
+  **nicht** mit).
+- **`Command`-Varianten in `crates/lumina-cli/src/main.rs`:** **33**
+  insgesamt — **32** mit Argument-Strukt plus die Feature-Gate-Variante
+  `Mcp` (`#[cfg(feature = "mcp")]`), die **ohne** Klammer steht (Zahlweg:
+  `awk "/^enum Command \{/,/^\}/" crates/lumina-cli/src/main.rs | grep -cE "^    [A-Z][A-Za-z]*"`
+  — `Mcp` **mitgezaehlt**; dieselbe Pipe mit `grep -cE "^    [A-Z][A-Za-z]*\("`
+  zaehlt die **32** Varianten **mit** Argument-Strukt).
+
+Quelle: die beiden genannten Quelltext-Dateien (committet). Die Zahlen sind
+eine Textableitung aus dem Code, keine Laufzeitmessung.
+<!-- END GENERATED: mcp-tools -->
 
 ## Inhaltsverzeichnis
 
@@ -747,7 +770,9 @@ zurückgenommen (siehe „Ist-Abdeckung" unten).
 
 ### CLI-Abdeckung — Ist-Stand und offene Lücke (gezählt 2026-09-26; Merge-Zählstand 2026-10-14; Matrix-Zählstand 2026-10-15)
 
-`lumina-cli` hat **32** Subcommands. Abgedeckt sind **29**, offen sind
+`lumina-cli` hat so viele Subcommands mit Argument-Strukt, wie der generierte
+Block **mcp-tools** ausweist (die Feature-Gate-Variante `Mcp` kommt hinzu).
+Abgedeckt sind **29**, offen sind
 **3**. Der Abgleich erfolgte gegen die tatsächlich implementierten
 Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
 2026-09-26: 17 abgedeckt / 15 offen vor MCP-PARITY-A, 21 / 11 nach A
@@ -760,7 +785,9 @@ MCP-PARITY-B**, **28 / 4 nach MCP-PARITY-C** (`merge-hdr`, `merge-pano`),
 (Die Tabelle hat 26 Datenzeilen (mit Kopf- und Trennzeile 28 Leitungen):
 `lumina develop` / `lumina render` / `lumina export` teilen sich eine Zeile,
 und die letzte Zeile (`lumina mcp`) ist der Transport-Einstiegspunkt des
-Servers, nicht Teil der 32 abgeglichenen Subcommands. 29 + 3 = 32.)
+Servers, nicht Teil der abgeglichenen Subcommands. Die abgedeckten und die
+offenen Subcommands zusammen ergeben die Zahl des generierten Blocks
+**mcp-tools**.)
 
 | CLI-Befehl | MCP-Tool | Status |
 | --- | --- | --- |
@@ -810,7 +837,8 @@ einer Tool-Beschreibung vorkommt. Das war ein **Stichwort-False-Positive**: es
 gibt kein MCP-Tool dafür, das Kommando wird in `mcp-server.md` **null Mal**
 erwähnt, und es ist ein **rezeptschreibendes** Kommando, nicht nur lesend. Die
 Offen-Liste nannte daraufhin 11 Einträge bei einer Kopfzahl von 10. Die
-Arithmetik ist: **32 − 8 = 24 abgedeckt**, und `batch-meta` plus
+Arithmetik ist: von den abgeglichenen Subcommands sind **8 offen** und damit
+**24 abgedeckt**, und `batch-meta` plus
 `keywords` sind über die Metadaten-Tools abgedeckt (oben erstmals als Zeilen
 geführt).
 

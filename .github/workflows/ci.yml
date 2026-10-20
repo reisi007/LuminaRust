@@ -145,17 +145,20 @@ jobs:
           # Stable across the three Rust shards; do not use the job ID here.
           shared-key: lumina-rust-shards
 
-      # LOCAL-GATE-TIERS-81: die acht schnellen Checks laufen über DENSELBEN
+      # LOCAL-GATE-TIERS-81: die neun schnellen Checks laufen über DENSELBEN
       # Runner wie lokal (`sh scripts/gates.sh fast`), damit Definition und
       # Ausführung nicht auseinanderlaufen. Der Runner zählt die gestarteten
-      # Checks (Floor: mindestens 8) und führt keinen Codegen aus.
-      # Die acht Checks laufen gebündelt am Job-Anfang (vorher: „Check
-      # formatting" zuerst, die vier Textgates zuletzt); alle acht sind
+      # Checks (Floor: mindestens 9) und führt keinen Codegen aus.
+      # Die neun Checks laufen gebündelt am Job-Anfang (vorher: „Check
+      # formatting" zuerst, die vier Textgates zuletzt); alle neun sind
       # artefaktfrei (kein Build, kein Adapter, kein Netz).
       # Abgedeckter Kommando-Satz — gegenüber den fünf vorherigen Einzel-
       # schritten unverändert, plus der Drift-Gate, die Zeilen-Obergrenze
-      # 3000 (FILE-SIZE-CEILING-3K-83) und der Drift-Gate der Prosa-Zahlen
-      # (DOC-ZAHLEN-DRIFT-82):
+      # 3000 (FILE-SIZE-CEILING-3K-83), der Drift-Gate der Prosa-Zahlen
+      # (DOC-ZAHLEN-DRIFT-82) und das Hygiene-Gate des Generators
+      # (DOC-ZAHLEN-DRIFT-82 Welle 2 — Determinismus und Git-Freiheit; der
+      # Container hat KEIN `git`-Binary, deshalb laeuft der Generator in einer
+      # PATH-Sandbox ohne `git`):
       #   cargo fmt --all -- --check
       #   sh scripts/check_file_sizes.sh
       #   sh scripts/check_plan_format.sh
@@ -164,6 +167,7 @@ jobs:
       #   sh scripts/check_ci_tier_drift.sh
       #   sh scripts/check_file_ceiling.sh
       #   sh scripts/check_doc_facts_drift.sh
+      #   sh scripts/check_doc_facts_generator.sh
       - name: Run fast tier (scripts/gates.sh fast)
         run: sh scripts/gates.sh fast
 

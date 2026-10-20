@@ -36,10 +36,13 @@
 # einzige gestartete Prozess ist `scripts/gen_doc_facts.sh` (eigenes
 # Repo-Skript) und der Vergleich `diff`.
 #
-# ANMERKUNG zum Testhaken `LUMINA_GOLDENS_LOCK`: damit kann der Generator
-# gegen ein anderes Lockfile laufen (Rotbeweis "Quelle wandert"). Der Default
-# ist IMMER `scripts/golden_ref.lock` des Repos; der Haken aendert nur,
-# welche TEXTdatei gelesen wird.
+# ANMERKUNG zu den Testhaken `LUMINA_GOLDENS_LOCK` und `LUMINA_PERF_BASELINE`:
+# damit kann der Generator gegen eine andere Quelle laufen (Rotbeweis "Quelle
+# wandert"). Die Defaults sind IMMER `scripts/golden_ref.lock` bzw.
+# `perf/baseline.json` des Repos; die Haken aendern nur, welche TEXTdatei
+# gelesen wird. **Kein Haken darf den Gate gruen machen, ohne dass die
+# Block-Quelle sichtbar aendert**: ein anderer Store erzeugt einen anderen
+# Block — der Gate wird rot.
 #
 # KEIN `git`: weder der Gate noch der Generator brauchen ein Git-Binary. Grund:
 # die Stufe `fast` laeuft in der CI im Container `lumina-ci:latest`, in dem
@@ -49,7 +52,10 @@
 # `scripts/golden_ref.lock`; die Kette zum Repo haelt
 # `scripts/golden_ref_test.sh` (im Job „Documentation checks" OHNE Container,
 # also mit `git`): es re-derived die Goldens aus dem Git-Index und prueft das
-# Lockfile dagegen.
+# Lockfile dagegen. Der Nachweis, dass **kein** Block `git` braucht, ist der
+# Hygiene-Gate `scripts/check_doc_facts_generator.sh` (Eintrag `fast-9`): er
+# laesst den Generator in einer PATH-Sandbox ohne `git*` laufen und vergleicht
+# die Ausgabe byteweise.
 #
 # HYGIENE: das Arbeitsverzeichnis (`mktemp -d`) wird per `trap ... EXIT`
 # geloescht (SIGINT/SIGTERM ebenso). Bei SIGPIPE (die Ausgabe laeuft in eine
@@ -68,12 +74,14 @@
 #   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — die Abweichung
 #                  muss 0 bleiben; es gibt keinen Wert, der steigen darf.
 #   Nicht gedeckt:  (a) die Zahlen, die NICHT generiert werden (der R/C-Split
-#                  der Goldens, die Oberflaechenzahl im Security-Register,
-#                  Testlaufzahlen) — sie sind handgepflegt und altern weiter;
-#                  (b) die Auswahl der Zeilen einer generierten Tabelle, wenn
-#                  sie regelbasiert nicht ableitbar ist; (c) die Tatsache, ob
-#                  die generierten Zahlen inhaltlich richtig sind — der Gate
-#                  vergleicht Text, er misst nichts nach.
+#                  der Goldens, die **Liste** der Oberflaechen selbst — nur
+#                  ihre Zahl wird abgeleitet —, Testlaufzahlen) — sie sind
+#                  handgepflegt und altern weiter; (b) die Auswahl der Zeilen
+#                  einer generierten Tabelle, wenn sie regelbasiert nicht
+#                  ableitbar ist; (c) die Tatsache, ob die generierten Zahlen
+#                  inhaltlich richtig sind — der Gate vergleicht Text, er misst
+#                  nichts nach; (d) ob ein Block **git-frei** erzeugbar ist —
+#                  das prueft der Hygiene-Gate `fast-9`.
 set -eu
 
 export LC_ALL=C

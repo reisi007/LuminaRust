@@ -291,7 +291,7 @@ Zeit-Tausch ohne Entscheidung).
 
 ## Status
 
-Status (2026-08-19): F-074-N1 umgesetzt und unabhängig verifiziert (Methodik
+Status (2026-09-17): F-074-N1 umgesetzt und unabhängig verifiziert (Methodik
 dokumentiert), F-074-N2 umgesetzt und unabhängig verifiziert (Setup-Gerüst
 ohne Messungen). F-074-N3 umgesetzt: erste echte Benchmarks für alle
 definierten Klassen existieren und eine Baseline ist in `perf/baseline.json`
@@ -350,72 +350,86 @@ und kein eigenständig erzwungener Schwellwert.
 ### F-074-N4 — Baseline-Analyse und abgeleitete Performance-TODOs
 
 Kostenverteilung je Pipeline-Stufe, bezogen auf `core/render_frame` derselben
-Auflösung. **Quelle und Stand:** `perf/baseline.json`,
-`environment.recorded_at` = 2026-09-17 (Commit `9f8c632`), Host
-`MacBook-Pro-von-Florian.local`, Darwin/arm64, rustc 1.98.0, LibRaw 0.22.2.
-Die frühere Fassung dieser Tabelle stammte aus dem Baseline-Stand `3b07ed7`
-(2026-08-19) und war nach der Re-Baseline nicht nachgezogen; alle Zahlen
-unten sind neu aus dem genannten Store berechnet.
+Auflösung. **Quelle und Stand:** `perf/baseline.json` (committeter Store-Stand
+`9f8c632`), Host `MacBook-Pro-von-Florian.local`, Darwin/arm64, rustc 1.98.0,
+LibRaw 0.22.2; der Erfassungszeitpunkt des Stores steht im generierten Block
+unten. Die frühere Fassung dieser Tabelle stammte aus dem Baseline-Stand
+`3b07ed7` (2026-08-19) und war nach der Re-Baseline nicht nachgezogen; alle
+Zahlen des generierten Blocks sind neu aus dem genannten Store berechnet.
 
-Die Anteile sind über 512/1024/2048 **weitgehend stabil**; keine Stufe rampet
+Die Anteile sind über die Auflösungen **weitgehend stabil**; keine Stufe rampet
 **sprunghaft** mit der Auflösung (der PNG-Encode-Δ-Anteil wächst leicht, s. u.).
-`apply_recipe_with_white_balance`
-liegt bei 85,2 % → 85,7 % → 85,8 %, `analyze_tone` bei 4,7 % → 4,6 % → 4,6 %,
-`suggest_auto_tone` bei 4,7 % → 4,6 % → 4,6 %, `match_total_exposure` bei
-4,8 % → 4,7 % → 4,7 %. Die frühere Aussage „die Auto-Tone-/Exposure-Match-Stufen
-rampen mit der Auflösung (≈47 % → 59 % → 64 %)" galt für den Stand `3b07ed7`
-und **entfällt**: die Stufen sind heute über alle Auflösungen ~4,6–4,8 %
-konstant. Einzig der PNG-Encode-Δ-Anteil wächst leicht mit der Auflösung
-(53,7 % → 55,8 % → 57,6 % von `render_frame`).
+Die frühere Aussage „die Auto-Tone-/Exposure-Match-Stufen rampen mit der
+Auflösung (≈47 % → 59 % → 64 %)" galt für den Stand `3b07ed7` und **entfällt**:
+die Stufen sind heute über alle Auflösungen konstant (die Anteile stehen im
+generierten Block). Einzig der PNG-Encode-Δ-Anteil wächst leicht mit der
+Auflösung.
 
-| Pipeline-Stufe | Quelle (ID in `perf/baseline.json`) | @2048 (ns) | Anteil an `core/render_frame__2048` | Anteil an `batch/render_export_png__2048` |
+<!-- BEGIN GENERATED: perf-baseline -->
+**Kostenverteilung je Pipeline-Stufe** — generiert aus `perf/baseline.json`
+(Feld `environment.recorded_at`, Stand **2026-09-17**).
+
+Die Anteilsspalten rechnen Wert / `core/render_frame__<dieselbe Aufloesung>`
+bzw. Wert / `batch/render_export_png__<dieselbe Aufloesung>`. Format: Tausender-
+trennzeichen schmales Leerzeichen (U+2009), Dezimalkomma, eine
+Nachkommastelle; `100 %`, `~0 %` und `—` sind die Sonderfaelle.
+
+| Pipeline-Stufe | Quelle (ID in `perf/baseline.json`) | Median @2048 (ns) | Anteil an `core/render_frame` (512 / 1024 / 2048) | Anteil an `batch/render_export_png` (512 / 1024 / 2048) |
 | --- | --- | ---: | ---: | ---: |
-| `core/render_frame` (Gesamt) | `core/render_frame__2048` | 65 758 354 | 100 % | 63,4 % |
-| `apply_recipe_with_white_balance` | `core/apply_recipe_with_white_balance__2048` | 56 391 542 | **85,8 %** | 54,4 % |
-| `analyze_tone` | `core/analyze_tone__2048` | 3 000 248 | 4,6 % | 2,9 % |
-| `suggest_auto_tone` | `core/suggest_auto_tone__2048` | 3 001 195 | 4,6 % | 2,9 % |
-| `match_total_exposure` | `core/match_total_exposure__2048` | 3 061 821 | 4,7 % | 3,0 % |
-| `histogram` | `core/histogram__2048` | 2 869 948 | 4,4 % | 2,8 % |
-| `mask_graph_eval` | `core/mask_graph_eval__2048` | 224 257 | 0,3 % | 0,2 % |
-| `cache_hit` / `cache_miss` | `core/cache_hit__2048` / `core/cache_miss__2048` | 9 / 6 | ~0 % | ~0 % |
-| PNG-Encode (Δ `batch` − `render_frame`) | `batch/render_export_png__2048` − `core/render_frame__2048` | 37 902 834 | 57,6 % | 36,6 % |
-| `decode/raw` (eigener Hot-Path, env-gated) | `decode/raw__aircraft-landscape` / `decode/raw__aircraft-portrait` | 321 892 250 / 360 537 833 | **4,9× / 5,5×** `render_frame` | — |
+| `core/render_frame` (Gesamt) | `core/render_frame__2048` | 65 758 354 | 100 % / 100 % / 100 % | 65,1 % / 64,2 % / 63,4 % |
+| `apply_recipe_with_white_balance` | `core/apply_recipe_with_white_balance__2048` | 56 391 542 | 85,2 % / 85,7 % / 85,8 % | 55,4 % / 55,0 % / 54,4 % |
+| `mask_graph_eval` | `core/mask_graph_eval__2048` | 224 257 | 0,8 % / 0,3 % / 0,3 % | 0,5 % / 0,2 % / 0,2 % |
+| `analyze_tone` | `core/analyze_tone__2048` | 3 000 248 | 4,7 % / 4,6 % / 4,6 % | 3,1 % / 2,9 % / 2,9 % |
+| `suggest_auto_tone` | `core/suggest_auto_tone__2048` | 3 001 195 | 4,7 % / 4,6 % / 4,6 % | 3,1 % / 2,9 % / 2,9 % |
+| `match_total_exposure` | `core/match_total_exposure__2048` | 3 061 821 | 4,8 % / 4,7 % / 4,7 % | 3,1 % / 3,0 % / 3,0 % |
+| `histogram` | `core/histogram__2048` | 2 869 948 | 4,5 % / 4,4 % / 4,4 % | 2,9 % / 2,8 % / 2,8 % |
+| `cache_hit` / `cache_miss` | `core/cache_hit__2048` / `core/cache_miss__2048` | 9 / 6 | ~0 % / ~0 % / ~0 % | ~0 % / ~0 % / ~0 % |
+| PNG-Encode (Δ `batch` − `render_frame`) | `batch/render_export_png__2048` − `core/render_frame__2048` | 37 902 834 | 53,7 % / 55,8 % / 57,6 % | 34,9 % / 35,8 % / 36,6 % |
 
-**Auswahlregel für die Tabelle (regelbasiert, keine handgepflegte ID-Liste).**
-Die Tabelle ist aus `perf/baseline.json` zu **erzeugen**, nicht von Hand zu
-pflegen. *Menge der Zeilen:* alle IDs mit Präfix `core/` und Suffix `__2048`
-(neun IDs), dazu `batch/render_export_png__2048` (Basis des Encode-Δ) sowie
-alle IDs mit Präfix `decode/raw__` (zwei IDs). Die PNG-Encode-Zeile ist die
-Differenz `batch/render_export_png__2048` − `core/render_frame__2048`.
-*Anteile:* Wert ÷ `core/render_frame__2048` bzw. ÷
-`batch/render_export_png__2048`. *Auflösungs-Rampe:* dieselbe Regel über alle
-IDs mit Präfix `core/` und Suffix `__512`, `__1024`, `__2048`, jeweils geteilt
-durch `core/render_frame__<dieselbe Auflösung>`. *Reihenfolge:* feste
-Pipeline-Reihenfolge dieses Dokuments (Render-Gesamt → Adjustments →
-Auto-Tone-Gruppe → Histogramm → Maske → Cache → Encode-Δ → Decode); sie ist
-eine Darstellungskonvention und ändert keine Zahl. *Format:* Tausendertrennzeichen
-als schmales Leerzeichen, Dezimalkomma, eine Nachkommastelle. Weicht der
-Store-Stand vom hier genannten ab (`recorded_at` ≠ 2026-09-17), ist die Tabelle
-neu zu erzeugen — die Zahlen in diesem Dokument werden nie manuell
-fortgeschrieben.
+**Decode-Klasse** (env-gated; die `decode/raw__*`-IDs tragen **kein**
+Aufloesungs-Suffix — die beiden CR3-Fixtures in voller Aufloesung):
+
+| ID | Median (ns) | Faktor zu `core/render_frame__2048` | Anteil an `batch/render_export_png` |
+| --- | ---: | ---: | ---: |
+| `decode/raw__aircraft-landscape` | 321 892 250 | 4,9× | — |
+| `decode/raw__aircraft-portrait` | 360 537 833 | 5,5× | — |
+<!-- END GENERATED: perf-baseline -->
+
+**Auswahlregel für den Block (regelbasiert, keine handgepflegte ID-Liste).**
+Der Block ist aus `perf/baseline.json` zu **erzeugen**, nicht von Hand zu
+pflegen. *Menge der Zeilen:* alle IDs mit Präfix `core/` (der Store liefert die
+Auflösungs-Suffixe und die Reihenfolge der Stufen), dazu je Auflösung die
+`batch/`-ID (Basis der Encode-Δ-Zeile) sowie alle IDs mit Präfix
+`decode/raw__` (ohne Auflösungs-Suffix). *Zeilenbildung:* neun `core/*__2048`-IDs
+ergeben **acht** Zeilen, weil `core/cache_hit__2048` und
+`core/cache_miss__2048` **eine** Zeile teilen („cache_hit / cache_miss“, zwei
+Werte in einer Zelle); die Decode-IDs ergeben je eine eigene Zeile. Die PNG-Encode-Zeile ist die
+Differenz `batch/render_export_png__<Auflösung>` −
+`core/render_frame__<Auflösung>`. *Anteile:* Wert ÷
+`core/render_frame__<dieselbe Auflösung>` bzw. ÷
+`batch/render_export_png__<dieselbe Auflösung>`. *Auflösungs-Rampe:* dieselbe
+Regel über alle Auflösungen, jeweils geteilt durch die Referenz derselben
+Auflösung; die Anteilsspalten des Blocks tragen sie Spalte für Spalte.
+*Reihenfolge:* die Reihenfolge der IDs im Store (eine Darstellungskonvention,
+keine Zahl). *Format:* Tausendertrennzeichen als schmales Leerzeichen,
+Dezimalkomma, eine Nachkommastelle; die Sonderfälle stehen im generierten
+Block. Weicht der Store-Stand vom im Block genannten ab
+(`environment.recorded_at`), ist der Block neu zu erzeugen — die Zahlen in
+diesem Dokument werden nie manuell fortgeschrieben.
 
 **Hotspot-Schlussfolgerung:** `apply_recipe_with_white_balance` dominiert den
-interaktiven Render-Pfad weiterhin, jetzt mit **85,8 %** von
-`core/render_frame__2048` (56 391 542 ns) und **54,4 %** des Batch-Exports;
-der Anteil ist über alle Auflösungen stabil (85,2 % → 85,7 % → 85,8 %) — das
-ist der klare Regler-/Vorschau-Hotspot. Die Auto-Tone-/Exposure-Match-Stufen
-sind **kein** dominanter Pfad mehr: `analyze_tone` **4,6 %**,
-`suggest_auto_tone` **4,6 %**, `match_total_exposure` **4,7 %** von
-`render_frame` (3,0–3,1 ms @2048) — je Stufe Faktor ~14 unter der früher
-behaupteten ~64-%-Größenordnung. Der RAW-Decode ist mit **4,9× / 5,5×
-`core/render_frame__2048`** (321 892 250 ns / 360 537 833 ns) ein eigener,
-env-gated Hot-Path für die Erst-Öffnen-Latenz; die `decode/raw__*`-IDs tragen
-**kein** Auflösungs-Suffix (die beiden CR3-Fixtures in voller Auflösung), ein
-Verhältnis zu `core/render_frame__512` wäre ein Fixture- gegen einen
-Auflösungsvergleich und wird hier **nicht** behauptet (die frühere Angabe
-„~45× bei 512" entfällt). Der PNG-Encode-Anteil am Batch-Export liegt bei
-**36,6 %** (Δ zum reinen `render_frame` = 37 902 834 ns), am `render_frame`
-selbst bei 57,6 %.
+interaktiven Render-Pfad weiterhin; sein Anteil am `render_frame` und am
+Batch-Export steht im generierten Block (F-074-N4) und ist über alle
+Auflösungen stabil — das ist der klare Regler-/Vorschau-Hotspot. Die
+Auto-Tone-/Exposure-Match-Stufen sind **kein** dominanter Pfad mehr: ihre
+Anteile (im generierten Block) liegen weit unter der früher behaupteten
+~64-%-Größenordnung. Der RAW-Decode ist mit dem im generierten Block genannten
+Faktor ein eigener, env-gated Hot-Path für die Erst-Öffnen-Latenz; die
+`decode/raw__*`-IDs tragen **kein** Auflösungs-Suffix (die beiden CR3-Fixtures
+in voller Auflösung), ein Verhältnis zu `core/render_frame__512` wäre ein
+Fixture- gegen einen Auflösungsvergleich und wird hier **nicht** behauptet (die
+frühere Angabe „~45× bei 512" entfällt). Das Encode-Δ und seine Anteile am
+Batch-Export und am `render_frame` stehen ebenfalls im generierten Block.
 
 **Priorisierte Performance-Feature-IDs** (Stand 2026-10-20: die vier IDs wurden
 am 2026-08-19 als offene Aufgaben in `Agents.todo.md` eingetragen und am
@@ -429,38 +443,38 @@ Kopplung an F-043 (Korrektheit) und F-075 (Speicherbudgets) gilt unverändert):
 - **F-074-A1 — bleibt (Prioritäts-Position, keine offene Aufgabe).**
   `apply_recipe_with_white_balance` Adjustments-Kernel (WB + Regler pro Pixel).
   Die A1-Optimierung (fusionierte Kanal-LUTs, Commit `8dacd3d`, 2026-08-20) ist
-  umgesetzt; der **verbleibende** Anteil ist der heutige Hotspot: **85,8 %**
-  von `core/render_frame__2048` (56 391 542 ns) und **54,4 %** von
-  `batch/render_export_png__2048` @2048, stabil über 512/1024/2048.
+  umgesetzt; der **verbleibende** Anteil ist der heutige Hotspot und steht im
+  generierten Block (F-074-N4) — stabil über alle Auflösungen.
 - **F-074-A2 — bleibt, Zahl korrigiert.** `decode/raw` Decode-Durchsatz
   (LibRaw-Overhead, Decode/Upload überlappen, dekodierte Buffer cachen). Die
   A2-Optimierung (Commit `a03c272`, 2026-08-20: redundante Dateikopie entfernt,
   schnelle RGBA-Promotion) ist umgesetzt; das Verhältnis Decode zu Render ist
-  durch die **schnellere** Render-Pipeline von ~3,0–3,4× auf **4,9× / 5,5×**
-  `core/render_frame__2048` gewachsen — die ID bleibt, die Zahl wird
+  durch die **schnellere** Render-Pipeline gewachsen — der Faktor steht im
+  generierten Block (F-074-N4), die ID bleibt, die Zahl wird
   korrigiert. Beleg-Einwand zum Stand: die Decode-Mediane **und** -P95 sind im
-  Baseline-Store vom 2026-09-17 **unverändert** aus dem Erfassungsstand
+  Baseline-Store (Erfassungszeitpunkt siehe generierter Block) **unverändert**
+  aus dem Erfassungsstand
   2026-08-19 (rustc 1.97.1) übernommen (identische Median- und P95-Werte in
   `3b07ed7` und `9f8c632`; die Re-Baseline-Begründung in F-074-N7 führt die
   `decode/raw__*`-IDs ausdrücklich als „unangetastet") — die Decode-Zahlen sind
   damit **keine** Messung mit rustc 1.98.0.
 - **F-074-A3 — fällt weg (als priorisierte offene Position).** Die
-  ~64-%-Motivierung trägt mit der heutigen Baseline **nicht**: `analyze_tone`
-  **4,6 %**, `suggest_auto_tone` **4,6 %**, `match_total_exposure` **4,7 %**
-  von `core/render_frame__2048` (3 000 248 / 3 001 195 / 3 061 821 ns) — je
-  Stufe Faktor ~14 unter dem alten Wert (64,7 % / 64,4 % / 64,4 %) und
-  auflösungsunabhängig statt auflösungsabhängig. Die A3-Optimierung (Commit
+  ~64-%-Motivierung trägt mit der heutigen Baseline **nicht**: die Anteile von
+  `analyze_tone`, `suggest_auto_tone` und `match_total_exposure` stehen im
+  generierten Block (F-074-N4) und liegen weit unter dem alten Wert
+  (64,7 % / 64,4 % / 64,4 %, Stand `3b07ed7`) — auflösungsunabhängig statt
+  auflösungsabhängig. Die A3-Optimierung (Commit
   `2253de5`, 2026-08-20: Single-Pass-`mean_luminance`, `analyze_tone` sortiert
   `unstable`) ist umgesetzt und die ID am 2026-08-20 geschlossen; für die
-  verbleibenden ~3 ms je Stufe trägt eine eigene Task-ID nicht.
+  verbleibenden wenigen Millisekunden je Stufe trägt eine eigene Task-ID nicht.
 - **F-074-A4 — bleibt (Prioritäts-Position, keine offene Aufgabe), Zahl
   korrigiert.** PNG-Export-Encode-Durchsatz (`batch/render_export_png` −
   `render_frame`; Codec/Stufen, ggf. schnellere Kodierung). Die A4-Optimierung
   (Commit `7045da7`, 2026-08-20: direkter `PngEncoder` ohne 16-MB-Klon) ist
-  umgesetzt; das Encode-Δ beträgt **37 902 834 ns** = **57,6 %** von
-  `core/render_frame__2048` bzw. **36,6 %** von
-  `batch/render_export_png__2048` @2048 (alt: 56,4 % / 36,0 %) — weiterhin der
-  zweitgrößte Block des Batch-Exports nach dem Render-Pfad selbst (63,4 %).
+  umgesetzt; das Encode-Δ und seine Anteile an `core/render_frame__2048` bzw.
+  `batch/render_export_png__2048` stehen im generierten Block (F-074-N4) —
+  weiterhin der zweitgrößte Block des Batch-Exports nach dem Render-Pfad
+  selbst.
 
 ### F-074-N5 — Regression-Gate
 
@@ -543,7 +557,9 @@ wurde nach PERF-GUI-2/GPU-STAGE-1/GUI-WGPU-PRESENT-1 stabilisiert und
 kalibriert). `budget_ns` ≈ 2× Median, `tolerance_ratio` 1.2; die
 Kalibrier-Notiz steht im `note`-Feld. Die Re-Baseline vom 2026-09-17 hat die
 GPU-Messwerte neu erfasst (readback-freier Present-Pfad: `cpu_vs_gpu__gpu__2048`
-jetzt ~1,1 ms statt ~55,6 ms, ~50× schneller als CPU).
+jetzt ~1,1 ms statt ~55,5 ms — der CPU-Gegenlauf `gpu/cpu_vs_gpu__cpu__2048`
+steht im Store `perf/baseline.json` mit 55 493 584 ns —, ~50× schneller als
+CPU).
 
 Der frühere Stand (2026-08-22, `gate: false`, ohne Baseline) ist überholt; die
 damaligen M5-Pro-Zahlen (z. B. `gpu/render_with_gpu__2048` = 5 057 014 ns,
@@ -749,7 +765,10 @@ Darwin/arm64, Apple M5 Pro, rustc 1.98.0), 50 Samples je Bench, Kommando
 | `stage_cache_hit__*` (Cache-Hit) | 0,012 | 0,050 | 0,227 |
 
 **Kostenverteilung (informativ):** die **heutige** Crop-Ersparnis ist klein
-(≈ 9 % bei 10 % Restfläche) — der Crop steht hinter der Tonal-Stufe und hinter
+(≈ 9,75 % bei 10 % Restfläche; aus `perf/crop_pipeline_measurement.json` —
+`render_frame_cropped_full__2048` 78 206 198 ns gegen
+`render_frame_cropped__2048__10pct` 70 581 354 ns) — der Crop steht hinter der
+Tonal-Stufe und hinter
 der Geometrie-Kette. Bei **eingeschalteter** Linsenkorrektur dominiert
 `lens_stage` (177 ms @2048, mehr als das Gesamt-`render_frame__2048` der
 Baseline, weil die manuelle Korrektur eine 8-stufige Newton-Iteration pro

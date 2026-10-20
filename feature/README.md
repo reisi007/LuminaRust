@@ -22,12 +22,17 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
   virtuelle Kopien
 - Autorität: fachlicher Zielzustand für Implementierungs- und
   Verifizierungs-Agenten
-- Codebestand: Raster-MVP in Arbeit — 17 Crates im Workspace (`lumina-sidecar`,
+- Codebestand: Raster-MVP in Arbeit — Crates im Workspace (`lumina-sidecar`,
   `lumina-core`, `lumina-cache`, `lumina-raw`, `lumina-onnx`, `lumina-gpu`,
   `lumina-lensfun`, `lumina-merge`, `lumina-cull`, `lumina-stages`, `lumina-cli`,
   `lumina-mcp`, `lumina-gui`, `lumina-iptc` sowie die Test-Infra
   `lumina-testskip`, `lumina-gui-harness` und `lumina-bench`); Stand und offene
   Arbeit siehe `Agents.todo.md` (Stand 2026-10-16)
+
+<!-- BEGIN GENERATED: crates -->
+**17** Crates im Workspace (Quelle: die `members` in `Cargo.toml`; Zahlregel:
+die Eintraege des `members`-Arrays — keine handgepflegte Liste).
+<!-- END GENERATED: crates -->
 
 ## Leitbild
 
@@ -172,7 +177,8 @@ Sidecars vollständig wiederherstellbar sein.
   Ausgabe belegt; dann *schließen*: Befunde in Wellen, je Welle ein
   Regressionstest), Registertabelle mit Befund-ID, Klasse, Oberfläche,
   Wellenstatus, Test, Owner, Beleg und Stand, und die Enumerationsbasis des
-  Projekts (24 erreichbare Oberflächen). **Bisher null Befunde** — die Form,
+  Projekts (die Liste der erreichbaren Oberflächen und ihre Zahl: siehe §5 des
+  Registers). **Bisher null Befunde** — die Form,
   nicht das Ergebnis; die erste Review-Welle ist die offene Task
   `SEC-REVIEW-WELLE-1-85` (SECURITY-REVIEW-REGISTER)
 

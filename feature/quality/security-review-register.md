@@ -16,9 +16,11 @@ Welle; der Implementierungs- bzw. Verifizierungs-Agent liefert den Beleg
 > geschlossene Welle bleibt die Tabelle leer.
 >
 > **§5.1** hält die **Enumeration** der Oberflächen fest (Welle 1,
-> Teil *Finden/Enumerieren*; die Basis wurde am 2026-10-20 auf 24 Oberflächen
-> erweitert): Eingabe- und Ausgabepfade, Vertrauensgrenze und die zu prüfenden
-> Klassen. Sie enthält **keine Bewertung** und **keinen Befund**.
+> Teil *Finden/Enumerieren*; die Basis wurde am 2026-10-20 um **fünf**
+> Oberflächen erweitert — die Zahl der enumerierten Oberflächen steht im
+> generierten Block **surfaces**): Eingabe- und Ausgabepfade, Vertrauensgrenze
+> und die zu prüfenden Klassen. Sie enthält **keine Bewertung** und **keinen
+> Befund**.
 
 ---
 
@@ -226,12 +228,18 @@ Bewertung des Zustands einer Oberfläche.
 Alle Pfade dieser Tabelle wurden am 2026-10-20 gegen den Baum geprüft und
 existieren.
 
-**Enumerationsstand:** Die **24** Oberflächen dieser Tabelle wurden am 2026-10-20
+**Enumerationsstand:** Die Oberflächen dieser Tabelle wurden am 2026-10-20
 (**Security-Review-Welle 1**, Teil *Finden/Enumerieren*) **enumeriert** —
 Eingabe- und Ausgabepfade je Oberfläche stehen in **§5.1**. Die Enumeration
 bewertet den Zustand einer Oberfläche **nicht** (§6) und hat **keinen** Befund
 erzeugt; die Spalte „Was hier noch offen ist" nennt weiterhin nur die noch
 ausstehende **Prüfung**.
+
+<!-- BEGIN GENERATED: surfaces -->
+**24** Oberflaechen enumeriert (Quelle: die §5-Basis-Tabelle in
+`feature/quality/security-review-register.md`; Zahlregel: die Datenzeilen
+dieser Tabelle — die Liste selbst bleibt handgepflegt).
+<!-- END GENERATED: surfaces -->
 
 **Basis-Erweiterung (Eigentümerentscheid 2026-10-20):** die Basis wurde
 **vollständig erweitert** — fünf neue Zeilen (`lumina-stages`, `lumina-cull`,
@@ -244,10 +252,10 @@ Ausgabepfade / Vertrauensgrenze / zu prüfende Klassen / Beleg).
 | Oberfläche | Pfad | Art der Eingabe/Ausgabe | Was hier noch offen ist |
 |---|---|---|---|
 | **MCP-Server (Transport)** | `crates/lumina-mcp/src/lib.rs` (`Server`, JSON-RPC über stdio), `crates/lumina-mcp/src/error.rs` | Eingabe: JSON-RPC-Requests auf stdin; Ausgabe: JSON-RPC-Responses auf stdout | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre die Protokoll-/Methodenliste des Servers |
-| **MCP-Werkzeug-Oberfläche** | `crates/lumina-mcp/src/tools/mod.rs` (`list_tool_definitions`, `dispatch_tool`, `is_known_tool`), Werkzeug-Implementierungen in `crates/lumina-mcp/src/tools/*.rs` | Eingabe: Tool-Argumente als JSON; Ausgabe: Tool-Ergebnis als JSON | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre die Tool-Liste (29 registrierte Tools, je ein eigenes Modul; daneben 4 gemeinsame Helper-Module im selben Verzeichnis); **SOLL-Quelle**: `feature/platform/mcp-server.md` |
+| **MCP-Werkzeug-Oberfläche** | `crates/lumina-mcp/src/tools/mod.rs` (`list_tool_definitions`, `dispatch_tool`, `is_known_tool`), Werkzeug-Implementierungen in `crates/lumina-mcp/src/tools/*.rs` | Eingabe: Tool-Argumente als JSON; Ausgabe: Tool-Ergebnis als JSON | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre die Tool-Liste (die registrierten Tools — Zahl und Zählweg siehe generierter Block **mcp-tools** in §5.1 — je ein eigenes Modul; daneben 4 gemeinsame Helper-Module im selben Verzeichnis); **SOLL-Quelle**: `feature/platform/mcp-server.md` |
 | **MCP-Pfad-/Zielbehandlung** | `crates/lumina-mcp/src/output_guard.rs` (`reject_protected_target`), `crates/lumina-mcp/src/util.rs` (`build_source_identity`, `write_output_guarded`, `parse_bounded_uint`, `validate_output_extension`) | Eingabe: Datei- und Zielpfade, Zahlen- und Formatparameter; Ausgabe: abgewiesene Schreibziele, Source-Identität | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: jede der Wurzelfunktionen wäre einzeln zu betrachten |
 | **MCP-Session-Zustand** | `crates/lumina-mcp/src/session.rs` | Eingabe: Tool-Aufrufe mit `image_id`; Ausgabe: Sitzungszustand, Vorschau-/Temp-Dateien | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Sitzung-Lebenszyklus und Aufräumen |
-| **CLI-Kommando-Oberfläche** | `crates/lumina-cli/src/main.rs` (`enum Command`, clap-`Parser`), Argument-Strukturen ab `struct FileArgs` ff., Kommando-Implementierungen ab `fn run(cli: Cli)` | Eingabe: Kommandozeile (Argumente, Pfade, Zahlen); Ausgabe: Dateien, stdout/stderr, Exit-Code | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre das `Command`-Enum (32 Varianten mit Argument-Strukt, zusätzlich die Feature-gate-Variante `Mcp`); **SOLL-Quelle**: `feature/platform/cli-gui-wasm.md` |
+| **CLI-Kommando-Oberfläche** | `crates/lumina-cli/src/main.rs` (`enum Command`, clap-`Parser`), Argument-Strukturen ab `struct FileArgs` ff., Kommando-Implementierungen ab `fn run(cli: Cli)` | Eingabe: Kommandozeile (Argumente, Pfade, Zahlen); Ausgabe: Dateien, stdout/stderr, Exit-Code | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre das `Command`-Enum (die Varianten mit Argument-Strukt und die Feature-gate-Variante `Mcp`; Zahl und Zählweg siehe generierter Block **mcp-tools** in §5.1); **SOLL-Quelle**: `feature/platform/cli-gui-wasm.md` |
 | **CLI-Submodule** | `crates/lumina-cli/src/{auto_tone_cli,cull_cli,lensfun_cli,lensfun_gpu,local_mask_gpu,mask_local,mask_local_color,mask_local_curves,mask_local_detail,mask_local_presence,merge,matrix,stages,library}.rs` (die vier GPU-/Lensfun-Module stehen unter `#[cfg(feature = "gpu")]` bzw. `#[cfg(feature = "lensfun")]` — im Default-Build sind sie **nicht** kompiliert) | Eingabe: je Subcommand eigene Argumente; Ausgabe: Rezept-/Sidecar-/Status-Änderungen | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: jede Kommando-Gruppe wäre getrennt zu zählen. **Ausnahme:** `lensfun_gpu.rs` und `local_mask_gpu.rs` sind **keine** Subcommands mit eigenen Argumenten, sondern GPU-Binder/-Compositing-Module des CLI-Crates, die `fn run(cli: Cli)` über `render_best_effort` erreicht (`lensfun_gpu::classify`, `lensfun_gpu::bind`, `local_mask_gpu::mask_layer_routing_reasons`, `local_mask_gpu::composite`) |
 | **Gemeinsame Pfad-/Dateischicht (`lumina-stages`)** | `crates/lumina-stages/src/paths.rs` (`require_sidecar`, `collect_target_sidecars`, `collect_sidecars`, `collect_tree_files`, `move_file_cross_volume`, `load_smart_catalog`), `crates/lumina-stages/src/relocate.rs` (`run`), `crates/lumina-stages/src/collections.rs` (`run`), `crates/lumina-stages/src/merge.rs` (`decode_source`), `crates/lumina-stages/src/matrix_run.rs` (`run`) | Eingabe: Bild-, Sidecar-, Ziel- und Verzeichnispfade; Ausgabe: verschobene Dateien samt Begleitdateien, geschriebene Sidecars, DNG- und Report-Dateien | **enumeriert (Welle 1, §5.1)** — **Basis-Erweiterung** (Eigentümerentscheid 2026-10-20) — enumeriert in §5.1 |
 | **Culling-Sidecar-Bindung (`lumina-cull`)** | `crates/lumina-cull/src/sidecar_io.rs` (`load_culling`, `save_culling`, `record_culling`, `clear_culling`, `evaluate_culling`, `evaluate_section`), `crates/lumina-cull/src/identity.rs` (`identity_mismatches`), `crates/lumina-cull/src/analyze.rs` (`analyze_heuristic`, `analyze_selection`) | Eingabe: Sidecar-Datei von Platte, Culling-Identität; Ausgabe: `CullingReadState`, persistierter `culling`-Block in der `.lumina.json` | **enumeriert (Welle 1, §5.1)** — **Basis-Erweiterung** (Eigentümerentscheid 2026-10-20) — enumeriert in §5.1 |
@@ -293,7 +301,8 @@ Ausgabepfade / Vertrauensgrenze / zu prüfende Klassen / Beleg).
 
 ## 5.1 Enumerierte Außengrenzen (Security-Review-Welle 1)
 
-**Was dieser Abschnitt ist.** Die **24** Oberflächen aus §5 sind **enumeriert**
+**Was dieser Abschnitt ist.** Die Oberflächen aus §5 (die Zahl steht im
+generierten Block **surfaces**) sind **enumeriert**
 (die ersten 19 in Welle 1, die weiteren 5 nach der Basis-Erweiterung vom
 2026-10-20): je Oberfläche sind die **erreichbaren Eingabe- und Ausgabepfade**
 aufgeführt, die **Vertrauensgrenze** benannt und die **Defektklassen**
@@ -311,36 +320,57 @@ die spätere Welle schauen müsste. Jede Aussage hier ist ein **Codebefund**
 
 | Population | Zahl |
 |---|---|
-| Oberflächen in §5 | **24** (Zeilen der §5-Basis-Tabelle) |
-| `tool_def(`-Aufrufe in `crates/lumina-mcp/src/tools/mod.rs` | **29** Werkzeugdefinitionen (plus die eine Konstruktorfunktion `fn tool_def`) |
-| Module in `crates/lumina-mcp/src/tools/` | **33** Module (+ `mod.rs` = **34** Dateien): **29** mit `pub const NAME` (je ein registriertes Werkzeug) + **4** Helper (`library_common`, `merge_common`, `meta_common`, `stage_common`) — 29 + 4 = 33 |
-| `Command`-Varianten in `crates/lumina-cli/src/main.rs` | **33** insgesamt: **32** mit Argument-Strukt, dazu die feature-gate-Variante `Mcp` (`#[cfg(feature = "mcp")]`), die **ohne** Klammer steht |
+| Oberflächen in §5 | siehe generierter Block **surfaces** (Zeilen der §5-Basis-Tabelle) |
+| `tool_def(`-Aufrufe in `crates/lumina-mcp/src/tools/mod.rs` | siehe generierter Block **mcp-tools** |
+| Module in `crates/lumina-mcp/src/tools/` | **33** Module (+ `mod.rs` = **34** Dateien): die Module mit `pub const NAME` (je ein registriertes Werkzeug — die Zahl steht im generierten Block **mcp-tools**) + **4** Helper (`library_common`, `merge_common`, `meta_common`, `stage_common`) |
+| `Command`-Varianten in `crates/lumina-cli/src/main.rs` | siehe generierter Block **mcp-tools** |
 | CLI-Module in `crates/lumina-cli/src/` | **15** `.rs`-Dateien: **14** in §5 benannt (12 Subcommand-Module + `lensfun_gpu.rs` + `local_mask_gpu.rs`), `main.rs` als Einstieg |
 | Argument-Strukturen in `crates/lumina-cli/src/main.rs` | **33** (`struct FileArgs` ff.) |
 
-**Die Zählkommandos** (im Repo ausführbar; die Ausgabe steht jeweils in
-Klammern dahinter):
+<!-- BEGIN GENERATED: mcp-tools -->
+**MCP-Werkzeuge und CLI-Kommandos (Population).**
 
-- `grep -c "tool_def(" crates/lumina-mcp/src/tools/mod.rs` → 30 (29 Aufrufe +
-  die Konstruktorfunktion `fn tool_def`)
+- **Registrierte MCP-Werkzeuge:** **29** (Zahlweg: die `tool_def(`-
+  Aufrufe in `crates/lumina-mcp/src/tools/mod.rs`;
+  `grep -c "^[[:space:]]*tool_def(" crates/lumina-mcp/src/tools/mod.rs` — der
+  Konstruktor `fn tool_def` steht ohne fuehrenden Leerraum und zaehlt
+  **nicht** mit).
+- **`Command`-Varianten in `crates/lumina-cli/src/main.rs`:** **33**
+  insgesamt — **32** mit Argument-Strukt plus die Feature-Gate-Variante
+  `Mcp` (`#[cfg(feature = "mcp")]`), die **ohne** Klammer steht (Zahlweg:
+  `awk "/^enum Command \{/,/^\}/" crates/lumina-cli/src/main.rs | grep -cE "^    [A-Z][A-Za-z]*"`
+  — `Mcp` **mitgezaehlt**; dieselbe Pipe mit `grep -cE "^    [A-Z][A-Za-z]*\("`
+  zaehlt die **32** Varianten **mit** Argument-Strukt).
+
+Quelle: die beiden genannten Quelltext-Dateien (committet). Die Zahlen sind
+eine Textableitung aus dem Code, keine Laufzeitmessung.
+<!-- END GENERATED: mcp-tools -->
+
+**Die Zählkommandos** (im Repo ausführbar; die Ausgabe steht jeweils in
+Klammern dahinter; die Zählwege der Populationen mit generiertem Block stehen
+im Block selbst):
+
+- `grep -c "tool_def(" crates/lumina-mcp/src/tools/mod.rs` → 30 (Aufrufe **plus**
+  die Konstruktorfunktion `fn tool_def`; die Zahl der **Aufrufe** steht im
+  generierten Block **mcp-tools**)
 - `ls crates/lumina-mcp/src/tools/*.rs | wc -l` → 34 (33 Module + `mod.rs`)
-- `grep -l "pub const NAME" crates/lumina-mcp/src/tools/*.rs | wc -l` → 29
+- `grep -l "pub const NAME" crates/lumina-mcp/src/tools/*.rs | wc -l` → siehe
+  generierter Block **mcp-tools** (die Zahl der Werkzeugmodule)
 - `grep -L "pub const NAME" crates/lumina-mcp/src/tools/*.rs` →
   `library_common.rs`, `merge_common.rs`, `meta_common.rs`, `mod.rs`,
   `stage_common.rs` (4 Helper + `mod.rs`)
-- `awk '/^enum Command \{/,/^\}/' crates/lumina-cli/src/main.rs | grep -cE "^    [A-Z][A-Za-z]*"` →
-  **33** (Gesamtzahl, `Mcp` **mitgezählt**)
-- `awk '/^enum Command \{/,/^\}/' crates/lumina-cli/src/main.rs | grep -cE "^    [A-Z][A-Za-z]*\("` →
-  32 (nur die Varianten **mit** Argument-Strukt; `Mcp` steht ohne Klammer)
 - `ls crates/lumina-cli/src/*.rs | wc -l` → 15
 - `grep -cE "^struct [A-Za-z]+Args" crates/lumina-cli/src/main.rs` → 33
 
 > **Zählhinweis (kein Befund):** die §5-Basiszeile *CLI-Kommando-Oberfläche*
-> nennt „32 Varianten mit Argument-Strukt, zusätzlich die Feature-gate-Variante
-> `Mcp`". Gezählt sind **33 Varianten** — **32 mit Argument-Strukt** plus `Mcp`,
-> das ohne Klammer steht und daher von der Regex `^    [A-Z][A-Za-z]*\(` **nicht**
-> erfasst wird. Die Formulierung in §5 ist damit **deckungsgleich** mit der
-> Messung; die **Zähl-Clause** in §5 bleibt unverändert (die §5-Tabelle selbst wuchs in dieser Welle von 19 auf 24 Zeilen und ihre Status-Spalte wurde umgestellt).
+> nennt die Varianten des `Command`-Enums und die Feature-gate-Variante
+> `Mcp`; Zahl und Zählweg stehen im generierten Block **mcp-tools** oben. Die
+> Variante `Mcp` steht **ohne** Klammer und wird von der Regex
+> `^    [A-Z][A-Za-z]*\(` deshalb **nicht** erfasst — der Block zählt sie **mit**
+> (er nutzt die Regex ohne Klammer). Die **Zähl-Clause** in §5 bleibt
+> unverändert (die §5-Tabelle selbst wuchs in dieser Welle — ihre Zeilenzahl
+> steht im generierten Block **surfaces** — und ihre Status-Spalte wurde
+> umgestellt).
 
 ---
 
@@ -374,7 +404,8 @@ Klammern dahinter):
 
 - **Eingabepfade** — `crates/lumina-mcp/src/tools/mod.rs`: `dispatch_tool`
   nimmt den Werkzeugnamen und `args: &Value` und ruft je Werkzeug `run(server, args)`
-  auf (29 registrierte Werkzeuge, je ein Modul in `crates/lumina-mcp/src/tools/`).
+  auf (die registrierten Werkzeuge — Zahl und Zählweg siehe generierter Block
+  **mcp-tools** — je ein Modul in `crates/lumina-mcp/src/tools/`).
   Die Argumentextraktion läuft über `crates/lumina-mcp/src/util.rs`
   (`get_str`, `parse_bounded_uint`, `parse_output_format`,
   `validate_output_extension`). Pfadtragende Argumente stehen in den
@@ -473,8 +504,8 @@ Klammern dahinter):
 ### 5.1.5 CLI-Kommando-Oberfläche
 
 - **Eingabepfade** — `crates/lumina-cli/src/main.rs`: `Cli::parse` (clap) füllt
-  `struct Cli` mit `enum Command` (**33** Varianten: 32 mit Argument-Strukt +
-  `Mcp`); `fn run(cli: Cli)`
+  `struct Cli` mit `enum Command` (die Variantenzahl steht im generierten Block
+  **mcp-tools**); `fn run(cli: Cli)`
   verzweigt in die Kommando-Implementierungen; die Argument-Strukturen
   (`struct FileArgs`, `struct ExportArgs`, `struct BatchArgs`, `struct MaskArgs`,
   `struct ProcessArgs`, `struct CullArgs`, `struct FaceArgs`,
@@ -1112,11 +1143,12 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
    Auswahl-Semantik (z. B. ob ein Verzeichnis statt einer Datei gewählt werden
    kann) ist aus dem LuminaRust-Code nicht entscheidbar und wurde deshalb
    nicht behauptet (§5.1.23 nennt die Aufrufstellen, nicht ein Symbol).
-5. **`Command`-Variantenzahl in §5 — geprüft, die Zähl-Clause unverändert.** Die Zählung
-   ergab **33** Varianten (32 mit Argument-Strukt plus `Mcp`); die
-   §5-Formulierung („32 Varianten mit Argument-Strukt, zusätzlich die
-   Feature-gate-Variante `Mcp`") ist genau das und **bleibt unverändert** — die
-   §5-Tabelle selbst hat sich in dieser Welle geändert (19 -> 24 Zeilen, Status-Spalte umgestellt).
+5. **`Command`-Variantenzahl in §5 — geprüft, die Zähl-Clause unverändert.** Die
+   Zählung und der Zählweg stehen im generierten Block **mcp-tools** (§5.1); die
+   §5-Formulierung (die Varianten mit Argument-Strukt und die
+   Feature-gate-Variante `Mcp`) ist genau das und **bleibt unverändert** — die
+   §5-Tabelle selbst hat sich in dieser Welle geändert (ihre Zeilenzahl steht im
+   generierten Block **surfaces**; die Status-Spalte wurde umgestellt).
    Die Zählregex `^    [A-Z][A-Za-z]*\(` erfasst `Mcp` nicht, weil die
    Variante ohne Klammer steht — der Zählhinweis in §5.1 weist darauf hin.
 6. **Die Zuordnung der Klassen.** Die in §5.1 je Oberfläche genannten Klassen
@@ -1176,7 +1208,8 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   **Enumeration** der Oberflächen (Security-Review-Welle 1, Teil
   *Finden/Enumerieren*) — **ohne Bewertung und ohne Befund**; §3 bleibt bei
   null Befunden. **Basis-Erweiterung desselben Tages** (Eigentümerentscheid):
-  §5 führt jetzt **24** Oberflächen (19 + 5 neue Zeilen) und die GUI ist
+  §5 führt jetzt die im generierten Block **surfaces** genannte Zahl an
+  Oberflächen (die Basis-Erweiterung hat fünf Zeilen ergänzt) und die GUI ist
   **gleichrangig** im Scope (§5, „Hinweise zur Reichweite dieser Basis").
 - **Pflege:** Der Build-Agent trägt nach jeder bestandenen Verifikation einer
   Welle die zugehörige Zeile in §3 nach; die Implementierungs- und

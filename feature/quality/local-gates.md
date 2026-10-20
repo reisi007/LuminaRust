@@ -5,7 +5,8 @@ DOC-ZAHLEN-DRIFT-82
 **Status:** umgesetzt (Runner `scripts/gates.sh`, Tier-Tabelle in §3, Floor in
 §4, Lückenliste in §5); die CI fährt die schnelle Stufe über denselben
 Runner (§6) und prüft die Spiegelung der Tier-Liste gegen `ci.yml` (§7) sowie
-die Zahlen der Prosa gegen ihren Generator (§8).
+die Zahlen der Prosa gegen ihren Generator (§8) und den Generator selbst
+gegen Determinismus und Git-Freiheit (§8.5).
 **Herkunft:** Skill `ratchet-gates` (agents-skills `70d49e0`), Range
 `787670a..00dbd22`.
 **Verwandt:** `Agents.md` §„Verifizierung und Tests", `DoD.md`,
@@ -38,6 +39,7 @@ macOS-Gate), `feature/quality/performance-benchmarks.md` (Bench-Budgets).
   - [8.2 Die Blöcke](#82-die-bloecke)
   - [8.3 Wie er läuft](#83-wie-er-laeuft)
   - [8.4 Grenzen](#84-grenzen)
+  - [8.5 Der Hygiene-Gate des Generators (`fast-9`)](#85-der-hygiene-gate-des-generators-fast-9)
 - [9. Bekannte Grenzen](#9-bekannte-grenzen)
 
 ---
@@ -57,7 +59,7 @@ Dieses Dokument und der Runner `scripts/gates.sh` liefern diese Antwort:
 1. **zwei benannte Stufen** — `fast` (Sekunden) und `slow` (Minuten), beide
    lokal startbar, beide mit fester Kommando-Menge;
 2. **ein Floor für die schnelle Stufe** — sie meldet nur „grün", wenn
-   tatsächlich mindestens acht Checks gelaufen sind (§4);
+   tatsächlich mindestens neun Checks gelaufen sind (§4);
 3. **eine Lückenliste** — jede Defektklasse, die keine Stufe abdeckt, steht
    mit Grund, Owner und Task-ID hier (§5);
 4. **einen Drift-Gate gegen die CI** — die Tier-Liste wird aus `ci.yml`
@@ -80,7 +82,7 @@ sh scripts/gates.sh fast
 - **Budget:** Sekunden (gemessen: unter zehn Sekunden auf diesem Host).
 - **Bedarf:** keine Infrastruktur — kein Server, keine Datenbank, kein
   Netz, kein Build-Artefakt, kein Adapter. Nur `cargo fmt` (rustfmt, **kein**
-  Compile) und sieben POSIX-Shell-Gates.
+  Compile) und acht POSIX-Shell-Gates.
 - **Deckt ab:** Formatierung des gesamten Workspace; die vier Textschranken
   (Dateigrößen-Ratchet, Plan-Format, Env-Gate-Begründungen,
   Produktions-Dateisystemfreiheit von `lumina-core`) und den **Drift-Gate**
@@ -88,10 +90,13 @@ sh scripts/gates.sh fast
   dazu die **Zeilen-Obergrenze 3000** (`fast-7`,
   `scripts/check_file_ceiling.sh`) — die harte Grenze je Datei plus
   Ratchet-Richtung, deren SOLL-Zielsemantik in
-  [`file-size-policy.md`](file-size-policy.md) steht — und der **Drift-Gate
+  [`file-size-policy.md`](file-size-policy.md) steht — der **Drift-Gate
   der Prosa-Zahlen** (`fast-8`, `scripts/check_doc_facts_drift.sh`), der die
   generierten Fakten-Blöcke in den Dokumenten gegen ihren Generator prüft
-  (§8).
+  (§8), und das **Hygiene-Gate des Generators** (`fast-9`,
+  `scripts/check_doc_facts_generator.sh`), das prüft, dass der Generator
+  vollständig, deterministisch und **git-frei** ist — derselbe Lauf ohne
+  `git` im PATH muss byteweise dieselbe Ausgabe liefern (§8.5).
 - **Deckt nicht ab:** alles, was kompiliert, linkt, läuft oder einen Adapter
   braucht. `fast` ruft **kein** `cargo build/check/clippy/test/bench` auf; der
   Runner prüft das vor dem Lauf und bricht ab, falls die Definition
@@ -166,6 +171,7 @@ Wortgleich mit `sh scripts/gates.sh list`:
 | fast-6 | fast | `sh scripts/check_ci_tier_drift.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-7 | fast | `sh scripts/check_file_ceiling.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-8 | fast | `sh scripts/check_doc_facts_drift.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
+| fast-9 | fast | `sh scripts/check_doc_facts_generator.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | slow-1 | slow | `cargo check --workspace --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-2 | slow | `cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-3 | slow | `cargo clippy -p lumina-core --features lensfun -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
@@ -204,9 +210,9 @@ zu unterscheiden — wer das grüne Gate liest, hat nichts gelernt.
 Der Runner zählt deshalb die **gestarteten** Checks der Stufe `fast` und
 erzwingt einen Mindeststand:
 
-- `MIN_CHECKS=8` — die Zahl der gestarteten Checks muss mindestens 8 sein.
+- `MIN_CHECKS=9` — die Zahl der gestarteten Checks muss mindestens 9 sein.
 - Darunter ist das Ergebnis ein **Fehler** (Exit 1), kein Pass. Meldung:
-  `floor nicht erreicht: nur N von 8 Checks ausgefuehrt`.
+  `floor nicht erreicht: nur N von 9 Checks ausgefuehrt`.
 - Eine **leere Tier-Liste** ist ebenfalls ein Fehler (Exit 1), kein Pass.
 - Ein **fehlendes Prüfskript** zählt als **Fehlschlag** (Exit 127), nicht als
   Überspringen: ein Check, der nicht startet, ist ein toter Check.
@@ -215,6 +221,7 @@ erzwingt einen Mindeststand:
   im selben Commit an. (Erhöht von 5 auf 6, als `fast-6` — der Drift-Gate —
   hinzukam, und von 6 auf 7, als `fast-7` — die Zeilen-Obergrenze 3000 —
   hinzukam, und von 7 auf 8, als `fast-8` — der Drift-Gate der Prosa-Zahlen —
+  hinzukam, und von 8 auf 9, als `fast-9` — das Hygiene-Gate des Generators —
   hinzukam; ein Floor, der unter der Zahl der Checks liegt, würde das
   Entfernen eines Checks still werden lassen.)
 
@@ -310,7 +317,7 @@ tests") und steht deshalb in §5.1.
 
 ## 6. CI-Spiegelung der schnellen Stufe
 
-Die CI führt die acht schnellen Checks **über denselben Runner** wie lokal:
+Die CI führt die neun schnellen Checks **über denselben Runner** wie lokal:
 der Job „Rust fast checks" in `.github/workflows/ci.yml` hat einen Schritt
 „Run fast tier (scripts/gates.sh fast)". Definition und Ausführung sind
 damit dieselbe — ein Check, der lokal existiert und in der CI fehlt (oder
@@ -324,12 +331,12 @@ umgekehrt), kann nicht mehr unbemerkt auseinanderlaufen.
 „Run fast tier (scripts/gates.sh fast)" → `sh scripts/gates.sh fast`.
 
 Der abgedeckte Kommando-Satz ist damit **identisch**: der Runner führt genau
-`fast-1`…`fast-8` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
+`fast-1`…`fast-9` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
 Quelle, aus der der Runner seine Liste liest (`sh scripts/gates.sh list`).
 Die Kommando-Liste steht damit **nur** an einer Stelle; §6 führt sie nicht
-noch einmal auf. Die acht Checks laufen dabei **gebündelt am Job-Anfang**
+noch einmal auf. Die neun Checks laufen dabei **gebündelt am Job-Anfang**
 (vorher lief „Check formatting" zuerst, die vier Textgates zuletzt); alle
-acht sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
+neun sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
 Reihenfolge **innerhalb** der Stufe ist unverändert.
 
 Die übrigen Jobs der CI („Rust GUI tests", „Rust tests (excluding GUI)",
@@ -458,17 +465,21 @@ selben Diff.
 
 Eine Zahl in Prosa ist eine Kopie einer fremd gepflegten Tatsache und altert
 still. Die Zahlen der Prosa (Dateigrößen, Population, Zahl der committeten
-Goldens) standen als Text im Dokument — eine zweite Quelle der Wahrheit
-neben der Datei, aus der sie stammen. `fast-8` macht sie prüfbar: Muster
-„generate + diff", nicht „wirkt plausibel".
+Goldens, MCP-/CLI-Population, Baseline-Kostenverteilung, Zahl der
+Workspace-Crates, Zahl der enumerierten Oberflächen) standen als Text im
+Dokument — eine zweite Quelle der Wahrheit neben der Datei, aus der sie
+stammen. `fast-8` macht sie prüfbar: Muster „generate + diff", nicht „wirkt
+plausibel". `fast-9` sichert die Eigenschaft des Generators, ohne die diese
+Prüfung überhaupt aussagekräftig ist: **git-frei** (§8.5).
 
 ### 8.1 Bausteine
 
 | Baustein | Datei | Was er tut |
 | --- | --- | --- |
-| Generator | `scripts/gen_doc_facts.sh` | liest die Quelle (Textdatei, Dateisystem oder committetes Lockfile) und liefert den Block-Text → **Soll-Seite** |
+| Generator | `scripts/gen_doc_facts.sh` | liest die Quelle (Textdatei, Dateisystem, committetes Lockfile) und liefert den Block-Text → **Soll-Seite** |
 | Block-Marker | `<!-- BEGIN GENERATED: <id> -->` … `<!-- END GENERATED: <id> -->` | fassen den generierten Abschnitt in der Zieldatei ein |
 | Drift-Gate | `scripts/check_doc_facts_drift.sh` (Eintrag `fast-8`) | extrahiert den Block aus der Zieldatei (Arbeitsbaum), difft ihn gegen den Generator und meldet jede Abweichung |
+| Hygiene-Gate | `scripts/check_doc_facts_generator.sh` (Eintrag `fast-9`) | prüft den Generator selbst: Syntax, Vollständigkeit, Determinismus und **Git-Freiheit** (§8.5) |
 
 Der Generator liest **nur Text** und führt **nie** etwas aus, was er aus einem
 gelesenen Dokument gelesen hat (kein `eval`, kein `sh -c` mit extrahierten
@@ -487,6 +498,10 @@ Commit.
 | `file-sizes` | `feature/quality/file-size-policy.md` | `scripts/file_size_ceiling.txt` (Eintrag), `wc -l` (Ist-Stand), `scripts/file_size_baseline.txt` (500er-Eintrag) |
 | `population` | `feature/quality/file-size-policy.md` | das Dateisystem (`crates/`, `agent-harness/`), Schwellen aus den beiden Gate-Skripten |
 | `goldens` | `feature/README.md`, `feature/quality/golden-references.md`, `feature/quality/golden-fixtures.md` | `scripts/golden_ref.lock`, Feld `goldens.count` (committete Baseline; **kein** `git` nötig — der CI-Container hat keins; **kein** `ls`: im Verzeichnis liegen gitignorierte `*.new.png`-Artefakte). Die Kette zum Repo hält `scripts/golden_ref_test.sh` (Docs-Job **ohne** Container): es re-derived die Goldens aus dem Git-Index und prüft das Lockfile dagegen |
+| `mcp-tools` | `feature/platform/mcp-server.md`, `feature/quality/security-review-register.md` | die Quelltexte selbst: die `tool_def(`-Aufrufe in `crates/lumina-mcp/src/tools/mod.rs` (ohne den Konstruktor `fn tool_def`) und die Varianten des `enum Command` in `crates/lumina-cli/src/main.rs` (die Feature-Gate-Variante `Mcp` steht ohne Klammer und wird **mitgezählt**) |
+| `perf-baseline` | `feature/quality/performance-benchmarks.md` | der committete Store `perf/baseline.json`: die IDs mit Präfix `core/` (Auflösungs-Suffixe und Reihenfolge ergeben sich aus dem Store), die `batch/`-ID je Auflösung und die IDs mit Präfix `decode/raw__`; der Stand kommt aus `environment.recorded_at` |
+| `crates` | `feature/README.md` | die `members` im Workspace-Manifest `Cargo.toml` |
+| `surfaces` | `feature/quality/security-review-register.md` | die Datenzeilen der §5-Basis-Tabelle desselben Dokuments (die Liste selbst bleibt handgepflegt; nur ihre **Zahl** wird abgeleitet) |
 
 Die Zuordnung Block → Zieldatei steht im Manifest des Generators; der Gate
 liest dasselbe Manifest — ein **fehlender erwarteter Block** ist damit ein
@@ -498,6 +513,7 @@ Exit ≠ 0.
 
 ```sh
 sh scripts/check_doc_facts_drift.sh        # der Gate (Eintrag fast-8)
+sh scripts/check_doc_facts_generator.sh    # der Hygiene-Gate (Eintrag fast-9)
 sh scripts/gen_doc_facts.sh                # alle Blöcke, zum Einfügen
 sh scripts/gen_doc_facts.sh population     # ein Block (ohne Marker)
 sh scripts/gen_doc_facts.sh --manifest     # Block → Zieldatei
@@ -516,13 +532,36 @@ tot.
   eingebetteter Handliste wäre selbst eine zweite Quelle der Wahrheit.
 - **Nicht generiert sind** die Zahlen, die keine Ableitung aus einer Quelle
   sind: der R/C-Split der Goldens (die Klassifikation ist handgepflegt), die
-  Oberflächenzahl im Security-Register, Testlaufzahlen (ohne Build nicht
-  ableitbar). Sie altern weiter — das ist eine offene Lücke, keine Behauptung
+  **Liste** der Oberflächen selbst (nur ihre Zahl wird abgeleitet),
+  Testlaufzahlen (ohne Build nicht ableitbar — sie sind datiert oder
+  gestrichen). Sie altern weiter — das ist eine offene Lücke, keine Behauptung
   dagegen.
 - **Der Gate vergleicht Text**, er misst nichts nach: die erzeugten Zahlen
   sind Textableitungen, keine Laufzeitmessungen.
 - **Fehlt eine Quelle** (kein Git-Arbeitsbaum, fehlende Datei), meldet der
   Generator das und der Gate wird rot — er liefert **nie** still 0.
+
+### 8.5 Der Hygiene-Gate des Generators (`fast-9`)
+
+`scripts/check_doc_facts_generator.sh` prüft die Eigenschaft, ohne die der
+Drift-Gate `fast-8` **nichts** aussagen würde: dass der Generator in **jeder**
+Umgebung dasselbe erzeugt.
+
+- **Syntax** — `sh -n` auf dem Generator und auf dem Gate selbst.
+- **Vollständigkeit** — jede Block-Id aus dem Manifest ist erzeugbar (eine Id
+  ohne Implementierung wäre eine stille Lücke) und jede Zieldatei existiert.
+- **Determinismus** — zwei Läufe liefern byteweise dieselbe Ausgabe.
+- **Git-Freiheit** — derselbe Lauf in einer **PATH-Sandbox ohne `git*`**
+  (Symlinks auf alle übrigen Werkzeuge des PATH) liefert byteweise dieselbe
+  Ausgabe. Der Nachweis ist ein **Verhaltens-Nachweis**: er bräuchte kein
+  Git-Binary — und genau das ist die Bedingung, weil der CI-Container
+  `ghcr.io/reisi007/luminarust/lumina-ci:latest` **kein** `git` installiert
+  hat (CI-Lauf 39459843221, Job „Rust fast checks", 2026-10-20). Ein Generator,
+  der `git` bräuchte, wäre dort rot und lokal grün.
+
+Der Gate startet ausschließlich `sh scripts/gen_doc_facts.sh` mit festen
+Argumenten (`--manifest`, `--list`, `<block-id>`); der Inhalt einer gelesenen
+Datei fliesst nie in eine Kommandozeile.
 
 ## 9. Bekannte Grenzen
 
@@ -540,7 +579,7 @@ tot.
   `slow-22`, in der CI `continue-on-error`) zählen mit, werden mit
   Exit-Code und Hinweis gemeldet, machen die Stufe aber **nicht** rot. Der
   Floor zählt auch nicht *wie viele* Prüfungen ein Check intern durchführt —
-  die Zahl 8 ist die Zahl der Checks, nicht die Zahl der Einzelprüfungen.
+  die Zahl 9 ist die Zahl der Checks, nicht die Zahl der Einzelprüfungen.
 - Die Budgets in der Tier-Tabelle („Sekunden", „Minuten") sind Größenordnungen
   der Stufen, keine Messwerte aus einer Zeitmessung; der Runner misst die
   Sekunden je Check selbst und zeigt sie in der Zusammenfassung.
@@ -555,6 +594,13 @@ tot.
   **ohne** Lockfile-Update — macht `scripts/golden_ref_test.sh` im Job „Documentation checks“
   (ohne Container, mit `git`); ein Lockfile-Update **ohne** Doku-Update macht der Drift-Gate.
   Damit ist die Kette in beide Richtungen geschlossen.
+- **Alle sieben Bloecke sind git-frei** (§8.2) — der Generator liest
+  ausschliesslich committete Dateien und das Dateisystem. Der Nachweis ist
+  **nicht** das Wort im Kommentar, sondern der Hygiene-Gate `fast-9`
+  (`scripts/check_doc_facts_generator.sh`): derselbe Lauf in einer
+  PATH-Sandbox **ohne** `git*` muss byteweise dieselbe Ausgabe liefern. Ein
+  Block, der `git` braucht, ist im CI-Container nicht erzeugbar — am
+  2026-10-20 war das der Grund, warum der Job „Rust fast checks“ rot wurde.
 - Die **Richtungs-Pruefung (D)** des 3000er-Gates (`scripts/check_file_ceiling.sh`) laeuft
   **nur**, wo `git` verfuegbar ist: im CI-Container fehlt das Binary, der Gate schreibt dann
   den HINWEIS „(D) hat NICHT gelaufen“ (stderr **und** Schlusszeile) statt still gruen zu
