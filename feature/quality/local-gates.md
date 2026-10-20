@@ -79,7 +79,7 @@ Tabelle ist eine Kopie, kein zweiter Bestand.
 sh scripts/gates.sh fast
 ```
 
-- **Budget:** Sekunden (gemessen: unter zehn Sekunden auf diesem Host).
+- **Budget:** Sekunden — **unter fünfzehn Sekunden** auf diesem Host (gemessen 2026-10-20: **11 s** für die neun Checks; die Angabe war „unter zehn Sekunden“, bis die Welle 2 den neunten Check und das Hygiene-Gate `fast-9` hinzufügte ✓).
 - **Bedarf:** keine Infrastruktur — kein Server, keine Datenbank, kein
   Netz, kein Build-Artefakt, kein Adapter. Nur `cargo fmt` (rustfmt, **kein**
   Compile) und acht POSIX-Shell-Gates.
