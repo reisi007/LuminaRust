@@ -192,8 +192,8 @@ Zwei Wege, beide optional und kombinierbar:
   Header-/Strukturprüfung. Ist die DB beschädigt oder inkompatibel, gilt sie als
   `corrupt` und wird **sichtbar** gemeldet — sie wird **nicht** stillschweigend
   als leere DB behandelt, aus der die GUI „ohne Bilder" startet (kein stiller
-  Fallback, Agents.md „Reproduzierbarkeit ist wichtiger als ein stiller
-  Fallback").
+  Fallback, `feature/README.md` §„Invarianten": „Veraltete oder fehlende Daten
+  werden sichtbar gemeldet.").
 - Wiederherstellung erfolgt **ausschließlich durch expliziten Rebuild aus den
   Sidecars**. Ein korrupter Index berührt weder Originale noch Sidecars; CLI und
   GUI fallen auf den DB-freien Pfad zurück (Sidecar-only), ohne Benutzerdaten zu

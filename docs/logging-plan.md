@@ -27,8 +27,9 @@ Ziele des Loggings:
 - **Testbarkeit**: Log-Aufrufe dokumentieren Entscheidungen (Cache-Hit/Miss,
   Masken-Fallbacks) und machen sie in Integrationstests prüfbar.
 - **Keine stillen Fallbacks**: Logging ergänzt die sichtbare Meldung
-  (Agents.md: „Reproduzierbarkeit ist wichtiger als ein stiller Fallback"),
-  ersetzt sie aber nie.
+  (`Agents.md` §„Änderungsregeln": „Keine stillen Fallbacks bei veralteten
+  Rezepten, Farbprofilen, Masken oder fehlenden Artefakten"), ersetzt sie aber
+  nie.
 
 ### 1.2 Severities und Einsatzregeln
 

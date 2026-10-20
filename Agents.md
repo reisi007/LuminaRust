@@ -32,8 +32,8 @@ sondern in `feature/`/`docs/` bzw. die Projekt-Doku; offene Punkte nach
 
 ## Produktprinzipien
 
-Die Produktprinzipien und Invarianten sind **nicht** in dieser Datei
-festgelegt. Ihre normative Quelle ist [`feature/README.md`](feature/README.md):
+Die Produktprinzipien und Invarianten sind **nicht vollständig** in dieser
+Datei festgelegt. Ihre normative Quelle ist [`feature/README.md`](feature/README.md):
 §„Leitbild" beschreibt das Zielbild, §„Invarianten" die verbindlichen
 Zusicherungen; die Detaildokumente stehen in der Feature-Matrix derselben
 Datei. Diese Datei hält daraus nur die Regeln, die für jede Arbeit gelten:
