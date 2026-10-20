@@ -349,6 +349,14 @@ Prüfungen zu verwenden:
 - Property-Tests für Wertebereiche, Monotonie und Clipping
 - JSON-Roundtrip- und Schema-Migrationstests
 - Sidecar-Recovery-, Atomic-Write- und Konflikttests
+- **Lokale Gate-Stufen:** `sh scripts/gates.sh fast` (Sekunden, ohne Codegen:
+  Formatter plus vier Textgates) und `sh scripts/gates.sh slow` (Minuten,
+  CI-Mirror, Fail fast). Die schnelle Stufe meldet grün nur, wenn mindestens
+  5 Checks gestartet wurden (Floor); eine leere Auswahl ist ein Fehler, kein
+  Pass. `sh scripts/gates.sh list` ist die Quelle der Wahrheit für die
+  Tier-Tabelle; die Lücken zwischen den Stufen (GPU-Adapter, onnx-rt-Link,
+  macOS-Golden-Re-Pin, manuelle GUI-Läufe) stehen mit Grund, Owner und
+  Task-ID in `feature/quality/local-gates.md`.
 - Virtuelle-Kopien-Tests inklusive stabiler IDs und unabhängiger Rezepte
 - Masken-Cache-Hit-, Miss- und Invalidierungstests
 - Golden-Image-Tests mit dokumentierten Toleranzen

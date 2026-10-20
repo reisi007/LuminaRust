@@ -58,6 +58,15 @@
 #   sh scripts/check_test_orphans.sh                # crates/lumina-gui
 #   sh scripts/check_test_orphans.sh lumina-core    # another crate
 #   LUMINA_DEP_INFO_DIR=target/release/deps sh scripts/check_test_orphans.sh
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — Defektklasse und Anlass
+# stehen oben, hier nur die noch fehlenden Teile):
+#   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — die Zahl der
+#                     Waisen muss 0 bleiben; es gibt keinen Wert, der steigen
+#                     darf, und keinen Paydown-Pfad (die Waise wird behoben,
+#                     nicht weggerechnet).
+#   Nicht gedeckt:     die NAMED LIMITS oben (Scope je Crate, benoetigte
+#                     Artefakte, Frische, Feature-Satz-Zuordnung).
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

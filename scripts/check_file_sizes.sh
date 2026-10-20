@@ -6,6 +6,21 @@
 # baseline entry (or drop it once the file is at or below 500 lines).
 # New files over 500 lines fail until a baseline entry is added consciously.
 # POSIX sh only (macOS ships bash 3.2 without associative arrays).
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: oversized unit — eine Rust-Datei ueber 500 Zeilen.
+#   Anlass:        User-Vorgabe 2026-09-17 (500-Zeilen-Schranke). Ohne
+#                  Baseline waere die Schranke entweder dauerhaft rot (eine
+#                  tote Schranke, die nach dem zweiten Lauf abgeschaltet wird)
+#                  oder eine unerzwungene Empfehlung.
+#   Ratchet-Richtung: ceiling — der Baseline-Eintrag (Maximalgroesse je
+#                  Datei) darf nur sinken, nie steigen; gesenkt wird er
+#                  zusammen mit der Extraktion, die die Datei schrumpft.
+#   Nicht gedeckt:  Nicht-Rust-Dateien (Markdown, Shell, YAML) und Dateien
+#                  mit bis zu 500 Zeilen (bewusst ungeprueft); die Baseline
+#                  ist handgepflegt, nicht generiert (siehe Lueckenliste in
+#                  `feature/quality/local-gates.md`).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASELINE="$ROOT/scripts/file_size_baseline.txt"

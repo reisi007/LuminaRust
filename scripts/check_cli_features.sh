@@ -59,6 +59,23 @@
 #     The library axis above stays green (the import is test-only), which is
 #     exactly why the testbuild checks are an extension and not a replacement.
 #     Restoring the import restores exit 0.
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: Feature-Isolationsbruch — ein deklariertes Feature, das nur
+#                  in Kombination mit einem anderen kompiliert.
+#   Anlass:        2026-10-02, der gemessene Defekt oben (ein verwaistes
+#                  `#[cfg(feature = "lensfun")]` auf dem `gpu`-Import liess
+#                  `--features gpu` mit 6 Fehlern sterben, waehrend
+#                  `--features gpu,lensfun` gruen blieb).
+#   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — jedes deklarierte
+#                  Feature muss allein kompilieren; der Zaehlwert ist heute 0
+#                  und muss 0 bleiben. Die Feature-Liste kommt aus dem
+#                  Manifest, ein neu deklariertes Feature ist damit automatisch
+#                  gedeckt (kein Handbestand, der altern kann).
+#   Nicht gedeckt:  die NAMED LIMITS oben (keine Dreier-Kombination, kein
+#                  Laufzeitverhalten, keine Adapter-Tests) und alle Crates
+#                  ausser `lumina-cli` (die trägt `scripts/check_feature_matrix.sh`).
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -43,6 +43,21 @@
 # sie erkennt nur den eingeklemmten Absatz zwischen zwei `- [ ] `-Zeilen. Ein
 # Waise am Dateiende, vor einem `##`-Abschnitt oder nach einer Tabelle wird
 # **nicht** erfasst; dafuer braucht es eine andere Sorte Pruefung.
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: unfinished marker / Formverstoss — ein abgeschlossener
+#                  Eintrag, der als offen markiert in `Agents.todo.md`
+#                  stehenbleibt (oder eine Waise ohne Task-Eigentuemer).
+#   Anlass:        2026-09-28 standen vier Eintraege als `- [x]` in der
+#                  Datei, drei davon mit Verifikationsverdikt — die Regel war
+#                  also nicht vergessen, sondern nicht erzwungen.
+#   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — der Zaehlwert
+#                  (abgehakte Eintraege, Erledigt-Abschnitte, Waisen) muss
+#                  0 bleiben; es gibt keinen Wert, der steigen darf.
+#   Nicht gedeckt:  der INHALT einer offenen Aufgabe (geprueft wird nur die
+#                  Form) und eine Waise am Dateiende, vor einer `##`-Ueberschrift
+#                  oder nach einer Tabelle (die Grenze der Regel 4 oben).
 set -eu
 
 plan="Agents.todo.md"

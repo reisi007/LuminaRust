@@ -66,6 +66,25 @@
 #     `use` innerhalb eines Strings derselben Zeile, oder `std::{` in
 #     einem `/* */`-Blockkommentar) bleiben Falsch-Positiv-Richtung —
 #     echte Treffer werden dadurch nie unterdrueckt.
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: layer violation — ein direkter Zugriff auf das Dateisystem
+#                  im Produktionscode von `lumina-core` statt ueber die
+#                  Cache-Schicht (Entscheid `CACHE-SCHICHT`).
+#   Anlass:        Befund R4 aus der Abnahme von LUMINA-CACHE-EXTRACT-70 — die
+#                  Produktions-Dateisystemfreiheit von `lumina-core` war eine
+#                  gepruefte Behauptung, kein erzwungener Zustand; kein Gate
+#                  wurde rot, als erneut `std::fs` in den Produktionscode
+#                  geriet. Erweiterung 2026-10-18 (CORE-FS-GATE-IMPORT-FORM-78):
+#                  die Importform `std::{fs, …}` blieb unerkannt.
+#   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — der Zaehlwert der
+#                  Produktions-Treffer muss 0 bleiben; die test-only-Treffer
+#                  (aktuell gemeldet) sind ein gemessener Wert, kein Wert, der
+#                  steigen darf.
+#   Nicht gedeckt:  die NAMED LIMITS oben (Aliase/Re-Exporte, `include!`/
+#                  `#[path]`, Regionregel, Blockkommentare) und jede andere
+#                  Schicht als `lumina-core`.
 set -eu
 
 root="${1:-.}"

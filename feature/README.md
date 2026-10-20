@@ -143,6 +143,12 @@ Sidecars vollständig wiederherstellbar sein.
   Resampling-Kernel, zwei Zielformen (`MaxWidth`/`LongEdge`),
   Nearest-Neighbour entfaellt (Qualitaetsverbesserung), Byte-Anker und
   benanntes Goldens-Gate (DOWNSCALER-UNIFY-71)
+- [local-gates.md](quality/local-gates.md):
+  Lokale Gate-Stufen — `scripts/gates.sh` mit den benannten Stufen `fast`
+  (Sekunden, ohne Codegen, Floor: mindestens 5 gestartete Checks) und `slow`
+  (Minuten, CI-Mirror), die wortgleiche Tier-Tabelle aus
+  `sh scripts/gates.sh list` und die Lückenliste zwischen den Stufen (jede
+  Lücke mit Klasse, Grund, Owner und Task-ID) (LOCAL-GATE-TIERS-81)
 
 ## Feature-Matrix
 

@@ -13,6 +13,23 @@
 # Nothing here compares the two, so they can still drift. Pinning it needs a
 # Rust test that reads the attribute — that is a known open gap in
 # FIXTURE-SKIP-VISIBLE-2, not something this script pretends to cover.
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: unfinished marker / stiller Skip — ein umgebungsgegateter
+#                  `#[ignore]`-Beweis ohne sichtbare Begruendung und ohne
+#                  sichtbaren Skip-Report.
+#   Anlass:        FIXTURE-SKIP-VISIBLE-2 — `eprintln!` ist in libtest
+#                  unsichtbar, weil der captured Output eines gruengen Tests
+#                  verworfen wird; ein umgebungsgegateter Beweis meldete sich
+#                  damit nie, obwohl er nicht gelaufen ist.
+#   Ratchet-Richtung: ceiling — die Zahl der noch nicht migrierten Stellen
+#                  (aktuell als NAMED GAP gemeldet) darf nur sinken. Das
+#                  Skript erzwingt die drei migrierten Stellen und misst die
+#                  Restzahl; eine Baseline-Datei gibt es dafuer nicht.
+#   Nicht gedeckt:  repo-weit alle `#[ignore]` (nur die drei migrierten
+#                  Stellen sind unten benannt) und die Drift zwischen
+#                  Attribut-Text und Laufzeitzeile (NAMED LIMIT oben).
 set -eu
 
 root="${1:-.}"

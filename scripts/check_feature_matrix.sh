@@ -76,6 +76,26 @@
 #   sh scripts/check_feature_matrix.sh   # must exit 1 and print
 #   #   FAIL lumina-cli --all-targets --no-default-features
 #   # restore byte-identically (sha256sum before/after); never git checkout
+#
+# Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
+# Schranke, Klasse und Anlass im Header benannt):
+#   Defektklasse: ungetestete Feature-Kombination — ein deklariertes Feature,
+#                  das nur ZUSAMMEN mit einem anderen kompiliert (oder nur in
+#                  der leeren Feature-Menge nicht).
+#   Anlass:        siehe oben (gemessener Befund vom 2026-10-17: das
+#                  `#[cfg(all(test, feature = "gpu"))]`-Modul
+#                  `crates/lumina-mcp/src/util.rs` wurde von keinem CI-Job
+#                  gebaut — vier Feldzugriffe ueberlebten die Q5-Kapselung
+#                  unentdeckt).
+#   Ratchet-Richtung: Boolean-Gate (keine Baseline-Datei) — jede deklarierte
+#                  Feature-Menge muss kompilieren; der Zaehlwert ist heute 0
+#                  und muss 0 bleiben. Die Feature-Listen kommen aus den
+#                  Manifesten, ein neu deklariertes Feature ist damit
+#                  automatisch gedeckt (kein Handbestand, der altern kann).
+#   Nicht gedeckt:  die NAMED LIMITS oben (keine Dreier-Kombination, kein
+#                  Laufzeitverhalten, kein Adapter, kein macOS-Pfad) und der
+#                  onnx-rt-Link-Gate (glibc 2.36 < 2.38), den `cargo check`
+#                  nicht trifft.
 set -eu
 
 started_at=$(date +%s)

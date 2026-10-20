@@ -145,8 +145,22 @@ jobs:
           # Stable across the three Rust shards; do not use the job ID here.
           shared-key: lumina-rust-shards
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      # LOCAL-GATE-TIERS-81: die fünf schnellen Checks laufen über DENSELBEN
+      # Runner wie lokal (`sh scripts/gates.sh fast`), damit Definition und
+      # Ausführung nicht auseinanderlaufen. Der Runner zählt die gestarteten
+      # Checks (Floor: mindestens 5) und führt keinen Codegen aus.
+      # Die fünf Checks laufen gebündelt am Job-Anfang (vorher: „Check
+      # formatting" zuerst, die vier Textgates zuletzt); alle fünf sind
+      # artefaktfrei (kein Build, kein Adapter, kein Netz).
+      # Abgedeckter Kommando-Satz — gegenüber den fünf vorherigen Einzel-
+      # schritten unverändert:
+      #   cargo fmt --all -- --check
+      #   sh scripts/check_file_sizes.sh
+      #   sh scripts/check_plan_format.sh
+      #   sh scripts/check_env_gate_reasons.sh
+      #   sh scripts/check_core_prod_fs_free.sh
+      - name: Run fast tier (scripts/gates.sh fast)
+        run: sh scripts/gates.sh fast
 
       - name: Check workspace
         run: cargo check --workspace --all-targets
@@ -243,37 +257,6 @@ jobs:
 
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
-
-      # File-size ratchet (2026-09-17): .rs files over 500 lines must not
-      # grow (baseline in scripts/file_size_baseline.txt); shrink/extract
-      # freely and lower the baseline afterwards.
-      - name: Check file-size ratchet
-        run: sh scripts/check_file_sizes.sh
-
-      # Plan-Format-Schranke (2026-09-28): Agents.todo.md darf nur offene
-      # Aufgaben enthalten. Abgeschlossene Punkte werden vollstaendig entfernt,
-      # nie abgehakt — vier Eintraege hatten diese Regel am 2026-09-28 verletzt.
-      - name: Check plan format
-        run: sh scripts/check_plan_format.sh
-
-      # Env-Gate-Schranke (2026-09-30, FIXTURE-SKIP-VISIBLE-2): ein
-      # `#[ignore]`-Beweis, der an einer Umgebungsvariable haengt, muss sagen
-      # WAS fehlt und mit WELCHEM Befehl, und seinen Skip an das echte stderr
-      # melden — `eprintln!` ist unsichtbar, weil libtest den captured Output
-      # eines gruengen Tests verwirft. Das Skript zaehlt die noch nicht
-      # migrierten Stellen als benannte Luecke mit, statt sie zu verschweigen.
-      - name: Check env-gate reasons
-        run: sh scripts/check_env_gate_reasons.sh
-
-      # Core-Produktions-FS-Freiheit (CORE-PROD-FS-FREE-GATE-76, 2026-10-17):
-      # die Produktions-Dateisystemfreiheit von `lumina-core` (Entscheid
-      # `CACHE-SCHICHT`, Befund R4) war eine gepruefte Behauptung, kein
-      # erzwungener Zustand. Dieses Skript macht sie erzwungen: ein neuer
-      # `std::fs`-Treffer im Produktionscode von `crates/lumina-core/src`
-      # wird rot. Test-only-Treffer (tests/-Verzeichnis, _tests.rs-Suffix,
-      # Testmodul am Dateiende) sind erlaubt und werden als Zahl genannt.
-      - name: Check core production fs-free
-        run: sh scripts/check_core_prod_fs_free.sh
 
   rust-test-gui:
     name: Rust GUI tests

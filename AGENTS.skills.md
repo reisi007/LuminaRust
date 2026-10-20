@@ -1,7 +1,7 @@
 # Skills-Marker
 
-agents-skills-consumed: 787670a
-geprüft am: 2026-10-19
+agents-skills-consumed: 00dbd22
+geprüft am: 2026-10-20
 
 ## Skill-Stand
 
@@ -15,14 +15,16 @@ geprüft am: 2026-10-19
 | `ghcr-visibility` | ja | `.github/workflows/ci.yml` — `ghcr.io/reisi007/luminarust/lumina-ci:latest` in denselben fünf `container:`-Jobs | |
 | `security-review` (neu) | nein (trifft zu, nicht drin) | erreichbare Oberflächen: MCP-Server (`feature/platform/mcp-server.md`), CLI (`crates/lumina-cli/`), Datei-/Sidecar-I/O | `Agents.todo.md` → `SECURITY-REVIEW-REGISTER` |
 | `ui-review` | nein | als Playwright-Flow trifft es nicht zu: native egui-GUI, der visuelle Review läuft über `egui_kittest`-Goldens/PSNR und den Fenster-Review `UI-VISION-REVIEW-70`. Die **geänderte** Regel derselben Runde (kein Vision-Subagent) trifft die Projekt-Pflicht in `DoD.md` §6 → dort geführt | `Agents.todo.md` → `VISION-SUBAGENT-PFLEGE` |
-| `agent-config` | nein | | Maschinenkonfiguration (globale `opencode.jsonc`, globale `AGENTS.md`); die projektbezogene Aussage der Änderung — ein Projekt verweist auf die Regeldatei, statt den Flow zu wiederholen — ist im Projekt erfüllt |
+| `ratchet-gates` (neu) | ja | `scripts/gates.sh` (Stufen `fast`/`slow`/`all`/`list`, Floor `MIN_CHECKS=5`, keine Codegen-Stufe `fast`), `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu `gates.sh list`, Floor-Regel, Lückenliste), `Agents.md` §„Verifizierung und Tests", CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`), Gate-Header der sieben `scripts/check_*.sh` (Defektklasse, Anlass, Ratchet-Richtung, benannte Grenze) | |
+| `generated-docs` (neu) | nein | | Die Zahlen in der Prosa sind quellenabhaengig und altern still (`Agents.todo.md` `GUI-LIB-SPLIT-65` nennt 12 571/12 573 Zeilen, `scripts/file_size_baseline.txt` führt andere Werte); ein Generator + Drift-Gate fehlt | `Agents.todo.md` → `DOC-ZAHLEN-DRIFT-82` |
+| `agent-config` | nein | | Maschinenkonfiguration (globale `opencode.jsonc`, globale `AGENTS.md`); die projektbezogene Aussage der Änderung — ein Projekt verweist auf die Regeldatei, statt den Flow zu wiederholen — ist im Projekt erfüllt; die versteckten Skills der Range (`70d49e0`, `00dbd22`) sind für dieses Projekt ohne Wirkung |
 | `laravel` | nein | | Rust-Workspace, kein PHP |
 | `node-deps` | nein | | keine `package.json`/pn-Pins; Abhängigkeiten laufen über Cargo |
 | `permissions` | nein | | Maschinenpolicy (`opencode.jsonc`), nicht Projektstand |
 | `playwright-parallel` | nein | | keine Playwright-Suite; E2E sind `egui_kittest`-Targets in `crates/lumina-gui/tests/` |
 | `react-i18n` | nein | | GUI ist egui/Rust mit eigener `Str`-i18n, kein React/Lingui |
 | `tailscale-serve` | nein | | headless-Host, kein Dev-Server-Expose |
-| `update-models` (neu; ersetzt `model-updater` + `update-opencode-models`) | nein | | Modell-Registry ist Maschinenstand (`opencode.jsonc`); die Projekt-Entscheidung `MODELL` (nur freie Subagenten) bleibt unberührt — die Maschine fährt `opencode-go/minimax-m3.1-flash-free` in Root und allen vier Rollen |
+| `update-models` (neu; ersetzt `model-updater` + `update-opencode-models`) | nein | | Modell-Registry ist Maschinenstand (`opencode.jsonc`), kein Projektstand; die Projekt-Entscheidung `MODELL` (nur freie Subagenten) bleibt unberührt. **Belegter Stand (gelesen am 2026-10-20 aus `opencode.jsonc` und `model-preferences.md`):** `namespaceRule: opencode-go-only`; Root-Modell und die vier Rollen `plan`/`general`/`build`/`explore` fahren `opencode-go/minimax-m3.1-flash-free`. Die Zeile folgt damit der upstream-Angleichung (`219171c`, `8c6b9af`): die Namespace-Regel steht auf der Entscheidung, nicht mehr auf einem Kontext-/Preisargument, und der `$0`-Vermerk gilt dem konfigurierten Modell |
 | `web-audit` | nein | | kein Web-Frontend; LuminaRust ist Desktop-GUI + CLI |
 | Konvention: 500-Zeilen-Ratetch | ja | `scripts/check_file_sizes.sh` (`THRESHOLD=500`), `scripts/file_size_baseline.txt`, `Agents.md` §„Verifizierungs-Agent" | |
 | Konvention: Projektsprache Deutsch (Doku + UI) | ja | `Agents.md`, `Agents.todo.md`, `feature/` | |
@@ -113,6 +115,52 @@ Positionen sind in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
   Entscheidungen wandern ins README), `2d5793b` (Command-Templates im
   Skills-Repo versioniert), `c3f3e10` (Skill-Budget-Gate in der CI des
   Skills-Repos) — alle drei betreffen das Skills-Repo selbst.
+
+## Offen aus dem Bereich `787670a..00dbd22`
+
+Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
+
+**Neu**
+
+- `ratchet-gates` (`70d49e0`, hidden) — trifft zu und ist **angewendet**: der
+  Skill verlangt zwei benannte, dokumentierte und lokal lauffähige
+  Gate-Stufen, einen Floor für die schnelle Stufe und eine Lückenliste
+  zwischen den Stufen. Umgesetzt in `scripts/gates.sh` (Stufen `fast`
+  (Sekunden, ohne Codegen, Floor `MIN_CHECKS=5`), `slow` (Minuten, CI-Mirror)
+  und `list` als Quelle der Wahrheit für die Tier-Tabelle), in
+  `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu
+  `sh scripts/gates.sh list`, Floor-Regel, Lückenliste mit Klasse, Grund,
+  Owner und Task-ID je Lücke), in `Agents.md` §„Verifizierung und Tests" und
+  im CI-Schritt „Run fast tier (scripts/gates.sh fast)" (Job „Rust fast
+  checks"), damit Definition und Ausführung dieselbe sind. Zusätzlich
+  tragen die sieben `scripts/check_*.sh` den Gate-Header (Defektklasse, der
+  konkrete Anlass, die Ratchet-Richtung, die benannte Grenze) — reine
+  Kommentarzeilen, keine Verhaltensaenderung.
+- `generated-docs` (`00dbd22`, hidden) — trifft zu, ist aber nicht drin: die
+  Zahlen in der Prosa sind quellenabhaengig und bereits veraltet
+  (`Agents.todo.md` `GUI-LIB-SPLIT-65`), ein Generator und ein Drift-Gate
+  fehlen → offene Position `DOC-ZAHLEN-DRIFT-82`.
+
+**Geändert**
+
+- `ui-review` (`fa2268f`) — die Findings-Vorlage nennt keinen „vision-agent"
+  mehr. Als Playwright-Flow trifft der Skill dieses Projekt weiterhin nicht
+  (native egui-GUI); die Projekt-Pflicht in `DoD.md` §6 wird von der
+  geänderten Regel berührt und bleibt dort geführt → offene Position
+  `VISION-SUBAGENT-PFLEGE` (unverändert, der Task läuft noch).
+- `update-models` (`219171c`, `8c6b9af`) — die Namespace-Regel steht jetzt auf
+  der Entscheidung (`opencode-go-only`) statt auf einem
+  Kontext-/Preisargument, und der `$0`-Vermerk gilt dem konfigurierten
+  Modell. Der Skill trifft dieses Projekt nicht (Modell-Registry ist
+  Maschinenstand). Die Marker-Zeile wurde gegen die tatsächliche Konfiguration
+  gelesen (`opencode.jsonc`, `model-preferences.md`, Stand 2026-10-20) und
+  nennt den belegten Stand: `opencode-go/minimax-m3.1-flash-free` im Root und
+  in den vier Rollen `plan`/`general`/`build`/`explore`.
+- `agent-config` (`70d49e0`, `00dbd22`) — nur die Liste der versteckten Skills
+  im Skills-Repo hat sich geändert (die Zähler 12 → 13 → 14). Das Projekt
+  hat keine eigene Agent-Konfiguration; die projektbezogene Aussage der
+  Änderung (ein Projekt verweist auf die Regeldatei, statt den Flow zu
+  wiederholen) ist im Projekt erfüllt → keine Änderung nötig.
 
 ## Fortschreiben
 
