@@ -181,17 +181,29 @@ prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Lauf
 <!-- END GENERATED: goldens -->
 
 Die in `Agents.todo.md` genannte Zahl
-„56" ist die Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon
-erzeugen 46 ein Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden.
-Die restlichen **20** Goldens gehören zu den anderen kittest-Binaries und zum
-Lib-Test — zusammen mit den 46 ergeben sie die Zahl im generierten Block oben.
+„56" ist die Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`
+(Zählstand 2026-10-20, per `grep` gezählt — eine Testzahl ist keine
+Dateieigenschaft und deshalb nicht ableitbar). Die Zahl der Goldens je
+Test-Target steht im generierten Block `golden-targets` in
+`feature/quality/golden-references.md` §7; die Tests ohne Golden sind reine
+Zustands-/Interaktions-Tests.
 
+<!-- BEGIN GENERATED: golden-classes -->
 **Bilanz: 14 Render-Invarianten (Klasse R), 52 Chrome-/Layout-Invarianten
-(Klasse C)** — Bilanzzeilen, ausgezählt aus der Tabelle dieses Abschnitts.
+(Klasse C)** — zusammen **66** Goldens (Quelle: `scripts/golden_inventory.txt`,
+eine Zeile je Golden mit Dateiname, Klasse und Test-Target; die Zahl stimmt mit
+`goldens.count` aus `scripts/golden_ref.lock` überein — sie wird aus der Datei
+gezählt, nicht abgeschrieben).
+<!-- END GENERATED: golden-classes -->
+
 (Zahlenkorrektur 2026-09-26: die Fassung vor der Zeilen-Ergänzung nannte 62 /
 16 / 48 und war nach der Ergänzung um genau die vier neuen Goldens zu niedrig.)
 
-### 4.1 `kittest_snapshots` (46 Goldens, Binary `tests/kittest_snapshots.rs`)
+### 4.1 `kittest_snapshots` (Binary `tests/kittest_snapshots.rs`)
+
+(Zahl der Goldens dieses Targets: generierter Block `golden-targets` in
+`feature/quality/golden-references.md` §7 — dieselbe Quelle wie die Klassen
+oben.)
 
 | # | Golden | Klasse | Fixture | Nachweis-Scope |
 | --- | --- | --- | --- | --- |
@@ -242,7 +254,11 @@ Lib-Test — zusammen mit den 46 ergeben sie die Zahl im generierten Block oben.
 | 45 | `navigator_viewport.png` | C | S2 | Navigator-Viewport-Rechteck |
 | 46 | `toast_info.png` | C | S2 | Toast-Overlay |
 
-### 4.2 Weitere kittest-Binaries (20 Goldens)
+### 4.2 Weitere kittest-Binaries
+
+(Zahl der Goldens dieser Targets: generierter Block `golden-targets` in
+`feature/quality/golden-references.md` §7 — dieselbe Quelle wie die Klassen
+oben.)
 
 | # | Golden | Klasse | Fixture | Nachweis-Scope | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -342,7 +358,7 @@ alle gegen die **committeten** Dateien, nicht gegen eine Kopie:
 | --- | --- | --- |
 | A1 | jede Goldendatei im Verzeichnis hat eine Tabellenzeile | das Inventar ist vollständig |
 | A2 | jede Tabellenzeile nennt eine existierende Datei | kein Phantom-Eintrag |
-| A3 | die im Text genannten Zahlen (Gesamtzahl aus dem generierten Block / 14 / 52) stimmen mit der Tabelle | keine Zahl, die man nicht nachzählen kann |
+| A3 | die im Text genannten Zahlen (Gesamtzahl **und** R/C-Split aus dem generierten Block `golden-classes`) stimmen mit der Tabelle | keine Zahl, die man nicht nachzählen kann |
 | A4 | der Dateibestand ist identisch mit dem committeten Bestand (`git ls-files`) | „committed" ist keine Behauptung |
 | B1 | keine Zeile mit Klasse `R-F` | Regel 5 und Regel 8 |
 | B2 | jede `R`-Zeile **außer** der in `GFC_KNOWN_RED` genannten erfüllt P1 **und** P2 gegen die PNG-Datei | Regel 7 |
@@ -541,6 +557,14 @@ Worker-Pool läuft in eigenen Threads) — dadurch sank die Einzeltestzeit von
 ## 7. Verweise
 
 - `Agents.md` (Verifikationsregeln, Anti-Gaming), `DoD.md` §7
+- `scripts/golden_inventory.txt` — die **maschinenlesbare Quelldatei** des
+  Inventars (eine Zeile je Golden: Dateiname, Klasse `R`/`C`, Test-Target).
+  Die Klassifikation dieses Abschnitts ist eine menschliche Entscheidung; diese
+  Datei ist ihre maschinenlesbare Form. Aus ihr erzeugt
+  `scripts/gen_doc_facts.sh` die Blöcke `golden-classes` (hier in §4) und
+  `golden-targets` (in `feature/quality/golden-references.md` §7); der
+  Drift-Gate `scripts/check_doc_facts_drift.sh` vergleicht sie mit den
+  committeten Blöcken.
 - [`fixtures-licensing.md`](fixtures-licensing.md) — Fixture-Inventar und Lizenzen
   (F-073/F-078)
 - [`conflicts-and-acceptance.md`](conflicts-and-acceptance.md) — Abnahmeszenarien

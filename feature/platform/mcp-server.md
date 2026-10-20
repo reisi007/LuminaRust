@@ -772,15 +772,15 @@ zurückgenommen (siehe „Ist-Abdeckung" unten).
 
 `lumina-cli` hat so viele Subcommands mit Argument-Strukt, wie der generierte
 Block **mcp-tools** ausweist (die Feature-Gate-Variante `Mcp` kommt hinzu).
-Abgedeckt sind **29**, offen sind
-**3**. Der Abgleich erfolgte gegen die tatsächlich implementierten
-Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
+Abgedeckt sind **29** (Zählstand 2026-10-15), offen sind
+**3** (Zählstand 2026-10-15). Der Abgleich erfolgte gegen die tatsächlich
+implementierten Tool-Beschreibungen, nicht nur gegen diese Tabelle. Zählstand
 2026-09-26: 17 abgedeckt / 15 offen vor MCP-PARITY-A, 21 / 11 nach A
 (dort mit dem unten genannten `previous`-Zählfehler), **26 / 6 nach
 MCP-PARITY-B**, **28 / 4 nach MCP-PARITY-C** (`merge-hdr`, `merge-pano`),
 **29 / 3 nach MCP-PARITY-C** (`matrix`).
 
-**Abgedeckt (29):**
+**Abgedeckt (29, Zählstand 2026-10-15):**
 
 (Die Tabelle hat 26 Datenzeilen (mit Kopf- und Trennzeile 28 Leitungen):
 `lumina develop` / `lumina render` / `lumina export` teilen sich eine Zeile,

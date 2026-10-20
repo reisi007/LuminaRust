@@ -465,8 +465,9 @@ selben Diff.
 
 Eine Zahl in Prosa ist eine Kopie einer fremd gepflegten Tatsache und altert
 still. Die Zahlen der Prosa (Dateigrößen, Population, Zahl der committeten
-Goldens, MCP-/CLI-Population, Baseline-Kostenverteilung, Zahl der
-Workspace-Crates, Zahl der enumerierten Oberflächen) standen als Text im
+Goldens, R/C-Split und Verteilung der Goldens auf die Test-Targets,
+MCP-/CLI-Population, Baseline-Kostenverteilung, Zahl der Workspace-Crates, Zahl
+der enumerierten Oberflächen) standen als Text im
 Dokument — eine zweite Quelle der Wahrheit neben der Datei, aus der sie
 stammen. `fast-8` macht sie prüfbar: Muster „generate + diff", nicht „wirkt
 plausibel". `fast-9` sichert die Eigenschaft des Generators, ohne die diese
@@ -498,6 +499,8 @@ Commit.
 | `file-sizes` | `feature/quality/file-size-policy.md` | `scripts/file_size_ceiling.txt` (Eintrag), `wc -l` (Ist-Stand), `scripts/file_size_baseline.txt` (500er-Eintrag) |
 | `population` | `feature/quality/file-size-policy.md` | das Dateisystem (`crates/`, `agent-harness/`), Schwellen aus den beiden Gate-Skripten |
 | `goldens` | `feature/README.md`, `feature/quality/golden-references.md`, `feature/quality/golden-fixtures.md` | `scripts/golden_ref.lock`, Feld `goldens.count` (committete Baseline; **kein** `git` nötig — der CI-Container hat keins; **kein** `ls`: im Verzeichnis liegen gitignorierte `*.new.png`-Artefakte). Die Kette zum Repo hält `scripts/golden_ref_test.sh` (Docs-Job **ohne** Container): es re-derived die Goldens aus dem Git-Index und prüft das Lockfile dagegen |
+| `golden-classes` | `feature/quality/golden-fixtures.md` | `scripts/golden_inventory.txt` (eine Zeile je Golden: Dateiname, Klasse `R`/`C`, Test-Target) — der **R/C-Split**, gezählt, nicht abgeschrieben. Die Klassifikation selbst ist eine menschliche Entscheidung (GOLDEN-FIXT-31); die Datei ist ihre maschinenlesbare Form |
+| `golden-targets` | `feature/quality/golden-references.md` | dieselbe Datei `scripts/golden_inventory.txt` — die **Verteilung auf die Test-Targets**, je Ziel gezählt. Der Generator prüft die Datei laut: Kopfzeile, Feldzahl, keine Doppelnennung, Sortierung (LC_ALL=C), Existenz jeder genannten Datei und Übereinstimmung mit `goldens.count`; **zusätzlich** gleicht er die Klassen der Inventartabelle in `feature/quality/golden-fixtures.md` §4 gegen die Quelldatei ab — die Tabelle bleibt Prosa, ist aber keine zweite, stille Quelle |
 | `mcp-tools` | `feature/platform/mcp-server.md`, `feature/quality/security-review-register.md` | die Quelltexte selbst: die `tool_def(`-Aufrufe in `crates/lumina-mcp/src/tools/mod.rs` (ohne den Konstruktor `fn tool_def`) und die Varianten des `enum Command` in `crates/lumina-cli/src/main.rs` (die Feature-Gate-Variante `Mcp` steht ohne Klammer und wird **mitgezählt**) |
 | `perf-baseline` | `feature/quality/performance-benchmarks.md` | der committete Store `perf/baseline.json`: die IDs mit Präfix `core/` (Auflösungs-Suffixe und Reihenfolge ergeben sich aus dem Store), die `batch/`-ID je Auflösung und die IDs mit Präfix `decode/raw__`; der Stand kommt aus `environment.recorded_at` |
 | `crates` | `feature/README.md` | die `members` im Workspace-Manifest `Cargo.toml` |
@@ -531,8 +534,11 @@ tot.
   regelbasiert treffen kann, legt sie nicht an — eine generierte Datei mit
   eingebetteter Handliste wäre selbst eine zweite Quelle der Wahrheit.
 - **Nicht generiert sind** die Zahlen, die keine Ableitung aus einer Quelle
-  sind: der R/C-Split der Goldens (die Klassifikation ist handgepflegt), die
-  **Liste** der Oberflächen selbst (nur ihre Zahl wird abgeleitet),
+  sind: die **Klassifikation** der Goldens selbst (R oder C ist eine
+  menschliche Entscheidung — sie steht als Text in
+  `feature/quality/golden-fixtures.md` §4 und in ihrer maschinenlesbaren Form
+  in `scripts/golden_inventory.txt`; die **Zahlen** daraus sind generiert),
+  die **Liste** der Oberflächen selbst (nur ihre Zahl wird abgeleitet),
   Testlaufzahlen (ohne Build nicht ableitbar — sie sind datiert oder
   gestrichen). Sie altern weiter — das ist eine offene Lücke, keine Behauptung
   dagegen.
@@ -594,7 +600,7 @@ Datei fliesst nie in eine Kommandozeile.
   **ohne** Lockfile-Update — macht `scripts/golden_ref_test.sh` im Job „Documentation checks“
   (ohne Container, mit `git`); ein Lockfile-Update **ohne** Doku-Update macht der Drift-Gate.
   Damit ist die Kette in beide Richtungen geschlossen.
-- **Alle sieben Bloecke sind git-frei** (§8.2) — der Generator liest
+- **Alle neun Blöcke sind git-frei** (§8.2) — der Generator liest
   ausschliesslich committete Dateien und das Dateisystem. Der Nachweis ist
   **nicht** das Wort im Kommentar, sondern der Hygiene-Gate `fast-9`
   (`scripts/check_doc_facts_generator.sh`): derselbe Lauf in einer

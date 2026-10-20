@@ -1,0 +1,102 @@
+# Maschinenlesbare Quelldatei des Golden-Inventars (DOC-ZAHLEN-DRIFT-82, Welle 3).
+#
+# Zweck: die R/C-Klassifikation der Goldens und ihre Zuordnung zu den
+# Test-Targets waren handgepflegte Prosa-Zahlen in
+# `feature/quality/golden-fixtures.md` (§4, R/C-Split) und
+# `feature/quality/golden-references.md` (§7, Verteilung auf die Test-Targets).
+# Eine Zahl in Prosa ist eine Kopie einer fremd gepflegten Tatsache und altert
+# still. Diese Datei ist die Quelle; die Zahlen werden daraus ERZEUGT
+# (`scripts/gen_doc_facts.sh`, Bloecke `golden-classes` und `golden-targets`)
+# und per Drift-Gate (`scripts/check_doc_facts_drift.sh`) gegen die committeten
+# Bloecke geprueft.
+#
+# Format:
+#   * eine Kopfzeile mit den Spaltennamen: `golden|klasse|target`
+#   * danach genau eine Zeile je committetem Golden, sortiert nach dem
+#     Golden-Namen (LC_ALL=C, feste Byte-Reihenfolge) — die Sortierung ist Teil
+#     des Vertrags: die Datei wird maschinell gelesen.
+#   * `golden` = der Dateiname ohne Pfad. Die Goldens liegen in
+#     `crates/lumina-gui/tests/snapshots/` (das Verzeichnis ist NICHT Teil
+#     dieser Datei, damit die Zeilen unabhaengig vom Pfad bleiben).
+#   * `klasse` = `R` (Render-Invariante) oder `C` (Chrome-/Layout-Invariante).
+#   * `target` = der repo-relative Pfad des Test-Targets, das den Golden
+#     erzeugt.
+#
+# Die Klassifikation ist eine MENSCHLICHE Entscheidung (GOLDEN-FIXT-31,
+# `feature/quality/golden-fixtures.md` §2/§3): sie wird hier in ihre
+# maschinenlesbare Form ueberfuehrt, nicht aus dem Bildinhalt abgeleitet. Der
+# Generator rechnet aus dieser Datei, er entscheidet nichts.
+#
+# Aenderungen an dieser Datei sind ein sichtbares Ereignis: der Drift-Gate wird
+# rot, bis die betroffenen Bloecke neu erzeugt sind. Zwei Zahlen muessen
+# zueinander passen und werden vom Generator laut geprueft: die Zahl der Zeilen
+# hier und `goldens.count` aus `scripts/golden_ref.lock` (die committete
+# Baseline der Golden-Zahl; `scripts/golden_ref_test.sh` prueft dieses Lockfile
+# gegen den Git-Index).
+golden|klasse|target
+develop_basic.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_empty.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_history_no_sidecar.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_overlay_crop.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_overlay_crop_interactive.png|C|crates/lumina-gui/tests/kittest_crop_overlay.rs
+develop_overlay_crop_rotation.png|C|crates/lumina-gui/tests/kittest_crop_overlay.rs
+develop_overlay_lens_blur.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_overlay_mask.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_overlay_pins.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_color.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_denoise.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_detail.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_effects.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_geometry.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_history.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_masking.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_optics.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_optics2.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_presets.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_rating.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_section_tone_curve.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_sections_expanded.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+develop_spot_selected.png|C|crates/lumina-gui/tests/kittest_spot_tool.rs
+develop_spot_tool_options.png|C|crates/lumina-gui/tests/kittest_spot_tool.rs
+develop_spot_tool_options_expanded.png|C|crates/lumina-gui/tests/kittest_spot_tool.rs
+draw_meta_preset_dialog.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+error_dialog.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+export_module.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+export_module_jpeg.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+filmstrip_twenty_dummies.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+generative_auto_fill_panel.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+generative_expand_panel_off.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+generative_expand_panel_ready.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+histogram_graphic.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_compare.png|R|crates/lumina-gui/tests/kittest_snapshots.rs
+library_empty.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_loupe.png|R|crates/lumina-gui/tests/kittest_snapshots.rs
+library_meta_embedded.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_meta_history.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_meta_preset.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_meta_sync.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_metadata.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_metadata_copy_paste.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_people_empty.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+library_rated_badges.png|R|crates/lumina-gui/tests/kittest_snapshots.rs
+library_stack_membership.png|R|crates/lumina-gui/tests/kittest_library_stack.rs
+library_subfolder_badges.png|R|crates/lumina-gui/tests/kittest_snapshots.rs
+library_survey.png|R|crates/lumina-gui/tests/kittest_snapshots.rs
+library_with_image.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+mask_local_color.png|C|crates/lumina-gui/tests/kittest_mask_local.rs
+mask_local_detail.png|C|crates/lumina-gui/tests/kittest_mask_local.rs
+mask_local_presence.png|C|crates/lumina-gui/tests/kittest_mask_local.rs
+mask_local_tone_curve.png|C|crates/lumina-gui/tests/kittest_mask_local.rs
+mask_management_controls.png|C|crates/lumina-gui/src/tests/brush_management.rs
+mask_view_visibility.png|C|crates/lumina-gui/tests/kittest_mask_visibility.rs
+navigator_closed.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+navigator_viewport.png|C|crates/lumina-gui/tests/kittest_snapshots.rs
+parity_paths_detail_cpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_detail_gpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_lensfun_corrector_cpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_lensfun_corrector_gpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_neutral_cpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_neutral_gpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_tinted_cpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+parity_paths_tinted_gpu.png|R|crates/lumina-gui/tests/kittest_parity.rs
+toast_info.png|C|crates/lumina-gui/tests/kittest_snapshots.rs

@@ -589,7 +589,7 @@ Gate rot geprüft (2026-09-26, `sh scripts/golden_ref_test.sh`):
 
 | Mutation | Ergebnis |
 | --- | --- |
-| ImageMagick fehlt (PATH ohne jedes Bildwerkzeug) | **rot**, Exit 1: die 3 Werkzeug-Vorbedingungen, alle 14 `R`-Zeilen, `unknown failures` **und** `could be measured` |
+| ImageMagick fehlt (PATH ohne jedes Bildwerkzeug) | **rot**, Exit 1: die 3 Werkzeug-Vorbedingungen, alle `R`-Zeilen (Zahl im generierten Block `golden-classes`), `unknown failures` **und** `could be measured` |
 | 7. `R`-Zeile `parity_paths_neutral_cpu.png` gesundes Golden mit Pixels kaputt | **rot**, Exit 1: `unknown failure … parity_paths_neutral_cpu.png` |
 | `library_survey.png` aus der Liste entfernt, obwohl es weiterhin scheitert | **rot**, Exit 1: `unknown failure … library_survey.png` |
 | `parity_paths_tinted_cpu.png` (gesund, besteht B2) zur Liste hinzugefügt | **rot**, Exit 1: `stale entry …` |
@@ -740,18 +740,40 @@ Ordnerbaum leaken).
 prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).
 <!-- END GENERATED: goldens -->
 
-Die Verteilung auf die Test-Targets:
+Die Verteilung auf die Test-Targets (generierter Block `golden-targets`):
+
+<!-- BEGIN GENERATED: golden-targets -->
+**Verteilung der Goldens auf die Test-Targets** (Quelle:
+`scripts/golden_inventory.txt`, eine Zeile je Golden; die Zahl je Target ist aus
+der Datei gezählt, nicht abgeschrieben; absteigend nach Zahl, bei Gleichstand
+nach Target-Pfad).
 
 | Test-Target | Goldens |
-| --- | --- |
-| `crates/lumina-gui/tests/kittest_snapshots.rs` (56 Tests, davon 46 Golden-Vergleiche) | 46 |
+| --- | ---: |
+| `crates/lumina-gui/tests/kittest_snapshots.rs` | 46 |
+| `crates/lumina-gui/tests/kittest_parity.rs` | 8 |
+| `crates/lumina-gui/tests/kittest_mask_local.rs` | 4 |
 | `crates/lumina-gui/tests/kittest_spot_tool.rs` | 3 |
 | `crates/lumina-gui/tests/kittest_crop_overlay.rs` | 2 |
-| `crates/lumina-gui/tests/kittest_mask_visibility.rs` | 1 |
+| `crates/lumina-gui/src/tests/brush_management.rs` | 1 |
 | `crates/lumina-gui/tests/kittest_library_stack.rs` | 1 |
-| `crates/lumina-gui/src/tests/brush_management.rs` (Lib-Target, `mask_management_controls_have_a_representative_kittest_golden`) | 1 |
-| `crates/lumina-gui/tests/kittest_parity.rs` (`parity_paths_{scene}_{cpu,gpu}`, nur mit `--features gpu`) | 8 |
-| `crates/lumina-gui/tests/kittest_mask_local.rs` | 4 |
+| `crates/lumina-gui/tests/kittest_mask_visibility.rs` | 1 |
+
+Summe: **66** Goldens (identisch mit `goldens.count` aus `scripts/golden_ref.lock`).
+<!-- END GENERATED: golden-targets -->
+
+**Was die Tabelle nicht sagt (handgepflegt, nicht ableitbar).** Zwei
+Besonderheiten der Test-Targets stehen nicht in der Zahl, sondern im Test:
+
+- `crates/lumina-gui/src/tests/brush_management.rs` ist ein **Lib-Target**
+  (kein Integrationstest); sein Golden-Test heißt
+  `mask_management_controls_have_a_representative_kittest_golden`.
+- `crates/lumina-gui/tests/kittest_parity.rs` erzeugt die Goldens
+  `parity_paths_{scene}_{cpu,gpu}` und läuft nur mit `--features gpu`.
+
+Die Anzahl der `#[ignore]`-Tests je Target ist eine Testzahl und nicht
+ableitbar; sie steht für `kittest_snapshots` in
+`feature/quality/golden-fixtures.md` §4.
 
 Alle sind `#[ignore]`. Es gibt dabei **zwei** dokumentierte Gründe, nicht einen:
 `"headless GPU required; …"` in den Integrationstest-Targets
@@ -806,8 +828,10 @@ Für die heute drei benutzten Prädikate ist die Bedingung strukturell haltbar
 
 
 > **Merke zur Zahlenangabe:** „56 Goldens" bezeichnet die **Tests** in
-> `kittest_snapshots.rs`, nicht die Vergleichsanzahl. Vergleichsanzahl in
-> diesem Target: 46. Über alle Targets: die Zahl im generierten Block in §7
+> `kittest_snapshots.rs`, nicht die Vergleichsanzahl; die Vergleichsanzahl je
+> Target steht im generierten Block `golden-targets` in §7 (Quelle:
+> `scripts/golden_inventory.txt`). Über alle Targets: die Zahl im generierten
+> Block `goldens` in §7
 > (Quelle: `goldens.count` aus `scripts/golden_ref.lock`; identisch mit dem
 > `git ls-files`-Count, den `golden_ref.sh check` und
 > `scripts/golden_ref_test.sh` dagegen prüfen). Die in der

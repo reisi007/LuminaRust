@@ -65,6 +65,17 @@
 #                     waere ausgeschlossen: im Snapshot-Verzeichnis liegen
 #                     gitignorierte `*.new.png`-Artefakte, die ein Scan
 #                     mitzaehlen wuerde (mehr als 66 — die Zahl der liegengebliebenen Artefakte ist hostabhaengig).
+#   * `golden-classes` / `golden-targets` — der committeten Datei
+#                     `scripts/golden_inventory.txt` (eine Zeile je Golden:
+#                     Dateiname, Klasse `R`/`C`, Test-Target). Das ist die
+#                     MASCHINENLESBARE FORM der handgepflegten Klassifikation
+#                     (GOLDEN-FIXT-31): die Entscheidung (R oder C) ist
+#                     menschlich, die Zahlen werden hier gerechnet. Der
+#                     Generator enthaelt deshalb KEINE Liste von Goldens,
+#                     Klassen oder Targets; er zaehlt die Zeilen der Datei
+#                     und prueft sie laut (Format, Kopfzeile, keine
+#                     Doppelnennung, Sortierung, Existenz der Datei,
+#                     Uebereinstimmung mit `goldens.count`).
 #   * `mcp-tools`  — den Aufrufen `tool_def(` in
 #                     `crates/lumina-mcp/src/tools/mod.rs` (der Konstruktor
 #                     `fn tool_def` steht ohne fuehrenden Leerraum und faellt
@@ -102,10 +113,13 @@
 # dem der `goldens`-Block liest (Default: IMMER `scripts/golden_ref.lock` des
 # Repos). `LUMINA_PERF_BASELINE` ueberschreibt den Pfad des Baseline-Stores,
 # aus dem der `perf-baseline`-Block liest (Default: IMMER `perf/baseline.json`
-# des Repos). Die Haken existieren nur fuer den Rotbeweis „Quelle wandert";
+# des Repos). `LUMINA_GOLDEN_INVENTORY` ueberschreibt den Pfad der
+# Inventar-Quelldatei, aus der die Bloecke `golden-classes` und
+# `golden-targets` lesen (Default: IMMER `scripts/golden_inventory.txt` des
+# Repos). Die Haken existieren nur fuer den Rotbeweis „Quelle wandert";
 # sie aendern nur, welche TEXTdatei gelesen wird. **Kein Haken darf den Gate
-# gruen machen, ohne dass die Block-Quelle sichtbar aendert**: ein anderer
-# Store erzeugt einen anderen Block — der Drift-Gate wird rot.
+# gruen machen, ohne dass die Block-Quelle sichtbar aendert**: eine andere
+# Quelle erzeugt einen anderen Block — der Drift-Gate wird rot.
 #
 # Exit: 0 = Ausgabe auf stdout. 2 = Fehler (Quelle nicht lesbar, Lockfile
 # fehlt oder unlesbar, Konstante nicht gefunden). Der Drift-Gate behandelt
@@ -124,6 +138,8 @@ SIZE_GATE="$ROOT/scripts/check_file_sizes.sh"
 CEILING_GATE="$ROOT/scripts/check_file_ceiling.sh"
 GOLDEN_DIR_REL="crates/lumina-gui/tests/snapshots"
 GOLDEN_LOCK="${LUMINA_GOLDENS_LOCK:-$ROOT/scripts/golden_ref.lock}"
+GOLDEN_INVENTORY="${LUMINA_GOLDEN_INVENTORY:-$ROOT/scripts/golden_inventory.txt}"
+GOLDEN_FIXTURES_DOC="$ROOT/feature/quality/golden-fixtures.md"
 MCP_TOOLS_MOD="$ROOT/crates/lumina-mcp/src/tools/mod.rs"
 CLI_MAIN="$ROOT/crates/lumina-cli/src/main.rs"
 PERF_BASELINE="${LUMINA_PERF_BASELINE:-$ROOT/perf/baseline.json}"
@@ -140,6 +156,8 @@ PERF_REFERENCE_STAGE="render_frame"
 PERF_BATCH_PREFIX="batch/"
 PERF_CACHE_PREFIX="cache_"
 SURFACES_TABLE_HEADER="| Oberfläche |"
+# Die Kopfzeile der Inventar-Quelldatei (Form des Vertrags, keine Tatsache).
+GOLDEN_INVENTORY_HEADER="golden|klasse|target"
 
 # MANIFEST: Block-Id | Zieldatei (relativ zur Repo-Wurzel).
 # Eine Quelle der Wahrheit fuer Generator UND Drift-Gate: der Gate liest das
@@ -150,6 +168,8 @@ population|feature/quality/file-size-policy.md
 goldens|feature/README.md
 goldens|feature/quality/golden-references.md
 goldens|feature/quality/golden-fixtures.md
+golden-classes|feature/quality/golden-fixtures.md
+golden-targets|feature/quality/golden-references.md
 mcp-tools|feature/platform/mcp-server.md
 mcp-tools|feature/quality/security-review-register.md
 perf-baseline|feature/quality/performance-benchmarks.md
@@ -297,6 +317,18 @@ gen_population() {
 # Fehlt das Lockfile oder steht kein gueltiger Wert drin, MELDET der Generator
 # das (Exit 2) — er liefert NICHT still 0.
 gen_goldens() {
+    n=$(lock_goldens_count)
+
+    printf '**%s** committete Golden-Dateien in `%s/` (Quelle:\n' "$n" "$GOLDEN_DIR_REL"
+    printf '`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`\n'
+    printf 'prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).\n'
+}
+
+# lock_goldens_count — die Zahl der committeten Goldens aus dem Lockfile.
+# Fehlt das Lockfile oder steht kein gueltiger Wert drin, MELDET der Generator
+# das (Exit 2) — er liefert NICHT still 0. Die Pruefung steht hier, weil
+# zwei Bloecke (`goldens` und `golden-classes`) dieselbe Quelle lesen.
+lock_goldens_count() {
     [ -f "$GOLDEN_LOCK" ] ||
         die "das Lockfile fehlt: $GOLDEN_LOCK - die Zahl der committeten Goldens ist nicht ermittelbar"
     [ -r "$GOLDEN_LOCK" ] ||
@@ -308,10 +340,170 @@ gen_goldens() {
         *[!0-9]*) die "im Lockfile steht kein gueltiger Wert fuer goldens.count: $GOLDEN_LOCK" ;;
     esac
     [ "$n" -gt 0 ] || die "im Lockfile steht goldens.count=0 - das ist kein gueltiger Stand"
+    printf '%s\n' "$n"
+}
 
-    printf '**%s** committete Golden-Dateien in `%s/` (Quelle:\n' "$n" "$GOLDEN_DIR_REL"
-    printf '`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`\n'
-    printf 'prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).\n'
+# ------------------------------------------------------- golden-inventar (neu)
+# Quelle: die committete Datei `scripts/golden_inventory.txt` — eine Zeile je
+# committetem Golden: Dateiname, Klasse (`R`/`C`) und Test-Target. Das ist die
+# **maschinenlesbare Form der handgepflegten Klassifikation** (GOLDEN-FIXT-31,
+# `feature/quality/golden-fixtures.md` §2/§3): die ENTSCHEIDUNG (R oder C) ist
+# eine menschliche, die ZAHLEN werden hier gerechnet. Der Generator enthaelt
+# deshalb KEINE Liste von Goldens, Klassen oder Targets — die Auswahl ist die
+# Datei.
+#
+# Regelbasiert und git-frei: die Quelle ist eine committete Datei im Repo (der
+# CI-Container `lumina-ci:latest` hat kein `git`; ein `git ls-files` waere dort
+# rot und lokal gruen). Der Generator fuehrt NICHTS aus, was er aus der Datei
+# gelesen hat — er zaehlt Zeilen.
+#
+# Geprueft wird LAUT (nie still), sonst waere die Quelle eine Behauptung:
+#   * die Kopfzeile ist genau `golden|klasse|target`;
+#   * jede Datenzeile hat genau drei Felder, der Dateiname endet auf `.png`,
+#     die Klasse ist `R` oder `C`, das Target ist ein repo-relativer Pfad;
+#   * kein Golden steht zweimal, und die Datei ist sortiert (LC_ALL=C) — die
+#     Sortierung ist Teil des Datei-Vertrags, nicht eine Kosmetik;
+#   * jede genannte Datei existiert in `crates/lumina-gui/tests/snapshots/`
+#     (kein Phantom-Eintrag, keine Luecke);
+#   * die Zahl der Zeilen ist `goldens.count` aus `scripts/golden_ref.lock`
+#     (die committete Baseline der Golden-Zahl) — die beiden Quellen muessen
+#     uebereinstimmen.
+read_golden_inventory() {
+    [ -f "$GOLDEN_INVENTORY" ] ||
+        die "die Inventar-Quelldatei fehlt: $GOLDEN_INVENTORY - die Klassen- und Target-Zahlen sind nicht ermittelbar"
+    [ -r "$GOLDEN_INVENTORY" ] ||
+        die "die Inventar-Quelldatei ist nicht lesbar: $GOLDEN_INVENTORY - die Klassen- und Target-Zahlen sind nicht ermittelbar"
+
+    header=$(grep -v '^#' "$GOLDEN_INVENTORY" | head -n 1 || true)
+    [ "$header" = "$GOLDEN_INVENTORY_HEADER" ] ||
+        die "die Kopfzeile der Inventar-Quelldatei ist nicht '$GOLDEN_INVENTORY_HEADER' (gefunden: ${header:-<leer>})"
+
+    grep -v '^#' "$GOLDEN_INVENTORY" | tail -n +2 > "$WORK/gi.raw" || true
+
+    awk -F'|' '
+        NF == 0 { next }
+        NF != 3 {
+            printf "FEHLER: eine Datenzeile hat %d Felder (erwartet: 3): %s\n", NF, $0 > "/dev/stderr"
+            exit 1
+        }
+        $1 !~ /^[A-Za-z0-9_.-]+\.png$/ {
+            printf "FEHLER: unbrauchbarer Golden-Dateiname: %s\n", $1 > "/dev/stderr"
+            exit 1
+        }
+        $2 != "R" && $2 != "C" {
+            printf "FEHLER: unbrauchbares Klassen-Token (erlaubt: R, C): %s\n", $2 > "/dev/stderr"
+            exit 1
+        }
+        $3 !~ /^[A-Za-z0-9._\/-]+$/ {
+            printf "FEHLER: unbrauchbarer Target-Pfad: %s\n", $3 > "/dev/stderr"
+            exit 1
+        }
+        { printf "%s\t%s\t%s\n", $1, $2, $3 }
+    ' "$WORK/gi.raw" > "$WORK/gi.rows" ||
+        die "die Inventar-Quelldatei $GOLDEN_INVENTORY ist nicht auswertbar (Format oder Quelle geaendert)"
+
+    gi_total=$(wc -l < "$WORK/gi.rows" | tr -d ' ')
+    [ "$gi_total" -gt 0 ] ||
+        die "die Inventar-Quelldatei $GOLDEN_INVENTORY enthaelt keine einzige Datenzeile"
+
+    dup=$(cut -f1 "$WORK/gi.rows" | LC_ALL=C sort | uniq -d)
+    [ -z "$dup" ] ||
+        die "in der Inventar-Quelldatei stehen Goldens mehrfach: $(printf '%s' "$dup" | tr '\n' ' ')"
+
+    if ! sort -t"$TAB" -k1,1 -c "$WORK/gi.rows" 2> "$WORK/gi.sort.err"; then
+        die "die Inventar-Quelldatei $GOLDEN_INVENTORY ist nicht sortiert (LC_ALL=C, nach dem Golden-Namen) — die Sortierung ist Teil des Vertrags"
+    fi
+
+    while IFS="$TAB" read -r gi_name gi_class gi_target; do
+        [ -n "$gi_name" ] || continue
+        [ -f "$ROOT/$GOLDEN_DIR_REL/$gi_name" ] ||
+            die "die Inventar-Quelldatei nennt ein Golden, das es nicht gibt: $GOLDEN_DIR_REL/$gi_name"
+    done < "$WORK/gi.rows"
+
+    gi_lock=$(lock_goldens_count)
+    [ "$gi_total" -eq "$gi_lock" ] ||
+        die "die Inventar-Quelldatei nennt $gi_total Goldens, das Lockfile $GOLDEN_LOCK nennt $gi_lock (Feld goldens.count) — die beiden Quellen muessen uebereinstimmen"
+
+    # Der Abgleich mit der handgepflegten Inventartabelle (§4 der Datei
+    # `golden-fixtures.md`): die Tabelle bleibt Prosa (Fixture, Nachweis-Scope,
+    # Zeilennummern, die das Render-Evidenz-Ledger referenziert), aber ihre
+    # KLASSENSPALTE darf nicht von der Quelldatei abweichen — sonst waere sie
+    # eine zweite, stille Quelle der Wahrheit. Der Abgleich ist LAUT: eine
+    # Abweichung beendet den Generator mit Exit 2 (der Drift-Gate wird rot).
+    check_golden_inventory_table
+}
+
+# check_golden_inventory_table — die Klassen der Inventartabelle in
+# `feature/quality/golden-fixtures.md` gegen die Quelldatei. Gelesen wird nur
+# Text (die Zeilen der Form `| <nr> | \`<golden>\` | <klasse> | …`), es wird
+# NICHTS aus dem Dokument ausgefuehrt.
+check_golden_inventory_table() {
+    [ -f "$GOLDEN_FIXTURES_DOC" ] ||
+        die "das Inventar-Dokument fehlt: $GOLDEN_FIXTURES_DOC - die Klassenspalte der Inventartabelle kann nicht abgeglichen werden"
+
+    awk -F'|' '
+        $0 ~ /^[[:space:]]*\|[[:space:]]*[0-9]+[[:space:]]*\|/ {
+            n = $3; c = $4
+            gsub(/`/, "", n); gsub(/[[:space:]]/, "", n)
+            gsub(/\*/, "", c); gsub(/[[:space:]]/, "", c)
+            if (n != "") printf "%s|%s\n", n, c
+        }
+    ' "$GOLDEN_FIXTURES_DOC" > "$WORK/gi.table"
+
+    t_rows=$(wc -l < "$WORK/gi.table" | tr -d ' ')
+    [ "$t_rows" -gt 0 ] ||
+        die "in der Inventartabelle in ${GOLDEN_FIXTURES_DOC##*/} wurde keine Zeile der Form '| <nr> | \`<golden>\` | <klasse> |' gefunden — die Form des Vertrags hat sich geaendert"
+
+    awk -F"$TAB" '{ printf "%s|%s\n", $1, $2 }' "$WORK/gi.rows" | LC_ALL=C sort > "$WORK/gi.src.sorted"
+    LC_ALL=C sort "$WORK/gi.table" > "$WORK/gi.table.sorted"
+
+    # `diff` OHNE `-u`: die unified-Ausgabe traegt Zeitstempel der Temp-Dateien
+    # im Kopf — eine Fehlermeldung mit Zeitstempel ist nicht wiederholbar.
+    gi_diff=$(diff "$WORK/gi.table.sorted" "$WORK/gi.src.sorted" 2>&1 || true)
+    if [ -n "$gi_diff" ]; then
+        die "die Klassenspalte der Inventartabelle in ${GOLDEN_FIXTURES_DOC##*/} weicht von der Quelldatei $GOLDEN_INVENTORY ab (< Tabelle, > Quelldatei):$(printf '\n%s' "$(printf '%s' "$gi_diff" | sed 's/^/  /')")"
+    fi
+}
+
+# `golden-classes` — der R/C-Split, NEU BERECHNET aus der Quelldatei.
+gen_golden_classes() {
+    read_golden_inventory
+
+    n_r=$(awk -F"$TAB" '$2 == "R"' "$WORK/gi.rows" | grep -c . || true)
+    n_c=$(awk -F"$TAB" '$2 == "C"' "$WORK/gi.rows" | grep -c . || true)
+    [ "$((n_r + n_c))" -eq "$gi_total" ] ||
+        die "die Klassenzaehlung ($n_r R + $n_c C) passt nicht zur Zeilenzahl ($gi_total) der Inventar-Quelldatei"
+
+    # Die Form des Satzes ist Teil des Vertrags mit `scripts/golden_ref_test.sh`
+    # (Pruefung A3 liest „Bilanz: <n> Render-Invarianten" und „<n>
+    # Chrome-/Layout-Invarianten" aus diesem Dokument) — die Zahlen stehen hier
+    # generiert, nicht in der Prosa.
+    printf '**Bilanz: %s Render-Invarianten (Klasse R), %s Chrome-/Layout-Invarianten\n' "$n_r" "$n_c"
+    printf '(Klasse C)** — zusammen **%s** Goldens (Quelle: `scripts/golden_inventory.txt`,\n' "$gi_total"
+    printf 'eine Zeile je Golden mit Dateiname, Klasse und Test-Target; die Zahl stimmt mit\n'
+    printf '`goldens.count` aus `scripts/golden_ref.lock` überein — sie wird aus der Datei\n'
+    printf 'gezählt, nicht abgeschrieben).\n'
+}
+
+# `golden-targets` — die Verteilung auf die Test-Targets, NEU BERECHNET.
+gen_golden_targets() {
+    read_golden_inventory
+
+    printf '**Verteilung der Goldens auf die Test-Targets** (Quelle:\n'
+    printf '`scripts/golden_inventory.txt`, eine Zeile je Golden; die Zahl je Target ist aus\n'
+    printf 'der Datei gezählt, nicht abgeschrieben; absteigend nach Zahl, bei Gleichstand\n'
+    printf 'nach Target-Pfad).\n\n'
+    printf '| Test-Target | Goldens |\n'
+    printf '| --- | ---: |\n'
+
+    awk -F"$TAB" '{ c[$3]++ } END { for (t in c) printf "%s\t%s\n", c[t], t }' "$WORK/gi.rows" > "$WORK/gi.targets"
+    sort -t"$TAB" -k1,1nr -k2,2 "$WORK/gi.targets" > "$WORK/gi.targets.sorted"
+    while IFS="$TAB" read -r cnt target; do
+        [ -n "$target" ] || continue
+        printf '| `%s` | %s |\n' "$target" "$cnt"
+    done < "$WORK/gi.targets.sorted"
+
+    printf '\nSumme: **%s** Goldens (identisch mit `goldens.count` aus `scripts/golden_ref.lock`).\n' "$gi_total"
 }
 
 # ----------------------------------------------------------------- mcp-tools
@@ -705,6 +897,8 @@ gen_block() {
         file-sizes)  gen_file_sizes ;;
         population)  gen_population ;;
         goldens)     gen_goldens ;;
+        golden-classes) gen_golden_classes ;;
+        golden-targets)  gen_golden_targets ;;
         mcp-tools)   gen_mcp_tools ;;
         perf-baseline) gen_perf_baseline ;;
         crates)      gen_crates ;;
