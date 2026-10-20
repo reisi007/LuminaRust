@@ -394,12 +394,22 @@ Doku behauptet SidecarConflict (-32010) bei CAS-Konflikt in `lumina_edit`/**`lum
 `edit.rs:136-140`). *Lösung:* Doku präzisieren oder Save-Write-Through
 spezifizieren/implementieren. *Aufwand S · MVP-blockierend: nein.*
 
-**R2-MCP-05 · mittel · GAP · `mcp-server.md:404-408` vs.
-`crates/lumina-mcp/src/main.rs:11-35`**
+**R2-MCP-05 · mittel · GAP · `feature/platform/mcp-server.md` §
+„Schnellvorschau (`lumina_preview`)" vs. `crates/lumina-mcp/src/lib.rs` →
+`Server::cleanup_previews`**
 Doku: Shutdown-Cleanup der Vorschauen „optional, Default: ja". Implementiert:
 nein — Preview-Dateien alter Sessions akkumulieren unbegrenzt in
 `$TMPDIR/lumina-previews/`. *Lösung:* Session-geführte Liste + Löschung am
 Loop-Ende. *Aufwand S · MVP-blockierend: nein.*
+**Beleg-Nachtrag 2026-10-20 (Anker-Update, kein Statuswechsel):** der
+Session-Cleanup existiert heute — `crates/lumina-mcp/src/lib.rs` →
+`Server::cleanup_previews` (Opt-out `LUMINA_MCP_KEEP_PREVIEWS`, Test
+`crates/lumina-mcp/src/lib.rs` →
+`cleanup_previews_honors_the_keep_policy_and_removes_by_default`, eingeführt
+in Commit `00ed610`). Er räumt aber nur die **session-eigenen** Vorschau-Dateien
+(`crates/lumina-mcp/src/lib.rs` → `preview_files`); Dateien **abgestürzter**
+Sessions bleiben liegen. Der Restbefund (Löschung am Loop-Ende über alle
+Sessions) ist damit **nicht** abgedeckt — Status unverändert: **GAP**.
 
 **R2-GUIMOD-09 · mittel · PERFORMANCE (Startup) · `lumina-gui/src/lib.rs:841`
 + `main.rs:25-29`**

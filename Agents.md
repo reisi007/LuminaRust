@@ -562,6 +562,9 @@ erst fertig, wenn:
 - Neue Erkenntnisse oder Folgearbeiten werden als neue offene Aufgaben ergänzt.
 - Änderungen an fachlichen Zielzuständen werden zuerst im betroffenen Dokument
   unter `feature/` beschrieben und im `feature/README.md` verlinkt.
+- Ein Anker auf Code in der Prosa nennt den **vollständigen repo-relativen Pfad**
+  *und* den **Symbol- bzw. Testnamen**; Zeilennummern sind in Prosa nur in
+  **datierten Audit-Belegen** erlaubt.
 - Wichtige Architekturentscheidungen werden als ADR oder klar markierter
   Entscheidungsabschnitt dokumentiert.
 - Der Plan darf niemals stillschweigend durch Codeänderungen veralten.

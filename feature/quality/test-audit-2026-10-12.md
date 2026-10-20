@@ -61,25 +61,38 @@ Teilmenge (ohne No-Op-Pixelidentität, ohne 1×1-Mindestfall). **Entfallende
 Aussage: keine** — Streichen des mcp-Exemplars verliert keine Eigenschaft; es
 hat nachweislich kein eigenes Fehlsignal.
 
-### B2 — GEMESSEN, Priorität 1: fünf Tests pinnen dieselbe Aussage
+### B2 — GEMESSEN (2026-10-12), Priorität 1: fünf Tests pinnen dieselbe Aussage
 
 `LocalAdjustments::set_value` muss die deaktivierten Stufen-Keys abweisen
-(`crates/lumina-sidecar/src/local_adjustments.rs:362`, Tabelle
-`LOCAL_ADJUSTMENT_RANGES` `src/lib.rs:79`). Gepinnt von:
+(`crates/lumina-sidecar/src/local_adjustments.rs` → `LocalAdjustments::set_value`,
+Tabelle `LOCAL_ADJUSTMENT_RANGES` in `crates/lumina-sidecar/src/lib.rs`).
+Gepinnt von:
 
-- `crates/lumina-sidecar/src/tests/local_adjustments_color_digest.rs:121`
+- `crates/lumina-sidecar/src/tests/local_adjustments_color_digest.rs` →
   `disabled_local_presence_detail_denoise_and_optics_stay_rejected`
-- `crates/lumina-sidecar/src/tests/local_adjustments_presence.rs:366` (gleicher Name)
-- `crates/lumina-sidecar/src/tests/local_adjustments_detail_state.rs:87`
-  `disabled_local_denoise_and_optics_stay_rejected_and_the_legacy_keys_stay_p0`
-- `crates/lumina-core/src/render/tests/local_color_contract_tests.rs:239`
+- `crates/lumina-core/src/render/tests/local_color_contract_tests.rs` →
   `disabled_local_stages_stay_unreachable`
-- `crates/lumina-core/src/render/tests/local_presence_contract_tests.rs:299`
-  (gleicher Name)
+- `crates/lumina-core/src/render/tests/local_presence_contract_tests.rs` →
+  `disabled_local_stages_stay_unreachable`
 
-**Messung:** Mutation „`set_value` akzeptiert `detail`" → **alle fünf rot**
-(3 sidecar, 2 core). Redundanz damit quantifiziert: vier der fünf Exemplare der
-*Abweisungs-Aussage* sind gegeneinander austauschbar; **Rest-Aussagen pro
+**Anker-Update 2026-10-20:** die beiden weiteren sidecar-Exemplare sind
+**überholt** — sie wurden in das konsolidierte Exemplar
+`crates/lumina-sidecar/src/tests/local_adjustments_color_digest.rs` →
+`disabled_local_presence_detail_denoise_and_optics_stay_rejected` zusammengeführt
+(siehe dessen Doc-Kommentar). Die beiden alten Anker
+(`crates/lumina-sidecar/src/tests/local_adjustments_presence.rs` und
+`crates/lumina-sidecar/src/tests/local_adjustments_detail_state.rs`) zeigten
+ins Leere: die beiden Dateien sind heute 355 bzw. 81 Zeilen lang; auf dem damaligen
+Stand (442 bzw. 159 Zeilen) zeigten die Anker noch auf die dort genannten Tests —
+der dort genannte Testname
+`disabled_local_denoise_and_optics_stay_rejected_and_the_legacy_keys_stay_p0`
+existiert heute nicht mehr. Die Aussage „fünf Tests pinnen dieselbe Aussage"
+galt für den Stand 2026-10-12; heute sind es **drei** Exemplare.
+
+**Messung (2026-10-12):** Mutation „`set_value` akzeptiert `detail`" → **alle
+fünf rot** (3 sidecar, 2 core). Redundanz damit quantifiziert: vier der fünf
+Exemplare der *Abweisungs-Aussage* sind gegeneinander austauschbar;
+**Rest-Aussagen pro
 Exemplar**: die sidecar-presence-Variante pinned zusätzlich den
 Legacy-`adjustment_*`-Pfad (`validate_mask_layer_local_state`) — der hat
 **keinen** Ersatz; die Key-Listen (6/7/9/10 Keys) und serialisierten Feldsätze

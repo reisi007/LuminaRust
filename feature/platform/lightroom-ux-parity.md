@@ -18,41 +18,90 @@ read-only, 2026-09-12), `.goal/Goal.md` G-01…G-16,
 
 ## Gap-Inventory Klon (UXG)
 
-| ID | Lücke (Classic vs. Lumina) | Evidenz | SOLL-Entscheid nötig | Task-Anker |
+**Anker-Form (Stand 2026-10-20):** Die Spalte „Fundstelle" nennt den
+vollständigen repo-relativen **Pfad + Symbolnamen** — keine Zeilennummern.
+Zeilennummern driften mit jedem Refactor-Slice; die Alt-Anker dieser Tabelle
+sind deshalb gegen **zwei** Stände notiert:
+
+- **UXG-01…UXG-15 und alle UXD-Zeilen** gegen `crates/lumina-gui/src/lib.rs`
+  im Stand 2026-09-12 (Commit `b231920`;
+  `git show b231920:crates/lumina-gui/src/lib.rs | wc -l` = 31 909 Zeilen),
+- **UXG-16 und UXG-17** gegen denselben Pfad im Stand 2026-09-17 (Commit
+  `cd440fb`) — diese beiden Zeilen hat Commit `8de5585`
+  („Look-Analyse Top-Findings: Zielbild + UXG-16-18 + i18n-Fix") eingefügt.
+
+**Methodenvermerk (Stand 2026-10-20):** die Statusangaben — „geschlossen",
+„teilweise geschlossen" und die in der Spalte „Fundstelle" genannten
+Restbefunde („Restbefund:", „behoben:"/"offen:") — sind **per
+Code-Lesung** belegt — Quelldatei + Symbolname, ggf. der schließende Commit
+im Doc-Kommentar des Moduls — und **nicht per Testlauf**. Ein Testlauf steht
+aus; bis dahin sind die Einstufungen Quellcode-Stand, kein Lauftest-Ernis.
+
+Die Alt-Tabelle (Zustand vor dieser Welle) trug 26 Zeilen-Anker: 22 in der
+Form `datei.rs:NNNN` (commit-gepinnter Zählweg:
+`git show 3bc67d8:feature/platform/lightroom-ux-parity.md | grep -oE
+'[A-Za-z0-9_./-]+\.rs:[0-9]+' | wc -l`) und 4 Fortsetzungen der Form „`:Zahl`"
+in derselben Tabellenzelle (`git show 3bc67d8:feature/platform/lightroom-ux-parity.md
+| grep -oE '`:[0-9]+(-[0-9]+)?`' | wc -l`). Zum Zeitpunkt der Erhebung
+(Commit `8de5585`) waren es 23 + 4 = 27 — die Differenz ist UXG-15, dessen
+Anker später vom `lib.rs`-Zeilenanker auf den Dateinamen `navigator.rs`
+umgestellt wurde.
+
+Nach den 20 Refactor-Slices (GUI-LIB-SPLIT-65; Slice 20 = `ddbbb72`) ist
+`crates/lumina-gui/src/lib.rs` stark geschrumpft (`wc -l
+crates/lumina-gui/src/lib.rs`): 24 der 26 Alt-Anker lagen jenseits dieses EOF
+(Zählweg: `git show 3bc67d8:feature/platform/lightroom-ux-parity.md | grep -oE
+'[A-Za-z0-9_./-]+\.rs:[0-9]+|`:[0-9]+(-[0-9]+)?`' | sed 's/^[^0-9]*//' | awk
+-v eof="$(wc -l < crates/lumina-gui/src/lib.rs)" '$1>eof' | wc -l`), die zwei
+übrigen lagen innerhalb — der eine zeigte damals auf `module_for_key`, der
+andere auf die `spot_removals`-Deserialisierung innerhalb von
+`LuminaApp::visible_edit_pins`; heute zeigen die beiden Zeilen auf beliebigen
+Code und damit auf keinen tragfähigen Anker.
+
+Repo-Regel: `DoD.md` („Eine Zahl, die man nicht nachzählen kann, wird **nicht**
+hingeschrieben") und `feature/quality/security-review-register.md` § 4
+„Regeln für die Einträge", Punkt 7 „Stabile Bezüge" („Zeilen verweisen auf
+Pfade und Testnamen, nicht auf Zeilennummern (die driften). Der Beleg nennt
+das Kommando, das den Befund reproduzierbar zeigt."). Belegt wird jeder Anker
+mit `grep -n <Symbol> <Pfad>`.
+
+| ID | Lücke (Classic vs. Lumina) | Fundstelle (Pfad + Symbol) | SOLL-Entscheid nötig | Task-Anker |
 | --- | --- | --- | --- | --- |
-| UXG-01 | Crop nicht interaktiv (nur Badge + x/y/w/h-Felder statt Rahmen/Handles/Drag/Enter) | `lib.rs:12758`, `:14287` | ja (Commit-Semantik) | neu |
-| UXG-02 | Presets/History/Rating rechts statt links; Snapshots-Panel fehlt | `lib.rs:18418`, `:16725` | ja (Layout) | neu |
-| UXG-03 | Library-Chrome fehlt (Catalog-Panel, View-Toolbar, Filterleiste, Quick Develop, Import-Dialog) | `lib.rs:15924`, `:18208` | ja (G-09-Scope) | neu |
-| UXG-04 | Keine Werkzeugleiste über dem Bild (Q/K/M/R nur via Panel) | `lib.rs:17059` | eher nein | LRPAR-G11-OVERLAYS |
-| UXG-05 | Panels ohne Kontext-Dynamik (Sections sind kollabierbar, aber nichts blendet je nach Tool/Selektion ein/aus) | `lib.rs:16735` | ja (Panel-Dynamik) | neu |
-| UXG-06 | Develop-Reihenfolge ≠ Classic; Calibration-Panel fehlt | `lib.rs:16651` | ja (F-100-Reihenfolge) | neu |
-| UXG-07 | History zeigt Maschinen-IDs statt Namen/Werte/Zeit | `lib.rs:16526` | ja (Schema/Extras) | neu |
-| UXG-08 | Loupe/Compare/Survey sind Thumbnail-Stubs (kein Zoom/Pan, kein Render) | `lib.rs:16203` | ja (G-09-Scope) | neu |
-| UXG-09 | Filmstreifen ohne Badges/Filter/Sort/Zähler | `lib.rs:16768` | nein | neu |
-| UXG-10 | Before/After unvollständig (kein echtes Split); Softproof nur Badge | `lib.rs:13034` | teils | LRPAR-G10-VIEWER |
-| UXG-11 | Keine Menüleiste; Modul-Leiste nicht Classic-artig | `lib.rs:18364` | ja (Menüumfang) | neu |
-| UXG-12 | Presets = Datei-Browser statt Baum (kein Amount/Gruppen) | `lib.rs:16418` | ja (Amount-Semantik) | neu |
-| UXG-13 | Kürzel `O`/`Z`/`Shift+L`/`I` fehlen; `E`-Alias unsauber | `lib.rs:135` | nein (F-100 erweitern) | LRPAR-G16-POWER |
-| UXG-14 | Keine Canvas-Cursor; keine Stepper/Reset-Affordanz | Grep `CursorIcon` leer | nein | neu |
-| UXG-15 | Navigator-Rail: **R4-UX-1 (2026-09-20, User)** entfernt die Duplikat-Thumbnail-Rail unter dem Navigator — Navigator-Viewport bleibt, der untere Filmstrip ist die einzige Selektionsfläche; R4-NAV-1 gattert den Viewport-Drag auf vergrößerte Ansichten | `navigator.rs` | entschieden | R4-UX-1 |
-| UXG-16 | Tone Curve ohne Kurvengrafik (P0/P1-Slider + Add-Point statt Punkte setzen/ziehen; Vision 2026-09-17: „bitterste Umlernstelle") | `lib.rs:15832`, `develop_section_tone_curve.png` | ja (Interaktion/Kanal) | neu |
-| UXG-17 | Hardcodierte UI-Literale statt `Str::` (F-100: englisch, 0 deutsche UI-Literale); Generative-Panels 2026-09-17 behoben (`ExpandDragFrameHint`/`ExpandCropToImage`), Spot-Panel (`draw_spot_heal`) offen | `i18n.rs`, `lib.rs:17185/17188` (behoben), `lib.rs:17680–17719` (offen) | nein | neu |
-| UXG-18 | Vision-Feinschliff 2026-09-17 (je einzeln entscheidbar): HSL ohne 8 Color-Mixer-Farbfelder; Compare/Survey-Tiles unausgerichtet; Toast überdeckt Toolbar-Kante; Preset-Dialog unzentriert/beschnitten; Meta-History als Rohdaten-Dump (ISO/Pipe); Histogramm ohne RGB-Kanäle/Clipping-Dreiecke/EXIF-Zeile; kein EXIF-Overlay über dem Bild; Slider-Blau ohne Akzent-Disziplin | Goldens + Vision-Urteil 2026-09-17 | teils | neu |
+| UXG-01 | **Geschlossen (UX-LOOK-CROP-18):** Crop nicht interaktiv (nur Badge + x/y/w/h-Felder statt Rahmen/Handles/Drag/Enter) | `crates/lumina-gui/src/develop_geometry/crop_overlay.rs` → `LuminaApp::draw_crop_overlay` (vier Eck-Handles, Drag, Drittel-Gitter, `Enter`/`Esc`); `crates/lumina-gui/src/develop_geometry.rs` → `LuminaApp::draw_geometry` | nein (erledigt) | UX-LOOK-CROP-18 |
+| UXG-02 | **Teilweise geschlossen (UX-LOOK-LAYOUT-18):** Rating-Zeile rechts statt links | `crates/lumina-gui/src/develop_left_rail.rs` → `LuminaApp::draw_left_rail_panel`, `LuminaApp::draw_develop_left_rail`, `LuminaApp::draw_snapshots_section`; `crates/lumina-gui/src/develop_ops.rs` → `LuminaApp::draw_presets_section` — Presets/History/Snapshots liegen heute links; **Restbefund: die Rating-Zeile liegt weiter rechts** (`crates/lumina-gui/src/develop_ops.rs` → `LuminaApp::draw_rating_section`) | ja (Layout) | UX-LOOK-LAYOUT-18 · Restbefund: neu |
+| UXG-03 | **Teilweise geschlossen:** Kein Import-Dialog | `crates/lumina-gui/src/library_grid.rs` → `LuminaApp::draw_library_grid` (View-Toolbar, Filterleiste, Quick Develop sind vorhanden); `crates/lumina-gui/src/library_tree.rs` → `LuminaApp::draw_folder_tree`; **Restbefund: es gibt keinen Import-Dialog** — `grep -rni "import_dialog\|import_window" crates/lumina-gui/src/` liefert 0 Treffer — `crates/lumina-gui/src/app_frame.rs` → `LuminaApp::apply_import_export_action` schaltet beim Import nur das Modul | ja (G-09-Scope) | neu |
+| UXG-04 | **Geschlossen (UX-LOOK-TOOLBAR-18):** Keine Werkzeugleiste über dem Bild (Q/K/M/R nur via Panel) | `crates/lumina-gui/src/app_frame.rs` → `LuminaApp::draw_preview_area`; Werkzeugleiste: `LuminaApp::draw_view_toolbar` (Crop/Heal/Red-Eye/Masken + View-Toggles); Icons: `crates/lumina-gui/src/icon_toolbar.rs` → `ToolbarIcon`, `icon_button` | nein (erledigt) | UX-LOOK-TOOLBAR-18 / LRPAR-G11-OVERLAYS |
+| UXG-05 | Panels ohne Kontext-Dynamik (Sections sind kollabierbar, aber nichts blendet je nach Tool/Selektion ein/aus) | `crates/lumina-gui/src/develop_frame.rs` → `LuminaApp::develop_scroll_content` (Section-Aufbau über `LuminaApp::DEVELOP_SECTIONS`); Offen-/Solo-State: `crates/lumina-gui/src/develop_sections.rs` → `LuminaApp::is_section_open`, `LuminaApp::set_section_open`, `LuminaApp::set_solo_mode` | ja (Panel-Dynamik) | neu |
+| UXG-06 | **Teilweise geschlossen:** Develop-Reihenfolge ohne Calibration-Panel | `crates/lumina-gui/src/develop_frame.rs` → `LuminaApp::DEVELOP_SECTIONS` (einzige Reihenfolge-Quelle); Reihenfolge-Beleg: `crates/lumina-gui/src/tests/startup.rs` → `develop_section_order_is_lightroom_conform`; **Restbefund: ein Calibration-Panel fehlt weiterhin** (nicht in `LuminaApp::DEVELOP_SECTIONS`) | ja (F-100-Reihenfolge) | neu |
+| UXG-07 | **Geschlossen (UX-LOOK-HISTORY-18):** History zeigt Maschinen-IDs statt Namen/Werte/Zeit | `crates/lumina-gui/src/develop_ops.rs` → `LuminaApp::draw_history_section` (Label `Name from → to — Zeit`); strukturiertes Schema: `crates/lumina-sidecar/src/history.rs` → `HistoryChange` | nein (erledigt) | UX-LOOK-HISTORY-18 |
+| UXG-08 | **Teilweise geschlossen:** Compare/Survey ohne Bild-Render (nur Thumbnails) | `crates/lumina-gui/src/library_views.rs` → `LuminaApp::draw_library_loupe` (rendert heute das entwickelte Bild), `LuminaApp::draw_library_compare`, `LuminaApp::draw_library_survey`; **Restbefund: Compare/Survey zeigen weiterhin nur Thumbnails** (`crates/lumina-gui/src/filmstrip_frame.rs` → `thumbnail_for_entry`), keinen Bild-Render | ja (G-09-Scope) | neu |
+| UXG-09 | **Teilweise geschlossen:** Filmstreifen ohne Filter-/Sort-Leiste | `crates/lumina-gui/src/filmstrip_frame.rs` → `LuminaApp::draw_filmstrip`; Badges und „n von N“-Zähler sind vorhanden (`crates/lumina-gui/src/library_paths.rs` → `paint_entry_badge`, `crates/lumina-gui/src/i18n.rs` → `Str::FilmstripCounter`); **Restbefund: Filter-/Sort-Leiste im Filmstreifen fehlt** | nein | neu |
+| UXG-10 | Before/After unvollständig (kein echtes Split); Softproof nur Badge | `crates/lumina-gui/src/lib.rs` → `LuminaApp::toggle_before_after`, `LuminaApp::toggle_split_view`; **Restbefund: kein echtes Split-Render** — der Code-Kommentar zu `LuminaApp::toggle_split_view` führt das Side-by-Side-Split als dokumentierten Follow-up | teils | LRPAR-G10-VIEWER |
+| UXG-11 | Keine Menüleiste; Modul-Leiste nicht Classic-artig | `crates/lumina-gui/src/lib.rs` → `LuminaApp::ui` (Top: Brand + Status, **keine** Menüleiste — `grep -rn -e menu_bar -e MenuBar -e draw_menu crates/lumina-gui/src/` liefert 0 Treffer); Modul-Leiste: `crates/lumina-gui/src/app_frame.rs` → `LuminaApp::draw_module_bar` | ja (Menüumfang) | neu |
+| UXG-12 | **Teilweise geschlossen:** Presets ohne Amount-Konzept | `crates/lumina-gui/src/develop_ops.rs` → `LuminaApp::draw_presets_section` (Datei-Liste); Baum mit Gruppen: `crates/lumina-gui/src/preset_tree.rs` → `draw_preset_tree`; **Restbefund: kein Amount-Konzept** (`grep -rni amount crates/lumina-gui/src/preset_tree.rs crates/lumina-gui/src/develop_ops.rs` = 0 Treffer) | ja (Amount-Semantik) | neu |
+| UXG-13 | Kürzel `O`/`Z`/`Shift+L`/`I` fehlen; `E`-Alias unsauber | `crates/lumina-gui/src/key_bindings.rs` → `module_for_key`, `view_toggle_for_key`, `import_export_for_key` | nein (F-100 erweitern) | LRPAR-G16-POWER |
+| UXG-14 | **Teilweise geschlossen:** Keine Canvas-Stepper | `crates/lumina-gui/src/brush_tool.rs` → `LuminaApp::brush_cursor_allowed`; `crates/lumina-gui/src/preview_masks.rs` → `LuminaApp::brush_cursor_radius`; `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::handle_spot_tool_interaction`; der alte Beleg „Grep `CursorIcon` leer“ ist **überholt** — den Canvas-Cursor setzt heute `crates/lumina-gui/src/develop_geometry/crop_overlay.rs` → `paint_crop_mode_chrome`; die **Reset-Affordanz** gibt es: `crates/lumina-gui/src/develop_frame.rs` → `ui.button(Str::Reset.t())`; **Restbefund: keine Canvas-Stepper** — die `egui::DragValue`-Stepper sitzen in den Panels, nicht auf dem Canvas | nein | neu |
+| UXG-15 | Navigator-Rail: **R4-UX-1 (2026-09-20, User)** entfernt die Duplikat-Thumbnail-Rail unter dem Navigator — Navigator-Viewport bleibt, der untere Filmstrip ist die einzige Selektionsfläche; R4-NAV-1 gattert den Viewport-Drag auf vergrößerte Ansichten | `crates/lumina-gui/src/navigator.rs` → `LuminaApp::draw_navigator_viewport` (R4-NAV-1-Drag-Gate), `LuminaApp::draw_navigator`; Filmstrip: `crates/lumina-gui/src/filmstrip_frame.rs` → `LuminaApp::draw_filmstrip` | entschieden | R4-UX-1 |
+| UXG-16 | **Geschlossen (UX-LOOK-TONECURVE-18):** Tone Curve ohne Kurvengrafik (P0/P1-Slider + Add-Point statt Punkte setzen/ziehen; Vision 2026-09-17: „bitterste Umlernstelle") | `crates/lumina-gui/src/develop_tone.rs` → `LuminaApp::draw_tone_curve`; Kurvengrafik: `crates/lumina-gui/src/develop_tone/tone_curve_graph.rs` (ersetzt die P0/P1-Sliderreihen); Golden `crates/lumina-gui/tests/snapshots/develop_section_tone_curve.png` | nein (erledigt) | UX-LOOK-TONECURVE-18 |
+| UXG-17 | Hardcodierte UI-Literale statt `Str::` (F-100: englisch, 0 deutsche UI-Literale); Generative-Panels 2026-09-17 behoben (`ExpandDragFrameHint`/`ExpandCropToImage`), Spot-Panel (`draw_spot_heal`) offen | behoben: `crates/lumina-gui/src/develop_generative.rs` → `LuminaApp::draw_generative_expand` (heute `Str::ExpandDragFrameHint`/`Str::ExpandCropToImage`); offen: `crates/lumina-gui/src/develop_heal.rs` → `LuminaApp::draw_spot_tool_options` — das alte Sidebar-Panel `draw_spot_heal` **existiert nicht mehr** (R5-DUST-23: Werkzeugleiste über dem Bild); Literal-Tabelle: `crates/lumina-gui/src/i18n.rs` → `Str` | nein | neu |
+| UXG-18 | Vision-Feinschliff 2026-09-17 (je einzeln entscheidbar): HSL ohne 8 Color-Mixer-Farbfelder; Compare/Survey-Tiles unausgerichtet; Toast überdeckt Toolbar-Kante; Preset-Dialog unzentriert/beschnitten; Meta-History als Rohdaten-Dump (ISO/Pipe); Histogramm ohne RGB-Kanäle/Clipping-Dreiecke/EXIF-Zeile; kein EXIF-Overlay über dem Bild; Slider-Blau ohne Akzent-Disziplin | Goldens: `crates/lumina-gui/tests/snapshots/` (95 Dateien); Erzeugung/Vergleich: `crates/lumina-gui/tests/kittest_snapshots.rs` → `develop_section_tone_curve` (u. a.) | teils | neu |
 
 ## Gap-Inventory Dust Removal (UXD, G-04)
 
-| ID | Lücke | Evidenz | SOLL-Entscheid nötig |
+| ID | Lücke | Fundstelle (Pfad + Symbol) | SOLL-Entscheid nötig |
 | --- | --- | --- | --- |
-| UXD-01 | Spot-Tool armiert Vorschau nicht (Klick/Zug wirkungslos — „kein brush") | `lib.rs:12223`, `:12432` | nein (SOLL deckt ab) |
-| UXD-02 | Kein Brush-Cursor (Kreis = Radius, folgt Maus) | kein `CursorIcon` | klein (Cursor-SOLL präzisieren) |
-| UXD-03 | Size/Feather nur Panel-Slider (Rad = Zoom statt Size) | `lib.rs:12158` | klein (Shift-Feather präzisieren) |
-| UXD-04 | Pins: einzelner Fixpunkt, kein Target/Source-Paar, kein Drag/Delete/`/` | `lib.rs:4188` | **ja** (Pin-Semantik) |
-| UXD-05 | Panel statisch/überladen statt kontextuell | `lib.rs:15123` | **ja** (Panel-Zielbild) |
-| UXD-06 | Visualize = Dauer-Tint statt werkzeuggekoppelter High-Contrast-Ansicht | `lib.rs:10695` | teils |
-| UXD-07 | Kein Quell-Pin/Alt-Ziehen (Offset unsichtbar) | `commit_spot_heal` | nein (SOLL deckt ab) |
-| UXD-08 | Kein Einzel-Klick-Anlegen (nur Detect→Apply/CLI) | `lib.rs:15163` | nein (SOLL deckt ab) |
+| UXD-01 | **Geschlossen (R5-DUST-23):** Spot-Tool armiert Vorschau nicht (Klick/Zug wirkungslos — „kein brush") | `crates/lumina-gui/src/preview_draws.rs` → `LuminaApp::draw_preview`; `crates/lumina-gui/src/preview_masks.rs` → `LuminaApp::handle_mask_tool_drag`; Spot-Pfad: `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::handle_spot_tool_interaction` (R5-DUST-23) | nein (erledigt) |
+| UXD-02 | **Geschlossen (R5-DUST-23):** Kein Brush-Cursor (Kreis = Radius, folgt Maus) | `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::handle_spot_tool_interaction` (Kreis-Cursor, R5-DUST-23); `crates/lumina-gui/src/brush_tool.rs` → `LuminaApp::brush_cursor_allowed`; `crates/lumina-gui/src/preview_masks.rs` → `LuminaApp::brush_cursor_radius` — der alte Beleg „kein `CursorIcon`“ ist **überholt** | nein (erledigt) |
+| UXD-03 | Size/Feather nur Panel-Slider (Rad = Zoom statt Size) | `crates/lumina-gui/src/preview_draws.rs` → `LuminaApp::draw_preview` — das Rad zoomt **nur bei gehaltener Ctrl/Cmd-Taste** (`crates/lumina-gui/src/app_frame.rs` → `LuminaApp::wants_wheel_zoom`), sonst schiebt es das Bild; Size/Feather: `crates/lumina-gui/src/develop_heal.rs` → `LuminaApp::draw_spot_tool_options`; Tastatur: `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::handle_spot_size_shortcuts` | klein (Shift-Feather präzisieren) |
+| UXD-04 | Pins: einzelner Fixpunkt, kein Target/Source-Paar, kein Drag/Delete/`/` | `crates/lumina-gui/src/overlay_visibility.rs` → `LuminaApp::visible_edit_pins`; Maler: `crates/lumina-gui/src/preview_masks.rs` → `LuminaApp::draw_edit_pins`; Pin-Typen: `crates/lumina-gui/src/edit_pins.rs` → `EditPinKind` (nur `Mask`/`Spot`, **kein** Target/Source-Paar) | **ja** (Pin-Semantik) |
+| UXD-05 | **Geschlossen (R5-DUST-23):** Panel statisch/überladen statt kontextuell | das Sidebar-Panel `draw_spot_heal` **existiert nicht mehr** (R5-DUST-23); Nachfolger: `crates/lumina-gui/src/develop_heal.rs` → `LuminaApp::draw_spot_tool_options` — er wird nur gezeichnet, wenn das Heal-Werkzeug aktiv ist (`crates/lumina-gui/src/app_frame.rs` → `LuminaApp::draw_preview_area`) | nein (erledigt) |
+| UXD-06 | Visualize = Dauer-Tint statt werkzeuggekoppelter High-Contrast-Ansicht | `crates/lumina-gui/src/render_pipeline.rs` → `LuminaApp::render_from`; Schwelle: `crates/lumina-gui/src/lib.rs` → `LuminaApp::spot_visualize_overlay_threshold` | teils |
+| UXD-07 | Kein Quell-Pin/Alt-Ziehen (Offset unsichtbar) | `crates/lumina-gui/src/spot_select.rs` → `LuminaApp::commit_spot_heal`; Offset: `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::spot_auto_offset` | nein (SOLL deckt ab) |
+| UXD-08 | **Geschlossen (R5-DUST-23):** Kein Einzel-Klick-Anlegen (nur Detect→Apply/CLI) | das alte Panel `draw_spot_heal` existiert nicht mehr; das Anlegen läuft heute über `crates/lumina-gui/src/spot_tool.rs` → `LuminaApp::spot_dab` / `LuminaApp::handle_spot_tool_interaction` (je Klick ein Dab, R5-DUST-23) | nein (erledigt) |
 
-Direkt umsetzbar ohne Doc-Entscheid: UXD-01, -02, -03, -07, -08.
+Direkt umsetzbar ohne Doc-Entscheid: **UXD-07**. UXD-01, -02, -05 und -08
+sind geschlossen (R5-DUST-23; Beleg in der Spalte „Fundstelle"). UXD-03 braucht
+noch eine (kleine) Doc-Entscheidung — siehe seine SOLL-Spalte.
 
 ## Zielbild (3 Slices)
 

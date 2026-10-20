@@ -113,40 +113,43 @@ Fehlerklassen-Gleichheit CLI ≡ MCP verletzen.
 
 ## 3. Rückgabe-Felder 1:1 (CLI `--json` ≡ MCP `structuredContent`)
 
-Quelle: `report_json` in `crates/lumina-cli/src/matrix.rs:964-1007`, ausgegeben
-über `emit(args.json, payload, text)` (:562-576); `emit` druckt exakt dieses
-Objekt (`main.rs:5675-5682`). `tool_result_response` legt ein MCP-Payload-Objekt
-unverändert in `structuredContent` (`error.rs:239-247`).
+Quelle: `report_json` in `crates/lumina-stages/src/matrix_report.rs` (bis zur
+Extraktion aus der CLI dort `crates/lumina-cli/src/matrix.rs`), ausgegeben
+über `emit(args.json, payload, text)` (`crates/lumina-cli/src/main.rs` →
+`emit`); `emit` druckt exakt dieses Objekt (`crates/lumina-cli/src/main.rs` →
+`emit`). `tool_result_response` legt ein MCP-Payload-Objekt unverändert in
+`structuredContent` (`crates/lumina-mcp/src/error.rs` → `tool_result_response`).
 
 | Feld | Typ | Herkunft (1:1) | Anmerkung |
 | --- | --- | --- | --- |
-| `command` | string | Konstante `"matrix"` :996 | Werkzeug-unabhängig, nicht der MCP-Tool-Name |
-| `mode` | string | `"verify"`/`"baseline"` :305-309, :997 | der Modus ist ein **Domänen**-Wert, nicht das Transport-Flag |
-| `recipe_set` | string (Pfad) | :998 | absolut, wie der CLI sie auflöste → in der Parität normalisiert |
-| `golden_dir` | string (Pfad) | :999 | dito |
-| `comparison_width` | integer | :1000 | aufgelöster Wert (Set- oder Override) |
-| `pairs_total` | integer | :1001 | `outcomes.len()` (im Vollauf = `samples.len() * prepared.len()`, :311) |
-| `passed` | integer | :994, :1002 | Zähler über `PairOutcome::passed` (:228-235) |
-| `failed` | integer | :1003 | `pairs_total - passed` |
-| `duration_ms` | integer | :557, :1004 | **nicht-deterministisch** — Paritätsmaske (§3.1) |
-| `pairs` | array | :972-993 | je ein Objekt pro (Sample × Rezept) |
+| `command` | string | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Konstante `"matrix"` | Werkzeug-unabhängig, nicht der MCP-Tool-Name |
+| `mode` | string | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `mode`; die Werte `"verify"`/`"baseline"` setzt `crates/lumina-stages/src/matrix_run.rs` → `run` | der Modus ist ein **Domänen**-Wert, nicht das Transport-Flag |
+| `recipe_set` | string (Pfad) | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `recipe_set` | absolut, wie der CLI sie auflöste → in der Parität normalisiert |
+| `golden_dir` | string (Pfad) | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `golden_dir` | dito |
+| `comparison_width` | integer | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `comparison_width` | aufgelöster Wert (Set- oder Override) |
+| `pairs_total` | integer | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `pairs_total` (`outcomes.len()`; im Vollauf = `samples.len() * prepared.len()` in `crates/lumina-stages/src/matrix_run.rs` → `run`) | |
+| `passed` | integer | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `passed` | Zähler über `PairOutcome::passed` (`crates/lumina-stages/src/matrix_report.rs`) |
+| `failed` | integer | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `failed` | `pairs_total - passed` |
+| `duration_ms` | integer | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `duration_ms` (Wert `total_ms` aus `crates/lumina-stages/src/matrix_run.rs` → `run`) | **nicht-deterministisch** — Paritätsmaske (§3.1) |
+| `pairs` | array | `crates/lumina-stages/src/matrix_report.rs` → `report_json`, Feld `pairs` | je ein Objekt pro (Sample × Rezept) |
 
-`pairs[]` je Eintrag (`:975-991`):
+`pairs[]` je Eintrag (alle Felder in `crates/lumina-stages/src/matrix_report.rs`
+→ `report_json`):
 
 | Feld | Typ | Herkunft | Anmerkung |
 | --- | --- | --- | --- |
-| `sample` / `recipe` | string | :976-977 | die IDs aus dem Set (konsistent zu den Golden-Namen `<sample>__<recipe>.png`, :338-340) |
-| `status` | string | :978 | `pass` \| `fail` \| `error` \| `baseline-created` \| `baseline-updated` \| `route-fail` |
-| `psnr_db` | string \| null | :979-981 | **String**, nicht Zahl: `"inf"` oder `format!("{value:.4}")` — 1:1 übernehmen, kein Float-Cast |
-| `min_psnr_db` | number \| null | :982 | aus `ToleranceClass::min_psnr_db` (:119-126): exact → `null`, strict 45, standard 40, robust 30 |
-| `max_abs_diff` | integer \| null | :983 | per-Channel-Maximum ohne Alpha (:904-913) |
-| `duration_ms` | integer | :984 | **nicht-deterministisch** — Paritätsmaske |
-| `expected_route` | string | :985 | **Austrag des deklarierten Werts** — ausgeliefert, nie geschrieben/ausgewertet (§4) |
-| `route` | string \| null | :986 | `"gpu"`/`"cpu"`/`null`; gesetzt sobald ein Render erfolgreich war (:401) — auch im Baseline-Modus (`"cpu"`, :381-384) |
-| `route_reasons` | string[] | :987 | laute CPU-Routing-Gründe (:402); leer für GPU und im Baseline-Modus |
-| `golden` | string (Pfad) | :988 | → normalisieren |
-| `output` | string (Pfad) | :989 | Full-Resolution-Export-PNG → normalisieren |
-| `message` | string \| null | :990 | Fehler-/Gate-Text; `null` im grünen Fall |
+| `sample` / `recipe` | string | `report_json`, Felder `sample`/`recipe` | die IDs aus dem Set (konsistent zu den Golden-Namen `<sample>__<recipe>.png`, gebaut in `crates/lumina-stages/src/matrix_run.rs` → `run`) |
+| `status` | string | `report_json`, Feld `status` | `pass` \| `fail` \| `error` \| `baseline-created` \| `baseline-updated` \| `route-fail` |
+| `psnr_db` | string \| null | `report_json`, Feld `psnr_db` | **String**, nicht Zahl: `"inf"` oder `format!("{value:.4}")` — 1:1 übernehmen, kein Float-Cast |
+| `min_psnr_db` | number \| null | `report_json`, Feld `min_psnr_db` | aus `ToleranceClass::min_psnr_db` (`crates/lumina-stages/src/matrix_validate.rs`): exact → `null`, strict 45, standard 40, robust 30 |
+| `max_abs_diff` | integer \| null | `report_json`, Feld `max_abs_diff` | per-Channel-Maximum ohne Alpha (`crates/lumina-stages/src/matrix_report.rs` → `max_abs_diff`) |
+| `duration_ms` | integer | `report_json`, Feld `duration_ms` | **nicht-deterministisch** — Paritätsmaske |
+| `expected_route` | string | `report_json`, Feld `expected_route` | **Austrag des deklarierten Werts** — ausgeliefert, nie geschrieben/ausgewertet (§4) |
+| `route` | string \| null | `report_json`, Feld `route` | `"gpu"`/`"cpu"`/`null`; gesetzt sobald ein Render erfolgreich war (`crates/lumina-stages/src/matrix_run.rs` → `run`) — auch im Baseline-Modus (`"cpu"`) |
+| `route_reasons` | string[] | `report_json`, Feld `route_reasons` | laute CPU-Routing-Gründe (`crates/lumina-stages/src/matrix_run.rs` → `run`); leer für GPU und im Baseline-Modus |
+| `golden` | string (Pfad) | `report_json`, Feld `golden` | → normalisieren |
+| `output` | string (Pfad) | `report_json`, Feld `output` | Full-Resolution-Export-PNG → normalisieren |
+| `message` | string \| null | `report_json`, Feld `message` | Fehler-/Gate-Text; `null` im grünen Fall |
 
 **Keine** Zusatzfelder im MCP-Payload. Anders als beim Merge (dort `warning`,
 Merge-SOLL §5) braucht `matrix` **kein** MCP-eigenes Zusatzfeld: der CLI-Report
