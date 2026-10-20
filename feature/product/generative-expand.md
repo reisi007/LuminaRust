@@ -36,7 +36,7 @@ zwei zusammengehörige Operationen nicht-destruktiv erlaubt:
 Beide Operationen sind **eine** versionierte Rezept-Stufe (`GenerativeEdit`),
 weil sie im selben generativen Durchlauf und auf demselben Ziel-Canvas wirken.
 Das Original bleibt unverändert; das Ergebnis ist ein aus Original + Rezept +
-Modell ableitbares Artefakt (Agents.md, Produktprinzipien).
+Modell ableitbares Artefakt (`feature/README.md` §„Invarianten").
 
 Nicht-Destruktion und Reproduzierbarkeit haben Vorrang vor stillen Fallbacks:
 Eine Generative-Edit-Operation ist nur dann „aktuell", wenn Quelle,
@@ -195,8 +195,10 @@ Bis dahin wird **kein Crate-Code** angelegt.
 
 ## Normative Invarianten
 
-Für GEN-EXPAND-1 gelten die Produktprinzipien und Persistenzregeln aus
-`Agents.md` unverändert und werden hier für die generative Stufe konkretisiert:
+Für GEN-EXPAND-1 gelten die Produktprinzipien und Invarianten aus
+`feature/README.md` (§„Invarianten") sowie die Persistenzregeln aus `Agents.md`
+(§„Persistenz und Sidecars") unverändert und werden hier für die generative
+Stufe konkretisiert:
 
 - **Original unverändert:** Die Quelldatei wird niemals überschrieben,
   verschoben oder durch das generierte Canvas ersetzt. Ein Export schreibt eine

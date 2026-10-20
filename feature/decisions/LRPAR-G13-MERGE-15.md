@@ -87,8 +87,9 @@ Golden-Gates unverändert (Hasher/Re-Import-Anker).
 
 ## Normative Invarianten
 
-Für G-13 gelten die Produktprinzipien und Persistenzregeln aus `Agents.md`
-unverändert und werden hier für den Merge konkretisiert:
+Für G-13 gelten die Produktprinzipien und Invarianten aus `feature/README.md`
+(§„Invarianten") sowie die Persistenzregeln aus `Agents.md` (§„Persistenz und
+Sidecars") unverändert und werden hier für den Merge konkretisiert:
 
 - **Originale unverändert:** Keine Quelldatei wird überschrieben,
   verschoben oder durch das Merge-DNG ersetzt. Das Merge-DNG ist eine neue

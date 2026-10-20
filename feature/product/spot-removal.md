@@ -30,7 +30,7 @@ SPOT-REMOVE-1 beschreibt einen nicht-destruktiven **Staub-/Spot-Heal** in zwei M
 1. **Schnell (heuristisch/Clone):** Sofortiger Spot-Heal ohne Modell — Klon-/Heal-Brush (Kreis/Spot, Radius + Feather + Source-Offset), rein CPU-nativ, **kein Modell**, **instant**, **kein zdata-Artefakt** (nur Rezeptparameter). Ergebnis ist deterministisch aus Original + Rezept ableitbar.
 2. **Generativ lokal (ONNX Inpaint):** Lokale generative Heilung — Maske malen (Pinsel/Box), optional Prompt/Negativ-Prompt/Seed, ONNX-Inpaint Modell lokal (`lumina-onnx`), Persistenz als binäres Canvas-Artefakt `.lumina.zdata` mit `kind = "spot_heal_generative"`, Identität wie AI-Masken (Quelle/Decode/Modell/Hash/Inferenzauflösung/Koordinaten/Prüfsumme), **kein stiller Fallback**.
 
-Beide Modi sind nicht-destruktiv: Das Original wird niemals überschrieben. Vorschauen/Exporte sind aus Original + Rezept + (bei generativ) Modell + Artefakt reproduzierbar (Agents.md Produktprinzipien).
+Beide Modi sind nicht-destruktiv: Das Original wird niemals überschrieben. Vorschauen/Exporte sind aus Original + Rezept + (bei generativ) Modell + Artefakt reproduzierbar (`feature/README.md` §„Leitbild", §„Invarianten").
 
 ## Ist-Stand
 

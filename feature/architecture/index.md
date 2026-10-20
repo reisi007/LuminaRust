@@ -303,9 +303,9 @@ Fehlerfälle sind laut: `Corrupt`, `Conflict`, `InvalidSidecar` — nie still.
   migriert und validiert (Agents.md, Architekturgrenzen).
 - Relative Bezüge bleiben beim Verschieben eines Sidecar-Bundles gültig;
   absolute Pfade sind in persistenten Index- und Rezeptdaten verboten.
-- Reproduzierbarkeit vor stillem Fallback (Agents.md Produktprinzipien): fehlende
-  oder korrupte DB/Sidecars/Cacheverweise werden als veraltet/nicht verfügbar
-  gemeldet.
+- Reproduzierbarkeit vor stillem Fallback (`feature/README.md` §„Invarianten"):
+  fehlende oder korrupte DB/Sidecars/Cacheverweise werden als veraltet/nicht
+  verfügbar gemeldet.
 
 ## Testanforderungen (F-064…F-067)
 
