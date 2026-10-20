@@ -8,9 +8,9 @@
 > klassifiziert jede committete Golden-Datei und definiert, welche Fixture
 > für welchen Golden zulässig ist.
 >
-> **Inventar-Version 2** hat den Tabelleninhalt nicht verändert (identische 66
-> Zeilen, identische Klassifikation) und zwei Dinge hinzugefügt, die vorher nur
-> Prosa waren: den **Pixel-Beweis für Klasse R** (§2 Regel 7/8, ausgeführt in
+> **Inventar-Version 2** hat den Tabelleninhalt nicht verändert (identische
+> Zeilenzahl, identische Klassifikation) und zwei Dinge hinzugefügt, die vorher
+> nur Prosa waren: den **Pixel-Beweis für Klasse R** (§2 Regel 7/8, ausgeführt in
 > `scripts/golden_ref_test.sh`) und das **Render-Evidenz-Ledger** (§4.4). Die
 > Lücke, die Version 1 in §4.2 selbst benannt hat — „`golden_ref.sh check`
 > vergleicht Digests, nicht diese Tabelle — eine fehlende Zeile fällt dort nicht
@@ -174,16 +174,20 @@ ihre Aussage stützt. Das ist nötig, weil eine Render-Invariante auf einem
 
 ## 4. Inventar (Version 1)
 
-**66** committete Golden-Dateien (gezählt mit
+<!-- BEGIN GENERATED: goldens -->
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
 `git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
-`golden_ref.sh check` als `goldens.count`). Die in `Agents.todo.md` genannte Zahl
+`golden_ref.sh check` als `goldens.count`).
+<!-- END GENERATED: goldens -->
+
+Die in `Agents.todo.md` genannte Zahl
 „56" ist die Anzahl der `#[ignore]`-Tests im Binary `kittest_snapshots`; davon
 erzeugen 46 ein Golden, 10 sind reine Zustands-/Interaktions-Tests ohne Golden.
 Die restlichen **20** Goldens gehören zu den anderen kittest-Binaries und zum
-Lib-Test (46 + 20 = 66).
+Lib-Test — zusammen mit den 46 ergeben sie die Zahl im generierten Block oben.
 
 **Bilanz: 14 Render-Invarianten (Klasse R), 52 Chrome-/Layout-Invarianten
-(Klasse C)** — 66 Zeilen, ausgezählt aus der Tabelle dieses Abschnitts.
+(Klasse C)** — Bilanzzeilen, ausgezählt aus der Tabelle dieses Abschnitts.
 (Zahlenkorrektur 2026-09-26: die Fassung vor der Zeilen-Ergänzung nannte 62 /
 16 / 48 und war nach der Ergänzung um genau die vier neuen Goldens zu niedrig.)
 
@@ -338,7 +342,7 @@ alle gegen die **committeten** Dateien, nicht gegen eine Kopie:
 | --- | --- | --- |
 | A1 | jede Goldendatei im Verzeichnis hat eine Tabellenzeile | das Inventar ist vollständig |
 | A2 | jede Tabellenzeile nennt eine existierende Datei | kein Phantom-Eintrag |
-| A3 | die im Text genannten Zahlen (66 / 14 / 52) stimmen mit der Tabelle | keine Zahl, die man nicht nachzählen kann |
+| A3 | die im Text genannten Zahlen (Gesamtzahl aus dem generierten Block / 14 / 52) stimmen mit der Tabelle | keine Zahl, die man nicht nachzählen kann |
 | A4 | der Dateibestand ist identisch mit dem committeten Bestand (`git ls-files`) | „committed" ist keine Behauptung |
 | B1 | keine Zeile mit Klasse `R-F` | Regel 5 und Regel 8 |
 | B2 | jede `R`-Zeile **außer** der in `GFC_KNOWN_RED` genannten erfüllt P1 **und** P2 gegen die PNG-Datei | Regel 7 |
@@ -391,7 +395,7 @@ nicht in die Liste driften.
 
 ### 5.6 Herleitung der Schwellen P1 und P2 (Messung 2026-09-26)
 
-**Gemessen wurde über alle 66 committeten Goldens** (ImageMagick 7.1.2-31,
+**Gemessen wurde über alle committeten Goldens** (ImageMagick 7.1.2-31,
 `identify -format %k` für die Farbzahl, `magick … -alpha off -fx` für den
 Rotanteil; der Messweg selbst ist gegen `scripts/fixtures/png_pixel_probe.png`
 mit von Hand gezählten Literalwerten geprüft, siehe §5.7).

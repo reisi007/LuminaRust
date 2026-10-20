@@ -399,7 +399,7 @@ nicht fortgeschrieben):
 | --- | --- |
 | Schlüssel-Sweep | jede der **21** Schlüssel einzeln perturbiert → `check` Exit 1, und der Diff nennt **genau** diesen einen Schlüssel (kein Schlüssel ist unlasttragend) |
 | Wertableiter | `png_size` und `ui.scale_factor` gegen **committete, handgeprüfte** Eingaben statt gegen sich selbst: IHDR-Probe `scripts/fixtures/png_ihdr_probe.png` mit literal erwartetem `16909060x84281096`, `ui.scale_factor` mit `1.0` bei passendem und `non-unit:<w>/<Viewport>,<h>/<Viewport>` bei abweichendem synthetischem Viewport — Details in §4.2.1 |
-| Golden-Inventar-Ebene | die Schranke aus §3.1/§11.1 selbst, gegen eine **unabhängige** Ableitung: `goldens.count` = Zahl der committeten Golden-PNGs aus `git ls-files` (**66**, nicht 25), das vom Wächter enumerierte Set **pfadweise** gleich diesem, `goldens.digest` = der über alle committeten Goldens unabhängig berechnete Wert, `git:` als Modus bei vorhandenem git und `walk:` unter einem `git`-Shim, und die Aussage, dass der Modus **Teil des Wertes** ist — Details in §4.2.2 |
+| Golden-Inventar-Ebene | die Schranke aus §3.1/§11.1 selbst, gegen eine **unabhängige** Ableitung: `goldens.count` = Zahl der committeten Golden-PNGs aus `git ls-files` (nicht die `develop_*`-Teilmenge), das vom Wächter enumerierte Set **pfadweise** gleich diesem, `goldens.digest` = der über alle committeten Goldens unabhängig berechnete Wert, `git:` als Modus bei vorhandenem git und `walk:` unter einem `git`-Shim, und die Aussage, dass der Modus **Teil des Wertes** ist — Details in §4.2.2 |
 | Lock-Kanonik | 8 Varianten → Exit 1: angehängter Doppelschlüssel, umgestellte Reihenfolge, unbekannter Schlüssel, fehlender Schlüssel, Zeile ohne `=`, abschließendes Leerzeichen (dann über den **Wert**vergleich), ungültiges Schlüsselzeichen, leerer Schlüssel |
 | Legitime Formen | 7 Formen → Exit 0: wie aufgezeichnet, nur Schlüsselzeilen, handgeschriebener Kopf, Kommentar mitten im Block, Leerzeilen, **CRLF** (siehe §3), Wert mit Leerzeichen **und** `=` |
 | `record`-Verweigerungen | 9 Fälle → Exit 2 **und** keine Lock-Datei entstanden: kein `--confirm`, `--confirm` ohne Wert, leerer Grund, 19 Zeichen, LF, CR, CRLF, `--` im Grund, unerwartetes Argument |
@@ -453,8 +453,8 @@ dokumentierte Test-Override `GOLDEN_REF_LOCK`), das Pre-Commit-Gate läuft in
 einem Wegwerf-Repo, und ein `trap` räumt den Sandbox bei Erfolg, Fehler und
 Abbruch auf. Laufzeit auf einem echten Checkout: grob **eineinhalb bis zwei
 Minuten** (jeder `check`/`record`-Aufruf erfasst den Fingerabdruck neu und
-läuft `dd|od|awk` über 66 Goldens; die drei zusätzlichen Läufe aus §4.2.1
-kosten zusammen wenige Sekunden, weil dort nur das Golden-Inventar
+läuft `dd|od|awk` über alle committeten Goldens; die drei zusätzlichen Läufe
+aus §4.2.1 kosten zusammen wenige Sekunden, weil dort nur das Golden-Inventar
 ausgetauscht wird).
 
 ### 4.2.2 Der zweite Bruch: die Golden-Inventar-Ebene war nicht verankert
@@ -485,7 +485,7 @@ des Wächters und je für sich:
 
 - `goldens.count` gleich der Zahl der committeten Golden-PNGs aus
   `git ls-files --cached -- 'crates/lumina-gui/tests/snapshots/*.png'`
-  (gemessen: **66**);
+  (die Zahl steht im generierten Block in §7);
 - das vom Wächter **enumerierte** Set **pfadweise** gleich dieser Liste — nicht
   nur gleicher Anzahl: eine Liste kann richtig lang sein und trotzdem ein Golden
   gegen eine Datei eingetauscht haben, und genau das ist der „eine Zeile fehlt
@@ -501,7 +501,7 @@ des Wächters und je für sich:
   werden geprüft, damit kein Modus festgenagelt sein kann.
 
 **Was diese Prüfungen nicht behaupten.** In diesem Checkout enumerieren beide
-Modi dieselben 66 Dateien, `git:` und `walk:` unterscheiden sich also allein im
+Modi dieselben Dateien, `git:` und `walk:` unterscheiden sich also allein im
 Präfix — die Aussage ist damit „der Modus steckt im Wert", nicht „die Modi sehen
 verschiedene Dateien". Und die `walk:`-Enumerierung wird gegen eine
 `find`-Ableitung geprüft, die die dokumentierten Artefakt-Ausschlüsse
@@ -732,7 +732,13 @@ Ordnerbaum leaken).
 
 ## 7. Golden-Inventar
 
-66 committete Golden-PNGs in `crates/lumina-gui/tests/snapshots/`:
+<!-- BEGIN GENERATED: goldens -->
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
+`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
+`golden_ref.sh check` als `goldens.count`).
+<!-- END GENERATED: goldens -->
+
+Die Verteilung auf die Test-Targets:
 
 | Test-Target | Goldens |
 | --- | --- |
@@ -757,7 +763,8 @@ Lib-Target (`brush_management.rs`). Der Dateiname je Golden ist der
 
 **Nicht jeder `#[ignore]`d GPU-Target trägt ein Golden.** `kittest_sidecar_identity`
 (2 Tests) und `kittest_decode_bound` (2 Tests) haben **0** `harness.snapshot`-Aufrufe
-und zählen daher **nicht** in die 66. Sie sind hier genannt, weil sie dieselbe Ignore-Politik
+und zählen daher **nicht** in die Zahl der committeten Goldens (generierter
+Block oben). Sie sind hier genannt, weil sie dieselbe Ignore-Politik
 tragen und bei `cargo test --all-targets` mitgelinkt werden — nicht, weil sie
 Golden-Zustand sichern. Ihr Gegenstand ist Vertrags- und Verweigerungsverhalten
 (Quellidentitäts-Validierung, Decode-Wartegrenze), nicht ein Render-Pixelbild.
@@ -798,10 +805,11 @@ Für die heute drei benutzten Prädikate ist die Bedingung strukturell haltbar
 
 > **Merke zur Zahlenangabe:** „56 Goldens" bezeichnet die **Tests** in
 > `kittest_snapshots.rs`, nicht die Vergleichsanzahl. Vergleichsanzahl in
-> diesem Target: 46. Über alle Targets: **66** (gezählt mit
-> `git ls-files "crates/lumina-gui/tests/snapshots/*.png"`, identisch mit dem
-> `goldens.count` aus `golden_ref.sh check`). Die in der Task-Notiz genannten
-> „12 von 56" sind damit weder 56 noch 66 und müssen neu gezählt werden.
+> diesem Target: 46. Über alle Targets: die Zahl im generierten Block in §7
+> (gezählt mit `git ls-files "crates/lumina-gui/tests/snapshots/*.png"`,
+> identisch mit dem `goldens.count` aus `golden_ref.sh check`). Die in der
+> Task-Notiz genannten „12 von 56" sind damit weder 56 noch die Gesamtzahl
+> und müssen neu gezählt werden.
 > Ein früherer Zwischenstand dieses Dokuments stützte sich auf 11 Paare
 > `<name>.diff.png` / `<name>.new.png`, die zu einem GPU-Lauf im Arbeitsbaum
 > lagen. Das ist **kein** belastbarer Beleg: diese Artefakte sind gitignoriert,

@@ -128,11 +128,12 @@ Sidecars vollständig wiederherstellbar sein.
 - [golden-fixtures.md](quality/golden-fixtures.md):
   Fixture-Vertrag und Golden-Inventar — Klassen R1 (echtes RAW) /
   S1 (Layout-Sentinel) / S2 (Smoke-Raster) sowie die Klassifikation aller
-  62 committeten Goldens als *Render-Invariante* (echter Bildinhalt) oder
+  committeten Goldens als *Render-Invariante* (echter Bildinhalt) oder
   *Chrome-/Layout-Invariante* (nur UI-Rahmen). Eine Chrome-Invariante darf
   keine Bildpipeline-Regression belegen; die RAW-Fixtures sind die beiden
   lizenzierten CR3 aus `sample-data/raw/`, die 18-Byte-`.arw`-Sentinel sind
   entfernt (GOLDEN-FIXT-31)
+
 - [preview-cache.md](quality/preview-cache.md): Hybrid-Preview-Cache für
   sofortiges Scrollen — GPU-Textur (VRAM) fürs aktive Bild, WebP-Cache
   (Screen/1:1, Disk/RAM, Alpha) für Nachbarn, asymmetrisches +4/−2-Prefetch
@@ -145,13 +146,16 @@ Sidecars vollständig wiederherstellbar sein.
   benanntes Goldens-Gate (DOWNSCALER-UNIFY-71)
 - [local-gates.md](quality/local-gates.md):
   Lokale Gate-Stufen — `scripts/gates.sh` mit den benannten Stufen `fast`
-  (Sekunden, ohne Codegen, Floor: mindestens 7 gestartete Checks) und `slow`
+  (Sekunden, ohne Codegen, Floor: mindestens 8 gestartete Checks) und `slow`
   (Minuten, CI-Mirror), die wortgleiche Tier-Tabelle aus
   `sh scripts/gates.sh list`, der Drift-Gate, der die Tier-Liste gegen die
   aus `.github/workflows/ci.yml` generierte Liste diffst
-  (`scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`), und die
+  (`scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`), der
+  Drift-Gate der Prosa-Zahlen (`scripts/gen_doc_facts.sh` +
+  `scripts/check_doc_facts_drift.sh`, Eintrag `fast-8`) und die
   Lückenliste zwischen den Stufen (jede Lücke mit Klasse, Grund, Owner und
-  Task-ID) (LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84)
+  Task-ID) (LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84,
+  DOC-ZAHLEN-DRIFT-82)
 - [file-size-policy.md](quality/file-size-policy.md):
   Zeilen-Obergrenze 3000 je Rust-Datei — die SOLL-Zielsemantik der
   Eigentuemervorgabe (2026-10-20): die harte Grenze, die Zusage „einmal unter
@@ -171,6 +175,12 @@ Sidecars vollständig wiederherstellbar sein.
   Projekts (19 erreichbare Oberflächen). **Bisher null Befunde** — die Form,
   nicht das Ergebnis; die erste Review-Welle ist die offene Task
   `SEC-REVIEW-WELLE-1-85` (SECURITY-REVIEW-REGISTER)
+
+<!-- BEGIN GENERATED: goldens -->
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
+`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
+`golden_ref.sh check` als `goldens.count`).
+<!-- END GENERATED: goldens -->
 
 ## Feature-Matrix
 

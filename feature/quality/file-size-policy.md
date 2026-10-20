@@ -33,7 +33,7 @@ Dieses Dokument ist die **Zielsemantik**; die Schranke selbst steht in
 - [7. Das Gate: die Pruefregeln](#7-das-gate-die-pruefregeln)
 - [8. Was der Gate nicht deckt](#8-was-der-gate-nicht-deckt)
 - [9. Pflege der Werte](#9-pflege-der-werte)
-- [10. Stand 2026-10-20](#10-stand-2026-10-20)
+- [10. Ist-Stand der Ausnahmeliste (generiert)](#10-ist-stand-der-ausnahmeliste-generiert)
 
 ---
 
@@ -72,11 +72,22 @@ Die Population ist **alle `.rs`-Dateien** unter
 - `crates/` (alle Crates des Workspace, `src/` und `tests/`) und
 - `agent-harness/` (das zweite Cargo-Workspace des Projekts).
 
-Stand 2026-10-20 sind das **830 Dateien**. Es gibt bewusst **keine
-Ausnahmen fuer Verzeichnisse**: eine Datei, die nicht in der Population ist,
-faellt nicht unter die Schranke; eine Datei, die es ist, faellt ohne
-Ausnahme darunter. `target/`-Verzeichnisse (Build-Artefakte) gehoeren nicht
-zur Population.
+Die Zahlen der Population stehen im generierten Block unten. Sie werden von
+`scripts/gen_doc_facts.sh population` aus dem Dateisystem abgeleitet (dieselbe
+Population, die `scripts/check_file_ceiling.sh` enumeriert) und vom
+Drift-Gate `scripts/check_doc_facts_drift.sh` gegen dieses Dokument geprueft —
+eine Zahl im Prosa-Text waere eine zweite Quelle der Wahrheit, die still
+altert (Muster `DOC-ZAHLEN-DRIFT-82`):
+
+<!-- BEGIN GENERATED: population -->
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **830** Dateien, davon
+**67** ueber 500 Zeilen und **7** ueber 3000 Zeilen.
+<!-- END GENERATED: population -->
+
+Es gibt bewusst **keine Ausnahmen fuer Verzeichnisse**: eine Datei, die nicht
+in der Population ist, faellt nicht unter die Schranke; eine Datei, die es ist,
+faellt ohne Ausnahme darunter. `target/`-Verzeichnisse (Build-Artefakte)
+gehoeren nicht zur Population.
 
 Warum `agent-harness/` mitgezogen wird: das Harness ist ein eigenes
 Cargo-Workspace mit eigenem Lockfile und eigenem CI-Job. Die 500er-Schranke
@@ -292,31 +303,47 @@ als er prueft, schlimmer ist als kein Gate:
   senken **im selben Commit** — sonst sieht der Review zwei halbe Schritte
   statt eines.
 
-## 10. Stand 2026-10-20
+## 10. Ist-Stand der Ausnahmeliste (generiert)
 
-**Die Zahlen stehen in `scripts/file_size_ceiling.txt`, nicht hier.** Dieser
-Abschnitt ist die **Zielsemantik**, kein Ist-Stand; eine Wertkopie waere eine
-zweite Quelle der Wahrheit, die still altert (Muster `DOC-ZAHLEN-DRIFT-82`).
-Der datierte Stand lautet:
+**Die Zahlen stehen in `scripts/file_size_ceiling.txt` und in den generierten
+Bloecken, nicht im Prosa-Text.** Dieser Abschnitt ist die **Zielsemantik**
+plus der gemessene Ist-Stand; eine Wertkopie waere eine zweite Quelle der
+Wahrheit, die still altert (Muster `DOC-ZAHLEN-DRIFT-82`).
 
-- **7 Dateien** der Population (alle `.rs` unter `crates/` und
-  `agent-harness/`) liegen ueber 3000 Zeilen. Sie sind mit ihrem **Ist-Wert**
-  in `scripts/file_size_ceiling.txt` eingetragen — diese Datei ist die Quelle
-  der Wahrheit, sie wird gepflegt und im Diff reviewt (§4).
+Die Dateien der Population ueber 3000 Zeilen sind im generierten Block in §2
+gezaehlt. Ihre Ist-Werte, der Eintrag der 3000er-Ausnahmeliste und der Eintrag
+der 500er-Baseline stehen hier — ebenfalls generiert
+(`scripts/gen_doc_facts.sh file-sizes`, geprueft vom Drift-Gate
+`scripts/check_doc_facts_drift.sh`). Die Differenz zwischen den Spalten ist
+der Drift-Fall: die Datei ist kleiner als ihr Eintrag (Eintrag zu hoch, darf
+gesenkt werden) oder groesser (Eintrag gerissen, die harte Grenze gilt).
+
+<!-- BEGIN GENERATED: file-sizes -->
+| Datei | Ist-Stand (Zeilen) | Eintrag `scripts/file_size_ceiling.txt` | Eintrag `scripts/file_size_baseline.txt` |
+| --- | --- | --- | --- |
+| `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
+| `crates/lumina-cli/src/main.rs` | 7872 | 7872 | 7872 |
+| `crates/lumina-sidecar/src/lib.rs` | 4891 | 4891 | 4891 |
+| `crates/lumina-gpu/src/lib.rs` | 4767 | 4767 | 4767 |
+| `crates/lumina-gpu/tests/parity.rs` | 3533 | 3533 | 3533 |
+| `crates/lumina-sidecar/src/zdata.rs` | 3333 | 3333 | 3333 |
+| `crates/lumina-gpu/src/stages.rs` | 3264 | 3264 | 3264 |
+<!-- END GENERATED: file-sizes -->
 
 - `crates/lumina-gui/src/lib.rs` wird bereits ueber `GUI-LIB-SPLIT-65`
   geschnitten (der Vorgang laeuft; sein letzter dort protokollierter Schnitt
   ist in `scripts/file_size_baseline.txt` kommentiert). Fuer die uebrigen
-  sechs Dateien ist je ein Slicing-Task **angelegt** (`Agents.todo.md`,
+  Dateien der Tabelle ist je ein Slicing-Task **angelegt** (`Agents.todo.md`,
   Abschnitt „Folge aus `FILE-SIZE-CEILING-3K-83“); die Schnittpfad-Analyse
   mit den gemessenen Modulgrenzen und Symbolnamen steht dort mit.
+
 - **Datierte Beobachtung vom 2026-10-20:** die **500er-Baseline**
-  `scripts/file_size_baseline.txt` traegt fuer
+  `scripts/file_size_baseline.txt` trug fuer
   `crates/lumina-gpu/tests/parity.rs` noch den Wert vom 2026-09-18, waehrend
-  die Datei seither geschrumpft ist (der aktuelle Wert steht in
-  `scripts/file_size_ceiling.txt`). Das ist eine **Drift in der anderen
-  Baseline** (zu hoch, also zu locker) und **nicht** Gegenstand dieses
-  Dokuments; die 3000er-Ausnahmeliste traegt den aktuellen Ist-Wert. Die
-  Korrektur der 500er-Baseline gehoert in deren eigenes Ratchet-Verfahren
-  (`check_file_sizes.sh` meldet einen zu hohen Eintrag nicht, weil es nur
-  Wachstum verbietet).
+  die Datei seither geschrumpft war (der aktuelle Wert steht in
+  `scripts/file_size_ceiling.txt` und in der Tabelle oben). Das war eine
+  **Drift in der anderen Baseline** (zu hoch, also zu locker) und **nicht**
+  Gegenstand dieses Dokuments; die 3000er-Ausnahmeliste traegt den aktuellen
+  Ist-Wert. Die Korrektur der 500er-Baseline gehoert in deren eigenes
+  Ratchet-Verfahren (`check_file_sizes.sh` meldet einen zu hohen Eintrag
+  nicht, weil es nur Wachstum verbietet).
