@@ -62,10 +62,13 @@ genau diese Lücken.
 - **KI-Validierungs-Loop (GUI, verpflichtend nach jedem GUI-Batch):**
   1. `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` erzeugt
      aktuelle Frames (Goldens + `.diff.png`/`.new.png` bei Abweichung).
-  2. Der Build-Agent legt alle neuen/geänderten Snapshots einem
-     Vision-Agenten (`vision-technical`, max. 10 Bilder) vor mit der Frage nach
+  2. Alle neuen/geänderten Snapshots legt der Build-Agent **dem konfigurierten
+     Modell selbst** vor (max. 10 Bilder je Durchgang) mit der Frage nach
      Layout-Bugs (Overlap, abgeschnittene Panels, fehlende/falsche Elemente,
-     Platzierung, Zoom/Fit-Stimmigkeit gegen Navigator).
+     Platzierung, Zoom/Fit-Stimmigkeit gegen Navigator). Einen
+     Vision-Subagenten gibt es nicht: das konfigurierte Modell ist
+     vision-fähig und liest die Bilder selbst — harte Fälle werden
+     **nachgelesen, nicht geraten**.
   3. Jeder Vision-Befund wird als Todo-Task (Block A) angelegt oder widerlegt
      begründet verworfen — kein Befund versandet.
   4. Erst danach startet die unabhängige Code-Verifizierung. Vision-Befunde

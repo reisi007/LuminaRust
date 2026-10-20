@@ -167,9 +167,11 @@ wurden:
 
 ## Abnahme (je Slice)
 
-DoD §6 Vision-Review der geänderten Layouts + kittest-Goldens (neu/geändert)
-+ Headless-Asserts für Tool-Zustände; manueller Abgleich gegen die
-`.goal`-Screenshots; unabhängige Verifizierung (BESTANDEN) vor Commit.
+DoD §6 Vision-Review der geänderten Layouts: alle neuen/geänderten Snapshots
+legt der Build-Agent **dem konfigurierten Modell selbst** vor (max. 10 Bilder
+je Durchgang) + kittest-Goldens (neu/geändert) + Headless-Asserts für
+Tool-Zustände; manueller Abgleich gegen die `.goal`-Screenshots;
+unabhängige Verifizierung (BESTANDEN) vor Commit.
 
 ## Vision-Befunde UX-LOOK-LAYOUT-18 (Vision-Loop 2026-09-19, Build-Agent-sichtig)
 

@@ -133,9 +133,13 @@ cargo clippy -p lumina-gui-harness --all-targets -- -D warnings
 - **Retina/DPI:** `screencapture -R` und `enigo::Coordinate::Abs` arbeiten
   beide im Punkt-Koordinatensystem (top-left, y-down), sodass sie zueinander
   passen. Die Punkte werden nicht skaliert.
-- **„Visuell via Vision“** ist eine *optionale* Nachbearbeitung der PNGs durch
-  einen Vision-Agenten; der Harness selbst bestätigt Preview/kein-Crash über
-  das Log und den Exit-Code (wie in der Aufgabenstellung gefordert).
+- **„Visuell via Vision“** ist eine *optionale* Nachbearbeitung der
+  Harness-PNGs; der nach `DoD.md` §6 **verpflichtende** Bild-Loop über die
+  egui_kittest-Snapshots ist davon getrennt: alle neuen/geänderten Snapshots
+  legt der Build-Agent **dem konfigurierten Modell selbst** vor (max. 10 Bilder
+  je Durchgang). Der Harness **liest keine Bilder** — der Harness selbst
+  bestätigt Preview/kein-Crash über das Log und den Exit-Code (wie in der
+  Aufgabenstellung gefordert).
 - Der Harness modifiziert **niemals** Originaldateien oder Sidecars; er steuert
   nur die GUI und legt Artefakte nur unter `target/gui-verify/` ab.
 
