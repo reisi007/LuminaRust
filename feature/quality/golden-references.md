@@ -485,7 +485,9 @@ des Wächters und je für sich:
 
 - `goldens.count` gleich der Zahl der committeten Golden-PNGs aus
   `git ls-files --cached -- 'crates/lumina-gui/tests/snapshots/*.png'`
-  (die Zahl steht im generierten Block in §7);
+  (die Zahl steht im generierten Block in §7 — dort ist sie der committelte
+  Wert `goldens.count` aus `scripts/golden_ref.lock`, den diese Suite gegen den
+  Git-Index prüft);
 - das vom Wächter **enumerierte** Set **pfadweise** gleich dieser Liste — nicht
   nur gleicher Anzahl: eine Liste kann richtig lang sein und trotzdem ein Golden
   gegen eine Datei eingetauscht haben, und genau das ist der „eine Zeile fehlt
@@ -733,9 +735,9 @@ Ordnerbaum leaken).
 ## 7. Golden-Inventar
 
 <!-- BEGIN GENERATED: goldens -->
-**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
-`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
-`golden_ref.sh check` als `goldens.count`).
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (Quelle:
+`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`
+prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).
 <!-- END GENERATED: goldens -->
 
 Die Verteilung auf die Test-Targets:
@@ -806,8 +808,9 @@ Für die heute drei benutzten Prädikate ist die Bedingung strukturell haltbar
 > **Merke zur Zahlenangabe:** „56 Goldens" bezeichnet die **Tests** in
 > `kittest_snapshots.rs`, nicht die Vergleichsanzahl. Vergleichsanzahl in
 > diesem Target: 46. Über alle Targets: die Zahl im generierten Block in §7
-> (gezählt mit `git ls-files "crates/lumina-gui/tests/snapshots/*.png"`,
-> identisch mit dem `goldens.count` aus `golden_ref.sh check`). Die in der
+> (Quelle: `goldens.count` aus `scripts/golden_ref.lock`; identisch mit dem
+> `git ls-files`-Count, den `golden_ref.sh check` und
+> `scripts/golden_ref_test.sh` dagegen prüfen). Die in der
 > Task-Notiz genannten „12 von 56" sind damit weder 56 noch die Gesamtzahl
 > und müssen neu gezählt werden.
 > Ein früherer Zwischenstand dieses Dokuments stützte sich auf 11 Paare

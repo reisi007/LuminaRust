@@ -466,7 +466,7 @@ neben der Datei, aus der sie stammen. `fast-8` macht sie prüfbar: Muster
 
 | Baustein | Datei | Was er tut |
 | --- | --- | --- |
-| Generator | `scripts/gen_doc_facts.sh` | liest die Quelle (Textdatei, Dateisystem oder Git-Index) und liefert den Block-Text → **Soll-Seite** |
+| Generator | `scripts/gen_doc_facts.sh` | liest die Quelle (Textdatei, Dateisystem oder committetes Lockfile) und liefert den Block-Text → **Soll-Seite** |
 | Block-Marker | `<!-- BEGIN GENERATED: <id> -->` … `<!-- END GENERATED: <id> -->` | fassen den generierten Abschnitt in der Zieldatei ein |
 | Drift-Gate | `scripts/check_doc_facts_drift.sh` (Eintrag `fast-8`) | extrahiert den Block aus der Zieldatei (Arbeitsbaum), difft ihn gegen den Generator und meldet jede Abweichung |
 
@@ -486,7 +486,7 @@ Commit.
 | --- | --- | --- |
 | `file-sizes` | `feature/quality/file-size-policy.md` | `scripts/file_size_ceiling.txt` (Eintrag), `wc -l` (Ist-Stand), `scripts/file_size_baseline.txt` (500er-Eintrag) |
 | `population` | `feature/quality/file-size-policy.md` | das Dateisystem (`crates/`, `agent-harness/`), Schwellen aus den beiden Gate-Skripten |
-| `goldens` | `feature/README.md`, `feature/quality/golden-references.md`, `feature/quality/golden-fixtures.md` | `git ls-files 'crates/lumina-gui/tests/snapshots/*.png'` — **kein** `ls`: im Verzeichnis liegen gitignorierte `*.new.png`-Artefakte, die ein Verzeichnis-Scan mitzählen würde |
+| `goldens` | `feature/README.md`, `feature/quality/golden-references.md`, `feature/quality/golden-fixtures.md` | `scripts/golden_ref.lock`, Feld `goldens.count` (committete Baseline; **kein** `git` nötig — der CI-Container hat keins; **kein** `ls`: im Verzeichnis liegen gitignorierte `*.new.png`-Artefakte). Die Kette zum Repo hält `scripts/golden_ref_test.sh` (Docs-Job **ohne** Container): es re-derived die Goldens aus dem Git-Index und prüft das Lockfile dagegen |
 
 Die Zuordnung Block → Zieldatei steht im Manifest des Generators; der Gate
 liest dasselbe Manifest — ein **fehlender erwarteter Block** ist damit ein
@@ -547,3 +547,16 @@ tot.
 - Der Runner kennt nur zwei Stufen. Checks, die weder in `fast` noch in
   `slow` passen (etwa weil sie einen Adapter brauchen), gehören in §5.2 —
   nicht in eine dritte, unsichtbare Stufe.
+- Der **Drift-Gate der Prosa-Zahlen** (§8) braucht **kein** `git`: die Zahl der committeten
+  Goldens liest er aus dem committeten `scripts/golden_ref.lock` (`goldens.count`). Das ist
+  noetig, weil der CI-Container `ghcr.io/reisi007/luminarust/lumina-ci:latest` **kein
+  `git`-Binary** hat — am 2026-10-20 war der `goldens`-Block dort nicht erzeugbar und der
+  Job „Rust fast checks“ wurde **rot**. Die Gegenprobe zur anderen Richtung — ein Golden
+  **ohne** Lockfile-Update — macht `scripts/golden_ref_test.sh` im Job „Documentation checks“
+  (ohne Container, mit `git`); ein Lockfile-Update **ohne** Doku-Update macht der Drift-Gate.
+  Damit ist die Kette in beide Richtungen geschlossen.
+- Die **Richtungs-Pruefung (D)** des 3000er-Gates (`scripts/check_file_ceiling.sh`) laeuft
+  **nur**, wo `git` verfuegbar ist: im CI-Container fehlt das Binary, der Gate schreibt dann
+  den HINWEIS „(D) hat NICHT gelaufen“ (stderr **und** Schlusszeile) statt still gruen zu
+  sein. Lokal laeuft die Pruefung; eine **committete** Anhebung eines Baseline-Werts faellt
+  ueber den Review des Baseline-Diffs auf, nicht ueber den Gate.

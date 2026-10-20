@@ -49,7 +49,7 @@ Plan entfernt (`cfc8ebd`), `ALWAYSON-REGEL-WORTLAUT` am 2026-10-20 (`d73f313`),
 - `security-review` (`82a9abb`, hidden) — trifft zu (erreichbare Oberflächen:
   MCP-Server, CLI, Datei-/Sidecar-I/O). **Stand 2026-10-20: drin** — das Repo hat
   das Sicherheits-/Risikoregister `feature/quality/security-review-register.md`
-  (Form nach Stage 6, Enumerationsbasis mit 19 erreichbaren Oberflächen, null
+  (Form nach Stage 6, Enumerationsbasis mit 24 erreichbaren Oberflächen, null
   Befunde). Die offene Position `SECURITY-REVIEW-REGISTER` ist am 2026-10-20
   geschlossen und aus dem Plan entfernt (`905f4b5`, Eigentümerentscheid „Flow
   übernommen"); offen ist daraus allein die Folge `SEC-REVIEW-WELLE-1-85` — die

@@ -172,14 +172,14 @@ Sidecars vollständig wiederherstellbar sein.
   Ausgabe belegt; dann *schließen*: Befunde in Wellen, je Welle ein
   Regressionstest), Registertabelle mit Befund-ID, Klasse, Oberfläche,
   Wellenstatus, Test, Owner, Beleg und Stand, und die Enumerationsbasis des
-  Projekts (19 erreichbare Oberflächen). **Bisher null Befunde** — die Form,
+  Projekts (24 erreichbare Oberflächen). **Bisher null Befunde** — die Form,
   nicht das Ergebnis; die erste Review-Welle ist die offene Task
   `SEC-REVIEW-WELLE-1-85` (SECURITY-REVIEW-REGISTER)
 
 <!-- BEGIN GENERATED: goldens -->
-**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
-`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
-`golden_ref.sh check` als `goldens.count`).
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (Quelle:
+`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`
+prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).
 <!-- END GENERATED: goldens -->
 
 ## Feature-Matrix

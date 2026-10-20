@@ -7,7 +7,7 @@
 # diff", nicht "wirkt plausibel":
 #
 #   1) GENERIEREN: `scripts/gen_doc_facts.sh <block-id>` liest die Quelle
-#      (Textdatei, Dateisystem oder Git-Index) und liefert den Block-Text.
+#      (Textdatei, Dateisystem oder committetes Lockfile) und liefert den Block-Text.
 #   2) EXTRAHIEREN: der committete Block wird aus der Zieldatei gelesen —
 #      zwischen `<!-- BEGIN GENERATED: <id> -->` und
 #      `<!-- END GENERATED: <id> -->`.
@@ -25,8 +25,8 @@
 #   * der Block fehlt in der Datei     -> FAIL (kein BEGIN-Marker)
 #   * die Marker sind unbalanciert     -> FAIL (kein END-Marker, zwei
 #     BEGIN-Marker, END vor BEGIN)
-#   * der Generator kann nicht laufen  -> FAIL (Quelle nicht lesbar, kein
-#     Git-Arbeitsbaum)
+#   * der Generator kann nicht laufen  -> FAIL (Quelle nicht lesbar, Lockfile
+#     fehlt oder unlesbar)
 # Ein stilles Gruen waere eine Behauptung ohne Aussage: der Block, der nicht
 # gelesen werden kann, ist kein gepruefter Block.
 #
@@ -36,14 +36,28 @@
 # einzige gestartete Prozess ist `scripts/gen_doc_facts.sh` (eigenes
 # Repo-Skript) und der Vergleich `diff`.
 #
-# ANMERKUNG zum Testhaken `LUMINA_GOLDENS_PATTERN`: damit kann der Generator
-# gegen eine andere Menge von Golden-Dateien laufen (Rotbeweis "Quelle
-# wandert"). Der Default ist IMMER das Snapshot-Verzeichnis; der Haken
-# aendert nur, welches Pattern an `git ls-files` gegeben wird. Er ist
-# dokumentiert, damit niemand ihn fuer eine zweite Wahrheit haelt.
+# ANMERKUNG zum Testhaken `LUMINA_GOLDENS_LOCK`: damit kann der Generator
+# gegen ein anderes Lockfile laufen (Rotbeweis "Quelle wandert"). Der Default
+# ist IMMER `scripts/golden_ref.lock` des Repos; der Haken aendert nur,
+# welche TEXTdatei gelesen wird.
+#
+# KEIN `git`: weder der Gate noch der Generator brauchen ein Git-Binary. Grund:
+# die Stufe `fast` laeuft in der CI im Container `lumina-ci:latest`, in dem
+# `git` NICHT installiert ist (CI-Lauf 39459843221, Job „Rust fast checks",
+# 2026-10-20). Ein Gate, das `git` voraussetzt, ist dort rot und lokal gruen.
+# Die Quelle des `goldens`-Blocks ist deshalb das committete Lockfile
+# `scripts/golden_ref.lock`; die Kette zum Repo haelt
+# `scripts/golden_ref_test.sh` (im Job „Documentation checks" OHNE Container,
+# also mit `git`): es re-derived die Goldens aus dem Git-Index und prueft das
+# Lockfile dagegen.
 #
 # HYGIENE: das Arbeitsverzeichnis (`mktemp -d`) wird per `trap ... EXIT`
-# geloescht (SIGINT/SIGTERM ebenso). Der Gate schreibt NICHTS ins Repo.
+# geloescht (SIGINT/SIGTERM ebenso). Bei SIGPIPE (die Ausgabe laeuft in eine
+# geschlossene Pipe, z. B. `... | head`) greift der EXIT-Trap nicht und das
+# Verzeichnis bleibt unter `${TMPDIR:-/tmp}` liegen — das ist der Normalfall
+# einer abgebrochenen Pipe, kein Fehlerpfad des Gates; im Regelbetrieb
+# (Ausgabe in eine Datei oder ins Log) raeumt der Trap auf. Kein Umbau
+# noetig.
 #
 # Gate-Header (Skill `ratchet-gates`, Invariante 8):
 #   Defektklasse: stille Drift — die committete Prosa nennt Zahlen, die von

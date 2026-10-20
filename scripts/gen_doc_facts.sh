@@ -4,9 +4,9 @@
 # Zweck: „Eine Zahl in Prosa ist eine Kopie einer fremd gepflegten Tatsache
 # und altert still." (Skill `generated-docs`.) Die Loesung ist nicht besseres
 # Pflegen, sondern **erzeugen + diffen**: dieser Generator liest die Quellen
-# (Textdateien, Dateisystem, Git-Index) und liefert den fertigen Block-Text;
-# `scripts/check_doc_facts_drift.sh` vergleicht ihn mit dem Block aus der Zieldatei
-# in der Zieldatei und wird bei jeder Abweichung rot. Muster wie bei
+# (Textdateien, Dateisystem, committete Lockfiles) und liefert den fertigen
+# Block-Text; `scripts/check_doc_facts_drift.sh` vergleicht ihn mit dem Block
+# aus der Zieldatei und wird bei jeder Abweichung rot. Muster wie bei
 # `scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`.
 #
 # SICHERHEITSREGEL: der Generator liest NUR TEXT und fuehrt NICHTS aus, was er
@@ -14,8 +14,18 @@
 # extrahierten Werten, kein `source` auf einer gelesenen Datei. Die gelesenen
 # Dateien sind Eingabedokumente; wer ein daraus gelesenes Kommando ausfuehrt,
 # baut aus einer Pruefung ein Ausfuehrungs-Freigabegate. Ausgefuehrt werden
-# ausschlich Festplatzwerkzeuge (`wc`, `find`, `sort`, `git ls-files`, `awk`,
-# `sed`) mit festen Argumenten.
+# ausschlich Festplatzwerkzeuge (`wc`, `find`, `sort`, `awk`, `sed`) mit festen
+# Argumenten.
+#
+# KEIN `git`: der Generator braucht **kein** Git-Binary. Grund: die Stufe
+# `fast` laeuft in der CI im Container `lumina-ci:latest`, in dem `git` NICHT
+# installiert ist (die `checkout`-Action bringt ihr eigenes Node mit, aber kein
+# `git`). Ein Generator, der `git ls-files` braucht, ist im Container rot und
+# lokal gruen — genau die container-spezifische Luecke, die eine lokale
+# Verifikation nicht sieht (CI-Lauf 39459843221, Job „Rust fast checks",
+# 2026-10-20). Der Block-Text MUSS in beiden Umgebungen byteweise identisch
+# sein; deshalb ist die Quelle **immer** dieselbe committete Datei — nicht
+# „git, wenn verfuegbar, sonst Datei".
 #
 # KEINE handgepflegte Zahlen- oder Faktenliste: der Generator enthaelt keine
 # Datei-, Zeilen- oder Mengenangabe. Er enthaelt nur
@@ -31,9 +41,18 @@
 #   * `population`  — der Population des Gates `scripts/check_file_ceiling.sh`
 #                     (alle `.rs` unter `crates/` und `agent-harness/`, ohne
 #                     `target/`), gzaehlt und gemessen.
-#   * `goldens`     — `git ls-files` ueber das Snapshot-Verzeichnis; NICHT `ls`
-#                     (im Verzeichnis liegen gitignorierte `*.new.png`-
-#                     Artefakte, die ein Verzeichnis-Scan mitzaehlen wuerde).
+#   * `goldens`     — dem committeten Lockfile `scripts/golden_ref.lock`
+#                     (Feld `goldens.count`). Das Lockfile ist die committete
+#                     Baseline der Golden-Zahl — genau das Muster der anderen
+#                     Baselines im Repo: eine committete Datei mit der Zahl, ein
+#                     Gate, das die Doku dagegen prueft. Die Kette zum Repo
+#                     bleibt geschlossen: `scripts/golden_ref_test.sh`
+#                     re-derived die Goldens aus dem Git-Index und prueft das
+#                     Lockfile dagegen (im Job „Documentation checks" OHNE
+#                     Container, also mit `git`). Ein Verzeichnis-Scan (`ls`)
+#                     waere ausgeschlossen: im Snapshot-Verzeichnis liegen
+#                     gitignorierte `*.new.png`-Artefakte, die ein Scan
+#                     mitzaehlen wuerde (mehr als 66 — die Zahl der liegengebliebenen Artefakte ist hostabhaengig).
 #
 # DETERMINISTISCH: `LC_ALL=C`, feste Sortierung, keine Zeitstempel, keine
 # absoluten Pfade, kein Hostname. Zweimal laufen lassen -> byteweise identische
@@ -41,7 +60,11 @@
 # ist tot.
 #
 # HYGIENE: das Arbeitsverzeichnis (`mktemp -d`) wird per `trap ... EXIT`
-# geloescht (SIGINT/SIGTERM ebenso).
+# geloescht (SIGINT/SIGTERM ebenso). Bei SIGPIPE (die Ausgabe laeuft in eine
+# geschlossene Pipe, z. B. `... | head`) greift der EXIT-Trap nicht und das
+# Verzeichnis bleibt unter `${TMPDIR:-/tmp}` liegen — das ist der Normalfall
+# einer abgebrochenen Pipe, kein Fehlerpfad; im Regelbetrieb raeumt der Trap
+# auf. Kein Umbau noetig.
 #
 # Aufruf:
 #   sh scripts/gen_doc_facts.sh                 # alle Bloecke, mit Markern
@@ -49,9 +72,15 @@
 #   sh scripts/gen_doc_facts.sh --manifest      # "block-id|zieldatei" je Zeile
 #   sh scripts/gen_doc_facts.sh --list          # die bekannten Block-Ids
 #
-# Exit: 0 = Ausgabe auf stdout. 2 = Fehler (Quelle nicht lesbar, Git nicht
-# da, Konstante nicht gefunden). Der Drift-Gate behandelt Exit 2 als Fehler
-# (rot) — eine Quelle, die nicht gelesen werden kann, ist kein gruener Zustand.
+# Testhaken: `LUMINA_GOLDENS_LOCK` ueberschreibt den Pfad des Lockfiles, aus
+# dem der `goldens`-Block liest (Default: IMMER `scripts/golden_ref.lock` des
+# Repos). Er existiert nur fuer den Rotbeweis „Quelle wandert"; er aendert
+# nur, welche TEXTdatei gelesen wird.
+#
+# Exit: 0 = Ausgabe auf stdout. 2 = Fehler (Quelle nicht lesbar, Lockfile
+# fehlt oder unlesbar, Konstante nicht gefunden). Der Drift-Gate behandelt
+# Exit 2 als Fehler (rot) — eine Quelle, die nicht gelesen werden kann, ist
+# kein gruener Zustand.
 set -eu
 
 export LC_ALL=C
@@ -64,7 +93,7 @@ SIZE_BASELINE="$ROOT/scripts/file_size_baseline.txt"
 SIZE_GATE="$ROOT/scripts/check_file_sizes.sh"
 CEILING_GATE="$ROOT/scripts/check_file_ceiling.sh"
 GOLDEN_DIR_REL="crates/lumina-gui/tests/snapshots"
-GOLDEN_PATTERN="${LUMINA_GOLDENS_PATTERN:-crates/lumina-gui/tests/snapshots/*.png}"
+GOLDEN_LOCK="${LUMINA_GOLDENS_LOCK:-$ROOT/scripts/golden_ref.lock}"
 
 # MANIFEST: Block-Id | Zieldatei (relativ zur Repo-Wurzel).
 # Eine Quelle der Wahrheit fuer Generator UND Drift-Gate: der Gate liest das
@@ -76,9 +105,13 @@ goldens|feature/README.md
 goldens|feature/quality/golden-references.md
 goldens|feature/quality/golden-fixtures.md'
 
-BLOCK_IDS='file-sizes
-population
-goldens'
+# Die Block-Ids werden AUS DEM MANIFEST abgeleitet (keine zweite Liste): eine
+# Block-Id, die nur in einer eigenen Liste stuende, wuerde nie erzeugt und nie
+# geprueft — eine stille Luecke (L-1 aus dem Verifikationsbericht).
+manifest_ids() {
+    printf '%s\n' "$MANIFEST" |
+        awk -F'|' 'NF == 2 && $1 != "" && !seen[$1]++ { print $1 }'
+}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/gen_doc_facts.XXXXXX") || exit 2
 cleanup() { rm -rf "$WORK"; }
@@ -177,31 +210,40 @@ gen_population() {
 }
 
 # ------------------------------------------------------------------- goldens
-# Quelle: der Git-Index (`git ls-files`) — die committeten Golden-PNGs.
-# KEIN `ls`: im Snapshot-Verzeichnis liegen gitignorierte `*.new.png`-
-# Artefakte (Vergleichsartefakte des Testlaufs); ein Verzeichnis-Scan
-# zaehlt sie mit und liefert eine falsche Zahl. Fehlt `git` oder der
-# Arbeitsbaum, MELDET der Generator das (Exit 2) — er liefert NICHT still 0.
+# Quelle: das COMMITTEDTE Lockfile `scripts/golden_ref.lock`, Feld
+# `goldens.count` — die committete Baseline der Golden-Zahl (Muster der
+# Baselines im Repo: committete Datei mit der Zahl + Gate, das die Doku
+# dagegen prueft).
+#
+# Warum NICHT `git ls-files`: (a) der CI-Container `lumina-ci:latest` hat kein
+# `git`-Binary — der Generator waere dort rot und lokal gruen; (b) die Quelle
+# muss in JEDER Umgebung dieselbe sein, sonst waere der Block-Text nicht
+# byteweise gleich und der Drift-Gate in einer der Umgebungen rot.
+# Warum NICHT `ls`: im Snapshot-Verzeichnis liegen gitignorierte
+# `*.new.png`-Artefakte, die ein Verzeichnis-Scan mitzaehlen wuerde
+# (mehr als 66 — die Zahl der liegengebliebenen Artefakte ist hostabhaengig).
+# Die Kette zum Repo bleibt geschlossen: `scripts/golden_ref_test.sh`
+# re-derived die Goldens aus dem Git-Index und prueft das Lockfile dagegen
+# (Zeile 725: „inventory/goldens.count covers every committed golden"), und
+# `scripts/golden_ref.sh check` vergleicht es zur Laufzeit.
+# Fehlt das Lockfile oder steht kein gueltiger Wert drin, MELDET der Generator
+# das (Exit 2) — er liefert NICHT still 0.
 gen_goldens() {
-    command -v git >/dev/null 2>&1 || die "git fehlt - die Zahl der committeten Goldens ist nicht ermittelbar"
-    git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
-        die "kein Git-Arbeitsbaum unter $ROOT - die Zahl der committeten Goldens ist nicht ermittelbar"
+    [ -f "$GOLDEN_LOCK" ] ||
+        die "das Lockfile fehlt: $GOLDEN_LOCK - die Zahl der committeten Goldens ist nicht ermittelbar"
+    [ -r "$GOLDEN_LOCK" ] ||
+        die "das Lockfile ist nicht lesbar: $GOLDEN_LOCK - die Zahl der committeten Goldens ist nicht ermittelbar"
 
-    git -C "$ROOT" ls-files "$GOLDEN_PATTERN" > "$WORK/goldens.raw" 2> "$WORK/goldens.err" ||
-        die "git ls-files '$GOLDEN_PATTERN' ist fehlgeschlagen: $(cat "$WORK/goldens.err")"
+    n=$(awk -F= '$1 == "goldens.count" { print $2; exit }' "$GOLDEN_LOCK")
+    case "$n" in
+        '') die "im Lockfile steht kein Feld goldens.count: $GOLDEN_LOCK" ;;
+        *[!0-9]*) die "im Lockfile steht kein gueltiger Wert fuer goldens.count: $GOLDEN_LOCK" ;;
+    esac
+    [ "$n" -gt 0 ] || die "im Lockfile steht goldens.count=0 - das ist kein gueltiger Stand"
 
-    # Vergleichsartefakte (`*.new.png`, `*.diff.png`, `*.old.png`) sind nie
-    # committet; die Regel ist trotzdem explizit, damit ein committetes
-    # Artefakt nicht mitzaehlt (dieselbe Regel wie in `golden_ref_test.sh`).
-    awk '!/\.new\.png$/ && !/\.diff\.png$/ && !/\.old\.png$/' "$WORK/goldens.raw" > "$WORK/goldens"
-
-    n=$(wc -l < "$WORK/goldens" | tr -d ' ')
-    [ "$n" -gt 0 ] || die "die Liste der committeten Goldens ('$GOLDEN_PATTERN') ist leer - das ist kein gueltiger Stand"
-
-    printf '**%s** committete Golden-Dateien in `%s/` (gezählt mit\n' "$n" "$GOLDEN_DIR_REL"
-    cmd="git ls-files '$GOLDEN_PATTERN'"
-    printf '`%s`; dieselbe Zahl meldet\n' "$cmd"
-    printf '`golden_ref.sh check` als `goldens.count`).\n'
+    printf '**%s** committete Golden-Dateien in `%s/` (Quelle:\n' "$n" "$GOLDEN_DIR_REL"
+    printf '`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`\n'
+    printf 'prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).\n'
 }
 
 # --------------------------------------------------------------------- Ausgabe
@@ -232,8 +274,8 @@ Usage: sh scripts/gen_doc_facts.sh [<block-id> | --manifest | --list]
   (ohne Arg)  Alle Bloecke, jeweils mit BEGIN-/END-Marker, in der Reihenfolge
               des Manifests — die Form zum Einfuegen in eine Zieldatei.
 
-Exit 0 = Ausgabe auf stdout. Exit 2 = Fehler (Quelle nicht lesbar, kein Git,
-Konstante nicht gefunden).
+Exit 0 = Ausgabe auf stdout. Exit 2 = Fehler (Quelle nicht lesbar, Lockfile
+fehlt, Konstante nicht gefunden).
 EOF
 }
 
@@ -242,22 +284,23 @@ case "${1:-}" in
         printf '%s\n' "$MANIFEST"
         ;;
     --list)
-        printf '%s\n' "$BLOCK_IDS"
+        manifest_ids
         ;;
     --help|-h)
         usage
         ;;
     '')
-        # Alle Bloecke, je Block-Id EINMAL (die Zuordnung zu den Zieldateien
-        # steht im Manifest; der Block-Text ist davon unabhaengig).
-        printf '%s\n' "$BLOCK_IDS" | while IFS= read -r id; do
+        # Alle Bloecke, je Block-Id EINMAL, in der Reihenfolge des Manifests
+        # (die Zuordnung zu den Zieldateien steht im Manifest; der Block-Text
+        # ist davon unabhaengig).
+        manifest_ids | while IFS= read -r id; do
             [ -n "$id" ] || continue
             emit_block "$id"
             printf '\n'
         done
         ;;
     *)
-        printf '%s\n' "$BLOCK_IDS" | grep -qx -e "$1" ||
+        manifest_ids | grep -qx -e "$1" ||
             die "unbekannter Block: $1 (siehe --list)"
         gen_block "$1"
         ;;

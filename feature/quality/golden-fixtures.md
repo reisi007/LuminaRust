@@ -175,9 +175,9 @@ ihre Aussage stützt. Das ist nötig, weil eine Render-Invariante auf einem
 ## 4. Inventar (Version 1)
 
 <!-- BEGIN GENERATED: goldens -->
-**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (gezählt mit
-`git ls-files 'crates/lumina-gui/tests/snapshots/*.png'`; dieselbe Zahl meldet
-`golden_ref.sh check` als `goldens.count`).
+**66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (Quelle:
+`scripts/golden_ref.lock`, Feld `goldens.count`; `scripts/golden_ref_test.sh`
+prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Laufzeit).
 <!-- END GENERATED: goldens -->
 
 Die in `Agents.todo.md` genannte Zahl
