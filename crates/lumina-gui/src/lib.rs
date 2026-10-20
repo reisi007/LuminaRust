@@ -24,6 +24,9 @@ pub use overlay_modes::{
 // overlay and which edit pins the preview paints right now), extracted from the
 // ratcheted crate root.
 mod overlay_visibility;
+// GUI-LIB-SPLIT-65 Slice 19: the working view's chrome-visibility policy (which
+// frame parts the lights-out/panels-hide flags hide), extracted from the crate root.
+mod view_chrome;
 // GUI-LIB-SPLIT-65 Slice 8: pure display-diagnostic image statistics (shadow/
 // highlight clipping fractions, normalized histogram L1 distance).
 mod histogram_clip;
@@ -2921,75 +2924,6 @@ impl LuminaApp {
         self.masking_preview.as_deref()
     }
 
-    /// Toggle lights-out (`L`, Welle 2). Display-only: hides the side panels
-    /// and the filmstrip; header, module bar and preview stay so status and
-    /// errors remain visible. Never mutates the recipe.
-    pub fn toggle_lights_out(&mut self) {
-        instrument_gui_action!(self, GuiAction::ToggleLightsOut);
-        self.lights_out = !self.lights_out;
-        info!("GUI interaction: toggle_lights_out -> {}", self.lights_out);
-        self.status = if self.lights_out {
-            Str::LightsOutOn.t().into()
-        } else {
-            Str::LightsOutOff.t().into()
-        };
-    }
-
-    /// Toggle side-panel visibility (`Tab`, Welle 2). Display-only: hides the
-    /// left/right panels; the filmstrip stays (unlike `L` lights-out).
-    /// Never mutates the recipe.
-    pub fn toggle_panels_hidden(&mut self) {
-        instrument_gui_action!(self, GuiAction::TogglePanelsHidden);
-        self.panels_hidden = !self.panels_hidden;
-        info!(
-            "GUI interaction: toggle_panels_hidden -> {}",
-            self.panels_hidden
-        );
-        self.status = if self.panels_hidden {
-            Str::PanelsHiddenOn.t().into()
-        } else {
-            Str::PanelsHiddenOff.t().into()
-        };
-    }
-
-    /// Toggle all panels (`Shift+Tab`, G-11). Display-only: hides the side
-    /// panels, the navigator rail and the filmstrip; header/module bar and
-    /// preview stay so status and errors remain visible. Never mutates the
-    /// recipe or the sidecar (session-only like `Tab`).
-    pub fn toggle_all_panels_hidden(&mut self) {
-        instrument_gui_action!(self, GuiAction::ToggleAllPanelsHidden);
-        self.all_panels_hidden = !self.all_panels_hidden;
-        log::info!(
-            "GUI interaction: toggle_all_panels_hidden -> {}",
-            self.all_panels_hidden
-        );
-        self.status = if self.all_panels_hidden {
-            Str::AllPanelsHiddenOn.t().into()
-        } else {
-            Str::AllPanelsHiddenOff.t().into()
-        };
-    }
-
-    /// Whether `Shift+Tab` all-panels-hide is armed (read-only accessor for
-    /// headless tests).
-    pub fn all_panels_hidden(&self) -> bool {
-        self.all_panels_hidden
-    }
-
-    /// Whether the plain `Tab` side-panel hide is armed (read-only accessor
-    /// for the R5-MASKVIS-25 preview-growth test).
-    pub fn panels_hidden(&self) -> bool {
-        self.panels_hidden
-    }
-
-    /// Whether any side chrome is hidden: plain `Tab` panels-hide, `L`
-    /// lights-out, `F` fullscreen or `Shift+Tab` all-panels-hide. Shared by
-    /// the side-panel and navigator draw gates; [`Self::chrome_hidden`] keeps
-    /// its historical meaning (without the G-11 flag) for compatibility.
-    pub fn side_chrome_hidden(&self) -> bool {
-        self.chrome_hidden() || self.all_panels_hidden
-    }
-
     /// Toggle the crop-mode badge (`R`, Welle 2). Display-only: while armed,
     /// the preview header advertises the mode; edits stay in the Geometry
     /// Crop controls. Never mutates the recipe.
@@ -3193,32 +3127,6 @@ impl LuminaApp {
     /// [`Self::set_fullscreen`]).
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen
-    }
-
-    /// Whether side chrome (panels, navigator, filmstrip) is hidden: `Tab`
-    /// panels-hide, `L` lights-out or `F` fullscreen (Welle 3). Shared by the
-    /// draw paths so fullscreen hides exactly the lights-out chrome — and,
-    /// with `fullscreen == false`, every condition evaluates exactly as
-    /// before (no default-layout pixel change).
-    pub fn chrome_hidden(&self) -> bool {
-        self.panels_hidden || self.lights_out || self.fullscreen
-    }
-
-    /// Whether the bottom filmstrip is drawn for the current module state
-    /// (F-100: visible in Library, Develop AND Export; `Tab` panels-hide
-    /// keeps it, `L` lights-out and `F` fullscreen hide it). Single source
-    /// of truth shared by the draw path and the headless regression tests
-    /// (GUI-VISION-1: Export deliberately shows the filmstrip — there is no
-    /// Export-specific reason to hide it, the old
-    /// `Library | Develop`-only gate was an oversight against the F-100 norm
-    /// "Der Filmstreifen ist in allen drei Modulen sichtbar").
-    pub fn shows_filmstrip(&self) -> bool {
-        matches!(
-            self.active_module,
-            Module::Library | Module::Develop | Module::Export
-        ) && !self.lights_out
-            && !self.fullscreen
-            && !self.all_panels_hidden
     }
 
     /// Current stack-group proxy id of the active virtual copy (Welle 3,
