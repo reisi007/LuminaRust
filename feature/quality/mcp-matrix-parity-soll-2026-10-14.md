@@ -13,11 +13,29 @@ der **Rest** der Lücke (`feature/quality/mcp-parity-c-soll.md` §12). Dieses Do
 spiegelt die Struktur jenes SOLL — es erfindet nichts Neues.
 
 **Belegbasis (alles unten ist gelesen, nichts spekulativ):**
-`crates/lumina-cli/src/matrix.rs` (1007 Z., vollständig),
-`crates/lumina-cli/src/main.rs` (Modul :126-130, `Matrix`-Variante :655-656,
-Dispatch :1562, `RenderRoute` :280-329, `render_standard_routed` :497-538,
-`render_best_effort` :428-482, `CliError` :1466-1523, `emit` :5675-5682,
-`StagedArtifact` :6647-6700),
+
+**Anker-Form (Stand 2026-10-20, Welle H zu `PROSE-ANCHOR-POLICY-88`):** die
+Fundstellen auf **Code** nennen den vollständigen repo-relativen **Pfad +
+Symbol- bzw. Testnamen** — auf **Code-Dateien (`.rs`) steht keine
+Zeilennummer mehr**. Zeilennummern auf **Nicht-Code-Dateien** (Doku,
+Konfiguration, Workflow, Rezept-Set) bleiben als datierte Verweise stehen;
+sie zeigen auf Doku, nicht auf Code. Die Zeilennummern dieses SOLLs
+galten gegenüber dem **Plan-Stand `59cc0b5`** (2026-10-14) und wurden über die
+Historie rekonstruiert (`git show 59cc0b5:<pfad> | sed -n '<zeile>p'` — der
+umschließende Symbolträger). **Stand 2026-10-20:** der Matrix-Runner ist heute
+aus der CLI in `lumina-stages` extrahiert — `crates/lumina-stages/src/matrix_run.rs`
+→ `run`, `crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set` /
+`prepare_recipes` / `reject_artifact_backed_stages` / `resolve_relative` /
+`default_recipe_set_path` / `resolve_default_matrix_dir` / `check_expected_route`,
+`crates/lumina-stages/src/matrix_report.rs` → `encode_and_stage` / `write_diff` /
+`report_text` / `report_json`; die Anker nennen den **heutigen** Pfad. Die
+inhaltlichen Aussagen dieses SOLLs sind **unverändert** — umgestellt wurde nur
+die Anker-Form, nicht die Aussage.
+
+`crates/lumina-cli/src/matrix.rs` (im Plan-Stand 1007 Z., vollständig),
+`crates/lumina-cli/src/main.rs` (Modul `matrix`, `Matrix`-Variante, Dispatch in
+`run`, `RenderRoute`, `render_standard_routed`, `render_best_effort`, `CliError`,
+`emit`, `StagedArtifact`),
 `testdata/matrix/recipe-set.v1.json` (235 Z., vollständig) und
 `testdata/matrix/golden/` (22 committete PNG-Goldens, 7,0 MB),
 `crates/lumina-cli/tests/matrix_e2e.rs` (451 Z.), `crates/lumina-cli/tests/matrix_paths.rs`
@@ -29,13 +47,14 @@ Dispatch :1562, `RenderRoute` :280-329, `render_standard_routed` :497-538,
 `crates/lumina-mcp/tests/merge_tools.rs` + `merge_tools_validation.rs`,
 `crates/lumina-cli/tests/merge_mcp_parity.rs` + `_errors.rs` + `_envelope.rs`
 + `_gate.rs` + `merge_mcp_parity_common/{mod,fixtures,graders,job}.rs`,
-`crates/lumina-cli/src/tests/mcp_onnx.rs` (:1-96),
-`crates/lumina-cli/src/stages.rs` (:440-479, Decode-/Error-Shims),
-`crates/lumina-cli/src/library.rs` (:254-299, Render-Port-Muster),
-`crates/lumina-stages/src/regenerate.rs` (:107-137, Render-Port-Trait,
-:139-153, Request-Struktur), `crates/lumina-stages/src/decode.rs` (:36-50),
-`crates/lumina-stages/src/pipeline.rs` (:29-43),
-`crates/lumina-mcp/src/util.rs` (:340-463, MCP-eigener Render-Pfad),
+`crates/lumina-cli/src/tests/mcp_onnx.rs` (`mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools`,
+`EXPECTED_TOOLS`),
+`crates/lumina-cli/src/stages.rs` (Decode-/Error-Shims),
+`crates/lumina-cli/src/library.rs` (Render-Port-Muster),
+`crates/lumina-stages/src/regenerate.rs` (`MatchingRender`, Render-Port-Trait;
+`RegenerateRequest`, Request-Struktur), `crates/lumina-stages/src/decode.rs`,
+`crates/lumina-stages/src/pipeline.rs`,
+`crates/lumina-mcp/src/util.rs` (MCP-eigener Render-Pfad),
 `crates/lumina-mcp/Cargo.toml` (:1-49), `scripts/check_file_sizes.sh`,
 `scripts/file_size_baseline.txt`, `Agents.todo.md` :409, `Agents.md` :608-628
 (GPU-Regel), `feature/platform/mcp-server.md` (:1-23, :740-795).
@@ -47,7 +66,8 @@ Dispatch :1562, `RenderRoute` :280-329, `render_standard_routed` :497-538,
   `lumina_generative`/`lumina_relocate` (MCP-PARITY-B,
   `feature/quality/mcp-parity-c-soll.md:36-39`).
 - Das Tool ruft **dieselbe** Runner-Funktion auf wie die CLI
-  (`matrix::matrix`, `matrix.rs:237-596`) — über einen gemeinsamen, clap-freien
+  (`crates/lumina-cli/src/matrix.rs` → `matrix`; der Runner heute in
+  `crates/lumina-stages/src/matrix_run.rs` → `run`) — über einen gemeinsamen, clap-freien
   Kern in einer gemeinsam linkbaren Crate. Keine zweite Matrix-Mathematik, kein
   zweiter Renderpfad, keine zweite Golden-Schreibung.
 - Ergebnis: für dasselbe Rezept-Set (Bytes identisch) sind `--json`-Report, die
@@ -59,24 +79,27 @@ Dispatch :1562, `RenderRoute` :280-329, `render_standard_routed` :497-538,
 
 ## 2. `MatrixArgs` → MCP-JSON-Schema (SOLL-Vertrag)
 
-Quelle der Felder, Typen und Defaults: `crates/lumina-cli/src/matrix.rs:65-99`
-(`pub struct MatrixArgs`, clap). MCP-Felder sind snake_case; `--json` entfällt
-(§3). Der CLI-Flag `--recipe` ist wiederholbar (`matrix.rs:80-81`), im
+Quelle der Felder, Typen und Defaults: `crates/lumina-cli/src/matrix.rs` →
+`MatrixArgs` (`pub struct MatrixArgs`, clap). MCP-Felder sind snake_case;
+`--json` entfällt
+(§3). Der CLI-Flag `--recipe` ist wiederholbar (Feld `recipe` in
+`crates/lumina-cli/src/matrix.rs` → `MatrixArgs`), im
 MCP-Schema ist er ein echtes JSON-Array (`recipes`).
 
-| CLI-Flag (`MatrixArgs`, `matrix.rs:65-99`) | MCP-JSON-Feld | Typ | Pflicht | Default (MCP) | Grenzen / Schema-Keywords |
+| CLI-Flag (`MatrixArgs`, `crates/lumina-cli/src/matrix.rs` → `MatrixArgs`) | MCP-JSON-Feld | Typ | Pflicht | Default (MCP) | Grenzen / Schema-Keywords |
 | --- | --- | --- | --- | --- | --- |
-| `--recipe-set` :70-71 | `recipe_set` | string \| null | nein | `null`/absent → env-Kette `LUMINA_MATRIX_RECIPE_SET` → `LUMINA_MATRIX_DIR` → Vorfahren-Walk (`matrix.rs:806-835`, gepinnt in `matrix_paths.rs`) | Beschreibung der Kette im `description`-Text; **kein** Handler-Vorab-Check auf Existenz — die Domain prüft laut |
-| `--golden-dir` :73-74 | `golden_dir` | string \| null | nein | `null` → `<recipe-set-dir>/golden` (`matrix.rs:274-277`) | rel. oder abs.; der Runner legt es nur im Baseline-Modus an (:278-280) |
-| `--work-dir` :77-78 | `work_dir` | string \| null | nein | `null` → frisches `tempfile::tempdir()`, danach entfernt (`matrix.rs:284-295`) | MCP **muss** dasselbe Tempdir-Verhalten erben (kein Repo-Müll, Kommentar :282-283) |
-| `--recipe` (wiederholbar) :80-81 | `recipes` | string[] | nein | `[]` = **alle** Rezepte des Sets, in Set-Reihenfolge | unbekannte Id → lauter Abbruch **vor** jedem Render (`prepare_recipes`, :690-697) |
-| `--comparison-width` :84-85 | `comparison_width` | integer \| null | nein | `null` → `set.comparison_width` (committet: 384, `recipe-set.v1.json:4`) | `minimum: 1` **beschreibend**; `0` ist ein lauter Domain-Fehler (`:266-272`), nicht `InvalidParams` |
-| `--update-goldens` :87-88 | `update_goldens` | boolean | nein | `false` | Baseline-Modus: CPU-gepinnt, plattformneutral (`:371-375`, F4) |
-| `--require-gpu` :95-96 | `require_gpu` | boolean | nein | `false` | GPU-Paritätsgate; in dieser Slice **nur** gespiegelt, nicht neu bewiesen (§5) |
-| `--json` :98-99 | — (entfällt) | — | — | — | MCP antwortet **immer** `structuredContent`; `--json` ist reines CLI-Transport-Flag (`emit`, `main.rs:5675-5682`) |
+| `--recipe-set` | `recipe_set` | string \| null | nein | `null`/absent → env-Kette `LUMINA_MATRIX_RECIPE_SET` → `LUMINA_MATRIX_DIR` → Vorfahren-Walk (`crates/lumina-stages/src/matrix_validate.rs` → `default_recipe_set_path` / `resolve_default_matrix_dir`, gepinnt in `crates/lumina-cli/tests/matrix_paths.rs`) | Beschreibung der Kette im `description`-Text; **kein** Handler-Vorab-Check auf Existenz — die Domain prüft laut |
+| `--golden-dir` | `golden_dir` | string \| null | nein | `null` → `<recipe-set-dir>/golden` (`crates/lumina-stages/src/matrix_run.rs` → `run`) | rel. oder abs.; der Runner legt es nur im Baseline-Modus an (ebendort) |
+| `--work-dir` | `work_dir` | string \| null | nein | `null` → frisches `tempfile::tempdir()`, danach entfernt (`crates/lumina-stages/src/matrix_run.rs` → `run`) | MCP **muss** dasselbe Tempdir-Verhalten erben (kein Repo-Müll, Kommentar ebendort) |
+| `--recipe` (wiederholbar) | `recipes` | string[] | nein | `[]` = **alle** Rezepte des Sets, in Set-Reihenfolge | unbekannte Id → lauter Abbruch **vor** jedem Render (`crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes`) |
+| `--comparison-width` | `comparison_width` | integer \| null | nein | `null` → `set.comparison_width` (committet: 384, `recipe-set.v1.json`) | `minimum: 1` **beschreibend**; `0` ist ein lauter Domain-Fehler (`crates/lumina-stages/src/matrix_run.rs` → `run`), nicht `InvalidParams` |
+| `--update-goldens` | `update_goldens` | boolean | nein | `false` | Baseline-Modus: CPU-gepinnt, plattformneutral (`crates/lumina-stages/src/matrix_run.rs` → `run`, F4) |
+| `--require-gpu` | `require_gpu` | boolean | nein | `false` | GPU-Paritätsgate; in dieser Slice **nur** gespiegelt, nicht neu bewiesen (§5) |
+| `--json` | — (entfällt) | — | — | — | MCP antwortet **immer** `structuredContent`; `--json` ist reines CLI-Transport-Flag (`crates/lumina-cli/src/main.rs` → `emit`) |
 
 **Serverseitige Pflicht-Prüfungen (nicht nur Schema, sondern Handler-Code —**
-`reject_unknown_fields`/`stage_common.rs:51-66` ist das verbindliche Muster, weil
+`reject_unknown_fields`/`crates/lumina-mcp/src/tools/stage_common.rs` →
+`reject_unknown_fields` ist das verbindliche Muster, weil
 ein Schema für das aufrufende Modell nur eine *Beschreibung* ist).
 
 **Die Trennregel (wie Merge, §2 des Merge-SOLL):** der Handler prüft
@@ -90,22 +113,26 @@ Fehlerklasse künstlich auf `InvalidParams` ziehen und damit die
 Fehlerklassen-Gleichheit CLI ≡ MCP verletzen.
 
 1. `recipes`: Array von Strings. Fehlt das Feld oder ist es `null`, gilt `[]`
-   (= alle Rezepte — die Auswahl trifft `prepare_recipes`, :685-723; eine leere
+   (= alle Rezepte — die Auswahl trifft `crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes`; eine leere
    Treffermenge → **lauter** Fehler „recipe set … selected no recipes",
-   :298-303). Ein Nicht-Array oder ein
+   `crates/lumina-stages/src/matrix_run.rs` → `run`). Ein Nicht-Array oder ein
    Nicht-String-Element ist `InvalidParams`. Die **Existenz** jeder Id prüft allein
-   `prepare_recipes` (:690-697).
+   `crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes`.
 2. `recipe_set`/`golden_dir`/`work_dir`: optionales String-Feld; fehlt es oder ist
    es `null`, gilt der jeweilige Default. Nur ein **vorhandenes, nicht-String**-Feld
    ist ein Typfehler → `InvalidParams`. Die **Existenz** der Datei prüft
-   `load_recipe_set` (:599-603, `io_error`) und bleibt Domain — kein eigener
+   `crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set` (`io_error`) und bleibt Domain — kein eigener
    `FileNotFound`-Vorab-Check, sonst unterscheidet sich die Klasse vom CLI.
 3. `comparison_width`: strikt JSON-Integer (`1.5`/`"384"`/`-1` → `InvalidParams`).
    `0` ist ein gültiges Integer und fällt der Domain-Parität wegen an
-   `matrix.rs:266-272` → `Matrix`-Fehlerklasse, **nicht** `InvalidParams`.
-   Out-of-range wird nie geclippt (`stage_common.rs:169-173`).
-4. `update_goldens`/`require_gpu`: `optional_bool` (`stage_common.rs:208`). Die
-   **Kombination** beider Flags prüft die Domain (`matrix.rs:243-248`) — der
+   `crates/lumina-stages/src/matrix_run.rs` → `run` → `Matrix`-Fehlerklasse,
+   **nicht** `InvalidParams`.
+   Out-of-range wird nie geclippt (`crates/lumina-mcp/src/tools/stage_common.rs` →
+   `optional_f32`; der No-Clip-Satz steht dort im Doc).
+4. `update_goldens`/`require_gpu`: `optional_bool`
+   (`crates/lumina-mcp/src/tools/stage_common.rs` → `optional_bool`). Die
+   **Kombination** beider Flags prüft die Domain
+   (`crates/lumina-stages/src/matrix_run.rs` → `run`) — der
    Handler darf sie nicht vorab abfangen, sonst wird im CLI ein
    `CliError::Message` und im MCP ein `InvalidParams`.
 5. `additionalProperties: false` im Schema **und** `reject_unknown_fields` im
@@ -159,20 +186,23 @@ trägt bereits Route, Toleranz und Diagnose. Kein `saved`, kein `action`, kein
 ### 3.1 Die zwei Paritätsmasken (und nur diese)
 
 1. **`duration_ms`** (Top-Level und je Pair). Der CLI-Misst Wanduhrzeiten
-   (:310, :337, :551, :556); zwei Läufe können nicht identisch sein. Die Maske
+   (`crates/lumina-stages/src/matrix_run.rs` → `run`); zwei Läufe können nicht identisch sein. Die Maske
    entfernt genau diesen Schlüssel an beiden Stellen und vergleicht alles andere
    roh.
 2. ** absolute Pfade** (`recipe_set`, `golden_dir`, `golden`, `output`). Zwei
    Fixture-Bäume haben verschiedene Adressen; `normalize_paths` ersetzt beide
-   Wurzeln durch `<TREE>` (Muster `merge_mcp_parity_common/graders.rs:106-113`).
+   Wurzeln durch `<TREE>` (Muster `crates/lumina-cli/tests/merge_mcp_parity_common/graders.rs`
+   → `normalize_paths`).
 
 Alles Übrige — `psnr_db`, `max_abs_diff`, `status`, `message`, `route`,
 `route_reasons`, `expected_route` — wird **wortgleich** verglichen. Das ist die
 Stelle, an der ein Stub rot wird (§10).
 
 Textkanal: `tool_result_response` serialisiert das Payload zusätzlich als
-`content[0].text` (`error.rs:239-247`). Der CLI-Erfolgstext (`report_text`,
-:923-962, plus die Summenzeile :571-575) ist **nicht** Teil des JSON und damit
+`content[0].text` (`crates/lumina-mcp/src/error.rs` → `tool_result_response`).
+Der CLI-Erfolgstext (`report_text`,
+`crates/lumina-stages/src/matrix_report.rs` → `report_text`, plus die Summenzeile in `crates/lumina-stages/src/matrix_run.rs` → `run`) ist **nicht** Teil
+des JSON und damit
 kein Paritätsgegenstand; er kann als `content[0].text` ergänzt werden —
 Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 
@@ -189,24 +219,28 @@ laut `testdata/matrix/recipe-set.v1.json` und
 Das Feld hat im Runner **genau zwei** Leser und **null** Schreiber:
 
 - **Leser 1 — Austrag (erlaubt):** `outcome.expected_route = entry.spec.expected_route.label()`
-  (:352, :187-192) → landet im Report (:985). Ein Echo des Eingabewerts, keine
+  (`crates/lumina-stages/src/matrix_run.rs` → `run`; das Label liefert `crates/lumina-stages/src/matrix_validate.rs` → `ExpectedRoute::label`) → landet im Report
+  (`crates/lumina-stages/src/matrix_report.rs` → `report_json`). Ein Echo des Eingabewerts, keine
   Bewertung.
 - **Leser 2 — Auswertung (nur unter `--require-gpu`):** `check_expected_route`
-  (:841-866) wird **ausschließlich** im `if args.require_gpu`-Zweig aufgerufen
-  (:403-411) und vergleicht die Deklaration gegen die Route, die der
-  Standard-Renderpfad **tatsächlich** nah (`RenderRoute`, `main.rs:280-329`) —
-  nie gegen eine abgeleitete oder geloggte Vermutung (Doc :404-406).
+  (`crates/lumina-stages/src/matrix_validate.rs` → `check_expected_route`) wird **ausschließlich** im
+  `if args.require_gpu`-Zweig aufgerufen
+  (`crates/lumina-stages/src/matrix_run.rs` → `run`) und vergleicht die Deklaration gegen die Route, die der
+  Standard-Renderpfad **tatsächlich** nah (`RenderRoute`,
+  `crates/lumina-cli/src/main.rs` → `RenderRoute`) —
+  nie gegen eine abgeleitete oder geloggte Vermutung (Doc-Kommentar ebendort).
 - **Schreiber: keine.** Der Runner schrieb ausschließlich Golden-PNGs
-  (`encode_and_stage`, :877-880), Diff-Bilder (:884-901) und Full-Resolution-
-  Exporte (:422-433); das Rezept-Set wird nur gelesen (`load_recipe_set`, :600).
+  (`crates/lumina-stages/src/matrix_report.rs` → `encode_and_stage`), Diff-Bilder (`crates/lumina-stages/src/matrix_report.rs` → `write_diff`) und
+  Full-Resolution-Exporte (`crates/lumina-stages/src/matrix_run.rs` → `run`); das Rezept-Set wird nur gelesen
+  (`crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`).
 
 Damit ist die Grenze code-seitig scharf:
 
 | Frage | Antwort | Beleg |
 | --- | --- | --- |
-| Darf das Tool den Wert **ausliefern**? | Ja — er ist Pflichtfeld des CLI-Reports. | :985 |
-| Darf das Tool ihn **schreiben**? | Nein. Kein Codepfad schreibt in die Set-Datei; `update_goldens` schreibt nur Goldens in `golden_dir`. | :600, :877-880 |
-| Darf das Tool ihn **auswerten**? | Nur im gespiegelten `require_gpu`-Zweig, und nur gegen die tatsächliche Route — nicht zur Selbstvalidierung des Tools. Im Default-Modus (verify) ist das Feld **inert**. | :403-411, :841-866 |
+| Darf das Tool den Wert **ausliefern**? | Ja — er ist Pflichtfeld des CLI-Reports. | `crates/lumina-stages/src/matrix_report.rs` → `report_json` |
+| Darf das Tool ihn **schreiben**? | Nein. Kein Codepfad schreibt in die Set-Datei; `update_goldens` schreibt nur Goldens in `golden_dir`. | `crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`, `crates/lumina-stages/src/matrix_report.rs` → `encode_and_stage` |
+| Darf das Tool ihn **auswerten**? | Nur im gespiegelten `require_gpu`-Zweig, und nur gegen die tatsächliche Route — nicht zur Selbstvalidierung des Tools. Im Default-Modus (verify) ist das Feld **inert**. | `crates/lumina-stages/src/matrix_run.rs` → `run`, `crates/lumina-stages/src/matrix_validate.rs` → `check_expected_route` |
 
 **Der Default-Pfad ist damit der wichtigste Schutz:** `lumina_matrix` läuft
 standardmäßig im Verify-Modus, in dem `expected_route` ausschließlich dekodiert,
@@ -221,7 +255,8 @@ Drei Beweise, alle testseitig, ohne den committeten Datensatz zu ändern:
 1. **Fixture-Byte-Stabilität im Test (T16):** der Test fährt das Tool gegen ein
    Rezept-Set mit **geändertem** `expected_route` (kopiertes Set im Temp, eine
    Route von `gpu` auf `{ "cpu": "geometry (default content crop)" }` gedreht —
-   dieselbe Fixture-Idee wie `matrix_e2e.rs:107-112`), und prüft per
+   dieselbe Fixture-Idee wie `crates/lumina-cli/tests/matrix_e2e.rs` →
+   `ROUTE_RECIPE`), und prüft per
    `content_fingerprint`/Byte-Vergleich,
    (a) dass die Set-Datei **vorher == nachher** byte-identisch ist,
    (b) dass das Verhalten **identisch** zum CLI-Lauf auf derselben Mutation ist
@@ -230,7 +265,8 @@ Drei Beweise, alle testseitig, ohne den committeten Datensatz zu ändern:
    denn `expected_route` wird dort nicht ausgewertet.
 2. **Snapshot vorher/nachher (T18):** der komplette Fixture-Baum (Set, Samples,
    Goldens) wird vor und nach jeder Ablehnung verglichen; eine Ablehnung lässt
-   **nichts** zurück (`merge_mcp_parity_common/graders.rs:393-400`).
+   **nichts** zurück (`crates/lumina-cli/tests/merge_mcp_parity_common/graders.rs`
+   → `snapshot`).
 3. **Diff-Nachweis auf Repo-Ebene:** `git diff --stat -- testdata/matrix/` muss im
    Verify-Bericht des Slices **leer** sein, und
    `git status --porcelain -- testdata/matrix/` darf höchstens das neue Dok
@@ -242,12 +278,14 @@ Befund aus den Quellen:
 
 - Das Gate steht **nicht** in `lumina-core`/`lumina-merge`, sondern in der CLI:
   `render_standard_routed` gibt zusätzlich die `RenderRoute` zurück
-  (`main.rs:497-538`, Dok :497-499 „the matrix's `--require-gpu` gate uses it to
+  (`crates/lumina-cli/src/main.rs` → `render_standard_routed`, Doc-Kommentar
+  ebendort „the matrix's `--require-gpu` gate uses it to
   prove GPU parity from the **same** decision that produced the pixels").
 - Es hat **drei** laute Ablehnungen, alle vor dem ersten Render:
-  `--require-gpu` + `--update-goldens` (`matrix.rs:243-248`), `--require-gpu` ohne
-  GPU-fähigen Build (:252-258), und pro Pair der Routen-Vergleich (:403-411 →
-  `route-fail`, :538-549).
+  `--require-gpu` + `--update-goldens` (`crates/lumina-stages/src/matrix_run.rs`
+  → `run`), `--require-gpu` ohne
+  GPU-fähigen Build (`crates/lumina-stages/src/matrix_run.rs` → `run`), und pro Pair der Routen-Vergleich
+  (`crates/lumina-stages/src/matrix_run.rs` → `run` → `route-fail`).
 - Die committeten Recipes deklarieren 10× `"gpu"` und 1× die dokumentierte
   CPU-Ausnahme `g06-lens-perspective` = `{ "cpu": "geometry (default content crop)" }`
   (`recipe-set.v1.json:133-137`; Tabelle `conflicts-and-acceptance.md:158-170`).
@@ -268,7 +306,7 @@ Beweis. Konkret:
    Parameter abgebildet (§2). Damit ist `lumina_matrix --require-gpu` in einem
    GPU-fähigen Build dasselbe Gate wie CLI — inklusive derselben Texte. Diese
    Behauptung ist **ohne** GPU testbar, weil zwei der drei Ablehnungen
-   (:243-248, :252-258) deterministisch sind und die dritte (Routenvergleich)
+   (`crates/lumina-stages/src/matrix_run.rs` → `run`) deterministisch sind und die dritte (Routenvergleich)
    gegen eine gemockte Route gepinnt werden kann.
 2. Der **Hardware**-Beweis („GPU↔CPU-Pixelgleichheit") bleibt eigener Task und
    eigener Host; dieses Doc behauptet ihn nicht. Er ist in
@@ -276,7 +314,8 @@ Beweis. Konkret:
    Gate geführt.
 
 **Risiko, offen zu klären (TODO §13 Punkt 3):** `RenderRoute` lebt heute als
-`pub(crate)` in `main.rs:280-329`; der gemeinsame Kern (Impl-A, §11) braucht sie
+`pub(crate)` in `crates/lumina-cli/src/main.rs` → `RenderRoute`; der gemeinsame
+Kern (Impl-A, §11) braucht sie
 oder einen gleichwertigen Port. TODO/Placeholder: Ziel-Crate + Name der
 Route-Abstraktion ist mit dem Eigentümer zu bestätigen; fest steht nur, dass die
 **Entscheidung** (welche Route) an genau einer Stelle fällt und von beiden
@@ -285,38 +324,42 @@ Frontends nur gelesen wird.
 ## 6. Invarianten
 
 1. **Eine Implementierung:** MCP ruft denselben Runner wie die CLI
-   (`matrix.rs:237-596`) über einen gemeinsamen, clap-freien Kern. Keine zweite
+   (`crates/lumina-cli/src/matrix.rs` → `matrix`; Runner heute
+   `crates/lumina-stages/src/matrix_run.rs` → `run`) über einen gemeinsamen,
+   clap-freien Kern. Keine zweite
    Matrix-Logik, keine zweite Golden-Schreibung, kein zweiter Report.
 2. **Report 1:1:** MCP liefert genau die Felder aus §3 — inklusive
    `expected_route` (Echo) und `route`/`route_reasons` — mit denselben Werten.
    `duration_ms` ist die einzige inhaltlich nicht vergleichbare Größe und wird
    nur im **Vergleich** maskiert, nicht aus dem Payload entfernt.
 3. **Sample-Pfade sind relativ:** das Set referenziert Samples relativ zu seiner
-   eigenen Datei (`recipe-set.v1.json:5-8`, `resolve_relative` :791-797); absolute
-   Sample-Pfade lehnt die Set-Validierung laut ab (:638-644). Der Runner backt
-   keinen Build-Host-Pfad ein (:799-835).
+   eigenen Datei (`recipe-set.v1.json`, `crates/lumina-stages/src/matrix_validate.rs` → `resolve_relative`); absolute
+   Sample-Pfade lehnt die Set-Validierung laut ab (`crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`). Der
+   Runner backt keinen Build-Host-Pfad ein (`crates/lumina-stages/src/matrix_validate.rs` → `default_recipe_set_path` /
+   `resolve_default_matrix_dir`).
 4. **Artefakt-tragende Rezepte werden laut abgelehnt**, nie still übersprungen
-   (`reject_artifact_backed_stages`, :729-789: `source_actions`,
+   (`crates/lumina-stages/src/matrix_validate.rs` → `reject_artifact_backed_stages`: `source_actions`,
    `generative_edit`, externes `lens_blur.depth_artifact`, generative Spots,
    nicht-heuristische Spot-Modes, unbekannte Top-Level-Keys). Das Tool erbt das
    unverändert.
-5. **Fehlendes Golden ist ein lauter Fehler** (:470-475); ein Toleranz-Verstoß
-   ebenso (:503-526) samt Diff-Bild (:521-525). `update_goldens` schreibt
-   explizit (:455-469).
+5. **Fehlendes Golden ist ein lauter Fehler** (`crates/lumina-stages/src/matrix_run.rs` → `run`); ein
+   Toleranz-Verstoß ebenso (`crates/lumina-stages/src/matrix_run.rs` → `run`) samt Diff-Bild (`crates/lumina-stages/src/matrix_report.rs` → `write_diff`).
+   `update_goldens` schreibt explizit (`crates/lumina-stages/src/matrix_run.rs` → `run`).
 6. **Goldens sind CPU-gepinnt** (`--update-goldens` rendert über
-   `lumina_core::render_frame`, :376-386, F4-Kommentar :371-375); der Verify-Modus
-   nutzt den Standardpfad (:387-389). Paritäts Tests müssen den Modus explizit
+   `lumina_core::render_frame`, `crates/lumina-stages/src/matrix_run.rs` → `run`, F4-Kommentar ebendort); der
+   Verify-Modus nutzt den Standardpfad (ebendort). Paritäts Tests müssen den Modus explizit
    setzen, sonst vergleichen sie unterschiedliche Renderpfade.
 7. **`expected_route` wird nicht angefasst** (§4): kein Schreibpfad, Auswertung nur
    unter `require_gpu`, Inertheit im Default.
 8. **Exit-Codes sind CLI-Sache, nicht Tool-Sache:** `0` grün, `1` Matrix-Fehler,
    `2` clap-Nutzungsfehler (`conflicts-and-acceptance.md:269-272`;
-   `CliError::exit_code` :1517-1523). MCP bildet jeden Nicht-Grün-Fall auf
+   `CliError::exit_code` (`crates/lumina-cli/src/main.rs` → `CliError` → `exit_code`)). MCP bildet jeden
+   Nicht-Grün-Fall auf
    `isError: true` ab; ein „grüner" Report mit `failed > 0` ist im CLI ein Fehler
-   (:578-595) und darf im MCP **kein** Erfolg sein (§7).
+   (`crates/lumina-stages/src/matrix_run.rs` → `run`) und darf im MCP **kein** Erfolg sein (§7).
 9. **Kein stiller No-Op:** leeres Sample-Array, leeres Rezept-Array,
    nicht-existenter Filter, unbekanntes Feld → alle laut.
-10. **Originale unverändert:** der Runner liest Samples nur (:322) und schreibt
+10. **Originale unverändert:** der Runner liest Samples nur (`crates/lumina-stages/src/matrix_run.rs` → `run`) und schreibt
     ausschließlich in `work_dir` (Exporte/Diffs) und `golden_dir` (Baseline).
     Sidecars der Samples werden nicht berührt.
 
@@ -324,52 +367,62 @@ Frontends nur gelesen wird.
 
 Der Matrix-Runner hat **keine** eigene Fehler-Enum wie `MergeRunError`; jeder
 Domain-Abbruch ist ein `CliError::Message` mit einem satzartigen Text (Beispiele:
-:243-248, :316-321, :690-697, :729-789). Der Kanon sind damit die **Texte**, nicht
+`crates/lumina-stages/src/matrix_run.rs` → `run`, `crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes` / `reject_artifact_backed_stages`).
+Der Kanon sind damit die **Texte**, nicht
 Präfix-Klassen. SOLL-Vertrag:
 
 | Fall | CLI (`matrix.rs`) | MCP-`McpError`-Variante | stabiler `error`-Name (`data.error`) | JSON-RPC-Code |
 | --- | --- | --- | --- | --- |
-| `--require-gpu` + `--update-goldens` | `Message` :243-248, Exit 1 | **neu: `McpError::Matrix`** | `MatrixError` | `-32014` |
-| `--require-gpu` ohne GPU-Backend | `Message` :252-258, Exit 1 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| ungültiges Set (Parse, Version, IDs, Pfade, leere CPU-Begründung) | `Message` :599-681 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| unbekannter Rezept-Filter | `Message` :690-697 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| Sample-Datei fehlt | `Message` :315-321 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| Set wählt keine Rezepte | `Message` :298-303 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| Vergleichsbreite 0 | `Message` :266-272 | `McpError::Matrix` | `MatrixError` | `-32014` |
-| Lauf endet mit `failed > 0` | `matrix failed: N of M pair(s) not green` :590-595 + Report auf stdout :562-576, Exit 1 | `McpError::Matrix` — **mit dem Report im `data`** (§7.1) | `MatrixError` | `-32014` |
+| `--require-gpu` + `--update-goldens` | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`), Exit 1 | **neu: `McpError::Matrix`** | `MatrixError` | `-32014` |
+| `--require-gpu` ohne GPU-Backend | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`), Exit 1 | `McpError::Matrix` | `MatrixError` | `-32014` |
+| ungültiges Set (Parse, Version, IDs, Pfade, leere CPU-Begründung) | `Message` (`crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`) | `McpError::Matrix` | `MatrixError` | `-32014` |
+| unbekannter Rezept-Filter | `Message` (`crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes`) | `McpError::Matrix` | `MatrixError` | `-32014` |
+| Sample-Datei fehlt | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`) | `McpError::Matrix` | `MatrixError` | `-32014` |
+| Set wählt keine Rezepte | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`) | `McpError::Matrix` | `MatrixError` | `-32014` |
+| Vergleichsbreite 0 | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`) | `McpError::Matrix` | `MatrixError` | `-32014` |
+| Lauf endet mit `failed > 0` | `matrix failed: N of M pair(s) not green` (`crates/lumina-stages/src/matrix_run.rs` → `run`) + Report auf stdout (ebendort), Exit 1 | `McpError::Matrix` — **mit dem Report im `data`** (§7.1) | `MatrixError` | `-32014` |
 | Tool-Argumente (Typfehler, unbekanntes Feld) | — (CLI: clap, Exit 2) | `McpError::InvalidParams` | `InvalidParams` | `-32602` |
 
-Die Codes `-32001..-32013` sind belegt (`error.rs:62-87`); `-32014` ist der erste
+Die Codes `-32001..-32013` sind belegt (`crates/lumina-mcp/src/error.rs` →
+`McpError` → `code`); `-32014` ist der erste
 freie Block-Platz. TODO/Placeholder: ob statt einer neuen Variante ein bestehendes
 Vehikel (`Render`/-32007) genügt, ist §13 Punkt 4 — das Muster
-„eigene Variante pro Klasse" hat der Merge-Teil etabliert (`error.rs:46-57`).
+„eigene Variante pro Klasse" hat der Merge-Teil etabliert
+(`crates/lumina-mcp/src/error.rs` → `McpError`, Varianten-Block).
 
 ### 7.1 Der Report-im-Fehlerfall (einzige Stelle mit Payload plus Fehler)
 
 Ein Matrix-Lauf mit roten Paaren ist ein **Ergebnis mit Fehler**: der CLI druckt
-den vollständigen Report auf stdout und scheitert danach laut (:562-595). Ein
+den vollständigen Report auf stdout und scheitert danach laut (`crates/lumina-stages/src/matrix_run.rs` → `run`).
+Ein
 MCP-Tool, das in diesem Fall `isError: true` mit einem leeren `data`antwortet,
 verliert genau die Information, wegen der der Aufrufer die Matrix gestartet hat.
 SOLL deshalb: `McpError::Matrix` trägt den **gesamten** CLI-Report als
 `data.report` und den Summensatz als `message`. TODO/Placeholder: Feldname und
 genaue Form (`data.report` vs. verschachtelt) mit dem Eigentümer bestätigen
-(§13 Punkt 5); `tool_error_result` (`error.rs:254-261`) setzt `data` bereits
+(§13 Punkt 5); `tool_error_result` (`crates/lumina-mcp/src/error.rs` →
+`tool_error_result`) setzt `data` bereits
 unverändert in `structuredContent`, es braucht dort keine Änderung.
 
 ## 8. Fixtures / Goldens
 
 - **Synthetischer Anker (hermetisch, Default-Suite):** ein 64×48-PNG-Gradient wie
-  `matrix_e2e.rs:30-45` plus ein minimales Rezept-Set nach `matrix_e2e.rs:49-62`
+  `crates/lumina-cli/tests/matrix_e2e.rs` → `write_sample_png` plus ein minimales
+  Rezept-Set nach `crates/lumina-cli/tests/matrix_e2e.rs` → `write_recipe_set`
   (`schema_version 1`, `pipeline_version "raster-mvp-1"`,
   `comparison_width 48`, Sample `sample.png` relativ). Zwei Rezepte mit
- unterschiedlichen Toleranzklassen (`exact`/`strict`) nach `:78-105`.
+  unterschiedlichen Toleranzklassen (`exact`/`strict`) nach
+  `crates/lumina-cli/tests/matrix_e2e.rs` → `IDENTITY_RECIPE` / `TONE_RECIPE`.
   Damit sind Baseline-Write, Verify-Grün, fehlendes Golden, Toleranz-Verstoß und
   Diff-Bild **ohne RAW** paritätstestbar.
 - **Golden-Parität (neu, SOLL):** Baseline-Lauf auf beiden Transporten über
-  **zwei** Bäume (`both_trees`, `merge_mcp_parity_common/graders.rs:381-391`) →
+  **zwei** Bäume (`both_trees`, `crates/lumina-cli/tests/merge_mcp_parity_common/graders.rs`
+  → `both_trees`) →
   die geschriebenen Golden-PNGs müssen byte-identisch sein. Weil der
-  Baseline-Modus CPU-gepinnt ist (:376-386), ist das auf headless **beweisbar**.
-- **Route-Fälle (deterministisch, ohne Adapter):** `matrix_e2e.rs:339-372` zeigt
+  Baseline-Modus CPU-gepinnt ist (`crates/lumina-stages/src/matrix_run.rs` → `run`), ist das auf headless
+  **beweisbar**.
+- **Route-Fälle (deterministisch, ohne Adapter):** `crates/lumina-cli/tests/matrix_e2e.rs`
+  → `require_gpu_gate_exempts_documented_cpu_route` zeigt
   das Muster — `lens_correction` ohne expliziten Crop routed über den CPU-Orakel-
   Default (`geometry (default content crop)`), egal ob ein Adapter da ist; die
   Gegenprobe mit `expected_route: "gpu"` schlägt laut fehl. Dasselbe Paar für die
@@ -386,7 +439,8 @@ unverändert in `structuredContent`, es braucht dort keine Änderung.
   Belichtungsreihe — derselbe Inventar-Befund wie im Merge-Slice (Merge-SOLL §7).
   Ein MCP-Lauf dagegen ist technisch möglich (derselbe Runner, dieselben Goldens),
   aber teuer und RAW-abhängig → `#[ignore]` + env-gated `LUMINA_MATRIX=1`
-  (Muster `matrix_e2e.rs:409-431`).
+  (Muster `crates/lumina-cli/tests/matrix_e2e.rs` →
+  `real_matrix_against_committed_goldens`).
 - **Toleranzen:** keine für synthetische Pfade (deterministisch). Es gibt **keine**
   numerische Toleranz im MCP-Vertrag — der Bericht liefert `psnr_db` als String.
 
@@ -400,11 +454,15 @@ MCP-Run, gleiche Eingabemenge), **[N]** Negativ/Fehlerpfad, **[G]** Gate
 
 | ID | Art | Ort (SOLL) | Prüft | Fixture |
 | --- | --- | --- | --- | --- |
-| T1 | [U] | neue Testdatei `crates/lumina-mcp/tests/matrix_tools.rs` | `TOOL_NAMES` + `list_tool_definitions` + `is_known_tool` enthalten `lumina_matrix`, keine Duplikate, Zählguard — Muster `library_tools.rs:47-91`, `tool_names/mod.rs:60-114` | keine |
+| T1 | [U] | neue Testdatei `crates/lumina-mcp/tests/matrix_tools.rs` | `TOOL_NAMES` + `list_tool_definitions` + `is_known_tool` enthalten `lumina_matrix`, keine Duplikate, Zählguard — Muster `crates/lumina-mcp/tests/library_tools.rs` →
+`all_five_library_tools_are_registered_in_both_paths`,
+`crates/lumina-mcp/tests/tool_names/mod.rs` →
+`tools_list_reports_exactly_the_documented_tool_names` | keine |
 | T2 | [U] | `crates/lumina-mcp/tests/matrix_tools.rs` | committetes Set liegt vor und ist unberührt: 2 Samples, 11 Rezepte, 10× `gpu` + 1× `geometry (default content crop)`, `comparison_width` 384 — Lesen, kein Schreiben | `recipe-set.v1.json` |
 | T3 | [U] | `crates/lumina-mcp/tests/matrix_tools.rs` | `tools/list` liefert das Schema: `additionalProperties:false`, Property-Menge == §2-Felder, `required == []`, Typen, `comparison_width` Integer mit `minimum: 1` | keine |
 | T4 | [U] | `lumina-mcp` Unit im Tool-Modul | `reject_unknown_fields`-Vorab-Check: unbekanntes Feld → `InvalidParams` **vor** jedem Datei-Zugriff (Shape-Gate zuerst) | keine |
-| T5 | [U] | `crates/lumina-cli/src/tests/mcp_onnx.rs:27,65-96` | zweiter Pin: `tools.len()` 28 → **29**, `EXPECTED_TOOLS` um `lumina_matrix` gewachsen | keine |
+| T5 | [U] | `crates/lumina-cli/src/tests/mcp_onnx.rs` →
+`mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools` / `EXPECTED_TOOLS` | zweiter Pin: `tools.len()` 28 → **29**, `EXPECTED_TOOLS` um `lumina_matrix` gewachsen | keine |
 
 ### Phase 2 — Validierung & Fehlerklassen (kein Lauf)
 
@@ -415,10 +473,13 @@ MCP-Run, gleiche Eingabemenge), **[N]** Negativ/Fehlerpfad, **[G]** Gate
 | T8 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `comparison_width: 0` → `Matrix` mit CLI-Text; `null` → Set-Default 384/48 | minimales Set |
 | T9 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `recipe_set` ohne `recipes` → `Matrix` „selected no recipes"; `recipes: ["nope"]` → `Matrix` „unknown recipe id" | minimales Set |
 | T10 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | Sample-Datei fehlt → `Matrix` „matrix sample … not found at …" | Set ohne PNG |
-| T11 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | ungültiges Set: falsche `schema_version`, falsche `pipeline_version`, leere Samples/Recipes, absoluter Sample-Pfad, doppelte IDs, leere CPU-Begründung → je `Matrix` mit dem jeweiligen Text (:599-681) | 6 Set-Varianten |
-| T12 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | artefakt-tragende Rezepte und Typoschlüssel werden **laut** abgelehnt: `source_actions`, `generative_edit`, externer `depth_artifact`, generativer Spot, fremder Spot-Mode, unbekannter Top-Level-Key (:729-789) — Muster `matrix_e2e.rs:249-331` | 6 Rezept-Varianten |
-| T13 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `require_gpu` + `update_goldens` → `Matrix` mit Text „cannot be combined with --update-goldens" (:243-248) — **ohne** GPU_BUILD bestimmt | minimales Set |
-| T14 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `require_gpu` im CPU-Build → `Matrix` „no GPU backend" (:252-258); `#[cfg(feature = "gpu")]`-Gegenstück | minimales Set |
+| T11 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | ungültiges Set: falsche `schema_version`, falsche `pipeline_version`, leere Samples/Recipes, absoluter Sample-Pfad, doppelte IDs, leere CPU-Begründung → je `Matrix` mit dem jeweiligen Text (`crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`) | 6 Set-Varianten |
+| T12 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | artefakt-tragende Rezepte und Typoschlüssel werden **laut** abgelehnt: `source_actions`, `generative_edit`, externer `depth_artifact`, generativer Spot, fremder Spot-Mode, unbekannter Top-Level-Key (`crates/lumina-stages/src/matrix_validate.rs` →
+`reject_artifact_backed_stages`) — Muster `crates/lumina-cli/tests/matrix_e2e.rs`
+→ `artifact_backed_recipe_is_rejected_loudly` /
+`unknown_recipe_key_is_rejected_loudly` | 6 Rezept-Varianten |
+| T13 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `require_gpu` + `update_goldens` → `Matrix` mit Text „cannot be combined with --update-goldens" (`crates/lumina-stages/src/matrix_run.rs` → `run`) — **ohne** GPU_BUILD bestimmt | minimales Set |
+| T14 | [N] | `crates/lumina-mcp/tests/matrix_tools.rs` | `require_gpu` im CPU-Build → `Matrix` „no GPU backend" (`crates/lumina-stages/src/matrix_run.rs` → `run`); `#[cfg(feature = "gpu")]`-Gegenstück | minimales Set |
 
 ### Phase 3 — Parität & Artefakte (der Kern)
 
@@ -428,8 +489,11 @@ MCP-Run, gleiche Eingabemenge), **[N]** Negativ/Fehlerpfad, **[G]** Gate
 | T16 | [P] | `matrix_mcp_parity.rs` | **`expected_route`-Schutz:** Set-Kopie mit gedrehter Route → (a) Set-Datei byte-identisch vorher/nachher, (b) MCP == CLI auf derselben Mutation, (c) grünes Ergebnis unverändert (Inertheit im Verify-Modus) | Anker + mutierte Kopie |
 | T17 | [P] | `matrix_mcp_parity.rs` | **Goldens byte-identisch:** Baseline-Run (CPU-gepinnt) auf Baum CLI gegen Baum MCP → `blake3(golden_cli) == blake3(golden_mcp)`, `mode == "baseline"`, `status == "baseline-created"` | Anker, zwei Bäume |
 | T18 | [P] | `matrix_mcp_parity.rs` | **Export/Diff byte-identisch:** mit `work_dir` → `blake3(export_cli) == blake3(export_mcp)` und auf dem Toleranz-Verstoß-Pfad auch das Diff-Bild | Anker + überschriebenes Golden |
-| T19 | [P] | neu: `crates/lumina-cli/tests/matrix_mcp_parity_errors.rs` | Fehlertexte 1:1: für jede Domänen-Ablehnung aus §7 gilt CLI-`error:`-Zeile == MCP-`message` nach dem stabilen Namen (`cli_cause`/`mcp_cause`, `graders.rs:48-66`) | wie T8–T13 |
-| T20 | [N] | `matrix_mcp_parity_errors.rs` | jede Ablehnung hinterlässt **nichts**: Snapshot des Fixture-Baums vorher == nachher (`graders.rs:393-400`) | wie T19 |
+| T19 | [P] | neu: `crates/lumina-cli/tests/matrix_mcp_parity_errors.rs` | Fehlertexte 1:1: für jede Domänen-Ablehnung aus §7 gilt CLI-`error:`-Zeile == MCP-`message` nach dem stabilen Namen (`cli_cause`/`mcp_cause`,
+`crates/lumina-cli/tests/merge_mcp_parity_common/graders.rs` → `cli_cause` /
+`mcp_cause`) | wie T8–T13 |
+| T20 | [N] | `matrix_mcp_parity_errors.rs` | jede Ablehnung hinterlässt **nichts**: Snapshot des Fixture-Baums vorher == nachher
+(`crates/lumina-cli/tests/merge_mcp_parity_common/graders.rs` → `snapshot`) | wie T19 |
 | T21 | [P] | `matrix_mcp_parity_errors.rs` | roter Lauf: Report kommt an **und** ist ein Fehler — `isError: true`, `data.report` == CLI-stdout-JSON, `failed > 0`, `message` enthält den CLI-Summensatz | Anker + fehlendes Golden |
 | T22 | [P] | `matrix_mcp_parity.rs` | golden-dir-Override: explizites `golden_dir` wird von beiden Transporten benutzt und die Report-Pfade zeigen dorthin (normalisiert) | Anker, eigener Golden-Ordner |
 | T23 | [P] | `matrix_mcp_parity.rs` | Rezept-Filter: `recipes: ["g01-identity"]` reduziert auf genau dieses Paar auf beiden Transporten, `pairs_total == 1` | Anker |
@@ -482,13 +546,15 @@ zwei Rezepte `exact` und `strict`):**
 9. `expected_route`-Schutz diff-nachweisbar (T16 + `git status --porcelain --
    testdata/matrix/` leer außer dem neuen Dok).
 10. Registry in **beiden** Pfaden: `dispatch_tool` kennt den Namen (kein
-    `MethodNotFound`-Durchreichnen, `tools/mod.rs:137`-Muster), `is_known_tool`
+    `MethodNotFound`-Durchreichnen, `crates/lumina-mcp/src/tools/mod.rs` →
+    `dispatch_tool`-Muster), `is_known_tool`
     akzeptiert ihn, `TOOL_NAMES` und `EXPECTED_TOOLS` sind gewachsen (T1, T5).
 
 **Auf dem committeten Set (lesend, `LUMINA_MATRIX=1`, T26):**
 
 11. Gebundener Subset-Lauf (z. B. `g01-identity` + `g01-tone-wb`, Muster
-    `matrix_e2e.rs:432-443`): MCP-`structuredContent` == CLI-`--json`, 22/22
+    `crates/lumina-cli/tests/matrix_e2e.rs` →
+    `real_matrix_against_committed_goldens`): MCP-`structuredContent` == CLI-`--json`, 22/22
     bzw. 2/2 Paare grün, `psnr_db` identisch (**Strings**).
 12. `expected_route` der committeten Rezepte wird unverändert ausgeliefert
     („gpu" bzw. „cpu (geometry (default content crop))") und die Datei bleibt
@@ -504,14 +570,18 @@ zwei Rezepte `exact` und `strict`):**
 
 1. **SOLL (dieses Doc):** Review/Sign-off; Tool-Name finalisieren.
 2. **Impl-A — gemeinsamen Kern freilegen:** der Matrix-Runner
-   (`matrix.rs:237-596`) wird als **clap-freier** Kern in eine gemeinsam
+   (`crates/lumina-cli/src/matrix.rs` → `matrix`; Runner heute
+   `crates/lumina-stages/src/matrix_run.rs` → `run`) wird als **clap-freier** Kern in eine gemeinsam
    linkbare Crate gehoben (TODO: `lumina-stages` vs. `lumina-core` — §13 Punkt 1;
    das Merge-Vorbild hat den Adapter nach `lumina-stages` gezogen, Commit
    `189b7d9`). Schnittstelle: ein `MatrixRequest`-Struktur (Feld für Feld =
-   §2, Muster `RegenerateRequest`, `regenerate.rs:139-153`) plus ein Render-Port
-   (Muster `MatchingRender`, `regenerate.rs:107-137`) und der Report-Rückgabe.
+   §2, Muster `RegenerateRequest`, `crates/lumina-stages/src/regenerate.rs` →
+   `RegenerateRequest`) plus ein Render-Port
+   (Muster `MatchingRender`, `crates/lumina-stages/src/regenerate.rs` →
+   `MatchingRender`) und der Report-Rückgabe.
    `main.rs` bleibt baseline-gesperrt, also darf der Runner **nicht** dort
-   wachsen — nur ein dünner Dispatch bleibt (`main.rs:1562`).
+   wachsen — nur ein dünner Dispatch bleibt (`crates/lumina-cli/src/main.rs` →
+   `run`).
 3. **Impl-B — Tool-Modul:** `crates/lumina-mcp/src/tools/matrix.rs` angelegt,
    analog `merge_hdr.rs`/`dust_removal.rs`; Register in `tools/mod.rs` (list +
    dispatch) und `tool_names/mod.rs` (1 Name).
@@ -541,11 +611,11 @@ zwei Rezepte `exact` und `strict`):**
 | Datei | Änderung |
 | --- | --- |
 | `crates/lumina-mcp/src/tools/mod.rs` | +1 `pub mod`, +1 `tool_def(...)`, +1 Arm in `dispatch_tool`. 179 Z. → bleibt unter 500 |
-| `crates/lumina-mcp/src/error.rs` | +1 Variante `Matrix(String)` + `code()`/`name()`/`message()`/`data()` (:46-156). 266 Z. → bleibt unter 500 |
-| `crates/lumina-mcp/tests/tool_names/mod.rs` | +1 Name in `TOOL_NAMES` (:22-59) |
-| `crates/lumina-cli/src/tests/mcp_onnx.rs` | +1 Name in `EXPECTED_TOOLS` (:65-96), `:27` 28 → 29 |
-| `crates/lumina-cli/src/main.rs` | **nur** falls Impl-A es erzwingt: Dispatch-Zeile bleibt `Command::Matrix(args) => matrix::matrix(args)` (:1562); jede Zeile Wachstum bricht `check_file_sizes.sh` (Baseline 7874, `scripts/file_size_baseline.txt:1`) — der Runner zieht daher **raus** aus `main.rs` |
-| `crates/lumina-cli/src/matrix.rs` | wird zum dünnen Wrapper (Args → `MatrixRequest` → Kern); 1007 Z. → erst unter 500, wenn der Kern raus ist → Baseline-Eintrag senken (`check_file_sizes.sh:35-44` meldet das) |
+| `crates/lumina-mcp/src/error.rs` | +1 Variante `Matrix(String)` + `code()`/`name()`/`message()`/`data()` (`McpError`). 266 Z. → bleibt unter 500 |
+| `crates/lumina-mcp/tests/tool_names/mod.rs` | +1 Name in `TOOL_NAMES` |
+| `crates/lumina-cli/src/tests/mcp_onnx.rs` | +1 Name in `EXPECTED_TOOLS`, in `mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools` 28 → 29 |
+| `crates/lumina-cli/src/main.rs` | **nur** falls Impl-A es erzwingt: Dispatch-Zeile bleibt `Command::Matrix(args) => matrix::matrix(args)` (in `run`); jede Zeile Wachstum bricht `check_file_sizes.sh` (Baseline 7874, `scripts/file_size_baseline.txt`) — der Runner zieht daher **raus** aus `main.rs` |
+| `crates/lumina-cli/src/matrix.rs` | wird zum dünnen Wrapper (Args → `MatrixRequest` → Kern); 1007 Z. → erst unter 500, wenn der Kern raus ist → Baseline-Eintrag senken (`check_file_sizes.sh` meldet das) |
 
 **NICHT anfassen:**
 
@@ -577,7 +647,7 @@ vor dem Commit aufgeteilt (Ratchet).
 ## 12. Abgrenzung
 
 - **Nicht Teil:** GPU-Paritätsbeweis (§5), Real-RAW-Serien-Gate T26 als
-  Abnahme-Gate, `denoise`/`cull` (F-078-Modellgate, `mcp-server.md:790-795`),
+  Abnahme-Gate, `denoise`/`cull` (F-078-Modellgate, `feature/platform/mcp-server.md`),
   Merge-Teil (fertig), Auto-Tone.
 - **Keine Änderung:** Recipe-Set-Schema, Goldens, Toleranzklassen, Renderpfad,
   `expected_route`-Pflege.
@@ -599,33 +669,35 @@ sind als TODO/Placeholder markiert:
    `decode.rs`/`pipeline.rs`/`regenerate.rs` als Vorbilder) oder `lumina-core`
    (näher am Render)? Die Entscheidung ändert den Dependency-Graph; `lumina-mcp`
    hängt bereits an `lumina-core`, `lumina-stages`, `lumina-raw`
-   (`crates/lumina-mcp/Cargo.toml:9-28`), ein Zyklus wäre in beiden Fällen neu zu
+   (`crates/lumina-mcp/Cargo.toml`), ein Zyklus wäre in beiden Fällen neu zu
    prüfen.
 2. **`McpError::Matrix` vs. Recycling** (§7): eine eigene Variante (freier Code
    `-32014`, stabiler Name `MatrixError`) oder bestehendes Vehikel
    (`Render`/-32007) mit Präfix im Text? Das ist die einzige Stelle, an der
    dieser Slice die öffentliche Fehler-API von `lumina-mcp` erweitert.
 3. **Route-Abstraktion für den gemeinsamen Kern** (§5): `RenderRoute` ist heute
-   `pub(crate)` in `main.rs:280-329` und `#[cfg]`-abhängig. Zieht sie als
+   `pub(crate)` in `crates/lumina-cli/src/main.rs` → `RenderRoute` und
+   `#[cfg]`-abhängig. Zieht sie als
    `gpu`-optionales Item mit, oder bekommt der Port eine cfg-freie
    Minimalform (`is_gpu` + `reasons`)? TODO, code-seitig noch nicht entschieden.
 4. **Form des Reports im Fehlerfall** (§7.1): `data.report` als flaches Objekt
    oder verschachtelt (`data.matrix.report`)? Und: darf der **Summensatz**
-   (`matrix failed: N of M pair(s) not green …`, :590-595) 1:1 im `message`
+   (`matrix failed: N of M pair(s) not green …`, `crates/lumina-stages/src/matrix_run.rs` → `run`) 1:1 im `message`
    stehen, obwohl er Pfade/Adressen des aufrufenden Hosts enthält?
 5. **Textkanal** (§3): `tool_result_response` serialisiert das Payload automatisch
    als `content[0].text`. Soll zusätzlich der CLI-Erfolgssatz
-   (`report_text`, :923-962) erscheinen? Für den Merge-Teil war das offen
+   (`report_text`, `crates/lumina-stages/src/matrix_report.rs` → `report_text`) erscheinen? Für den Merge-Teil war das offen
    (Merge-SOLL §13 Punkt 6); hier stellt sich dieselbe Frage.
 6. **`work_dir`-Default im MCP-Pfad** (§2): der CLI nimmt ein frisches Tempdir und
-   löscht es nach dem Lauf (:284-295). Ein MCP-Tool, das den Aufrufer nach dem
+   löscht es nach dem Lauf (`crates/lumina-stages/src/matrix_run.rs` → `run`). Ein MCP-Tool, das den Aufrufer nach dem
    Lauf auf ein Diff-Bild hinweisen will, hätte nichts mehr, worauf es zeigen
    kann. Soll das Tool im `work_dir`-Default-Fall die Export-Pfade trotzdem im
    Report nennen (wie der CLI) — oder bewusst auf einem eigenen Scratch-Pfad
    arbeiten? TODO, Verhalten des CLI ist die Vorgabe, die Frage ist nur, ob der
    Eigentümer eine Abweichung wünscht.
 7. **`psnr_db` als String** (§3): der CLI liefert `"inf"`/`"42.5000"` als String
-   (:979-981). 1:1 heißt String; ein numerisches Feld wäre bequemer für Clients,
+   (`crates/lumina-stages/src/matrix_report.rs` → `report_json`). 1:1 heißt String; ein numerisches Feld wäre bequemer
+   für Clients,
    aber additiv. Bestätigen, dass String bleibt.
 8. **T26 als Abnahme-Gate:** das committete Set ist mit den zwei CR3s lauffähig
    (anders als Merges Belichtungsreihe). Soll T26 — `#[ignore]` +

@@ -5,39 +5,48 @@
 **Benennung:** folgt `feature/quality/`-Konvention `<slug>-<JJJJ-MM-TT>.md`
 (vgl. `pipeline-crop-early-2026-10-13.md`, `mcp-matrix-parity-soll-2026-10-14.md`).
 
-**Belegbasis (alles unten ist gelesen, nichts spekulativ; jede Zeilenangabe
+**Belegbasis (alles unten ist gelesen, nichts spekulativ; jede Angabe
 verifiziert 2026-10-15):**
 
-- `crates/lumina-merge/src/merge.rs` (vollständig, 779 Z.): `merge_hdr_weighted`
-  `:54-139` (Hut-Gewicht-Mittel über Radiance `pixel/rel`, `:123`; kein
-  Ghost-Test), `blend_panorama` `:155-284` (Union-Canvas `:183-197`,
-  Lücken bleiben 0 `:252-254`), `blend_panorama_transformed` `:305-445`
-  (Lücken bleiben 0 `:430-432`).
-- `crates/lumina-merge/src/bundle.rs`: `run_merge` `:357-479`,
-  `MergeRunOptions` `:213-227`, `align_and_merge` `:506-575`,
-  `build_recipe` `:735-782`, `check_existing_bundle` `:801-892`.
-- `crates/lumina-sidecar/src/merge_recipe.rs`: Schema `:52-173`,
-  `merge_digest` `:247-261` (Digest über `merge_version/mode/sources/alignment`),
-  `validate_merge_alignment` `:355-379`, Grenzen `:26-44`.
-- `crates/lumina-merge/src/lib.rs`: Scope-Dok `:13-29` („No homography, no
-  ghost removal" `:16`, „missing EXIF exposure is `Unsupported`, never guessed
-  from pixels" `:23-25`), `MergeError` `:66-74`, `HDR_SHIFT_WARN_PX` `:54-57`.
-- `crates/lumina-core/src/merge_geom.rs`: `hdr_hat_weight` `:32-44`,
-  `feather_weight` `:53-64`, `sample_bilinear` `:70`ff (Zero-Fill out-of-bounds).
-- `crates/lumina-merge/src/align.rs`: `status_for_shift` `:63-69` (Residual =
+**Anker-Form (Stand 2026-10-20, Welle H zu `PROSE-ANCHOR-POLICY-88`):** die
+Fundstellen nennen den vollständigen repo-relativen **Pfad + Symbol- bzw.
+Testnamen** — **keine** Zeilennummern mehr. Die Zeilennummern dieses SOLLs
+galten gegenüber dem **Plan-Stand `2aec896`** (2026-10-15) und wurden über die
+Historie rekonstruiert (`git show 2aec896:<pfad> | sed -n '<zeile>p'` — der
+umschließende Symbolträger). Alle genannten Symbole existieren **heute** noch
+(`grep -n "<symbol>" <pfad>`); wo eine Datei seitdem umgezogen ist, nennt der
+Anker den heutigen Pfad. Die inhaltlichen Aussagen dieses SOLLs sind
+**unverändert** — umgestellt wurde nur die Anker-Form, nicht die Aussage.
+
+- `crates/lumina-merge/src/merge.rs` (vollständig, 779 Z. im Plan-Stand
+  `2aec896`): `merge_hdr_weighted` (Hut-Gewicht-Mittel über Radiance
+  `pixel/rel`; kein Ghost-Test), `blend_panorama` (Union-Canvas; Lücken
+  bleiben 0), `blend_panorama_transformed` (Lücken bleiben 0).
+- `crates/lumina-merge/src/bundle.rs`: `run_merge`, `MergeRunOptions`,
+  `align_and_merge`, `build_recipe`, `check_existing_bundle`.
+- `crates/lumina-sidecar/src/merge_recipe.rs`: Schema (`MergeRecipe`,
+  `MergeAlignment`, `MergeOutput`, `MergeTransform`, `MergeExposure`),
+  `merge_digest` (Digest über `merge_version/mode/sources/alignment`),
+  `validate_merge_alignment`, Grenzen (`MERGE_RECIPE_VERSION`,
+  `MERGE_OUTPUT_BITS`).
+- `crates/lumina-merge/src/lib.rs`: Scope-Dok (`//!`-Kopf: „No homography, no
+  ghost removal", „missing EXIF exposure is `Unsupported`, never guessed from
+  pixels"), `MergeError`, `HDR_SHIFT_WARN_PX`.
+- `crates/lumina-core/src/merge_geom.rs`: `hdr_hat_weight`, `feather_weight`,
+  `sample_bilinear` (Zero-Fill out-of-bounds).
+- `crates/lumina-merge/src/align.rs`: `status_for_shift` (Residual =
   Shift-Betrag, Warnung nur `> HDR_SHIFT_WARN_PX`), `PANO_MIN_OVERLAP_PX`-Gate
-  `:232-237`.
-- `crates/lumina-cli/src/merge.rs`: `MergeArgs` `:43-77`
-  (`blend_width_px` Default 64 `:68-69`), `run_merge`-Wiring `:95-121`,
-  Residual-Warnung `:123-131`, CLI-JSON `:138-150`.
-- `crates/lumina-mcp/src/tools/merge_common.rs`: `ALLOWED` `:51-60`,
-  Defaults `:62-65`, `run_mode` `:70-129`, `map_merge_run_error` `:139-146`,
-  `outcome_payload` `:152-179`, `schema` `:247-299`; `merge_hdr.rs`/`merge_pano.rs`
+  (in `estimate_pano_transform`).
+- `crates/lumina-cli/src/merge.rs`: `MergeArgs` (`blend_width_px` Default 64),
+  `run_merge`-Wiring, Residual-Warnung, CLI-JSON.
+- `crates/lumina-mcp/src/tools/merge_common.rs`: `ALLOWED`, Defaults
+  (`DEFAULT_BLEND_WIDTH_PX`), `run_mode`, `map_merge_run_error`,
+  `outcome_payload`, `schema`; `merge_hdr.rs`/`merge_pano.rs`
   existieren als Einzeiler (vgl. SOLL `mcp-parity-c-soll.md` §4.3).
-- `crates/lumina-stages/src/merge.rs`: `resolve_exposure` `:166-176`,
-  `resolve_hdr_exposure` `:186-247`, `resolve_pano_exposure` `:249-287`.
-- `crates/lumina-gui/src/merge_gui.rs`: `run_merge_sync` `:203-239`
-  (baut `MergeRunOptions` `:220-226`, kennt heute nur
+- `crates/lumina-stages/src/merge.rs`: `resolve_exposure`,
+  `resolve_hdr_exposure`, `resolve_pano_exposure`.
+- `crates/lumina-gui/src/merge_gui.rs`: `run_merge_sync` (baut
+  `MergeRunOptions`, kennt heute nur
   `output/max_shift_px/blend_width_px/force`).
 - Tests: `crates/lumina-cli/tests/merge_parity.rs`, `merge_e2e.rs` (799 Z.),
   `merge_mcp_parity*.rs` (4 Dateien) existieren.
@@ -46,21 +55,31 @@ verifiziert 2026-10-15):**
 
 **Ist-Zustand (Lücken, code-belegt):**
 
-1. `merge_hdr_weighted` (`merge.rs:54-139`) mittelt Radiance mit Hut-Gewichten
-   (`num/den`, `:128-129`); bewegte Objekte mitteln sich ein — kein
-   Geister-Test, kein Fallback auf Referenz (Scope-Dok `lib.rs:16` bestätigt
+1. `merge_hdr_weighted` (`crates/lumina-merge/src/merge.rs` →
+   `merge_hdr_weighted`) mittelt Radiance mit Hut-Gewichten (`num/den`);
+   bewegte Objekte mitteln sich ein — kein
+   Geister-Test, kein Fallback auf Referenz (Scope-Dok `crates/lumina-merge/src/lib.rs`
+   → `//!`-Kopf bestätigt
    „no ghost removal" als bewussten Stand).
-2. `blend_panorama` (`merge.rs:155-284`) und `blend_panorama_transformed`
-   (`:305-445`) haben **keinen Gain-/Exposure-Parameter** im Blend; die
-   Rezept-Exposure (`bundle.rs:392-395, 421`) fließt nur ins Rezept, nie in
-   Pano-Pixel (`resolve_pano_exposure`, `stages/merge.rs:249-287`: „pixels
+2. `blend_panorama` (`crates/lumina-merge/src/merge.rs` → `blend_panorama`) und
+   `blend_panorama_transformed` (`crates/lumina-merge/src/merge.rs` →
+   `blend_panorama_transformed`) haben **keinen Gain-/Exposure-Parameter** im
+   Blend; die
+   Rezept-Exposure (`crates/lumina-merge/src/bundle.rs` → `run_merge`)
+   fließt nur ins Rezept, nie in
+   Pano-Pixel (`resolve_pano_exposure`, `crates/lumina-stages/src/merge.rs` →
+   `resolve_pano_exposure`: „pixels
    ignore exposure").
-3. Canvas = Union-Bounding-Box (`merge.rs:183-197`, transformed `:373-378`);
-   unabgedeckte Pixel bleiben 0 (`:252-254`, `:430-432`). Es gibt kein
+3. Canvas = Union-Bounding-Box (`crates/lumina-merge/src/merge.rs` →
+   `blend_panorama`, Union-Canvas-Block; transformed `crates/lumina-merge/src/merge.rs` →
+   `blend_panorama_transformed`, Canvas-Block);
+   unabgedeckte Pixel bleiben 0 (in beiden Blend-Funktionen). Es gibt kein
    Crop-to-valid.
 4. Digest = `merge_version/mode/sources/alignment`
-   (`merge_recipe.rs:247-261`); `output/created_at/status/error` sind
-   bewusst ausgeschlossen (`:182-188`, Test `:601-621`).
+   (`crates/lumina-sidecar/src/merge_recipe.rs` → `merge_digest`);
+   `output/created_at/status/error` sind
+   bewusst ausgeschlossen (Test `crates/lumina-sidecar/src/merge_recipe.rs` →
+   `digest_ignores_artefact_metadata`).
 
 ---
 
@@ -74,47 +93,55 @@ Referenz-Frame 0 (Statistik-Pfad). EXIF wird NICHT als Gain-Quelle verwendet.**
 Begründung (code-belegt):
 
 - EXIF scheitert bei Auto-Exposure-Sprüngen zwischen Frames: `resolve_pano_exposure`
-  (`stages/merge.rs:249-287`) behandelt Pano-Exposure heute ausdrücklich nur als
+  (`crates/lumina-stages/src/merge.rs` → `resolve_pano_exposure`) behandelt
+  Pano-Exposure heute ausdrücklich nur als
   Provenienz („pixels ignore exposure"), und `PANO_DEFAULT_*`
-  (`bundle.rs:78-80`) zeigt, dass Pano-Quellen gar keine gültige EXIF-Exposure
+  (`crates/lumina-merge/src/bundle.rs` → `PANO_DEFAULT_EXPOSURE_S` /
+  `PANO_DEFAULT_F_NUMBER`) zeigt, dass Pano-Quellen gar keine gültige
+  EXIF-Exposure
   haben müssen. Ein EXIF-Gain wäre auf dem neutralen Default (0,01 s / 100 /
   f/8) aufgebaut — also auf einem erfundenen Wert — sobald eine Quelle ohne
   EXIF kommt.
 - Der EXIF-Pfad ist zusätzlich fragil, weil Pano-`resolve_pano_exposure`
   Out-of-Range-Explizitwerte still auf EXIF/Default zurückfallen lässt
-  (`stages/merge.rs:254-273`): ein EXIF-Gain würde auf still-normalisierten
+  (`crates/lumina-stages/src/merge.rs` → `resolve_pano_exposure`): ein
+  EXIF-Gain würde auf still-normalisierten
   Eingaben rechnen, ohne dass der Aufrufer es merkt.
 - Statistik misst, was wirklich da ist: Nach Alignment (`align_and_merge`,
-  `bundle.rs:539-574`) liegen die Frames im gemeinsamen Canvas-Koordinatensystem;
+  `crates/lumina-merge/src/bundle.rs` → `align_and_merge`) liegen die Frames im
+  gemeinsamen Canvas-Koordinatensystem;
   das Median-Verhältnis der Luminanz im paarweisen Overlap (Frame i vs. Frame 0)
   ist robust gegen Outlier (Geister, Sättigung) und deterministisch
   (sortier-basiert, keine Zufallsanteile — passt zur
-  Determinismus-Doktrin `lib.rs:31-36`).
+  Determinismus-Doktrin `crates/lumina-merge/src/lib.rs` → `//!`-Kopf).
 - EXIF bleibt, was es ist: Rezept-Provenienz (`MergeExposure` je Quelle,
-  `merge_recipe.rs:104-110`). Der Gain wird *aus Pixeln geschätzt* und *als
+  `crates/lumina-sidecar/src/merge_recipe.rs` → `MergeExposure`). Der Gain wird
+  *aus Pixeln geschätzt* und *als
   eigener Rezept-Wert* persistiert — keine Vermischung mit der EXIF-Provenienz.
-  (Spannung zur Doktrin „never guessed from pixels", `lib.rs:23-25`: Diese gilt
-  für die **HDR-Radiance-Normierung** (`relative_exposure`, `merge.rs:24-43`);
+  (Spannung zur Doktrin „never guessed from pixels", `crates/lumina-merge/src/lib.rs`
+  → `//!`-Kopf: Diese gilt
+  für die **HDR-Radiance-Normierung** (`relative_exposure`,
+  `crates/lumina-merge/src/merge.rs` → `relative_exposure`);
   der Pano-Gain ist ein separater, explizit opt-in Blend-Parameter mit eigenem
   Flag — siehe A.3. Der SOLL markiert das bewusst als Doktrin-Ausnahme mit
   lautem Opt-in, nicht als stilles Uminterpretieren.)
 
 ### A.2 Exakte Code-Stellen
 
-| Eingriff | Datei:Zeile | Was |
+| Eingriff | Datei + Symbol | Was |
 |---|---|---|
-| Gain-Schätzung (neu, pure Funktion) | `crates/lumina-merge/src/pano_gain.rs` (neu; `merge.rs` extrahiert, neben `merge_hdr_weighted` `:54`) | `estimate_pano_gains(frames, matrices/offsets) -> Result<PanoGainEstimate, MergeError>` — Median-Verhältnis Luminanz im Overlap vs. Frame 0; Gain[0] = 1.0 per Definition |
-| Gain-Anwendung vor Blend | `pano_gain.rs`-Kerne via `merge.rs:268-291` (translations) + `merge.rs:441-455` (transformiert, inkl. `radiance`-Fallback) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; Seed/`acc`-Startwert ebenfalls gain-skaliert |
-| Orchestrierung | `bundle.rs:539-574` (`align_and_merge`, Pano-Arm) + `MergeRunOptions` `:213-227` | neues Options-Feld (A.3), Gain-Schätzung nach Alignment, vor Blend; Gains an `build_recipe` `:735-782` durchreichen |
-| Rezept + Digest | `merge_recipe.rs:133-143` (`MergeAlignment`), `:247-261` (`merge_digest`), `:355-379` (Validierung) | neues Feld `gain_compensation` (A.3); Digest-relevant (Teil von `alignment`, damit automatisch im Digest) |
-| CLI | `cli/src/merge.rs:43-77` (`MergeArgs`), `:104-110` (Options-Mapping) | neues Flag (A.3) |
-| MCP | `mcp/.../merge_common.rs:ALLOWED :51-60`, `run_mode` `:70-129`, `schema` `:247-299` | neues Feld, Parität (A.5) |
-| GUI | `gui/src/merge_gui.rs:203-239` (`run_merge_sync`) | Parameter durchreichen (GUI-Signatur-Erweiterung, Default = CLI-Default) |
+| Gain-Schätzung (neu, pure Funktion) | `crates/lumina-merge/src/pano_gain.rs` (neu; `crates/lumina-merge/src/merge.rs` extrahiert, neben `merge_hdr_weighted`) | `estimate_pano_gains(frames, matrices/offsets) -> Result<PanoGainEstimate, MergeError>` — Median-Verhältnis Luminanz im Overlap vs. Frame 0; Gain[0] = 1.0 per Definition |
+| Gain-Anwendung vor Blend | `pano_gain.rs`-Kerne via `crates/lumina-merge/src/merge.rs` → `blend_panorama` (translations) + `crates/lumina-merge/src/merge.rs` → `blend_panorama_transformed` (inkl. `radiance`-Fallback) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; Seed/`acc`-Startwert ebenfalls gain-skaliert |
+| Orchestrierung | `crates/lumina-merge/src/bundle.rs` → `align_and_merge` (Pano-Arm) + `crates/lumina-merge/src/bundle.rs` → `MergeRunOptions` | neues Options-Feld (A.3), Gain-Schätzung nach Alignment, vor Blend; Gains an `crates/lumina-merge/src/bundle.rs` → `build_recipe` durchreichen |
+| Rezept + Digest | `crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`, `merge_digest`, `validate_merge_alignment` | neues Feld `gain_compensation` (A.3); Digest-relevant (Teil von `alignment`, damit automatisch im Digest) |
+| CLI | `crates/lumina-cli/src/merge.rs` → `MergeArgs` (Options-Mapping in `run_merge`) | neues Flag (A.3) |
+| MCP | `crates/lumina-mcp/src/tools/merge_common.rs` → `ALLOWED`, `run_mode`, `schema` | neues Feld, Parität (A.5) |
+| GUI | `crates/lumina-gui/src/merge_gui.rs` → `run_merge_sync` | Parameter durchreichen (GUI-Signatur-Erweiterung, Default = CLI-Default) |
 
 ### A.3 Neue/veränderte Typen + Validierung
 
 ```rust
-// lumina-sidecar, merge_recipe.rs — neben MergeAlignment (:133-143):
+// lumina-sidecar, crates/lumina-sidecar/src/merge_recipe.rs — neben MergeAlignment:
 pub struct PanoGainCompensation {
     pub method: PanoGainMethod,   // C: `OverlapMedian` (einzige 1.0-Variante)
     pub gains: Vec<f64>,         // len == sources.len(), gains[0] == 1.0
@@ -124,7 +151,8 @@ pub struct PanoGainCompensation {
 // (Option, nicht Default-Wert: Abwesenheit = Verhalten wie heute; explizit.)
 ```
 
-Validierung (`validate_merge_alignment`, `:355-379`, neue Zweige):
+Validierung (`crates/lumina-sidecar/src/merge_recipe.rs` →
+`validate_merge_alignment`, neue Zweige):
 
 - `gains.len() == sources.len` (sonst `Invalid` — Len-Mismatch nie still
   auffüllen/kürzen); `gains[0] == 1.0` exakt (Referenz-Definition).
@@ -134,28 +162,34 @@ Validierung (`validate_merge_alignment`, `:355-379`, neue Zweige):
 - `min_overlap_px >= A_MIN_OVERLAP_STAT_PX` (neue Konstante, Vorschlag 1024;
   finaler Wert Implementierungs-Slice) — darunter lehnt die **Schätzung**
   laut ab (A.6), ein persistiertes Rezept darunter lehnt die **Validierung** ab.
-- `deny_unknown_fields` bleibt (`:136`, `:163`): alte Sidecars ohne das Feld
+- `deny_unknown_fields` bleibt (in `crates/lumina-sidecar/src/merge_recipe.rs`
+  → `MergeAlignment` und `MergeRecipe`): alte Sidecars ohne das Feld
   parsen weiter (fehlendes `Option` = `None`); neue unbekannte Methodenwerte
-  scheitern laut — konsistent zu `merge_version`-Pin (`:208-214`).
+  scheitern laut — konsistent zu `merge_version`-Pin
+  (`crates/lumina-sidecar/src/merge_recipe.rs` → `validate_merge_recipe`).
 
 Digest: Feld lebt in `MergeAlignment` → automatisch Teil von `merge_digest`
-(`:247-261`, `"alignment": recipe.alignment`). Gains sind damit
+(`crates/lumina-sidecar/src/merge_recipe.rs` → `merge_digest`,
+`"alignment": recipe.alignment`). Gains sind damit
 Identität: gleiche Quellen + andere Gains = anderer Digest = `stale` statt
-stillem Re-Use (`check_existing_bundle`, `bundle.rs:857-863`).
+stillem Re-Use (`crates/lumina-merge/src/bundle.rs` → `check_existing_bundle`).
 
 Interaktion mit `blend_width_px`:
 
 - Gain wirkt **multiplikativ vor** der Feather-Kombination, `blend_width_px`
-  steuert nur die **räumliche Rampe** (`feather_weight`, `merge_geom.rs:53-64`).
+  steuert nur die **räumliche Rampe** (`feather_weight`,
+  `crates/lumina-core/src/merge_geom.rs` → `feather_weight`).
   Keine Kopplung der Parameter: `blend_width_px == 0` (hard seam,
-  `merge.rs:609-616`) + Gain = harte Kante zwischen gain-korrigierten Frames
+  `crates/lumina-merge/src/merge.rs` → `panorama_hard_seam_with_zero_blend_width`)
+  + Gain = harte Kante zwischen gain-korrigierten Frames
   (dokumentieren, nicht verbieten).
 - Gain-Schätzung nutzt das **volle geometrische Overlap**, nicht die
   Feather-Rampe (Rampen-Pixel sind blend-verzerrt und damit keine saubere
   Statistik-Basis). TODO: exakte Overlap-Definition für den
   `transformed`-Pfad (invers-transformierte Abdeckung vs. Bounding-Box-Schnitt)
   legt der Implementierungs-Slice fest; Kriterium: nur Pixel, die in beiden
-  Frames echt sampeln (`sx/sy`-Bounds-Check, `merge.rs:411`).
+  Frames echt sampeln (`sx/sy`-Bounds-Check, `crates/lumina-merge/src/merge.rs`
+  → `blend_panorama_transformed`).
 
 ### A.4 Gain-Grenzen: kein stiller Clamp
 
@@ -163,7 +197,8 @@ Interaktion mit `blend_width_px`:
   `estimate_pano_gains` und **keine** in der Anwendung.
 - Stattdessen: Validierungs-Obergrenze `MAX_PANO_GAIN` (Vorschlag 8.0 ≈ ±3 EV;
   finaler Wert Implementierungs-Slice, als `pub const` neben
-  `MAX_MERGE_BLEND_WIDTH_PX`, `merge_recipe.rs:36`). Überschreitung =
+  `MAX_MERGE_BLEND_WIDTH_PX`, `crates/lumina-sidecar/src/merge_recipe.rs` →
+  `MAX_MERGE_BLEND_WIDTH_PX`). Überschreitung =
   `MergeError::Unsupported` mit gemessenem Wert im Text („gain 12.4 exceeds
   8.0 — frames differ by more than 3 EV, refusing to guess").
 - Begründung: Ein Gain > 8× signalisiert fast immer falsches Overlap
@@ -172,18 +207,22 @@ Interaktion mit `blend_width_px`:
 
 ### A.5 CLI-Flag + MCP-Feld (Parität)
 
-- CLI (`MergeArgs`, `cli/src/merge.rs:43-77`): `--gain-compensation <mode>`
+- CLI (`MergeArgs`, `crates/lumina-cli/src/merge.rs` → `MergeArgs`):
+  `--gain-compensation <mode>`
   mit `default_value = "off"`, Werte `off | overlap-median`. (String-Enum statt
   Bool: erweiterbar für spätere Methoden, ohne Flag-Bruch.) Pano-only: bei
   `merge-hdr` mit Wert ≠ `off` laut ablehnen („gain compensation is panorama
   only") — spiegelt die `blend_width_px`-Asymmetrie-Doktrin
-  (`cli/src/merge.rs:66-69`: HDR speichert nur Metadaten).
-- MCP (`merge_common.rs`): Feld `gain_compensation: string | null`, Default
-  `null`/`"off"`; `ALLOWED` (`:51-60`) +1; `schema()` (`:247-299`) + Property
+  (`crates/lumina-cli/src/merge.rs` → `MergeArgs`: HDR speichert nur
+  Metadaten).
+- MCP (`crates/lumina-mcp/src/tools/merge_common.rs`): Feld
+  `gain_compensation: string | null`, Default
+  `null`/`"off"`; `ALLOWED` +1; `schema()` + Property
   mit `enum: ["off", "overlap-median"]` (**beschreibend**, Durchgriff in
   `run_merge`, per Trennregel `mcp-parity-c-soll.md` §2); `run_mode`-Mapping
   auf dieselbe Options-Struktur wie CLI.
-- GUI (`merge_gui.rs:203-239`): `gain_compensation`-Parameter an
+- GUI (`crates/lumina-gui/src/merge_gui.rs` → `run_merge_sync`):
+  `gain_compensation`-Parameter an
   `run_merge_sync` (Default `"off"`); keine eigene Logik.
 - Byte-Parität CLI≡MCP: gleiche Eingaben + gleiche `gain_compensation` ⇒
   identischer Digest + Checksum (Gains stehen im Digest, s. A.3).
@@ -194,9 +233,9 @@ Interaktion mit `blend_width_px`:
 |---|---|---|---|
 | Overlap-Pixel < `A_MIN_OVERLAP_STAT_PX` | `MergeError::Unsupported` → `merge unsupported:` | `gain compensation needs ≥ N overlap pixels, got M` | neue Schätzfunktion, `pano_gain.rs` |
 | Gain > `MAX_PANO_GAIN` | `Unsupported` → `merge unsupported:` | `gain {g} exceeds {MAX}` (A.4) | dto. |
-| `--gain-compensation` bei `merge-hdr` | `MergeRunError::Failed` → `merge failed:` (Options-Validierung, wie `max_shift_px < 0`, `bundle.rs:370-375`) | `invalid --gain-compensation …: panorama only` | `run_merge` `:368-376` |
+| `--gain-compensation` bei `merge-hdr` | `MergeRunError::Failed` → `merge failed:` (Options-Validierung, wie `max_shift_px < 0`, in `crates/lumina-merge/src/bundle.rs` → `run_merge`) | `invalid --gain-compensation …: panorama only` | `crates/lumina-merge/src/bundle.rs` → `run_merge` |
 | Unbekannter Methoden-String (MCP/CLI) | Transport-Ebene: CLI clap-Usage / MCP `InvalidParams` (Shape, per Trennregel) | — | Frontend |
-| Persistiertes Gain-Rezept verletzt Grenzen | `SidecarError::Invalid` → `merge failed:` (via `recipe.validate()`, `bundle.rs:427-429`) | `merge alignment: …` | `merge_recipe.rs` |
+| Persistiertes Gain-Rezept verletzt Grenzen | `SidecarError::Invalid` → `merge failed:` (via `recipe.validate()`, in `crates/lumina-merge/src/bundle.rs` → `run_merge`) | `merge alignment: …` | `crates/lumina-sidecar/src/merge_recipe.rs` |
 
 Prinzip: **laut ablehnen statt raten** — kein Fallback auf „Gain 1.0 + Warnung",
 kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
@@ -209,8 +248,8 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 | A-T2 | [U] | dto. | Outlier-Robustheit: 10 % der Overlap-Pixel als Geist (s. B) verunreinigt ⇒ Median-Gain driftet < 1 % gegenüber sauberem Overlap (Mittelwert würde versagen — Negativ-Kontrolle im Test dokumentieren) | wie A-T1 + synthetischer Geist-Block |
 | A-T3 | [U] | dto. | Negativ: Overlap < `A_MIN_OVERLAP_STAT_PX` ⇒ `Unsupported`, Text enthält Pixelzahlen | 8×8 Frames, Offset (7,0) |
 | A-T4 | [U] | dto. | Negativ: Helligkeitsverhältnis 16× ⇒ Gain > MAX ⇒ `Unsupported` (kein Clamp: Output-Byte darf nie dem geclampten Wert entsprechen — Assert auf Fehler, nicht auf Pixel) | Solid 0.05 vs. 0.8 |
-| A-T5 | [U] | `lumina-sidecar` | Rezept-Roundtrip mit Gain (byte-stabil, Muster `:543-554`); Digest ändert sich bei Gain-Änderung (Muster `:579-599`); `None` parst auf alten JSON (Kompat, A.9) | `sample_recipe`-Derivat |
-| A-T6 | [U] | `lumina-sidecar` | Validierungsmatrix: `gains.len` ≠ sources, `gains[0]` ≠ 1.0, Gain ≤ 0 / NaN / Inf, `min_overlap_px` < Minimum ⇒ je `Invalid` | wie `:637-844`-Muster |
+| A-T5 | [U] | `lumina-sidecar` | Rezept-Roundtrip mit Gain (byte-stabil, Muster `crates/lumina-sidecar/src/merge_recipe.rs` → `json_roundtrip_is_byte_stable`); Digest ändert sich bei Gain-Änderung (Muster `crates/lumina-sidecar/src/merge_recipe.rs` → `digest_changes_on_identity_change`); `None` parst auf alten JSON (Kompat, A.9) | `sample_recipe`-Derivat |
+| A-T6 | [U] | `lumina-sidecar` | Validierungsmatrix: `gains.len` ≠ sources, `gains[0]` ≠ 1.0, Gain ≤ 0 / NaN / Inf, `min_overlap_px` < Minimum ⇒ je `Invalid` | wie `crates/lumina-sidecar/src/merge_recipe.rs` → `validation_matrix_rejects_every_error_path` |
 | A-T7 | [P] | neue Datei `merge_gain_parity.rs` | CLI `--gain-compensation overlap-median` ≡ MCP `gain_compensation` ⇒ identischer `digest` + `checksum` + DNG-Bytes | A-T1-Fixture als PNG-Paar |
 | A-T8 | [N] | `merge_gain_parity.rs`-Spiegel | `--gain-compensation overlap-median` bei `merge-hdr` ⇒ `merge failed:`; Ablehnung hinterlässt nichts (Snapshot-Vergleich) | 2 PNG |
 | A-T9 | [P] | dto. | Default-Parität: ohne Flag ⇒ Digest **identisch zum ALTEN Stand** — KEIN Stale-Fenster, KEINE Golden-Regeneration nötig (A.9-Abweichung: `skip_serializing_if` ⇒ `None` fällt aus dem Digest-Input; T21-Pins laufen unverändert grün); No-Flag-Läufe bleiben pixel-identisch | neuer `merge_gain_parity.rs`-Anker + bestehende `merge_parity.rs`/T21-Anker (unverändert) |
@@ -234,10 +273,12 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
   voraus („`None` serialisiert als `"gain_compensation": null` … jeder Digest
   ändert sich, sobald das Feld existiert"). Implementiert ist stattdessen
   `#[serde(default, skip_serializing_if = "Option::is_none")]`
-  (`merge_recipe.rs`, `MergeAlignment.gain_compensation`): ein `None`-Feld
+  (`crates/lumina-sidecar/src/merge_recipe.rs`, `MergeAlignment.gain_compensation`):
+  ein `None`-Feld
   fällt aus der kanonischen JSON-Serialisierung **vollständig heraus** (der Key
   existiert nicht, er wird nicht als `null` geschrieben). `merge_digest`
-  (`:255-269`) serialisiert das typisierte `MergeAlignment` über
+  (in `crates/lumina-sidecar/src/merge_recipe.rs` → `merge_digest`)
+  serialisiert das typisierte `MergeAlignment` über
   `serde_json::json!` — der Digest-Input eines Rezepts ohne Gain ist damit
   **byte-identisch** zum prä-Slice-Input. Folge: **kein Stale-Fenster für
   Slice A** — bestehende Bundles bleiben `cached`-gültig, committete Goldens
@@ -270,7 +311,7 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 - **Interaktion Fehl-Alignment**: Gain schätzt auf falsch überlappenden Pixeln
   Müll. Mitigation: `MAX_PANO_GAIN`-Ablehnung (A.4) + bestehende
   `residual_warning`-Kette bleibt vorgeschaltet (Warnung, kein Abbruch —
-  `cli/src/merge.rs:123-131`).
+  `crates/lumina-cli/src/merge.rs` → `run_merge`).
 - **Rollback (ein Satz):** Schlägt A-T7 (Parität) oder A-T9 (No-Drift) fehl und
   erfordert eine Änderung an `merge_digest`, `feather_weight` oder der
   EXIF-Resolve-Kette, wird der Slice verworfen statt die bestehende
@@ -282,36 +323,42 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 
 ### B.1 Exakte Code-Stellen
 
-| Eingriff | Datei:Zeile | Was |
+| Eingriff | Datei + Symbol | Was |
 |---|---|---|
-| Geister-Maske (neu, pure Funktion) | `crates/lumina-merge/src/merge.rs` (neu, neben `merge_hdr_weighted` `:54`) | `deghost_mask(radiances, threshold) -> Vec<bool>` — pro Pixel: Radiance-Ausreißer-Test über Frames nach Alignment-Shifts |
-| Gewichts-Eingriff | `merge.rs:113-133` (Pixel-Schleife) | Maskierte Frames: Hut-Gewicht → 0; alle- maskiert ⇒ Fallback Referenz-Frame statt Mittel (`:128-133` heute: `rad_sum/len`) |
-| Schwelle/Modus | `bundle.rs:506-538` (`align_and_merge`, HDR-Arm) + `MergeRunOptions` `:213-227` | neue Options-Felder (B.3); Maske/Schwelle an `build_recipe` `:735-782` |
-| Rezept + Digest | `merge_recipe.rs:133-143`, `:247-261`, `:355-379` | neues Feld `deghost` in `MergeAlignment` (digest-relevant) |
-| CLI / MCP / GUI | `cli/src/merge.rs:43-77, :104-110`; `merge_common.rs:ALLOWED, run_mode, schema`; `merge_gui.rs:203-239` | Flag + Feld + Parität (B.5) |
+| Geister-Maske (neu, pure Funktion) | `crates/lumina-merge/src/merge.rs` (neu, neben `merge_hdr_weighted`) | `deghost_mask(radiances, threshold) -> Vec<bool>` — pro Pixel: Radiance-Ausreißer-Test über Frames nach Alignment-Shifts |
+| Gewichts-Eingriff | `crates/lumina-merge/src/merge.rs` → `merge_hdr_weighted` (Pixel-Schleife) | Maskierte Frames: Hut-Gewicht → 0; alle- maskiert ⇒ Fallback Referenz-Frame statt Mittel (heute: `rad_sum/len`) |
+| Schwelle/Modus | `crates/lumina-merge/src/bundle.rs` → `align_and_merge` (HDR-Arm) + `crates/lumina-merge/src/bundle.rs` → `MergeRunOptions` | neue Options-Felder (B.3); Maske/Schwelle an `crates/lumina-merge/src/bundle.rs` → `build_recipe` |
+| Rezept + Digest | `crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`, `merge_digest`, `validate_merge_alignment` | neues Feld `deghost` in `MergeAlignment` (digest-relevant) |
+| CLI / MCP / GUI | `crates/lumina-cli/src/merge.rs` → `MergeArgs` (+ Options-Mapping in `run_merge`); `crates/lumina-mcp/src/tools/merge_common.rs` → `ALLOWED`, `run_mode`, `schema`; `crates/lumina-gui/src/merge_gui.rs` → `run_merge_sync` | Flag + Feld + Parität (B.5) |
 
 ### B.2 Verfahren (deterministisch, code-only)
 
-Nach Alignment (Shifts aus `estimate_hdr_translation`, `bundle.rs:520-530`)
+Nach Alignment (Shifts aus `estimate_hdr_translation`, `crates/lumina-merge/src/bundle.rs`
+→ `align_and_merge`)
 liegt pro Pixel und Kanal die Radiance je Frame vor
-(`radiance = pixel / rel[i]`, `merge.rs:123`):
+(`radiance = pixel / rel[i]`, `crates/lumina-merge/src/merge.rs` →
+`merge_hdr_weighted`):
 
 1. Pro Pixel/Kanal: Referenz-Radiance = Frame 0 (Referenz-Definition, konsistent
-   mit „frame 0 at (0,0)"-Konvention, `merge.rs:143-144`).
+   mit „frame 0 at (0,0)"-Konvention, `crates/lumina-merge/src/merge.rs` →
+   `blend_panorama`; die Konvention steht dort im Doc-Header: „frame 0
+   conventionally at `(0, 0)`").
 2. Abweichung `|radiance_i − radiance_0| / max(radiance_0, eps)` (relativ, damit
    helle und dunkle Bereiche vergleichbar; `eps`-Sockel gegen Division durch 0 —
    Wert legt Implementierungs-Slice fest, Vorschlag `1e-3`, dokumentiert).
 3. Frame i gilt an diesem Pixel als Geist, wenn die Abweichung in **≥1 Kanal**
    den Schwellwert überschreitet (Kanäle nicht mitteln — Farb-Geister, z. B.
    rotes Auto vor grauer Wand, würden im Luminanz-Mittel untergehen).
-4. Maskierte Frames: Gewicht 0 in `num/den` (`merge.rs:124-125`). Bleibt nur
+4. Maskierte Frames: Gewicht 0 in `num/den` (`crates/lumina-merge/src/merge.rs` →
+   `merge_hdr_weighted`). Bleibt nur
    Frame 0 übrig (oder alle maskiert): **Fallback Referenz-Frame**
-   (`radiance_0`), nicht das heutige Mittel (`:130-133`). Begründung: Das Mittel
+   (`radiance_0`), nicht das heutige Mittel (dieselbe Funktion). Begründung: Das Mittel
    über Geister ist genau der Fehler, der entfernt wird; die Referenz ist die
-   einzige definierte Wahrheit („first = reference", `cli/src/merge.rs:44-45`).
+   einzige definierte Wahrheit („first = reference", `crates/lumina-cli/src/merge.rs` →
+   `MergeArgs`).
 5. Determinismus: reine `f64`-Arithmetik über abbreviativ-iterierte Frames,
    keine Sortierung nötig (Schwellvergleich, kein Median) — same-machine
-   bit-identisch (Doktrin `lib.rs:31-36`).
+   bit-identisch (Doktrin `crates/lumina-merge/src/lib.rs` → `//!`-Kopf).
 
 Dokumentierte Grenzen (was NICHT erkannt wird — laut in Modul-Dok + Plan):
 
@@ -320,9 +367,11 @@ Dokumentierte Grenzen (was NICHT erkannt wird — laut in Modul-Dok + Plan):
   kein Referenzvergleich kann das finden; Referenz-Wahl bleibt Verantwortung
   des Aufrufers, `inputs[0]`).
 - Subpixel-Bewegung unterhalb der Bilinear-Interpolation
-  (`sample_bilinear`, `merge.rs:119-121`): interpolierte Mischpixel können unter
+  (`sample_bilinear`, `crates/lumina-merge/src/merge.rs` →
+  `merge_hdr_weighted`): interpolierte Mischpixel können unter
   der Schwelle bleiben.
-- Gesättigte Bereiche (Hut-Gewicht 0, `merge_geom.rs:36-38`): dort trägt kein
+- Gesättigte Bereiche (Hut-Gewicht 0, `crates/lumina-core/src/merge_geom.rs` →
+  `hdr_hat_weight`): dort trägt kein
   Frame bei — Deghosting ändert nichts, Fallback-Regel greift wie heute.
 
 ### B.3 Empfehlung Schwellwert-Modell: parametrierbar mit Default, enge Range
@@ -337,7 +386,8 @@ Begründung:
   bei Rausch-Frames (dunkle Brackets) Piercing-Löcher. Parametrierbar + enge
   Range + laute Ablehnung außerhalb ist der etablierte Kompromiss des Repos
   (Muster `blend_width_px`: parametriert, `0..=65536`, nie geclippt,
-  `merge_recipe.rs:36,365-370`).
+  `crates/lumina-sidecar/src/merge_recipe.rs` → `MAX_MERGE_BLEND_WIDTH_PX` bzw.
+  `validate_merge_alignment`).
 - `off`-Default: HDR-Verhalten ohne Flag bit-identisch (Kompat §B.9, Test B-T8).
 - Schwelle ins Rezept (Zahl, nicht nur Bool): Zwei Läufe mit Schwelle 0.25 vs.
   0.5 erzeugen verschiedene Pixel aus denselben Quellen — das **muss** den
@@ -361,16 +411,21 @@ laut ablehnen).
 
 ### B.4 Zusammenspiel mit `residual_warning`
 
-- Orthogonal, beide bleiben: `residual_warning` (`align.rs:63-69`,
-  `HDR_SHIFT_WARN_PX = 16.0`, `lib.rs:57`) misst **globale Alignmentschwäche**
+- Orthogonal, beide bleiben: `residual_warning` (`crates/lumina-merge/src/align.rs` →
+  `status_for_shift`,
+  `HDR_SHIFT_WARN_PX = 16.0`, `crates/lumina-merge/src/lib.rs` →
+  `HDR_SHIFT_WARN_PX`) misst **globale Alignmentschwäche**
   (Shift-Betrag); Deghosting misst **lokale Radiance-Ausreißer**. Ein großer
   Shift erzeugt viele Ausreißer — das ist korrekt (Fehl-Alignment ⇒ viele
   Geister ⇒ Referenz-Fallback an vielen Pixeln), kein Widerspruch.
 - Reihenfolge: Alignment → Residual bestimmen (Warnung wie heute,
-  `bundle.rs:528-529`) → Merge mit Maske. Die Warnung blockiert nichts
-  (Doktrin „never a silent abort", `lib.rs:27-29`); die Maske schützt die Pixel
+  `crates/lumina-merge/src/bundle.rs` → `align_and_merge`) → Merge mit Maske.
+  Die Warnung blockiert nichts
+  (Doktrin „never a silent abort", `crates/lumina-merge/src/lib.rs` → `//!`-Kopf);
+  die Maske schützt die Pixel
   trotzdem.
-- Sidecar/JSON: `warning`-Feld (`merge_common.rs:171-177`) bleibt allein für
+- Sidecar/JSON: `warning`-Feld (`crates/lumina-mcp/src/tools/merge_common.rs` →
+  `outcome_payload`) bleibt allein für
   Residual; Deghosting bekommt **kein** Warnfeld (es ist kein Warnzustand,
   sondern angefordertes Verhalten — Parameter steht im Rezept).
 
@@ -392,7 +447,7 @@ laut ablehnen).
 | Situation | Klasse | Ort |
 |---|---|---|
 | Schwelle außerhalb `(0.05, 2.0]` / nicht-numerisch (CLI-seitig geparst) | CLI: Usage/`CliError::Message`; MCP: `InvalidParams` (Shape); Rezept-Ebene: `Invalid` → `merge failed:` | Frontend + `merge_recipe.rs` |
-| `--deghost` bei `merge-pano` ≠ off | `merge failed:` (Options-Validierung, `bundle.rs:368-376`-Muster) | `run_merge` |
+| `--deghost` bei `merge-pano` ≠ off | `merge failed:` (Options-Validierung, `crates/lumina-merge/src/bundle.rs` → `run_merge`-Muster) | `run_merge` |
 | `reference_fallback == false` persistiert | `Invalid` → `merge failed:` | `validate_merge_alignment` |
 
 Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
@@ -431,10 +486,12 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
   Feld existiert"). Implementiert ist stattdessen — das in A.9 bereits
   gewählte Muster — `#[serde(default, skip_serializing_if =
   "Option::is_none")]` an `MergeAlignment.deghost`
-  (`merge_recipe.rs:142-161`): ein `None`-Feld fällt aus der kanonischen
+  (`crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`): ein
+  `None`-Feld fällt aus der kanonischen
   JSON-Serialisierung **vollständig heraus** (der Key existiert nicht, er
   wird nicht als `null` geschrieben). `merge_digest`
-  (`merge_recipe.rs:266-280`) serialisiert das typisierte `MergeAlignment`
+  (`crates/lumina-sidecar/src/merge_recipe.rs` → `merge_digest`) serialisiert
+  das typisierte `MergeAlignment`
   über `serde_json::json!` — der Digest-Input eines Laufs ohne `--deghost`
   ist damit **byte-identisch** zum prä-Slice-Input. Folge: **auch B erzeugt
   kein Stale-Fenster**; bestehende Bundles bleiben `cached`-gültig,
@@ -458,10 +515,14 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
   Handler als `InvalidParams` **und** in `recipe.validate()` als `Invalid`
   (`merge failed:`) geprüft — keine Clamp, kein Default (B-T5-Matrix).
 - **Dritte dokumentierte Abweichung (Modul-Lage):** Maske und HDR-Pass
-  liegen in `crates/lumina-merge/src/hdr_deghost.rs` (Ratchet-getrieben,
+  liegen im Modul `crates/lumina-merge/src/hdr_deghost.rs` (Ratchet-getrieben,
   nicht wie in der §B-Tabelle genannt in `merge.rs`/`bundle.rs`); die
   Baseline-Kommentare und die Modul-Doku in `merge.rs`/`hdr_deghost.rs`
-  dokumentieren den Move. Öffentlichkeit unverändert
+  dokumentieren den Move. **Stand 2026-10-20:** das Modul ist heute ein
+  **Verzeichnis** `crates/lumina-merge/src/hdr_deghost/` (`mod.rs`, `merge.rs`,
+  `mask.rs`); `merge_hdr_weighted_deghost` liegt in
+  `crates/lumina-merge/src/hdr_deghost/merge.rs`, die Maske in
+  `crates/lumina-merge/src/hdr_deghost/mask.rs`. Öffentlichkeit unverändert
   (`merge_hdr_weighted` = `deghost == None`-Spelling,
   `merge_hdr_weighted_deghost` = Vollpfad).
 - `MERGE_RECIPE_VERSION` bleibt 1 (Feld ist additiv-optional, kein
@@ -487,19 +548,20 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
 
 ### C.1 Exakte Code-Stellen
 
-| Eingriff | Datei:Zeile | Was |
+| Eingriff | Datei + Symbol | Was |
 |---|---|---|
-| Valid-Rechteck (neu, pure Funktion) | `merge.rs` (neu, neben `blend_panorama` `:155`) | `valid_pano_rect(offsets, w, h) -> Option<(x0,y0,x1,y1)>` — Schnitt aller Frame-Rechtecke (integer Offsets); `transformed`-Variante aus inversen Matrizen/Bounding-Boxen |
-| Canvas-Umschaltung | `merge.rs:183-197` (Union-Canvas) + `:236-283` (Schleife) bzw. `:373-398` (transformed) | Bei Flag: Canvas = Valid-Rechteck statt Union; kein Resampling, nur Ursprung + Dimension ändern |
-| Orchestrierung | `bundle.rs:539-574` + `MergeRunOptions` `:213-227` | neues Options-Feld (C.3); Geometrie an `build_recipe` + DNG-Writer (Dimension folgt automatisch aus `pass.merged`) |
-| Rezept + Digest | `merge_recipe.rs:133-153` (`MergeAlignment`/`MergeOutput`), `:247-261` | Canvas-Geometrie ist Identität (C.3) |
+| Valid-Rechteck (neu, pure Funktion) | `crates/lumina-merge/src/merge.rs` (neu, neben `blend_panorama`) | `valid_pano_rect(offsets, w, h) -> Option<(x0,y0,x1,y1)>` — Schnitt aller Frame-Rechtecke (integer Offsets); `transformed`-Variante aus inversen Matrizen/Bounding-Boxen |
+| Canvas-Umschaltung | `crates/lumina-merge/src/merge.rs` → `blend_panorama` (Union-Canvas + Schleife) bzw. `crates/lumina-merge/src/merge.rs` → `blend_panorama_transformed` | Bei Flag: Canvas = Valid-Rechteck statt Union; kein Resampling, nur Ursprung + Dimension ändern |
+| Orchestrierung | `crates/lumina-merge/src/bundle.rs` → `align_and_merge` + `crates/lumina-merge/src/bundle.rs` → `MergeRunOptions` | neues Options-Feld (C.3); Geometrie an `crates/lumina-merge/src/bundle.rs` → `build_recipe` + DNG-Writer (Dimension folgt automatisch aus `pass.merged`) |
+| Rezept + Digest | `crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`/`MergeOutput`, `merge_digest` | Canvas-Geometrie ist Identität (C.3) |
 | CLI / MCP / GUI | wie A.2 | Flag + Feld + Parität (C.5) |
 
 Berechnung (integer Pfad): `x0 = max(ox_i)`, `y0 = max(oy_i)`,
 `x1 = min(ox_i + w)`, `y1 = min(oy_i + h)`; leer wenn `x1 <= x0 || y1 <= y0`
 ⇒ `Unsupported` (kein gemeinsames Rechteck — laut, kein leeres DNG).
 Transformed-Pfad: Schnitt der transformierten Frame-Boxen (`bounds`,
-`merge.rs:348-372`); TODO: Schnitt auf echten (rotierten) Footprints vs.
+`crates/lumina-merge/src/merge.rs` → `blend_panorama_transformed`); TODO:
+Schnitt auf echten (rotierten) Footprints vs.
 Box-Schnitt legt Implementierungs-Slice fest — Box-Schnitt ist konservativ
 (eher kleiner, nie ungültig); exakte Footprint-Geometrie wäre größer, aber
 komplexer. Empfehlung: Box-Schnitt (laut dokumentiert als konservativ).
@@ -511,10 +573,12 @@ bzw. kein Flag); Crop-to-valid nur per explizitem Opt-in.**
 
 Begründung:
 
-- Jede existierende Pano-Golden (`merge_e2e.rs:286-321` prüft Canvas-Wachstum um
+- Jede existierende Pano-Golden (`crates/lumina-cli/tests/merge_e2e.rs` →
+  `merge_pano_produces_wider_dng` prüft Canvas-Wachstum um
   Offset) und jeder existierende Digest hängt an der Union-Geometrie. Default
   `valid` würde **alle** Pano-Bundles still in ihrer Geometrie ändern — das verletzt die
-  No-silent-Reinterpretation-Doktrin (`merge_recipe.rs:384-408`-Geist:
+  No-silent-Reinterpretation-Doktrin (`crates/lumina-sidecar/src/merge_recipe.rs` →
+  `validate_mode_alignment`-Geist:
   „rejected loudly, no silent reinterpretation").
 - Still wegfallende Randpixel sind Datenverlust ohne Zustimmung; wer cropt,
   soll es anfordern (laut dokumentiert, was wegfällt — C.4).
@@ -551,7 +615,8 @@ pub canvas: MergeCanvas { pub width: u32, pub height: u32,
 
 ### C.4 Kein stiller Beschnitt
 
-- Bei Opt-in loggt `run_merge` (info, Muster `bundle.rs:405-409`) das
+- Bei Opt-in loggt `run_merge` (info, Muster `crates/lumina-merge/src/bundle.rs` →
+  `run_merge`) das
   wegfallende Rechteck: `crop-valid: canvas {cw}x{ch} origin ({x0},{y0});
   removed left/right/top/bottom {l}/{r}/{t}/{b}px` — was wegfällt, steht im Log
   und (als `canvas`) im Rezept/Sidecar.
@@ -563,23 +628,24 @@ pub canvas: MergeCanvas { pub width: u32, pub height: u32,
 ### C.5 CLI-Flag + MCP-Feld (Parität)
 
 - CLI: `--crop-valid` (Bool-Flag, Default false; kein Wert — Muster `--force`,
-  `cli/src/merge.rs:70-73`). Pano-only: bei `merge-hdr` laut ablehnen
+  `crates/lumina-cli/src/merge.rs` → `MergeArgs`). Pano-only: bei `merge-hdr` laut ablehnen
   (`merge failed:` — HDR-Canvas ist immer Frame-Größe, Croppen sinnlos).
 - MCP: Feld `crop_valid: boolean`, Default `false`; `ALLOWED` +1, `schema()`
   + Property. Keine Range-Domäne (Bool ist Shape: Nicht-Bool ⇒
   `InvalidParams`, per Trennregel).
 - GUI: `crop_valid`-Parameter an `run_merge_sync` (Default `false`).
 - Byte-Parität CLI≡MCP inkl. Canvas-Dimension im DNG
-  (`encode_linear_dng`, `bundle.rs:446` — Dimension folgt `pass.merged`).
+  (`encode_linear_dng`, `crates/lumina-merge/src/bundle.rs` → `run_merge` —
+  Dimension folgt `pass.merged`).
 
 ### C.6 Testmatrix
 
 | ID | Art | Ort | Prüft | Fixture |
 |---|---|---|---|---|
-| C-T1 | [U] | `merge.rs` | Lücken-Canvas: 2× 8×4, Offset (4,0) ⇒ Union 12×4 mit heutigem Verhalten; mit Flag ⇒ 4×4, Pixel **byte-identisch** zum Union-Ausschnitt x=4..8 | Solid A/B (vgl. `merge.rs:590-606`-Muster) |
+| C-T1 | [U] | `crates/lumina-merge/src/merge.rs` | Lücken-Canvas: 2× 8×4, Offset (4,0) ⇒ Union 12×4 mit heutigem Verhalten; mit Flag ⇒ 4×4, Pixel **byte-identisch** zum Union-Ausschnitt x=4..8 | Solid A/B (vgl. `crates/lumina-merge/src/merge.rs` → `panorama_blend_range_and_seam`-Muster) |
 | C-T2 | [U] | dto. | Vertikal-Versatz: Offset (4,2), 8×8 ⇒ valid 4×6 | dto. |
 | C-T3 | [U] | dto. | Negativ: kein gemeinsamer Schnitt (z. B. dritter Frame disjunkt im Schnitt, aber paarweise überlappend) ⇒ `Unsupported` | 3 Frames Kette |
-| C-T4 | [U] | dto. | Transformed-Pfad: Rotation 2° (Muster `merge.rs:699-762`) ⇒ valid-Canvas ⊆ Union, alle Pixel aus echten Samples (kein 0-Fill im Output — Scan auf exakte 0, wo Abdeckung garantiert) | Rampen-Frame |
+| C-T4 | [U] | dto. | Transformed-Pfad: Rotation 2° (Muster `crates/lumina-merge/src/merge.rs` → `pano_blend_transformed_applies_rotation`) ⇒ valid-Canvas ⊆ Union, alle Pixel aus echten Samples (kein 0-Fill im Output — Scan auf exakte 0, wo Abdeckung garantiert) | Rampen-Frame |
 | C-T5 | [U] | `lumina-sidecar` | alte JSON (ohne `crop_valid`/`canvas`) parst mit Defaults; neue Roundtrips byte-stabil; Digest Union ≠ Digest valid bei gleichen Quellen | `sample_panorama_recipe`-Derivat |
 | C-T6 | [P] | Parity-Spiegel | CLI `--crop-valid` ≡ MCP `crop_valid:true` ⇒ identischer Digest/Checksum/DNG-Bytes + Dimension | C-T1 als PNG-Paar |
 | C-T7 | [N] | E2E-Spiegel | `--crop-valid` bei `merge-hdr` ⇒ `merge failed:`; nichts hinterlassen | 2 PNG |
@@ -601,7 +667,8 @@ pub canvas: MergeCanvas { pub width: u32, pub height: u32,
 
 ### C.9 Risiken + Rollback
 
-- **`#[serde(default)]` vs. `deny_unknown_fields`** (`merge_recipe.rs:136,163`):
+- **`#[serde(default)]` vs. `deny_unknown_fields`**
+  (`crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`/`MergeRecipe`):
   `deny_unknown_fields` lehnt *unbekannte* Felder ab, fehlende Felder mit Default
   parsen — kombinierbar, aber explizit testen (C-T5). Risiko klein, Test Pflicht.
 - **Box-Schnitt zu konservativ** (C.1-TODO): Nutzer verlieren mehr Rand als nötig.
@@ -619,8 +686,10 @@ pub canvas: MergeCanvas { pub width: u32, pub height: u32,
 ### D.1 Kompatibilitäts-Plan (ein Stale-Fenster für A+B+C)
 
 Problem: Jedes neue Digest-Feld ändert den kanonischen Digest-Input
-(`merge_digest`, `merge_recipe.rs:247-261`), auch bei Default/`None` — alle
-bestehenden Bundles werden einmal `stale` (`bundle.rs:857-863`), inkl.
+(`merge_digest`, `crates/lumina-sidecar/src/merge_recipe.rs` → `merge_digest`),
+auch bei Default/`None` — alle
+bestehenden Bundles werden einmal `stale` (`crates/lumina-merge/src/bundle.rs` →
+`check_existing_bundle`), inkl.
 Goldens mit pin-nierten Digests (`merge_parity.rs`, `merge_e2e.rs`,
 `merge_mcp_parity*.rs`).
 
@@ -640,7 +709,8 @@ Plan (einmalig, gemeinsam für A+B+C — kein dreifaches Stale-Fenster):
    regeneriert (`--force`-Läufe) und neu verankert; der Commit vermerkt im
    Footer, dass Digests sich durch Rezept-Erweiterung (nicht durch Pixel-Änderung)
    geändert haben — No-Flag-Läufe bleiben pixel-identisch (A-T9/B-T8/C-T8 sichern das gegen den regenerierten Stand).
-3. Cache-Semantik: `cached=true`-Fälle (`bundle.rs:881-891`) vor der Migration
+3. Cache-Semantik: `cached=true`-Fälle (`crates/lumina-merge/src/bundle.rs` →
+   `check_existing_bundle`) vor der Migration
    bleiben gültig, bis ein neuer Lauf den neuen Digest schreibt; danach gilt der
    neue Digest. Kein manuelles Sidecar-Umschreiben (gegen
    `expected_route`-Analogie-Doktrin: Sidecars werden nie für Self-Validation
@@ -657,7 +727,8 @@ JSON-Shape/Typ (`InvalidParams`), jede Domänen-Regel (Ranges, Arity-Analogien,
 Pano-/HDR-only-Gates, Gain-/Schwellen-Grenzen) lebt in `run_merge` /
 `resolve_exposure` / `recipe.validate()` und surft als
 `merge missing:|stale:|unsupported:|failed:`-Klasse über
-`map_merge_run_error` (`merge_common.rs:139-146`) — CLI-stderr-Präfix und
+`map_merge_run_error` (`crates/lumina-mcp/src/tools/merge_common.rs` →
+`map_merge_run_error`) — CLI-stderr-Präfix und
 MCP-`data.error` bleiben klassen-gleich (T17-Analogie: neue Fehlerpfade brauchen
 je einen Klassen-Gleichheitstest, A-T8/B-T7/C-T7).
 
@@ -692,7 +763,8 @@ je einen Klassen-Gleichheitstest, A-T8/B-T7/C-T7).
 8. `canvas`-Pflicht vs. abgeleitet (C.3): explizit persistiert (empfohlen) oder
    aus Transforms ableiten (weniger Redundanz, aber Validierung müsste
    Re-Geometrie rechnen)? Empfehlung explizit — bestätigen?
-9. GUI-Signatur-Bruch (`run_merge_sync`, `merge_gui.rs:203-239`): drei neue
+9. GUI-Signatur-Bruch (`run_merge_sync`, `crates/lumina-gui/src/merge_gui.rs` →
+   `run_merge_sync`): drei neue
    Parameter auf einmal vs. Options-Struct — GUI-Owner-Entscheid (kein Code
    in diesem SOLL).
 10. Real-RAW-Gates für A/B/C (Belichtungsreihe mit Geist, Auto-Exposure-Pano,

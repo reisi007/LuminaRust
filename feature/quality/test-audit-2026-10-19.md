@@ -18,6 +18,18 @@ Vorrundenbericht `test-audit-2026-10-12.md` ist dort ebenfalls nicht gelistet
 (`grep -n "test-audit" feature/README.md` → kein Treffer), deshalb bleibt die
 Indexierung aus Konsistenz unverändert.
 
+**Anker-Form (Stand 2026-10-20, Welle H zu `PROSE-ANCHOR-POLICY-88`):** die
+Fundstellen dieses Berichts nennen den vollständigen repo-relativen **Pfad +
+Symbol- bzw. Testnamen** — **keine** Zeilennummern mehr. Die Zeilennummern
+dieses Berichts galten gegenüber dem **Audit-Stand `c2c2ce1`** (2026-10-19);
+sie wurden über die Historie rekonstruiert (`git show c2c2ce1:<pfad> | sed -n
+'<zeile>p'` — der umschließende Symbolträger) und in Pfad + Symbol
+umgestellt. Wo ein Symbol heute umgezogen ist, nennt der Anker den
+**heutigen** Pfad; der damalige Stand bleibt als datierter Beleg
+(Commit + Fundstelle) erhalten. Die inhaltlichen Befunde dieses Berichts
+sind **unverändert** — umgestellt wurde nur die Anker-Form, nicht die
+Aussage.
+
 **Rotationshinweis — neu seit 2026-10-12:** `cb2da59` legte das SOLL
 `feature/quality/downscale-ein-pfad-soll.md` an, `c2c2ce1` konsolidierte die
 **vier** Downscale-Pfade (core `downscale_bilinear`, `ImageFrame::downscale`,
@@ -57,30 +69,38 @@ Testrümpfe: `assert_eq!(X, X)`, `assert_eq!(X, X.clone())`,
 Teilbefunde:
 
 1. **`person_ids_are_stable_and_name_derived`** —
-   `crates/lumina-gui/src/face_gui.rs:568`:
+   `crates/lumina-gui/src/face_gui.rs` → `person_ids_are_stable_and_name_derived`
+   (im Audit-Stand `c2c2ce1` war das die erste `assert_eq!`-Zeile des Tests):
    `assert_eq!(face_person_id_for("Alex"), face_person_id_for("Alex"))` —
    unverändert vorhanden, für eine reine Funktion nicht failbar. Die Aussage
-   bleibt in Zeilen 569–576 getragen (Stabilität, Präfix, Whitespace,
-   Ordnungsfreiheit); nur diese eine Zeile ist tot. Priorität: niedrig.
+   bleibt in den **übrigen Assertions desselben Tests** getragen (Stabilität,
+   Präfix, Whitespace, Ordnungsfreiheit); nur diese eine Zeile ist tot.
+   Priorität: niedrig.
 2. **`fixture_helpers_are_deterministic`** —
-   `crates/lumina-cull/tests/common/mod.rs:118–133`: sechsmal `f(x) == f(x)` mit
+   `crates/lumina-cull/tests/common/mod.rs` → `fixture_helpers_are_deterministic`:
+   sechsmal `f(x) == f(x)` mit
    identischen Literalen; `splitmix64(&mut 1)` reseedet pro Aufruf. Wieder
    **gemessen** (Mutation M3): deterministisch falsch gekippt bleibt die gesamte
    `lumina-cull`-Suite (45 Tests) grün. Priorität: niedrig; Löschung erspart
    nichts (0,06 s).
 3. **NEU: `fit_preview_histogram_matches_thumbnail` / `fit_preview_portrait_histogram_matches_thumbnail`** —
-   `crates/lumina-gui/src/tests/histogram.rs:320` / `:420`. Beide vergleichen das
+   `crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` →
+   `fit_preview_histogram_matches_thumbnail` /
+   `fit_preview_portrait_histogram_matches_thumbnail` (im Audit-Stand `c2c2ce1`
+   lagen beide Tests in `crates/lumina-gui/src/tests/histogram.rs`; heute sind sie
+   in das eigene Modul `preview_thumb_parity` gewandert). Beide vergleichen das
    Voll-Preview-Histogramm mit dem Thumbnail-Histogramm über
-   `histogram_l1(...) < 0.35` (`:363` / `:469`) — die Vergleichszeile ist aber
-   **tautologisch erfüllt** (Befund F1, siehe (e)).
+   `histogram_l1(...) < 0.35` (jeweils **im selben** Test) — die Vergleichszeile
+   ist aber **tautologisch erfüllt** (Befund F1, siehe (e)).
 
 ## (b) Doppelte Abdeckung derselben Eigenschaft
 
 Status der Vorrunden-Befunde (B1–B7), jeder gegen HEAD nachgeprüft:
 
 - **B1 — ERLEDIGT/ÜBERHOLT.** `downscale_never_upsizes_and_is_deterministic`
-  (`crates/lumina-mcp/tests/mcp.rs:164`) assertet jetzt die No-Op-Byte-Identität
-  (`:168–172`, „no-op downscale must preserve pixels byte-for-byte"). Fix
+  (`crates/lumina-mcp/tests/mcp.rs` → `downscale_never_upsizes_and_is_deterministic`)
+  assertet jetzt die No-Op-Byte-Identität (**im selben** Test, „no-op downscale
+  must preserve pixels byte-for-byte"). Fix
   `8d613d2` („test(mcp): repair own fail signal on downscale
   (TEST-REDUNDANCY-61, B1)"), Task verifiziert geschlossen `bb37c15`.
   **Nachgemessen (M1):** die No-Op-Perturbation schlägt jetzt auch im
@@ -88,27 +108,42 @@ Status der Vorrunden-Befunde (B1–B7), jeder gegen HEAD nachgeprüft:
   ist damit **keine** mehr.
 - **B2 — ERLEDIGT.** Die fünf Exemplare der Abweisungs-Aussage sind auf **einen**
   kanonischen Pin kollabiert:
-  `crates/lumina-sidecar/src/tests/local_adjustments_color_digest.rs:126`
+  `crates/lumina-sidecar/src/tests/local_adjustments_color_digest.rs`
   (`disabled_local_presence_detail_denoise_and_optics_stay_rejected`; der
-  Doc-Kommentar `:119–124` nennt die Konsolidierung aus den drei Vertretern).
+  Doc-Kommentar **über** diesem Test nennt die Konsolidierung aus den drei
+  Vertretern).
   Task `TEST-REDUNDANCY-61`/`-62` geschlossen. Die Rest-Aussage
   (Legacy-`adjustment_*`-Pfad) ist erhalten.
 - **B3 — OFFEN (unverändert).** Fünf `previous_refuses_*`-Tests, ein Pad, nur im
   gesetzten Stufen-Key unterschiedlich:
-  `crates/lumina-cli/tests/mask_local_e2e.rs:363`,
-  `…/mask_local_detail_previous_e2e.rs:22`,
-  `…/mask_local_presence_e2e.rs:283`,
-  `…/mask_local_curve_e2e.rs:338`,
-  `…/mask_local_color_history_e2e.rs:73`. **Nicht gemessen** (CLI-e2e-Lauf bleibt
+  `crates/lumina-cli/tests/mask_local_e2e.rs` →
+  `previous_refuses_recipe_only_local_mask_transfer_on_source_or_target`,
+  `crates/lumina-cli/tests/mask_local_detail_previous_e2e.rs` →
+  `previous_refuses_a_detail_only_local_state_on_source_and_target`,
+  `crates/lumina-cli/tests/mask_local_presence_e2e.rs` →
+  `previous_refuses_a_presence_only_local_state_on_source_and_target`,
+  `crates/lumina-cli/tests/mask_local_curve_e2e.rs` →
+  `previous_refuses_a_curve_only_local_state_on_source_and_target`,
+  `crates/lumina-cli/tests/mask_local_color_history_e2e.rs` →
+  `previous_refuses_a_color_only_local_state_on_source_and_target`.
+  **Nicht gemessen** (CLI-e2e-Lauf bleibt
   benanntes Gate).
 - **B4 — OFFEN, erweitert.** `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_*`
   liegt jetzt **viermal** vor:
-  `local_adjustments_detail.rs:106`, `local_adjustments_presence.rs:92`,
-  `local_adjustments_color.rs:126`, `local_adjustments_curves.rs:68` — identische
+  `crates/lumina-sidecar/src/tests/local_adjustments_detail.rs` →
+  `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_detail_block`,
+  `crates/lumina-sidecar/src/tests/local_adjustments_presence.rs` →
+  `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_presence_block`,
+  `crates/lumina-sidecar/src/tests/local_adjustments_color.rs` →
+  `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_color_block`,
+  `crates/lumina-sidecar/src/tests/local_adjustments_curves.rs` →
+  `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_curve` — identische
   Migrationsschleife + Refusal, unterschiedlich nur der eingeschleuste Block.
 - **B5 — OFFEN (Nur-Abgrenzung).**
   `brush_zero_width_/brush_zero_height_resolution_rejects_invalid_sidecar`
-  (`crates/lumina-sidecar/src/tests/mask_prompts.rs:133/138`) teilen den
+  (`crates/lumina-sidecar/src/tests/mask_prompts.rs` →
+  `brush_zero_width_resolution_rejects_invalid_sidecar` /
+  `brush_zero_height_resolution_rejects_invalid_sidecar`) teilen den
   Produktionszweig (`resolution.0 == 0 || resolution.1 == 0`) —
   Condition-Coverage, **kein** Streichkandidat.
 - **B6/B7 — unverändert** (kein neuer Befund; Abgrenzung wie Vorrunde:
@@ -118,7 +153,8 @@ Status der Vorrunden-Befunde (B1–B7), jeder gegen HEAD nachgeprüft:
 ## (c) Implementierungsentscheidung statt Verhalten
 
 **Keine Befunde.** Geprüft und leer: Debug-Format-Pins, Zeiger-/Adressidentität,
-`size_of`-Pins (nur `lumina-raw/tests/abi_layout.rs:57`, der ABI-Vertrag),
+`size_of`-Pins (nur `crates/lumina-raw/tests/abi_layout.rs` →
+`abi_constants_match_rust_struct_layout`, der ABI-Vertrag),
 Call-Order-Vergleiche. Die neuen Anker-Tests pinnen **Bytes und Geometrie**,
 nicht die Implementierungswahl.
 
@@ -135,9 +171,9 @@ vor/nach):
 
 | Messung | Mutation | Ergebnis |
 |---|---|---|
-| **M1** | `lumina_core::downscale` No-Op-Pfad (Early-Return-Klon `lib.rs:250`) perturbiert jedes Pixel um +1 | core `downscale_max_width_never_upsizes_and_is_deterministic` **rot**, mcp `downscale_never_upsizes_and_is_deterministic` **rot** (B1 jetzt mit eigenem Fehlsignal), anchor `downscale_max_width_byte_anchor_matches_pre_consolidation` + `max_width_geometry_honours_the_width_cap` **rot** |
-| **M2** | Kernel-Interpolation `lib.rs:271` `.round()` → `.floor()` | anchor **3 rot** (`downscale_max_width_byte_anchor…`, `downscale_long_edge_byte_anchor_frozen`, `bilinear_thumbnail_path_is_closer_to_the_area_reference_than_nearest`); **GUI-Histogramm-Parität grün → F1 bewiesen** |
-| **M3** | `checkerboard` dark↔light vertauscht (`crates/lumina-cull/tests/common/mod.rs:34/:36`, Funktionskörper `:31–39`) | `lumina-cull` **45/45 grün** → G2 reproduziert (Polarität unverankert, jetzt dokumentierte Grenze) |
+| **M1** | `lumina_core::downscale` No-Op-Pfad (Early-Return-Klon in `crates/lumina-core/src/lib.rs` → `downscale`; im Audit-Stand `c2c2ce1` die Klon-Zeile) perturbiert jedes Pixel um +1 | core `downscale_max_width_never_upsizes_and_is_deterministic` **rot**, mcp `downscale_never_upsizes_and_is_deterministic` **rot** (B1 jetzt mit eigenem Fehlsignal), anchor `downscale_max_width_byte_anchor_matches_pre_consolidation` + `max_width_geometry_honours_the_width_cap` **rot** |
+| **M2** | Kernel-Interpolation in `crates/lumina-core/src/lib.rs` → `downscale` (im Audit-Stand `c2c2ce1` die `.round()`-Zeile) `.round()` → `.floor()` | anchor **3 rot** (`downscale_max_width_byte_anchor…`, `downscale_long_edge_byte_anchor_frozen`, `bilinear_thumbnail_path_is_closer_to_the_area_reference_than_nearest`); **GUI-Histogramm-Parität grün → F1 bewiesen** |
+| **M3** | `checkerboard` dark↔light vertauscht (`crates/lumina-cull/tests/common/mod.rs` → `checkerboard`; im Audit-Stand `c2c2ce1` die `dark`/`light`-Argumente im Funktionskörper) | `lumina-cull` **45/45 grün** → G2 reproduziert (Polarität unverankert, jetzt dokumentierte Grenze) |
 
 **Restore-Beleg (SHA-256 vor und nach jeder Messung):**
 
@@ -152,15 +188,22 @@ Bericht behauptet sie nirgends als neu gemessen.
 
 ### F1 — NEU, GEMESSEN: die Preview↔Thumbnail-Histogramm-Parität ist vakuum
 
-`fit_preview_histogram_matches_thumbnail` (`histogram.rs:320`) und die
-Portrait-Variante (`:420`) bauen die „Thumbnail-Pipeline" mit
+`fit_preview_histogram_matches_thumbnail`
+(`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` →
+`fit_preview_histogram_matches_thumbnail`) und die
+Portrait-Variante (`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` →
+`fit_preview_portrait_histogram_matches_thumbnail`) bauen die „Thumbnail-Pipeline" mit
 `downscale(&original, DownscaleTarget::LongEdge(THUMBNAIL_MAX_DIM))`
-(`:340` / `:448`), wobei `THUMBNAIL_MAX_DIM = 200`
-(`crates/lumina-gui/src/filmstrip.rs:27`).
+(jeweils **im selben** Test), wobei `THUMBNAIL_MAX_DIM = 200`
+(`crates/lumina-gui/src/filmstrip.rs` → `THUMBNAIL_MAX_DIM`).
 
-Die Quellframes sind `synthetic_gradient_png()` **64×40** (`lib.rs:11035`) bzw.
-**40×64** (`histogram.rs:421`). Die lange Kante ist in beiden Fällen
-**64 ≤ 200** → `downscale` nimmt den Early-Return-Klon (`lib.rs:238`). Das
+Die Quellframes sind `synthetic_gradient_png()` **64×40**
+(`crates/lumina-gui/src/lib.rs` → `synthetic_gradient_png`; im Audit-Stand `c2c2ce1`
+die `let (w, h) = (64u32, 40u32)`-Zeile) bzw.
+**40×64** (`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` →
+`fit_preview_portrait_histogram_matches_thumbnail`). Die lange Kante ist in beiden Fällen
+**64 ≤ 200** → `downscale` nimmt den Early-Return-Klon
+(`crates/lumina-core/src/lib.rs` → `downscale`). Das
 „Thumbnail" ist also das **unveränderte Original**, und `render_frame(original)`
 == der Voll-Preview-Render → `histogram_l1(preview, thumb)` ist **exakt 0** und
 die Assertion `distance < 0.35` kann nicht scheitern. **Beweis:** M2
@@ -193,20 +236,28 @@ dem Thumbnail" ist im Test damit nicht abgedeckt. Lücke → F1.
 benannte Grenzen, kein Streichgrund — beide als Lücke geführt (F2/F3):
 
 - **F2 — Pixel-Bytes des f32→f64-Wechsels nur an glatten Fixtures gepinnt.**
-  `downscale_long_edge_byte_anchor_frozen` (`downscale_anchor.rs:110`) pinnt die
+  `downscale_long_edge_byte_anchor_frozen` (`crates/lumina-core/tests/downscale_anchor.rs` →
+  `downscale_long_edge_byte_anchor_frozen`) pinnt die
   Bytes an acht **Gradienten**-Fixtures;
-  `long_edge_f32_to_f64_geometry_difference_is_the_measured_one` (`:325`) pinnt
-  nur den **Geometrie**-Zähler 82/1.120.249. Die in der Modul-Doku (`:13–14`)
+  `long_edge_f32_to_f64_geometry_difference_is_the_measured_one`
+  (`crates/lumina-core/tests/downscale_anchor.rs` →
+  `long_edge_f32_to_f64_geometry_difference_is_the_measured_one`) pinnt
+  nur den **Geometrie**-Zähler 82/1.120.249. Die in der Modul-Doku
+  (`crates/lumina-core/tests/downscale_anchor.rs` → `//!`-Kopf)
   und im Commit behauptete Aussage „an allen acht Fixtures sind alte f32- und
   neue f64-**Bytes** identisch" ist damit nur für glatte Bilder belegt; ein
   **Pixel-Byte-Delta** f32↔f64 auf **nicht-glatten** Bildern (≤1-LSB-Behauptung)
   ist ungepinnt.
 - **F3 — `exactly_one_resampler_exists` ist eine 3-Datei-String-Blacklist.**
-  `downscale_anchor.rs:191` prüft per `include_str!`/`contains` nur
+  `crates/lumina-core/tests/downscale_anchor.rs` → `exactly_one_resampler_exists`
+  (im Audit-Stand `c2c2ce1`; heute in
+  `crates/lumina-core/tests/downscale_anchor/resampler_gate.rs` →
+  `exactly_one_resampler_exists`) prüft per `include_str!`/`contains` nur
   `core/src/lib.rs`, `gui/src/filmstrip.rs`, `gui/src/preview_jobs.rs` auf die
   Abwesenheit der drei Altnamen. Weitere Downscale-/Resampler-Implementierungen
-  außerhalb dieser drei Dateien — z. B. `lumina-core/src/render.rs:808`,
-  `lumina-core/src/mask_alignment.rs:17` (Masken-**Plane**, nicht Frame) — liegen
+  außerhalb dieser drei Dateien — z. B. `crates/lumina-core/src/render.rs` →
+  `resample_plane_bilinear`, `crates/lumina-core/src/mask_alignment.rs` →
+  `resample_plane_bilinear` (Masken-**Plane**, nicht Frame) — liegen
   außerhalb des Gates, ohne dass die Frame-vs-Masken-Plane-Grenze im Test benannt
   ist.
 
@@ -229,17 +280,20 @@ benannte Grenzen, kein Streichgrund — beide als Lücke geführt (F2/F3):
 - **G1 — ERLEDIGT, ersetzt.** Nicht gestrichen, sondern durch ein Gate abgelöst:
   `.github/workflows/golden-gate.yml` (schedule/dispatch) fährt
   `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` und
-  protokolliert ein nicht-stilles Rot (`:75–82`); dokumentiert in
+  protokolliert ein nicht-stilles Rot (Schritt „Record a non-silent result“ in
+  `.github/workflows/golden-gate.yml`); dokumentiert in
   `feature/quality/golden-references.md` §10. Task `CI-GOLDEN-GATE-75`
   (Vorrunden-`GOLDEN-CIGATE-62`), nach dem Toolchain-Fix `7cec73c`/`2f4300c` aus
   dem Plan ausgetragen.
 - **G2 — ERLEDIGT.** `CULL-POLARITY-63` geschlossen (`911a635`) via
-  **dokumentierter Grenze**: Kommentar `crates/lumina-cull/tests/fixtures.rs:56–61`
+  **dokumentierter Grenze**: Kommentar in `crates/lumina-cull/tests/fixtures.rs` →
+  `fixtures` (im Audit-Stand `c2c2ce1` der Kommentarblock über dem Fixture)
   („Polaritätsgrenze … polaritätsinvariant … kein Defekt"). M3 reproduziert die
   Invarianz.
 - **G3 — ERLEDIGT.** `PARITY-MATRIX-ASSERT-64` geschlossen (`9a22617`):
-  `cpu_gpu_path_parity_matrix` (`kittest_parity.rs:291`) assertet jetzt das
-  `MatrixOutcome` (`:295–306`) statt es zu verwerfen.
+  `cpu_gpu_path_parity_matrix` (`crates/lumina-gui/tests/kittest_parity.rs` →
+  `cpu_gpu_path_parity_matrix`) assertet jetzt das
+  `MatrixOutcome` (**im selben** Test) statt es zu verwerfen.
 
 **Prozessbefund „die Runde 2026-10-12 habe keine Tasks angelegt" — WIDERLEGT.**
 Commit `ea82f05` legt zusammen mit dem Bericht `TEST-REDUNDANCY-61`,

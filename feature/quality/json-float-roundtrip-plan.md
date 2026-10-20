@@ -5,6 +5,25 @@ Variante (a)) und Task `JSON-FLOAT-ROUNDTRIP` in `Agents.todo.md`. Abnahme:
 Feature im Workspace aktivieren, **vor** der Aktivierung diesen Plan aufstellen,
 **danach** nachweisen, dass kein Rezept-Digest sich unbeabsichtigt ändert.
 
+**Anker-Form (Stand 2026-10-20, Welle H zu `PROSE-ANCHOR-POLICY-88`):** die
+Fundstellen nennen den Pfad **und** den Symbol- bzw. Funktionsnamen — auf
+**Code-Dateien (`.rs`) steht keine Zeilennummer mehr**; der Verweis auf die
+Nicht-Code-Datei `Cargo.lock` nennt die Datei **ohne** Zeilennummer. Die
+Zeilennummern dieses Plans galten gegenüber dem
+**Plan-Stand `78c21c9`** (2026-10-12) und wurden über die Historie bzw. den
+Registry-Quelltext rekonstruiert (`git show 78c21c9:<pfad> | sed -n '<zeile>p'`
+bzw. der Datei im Registry-Cache) und in Pfad + Symbol umgestellt.
+
+**Wichtig: die `src/…`-Anker dieses Plans gehören NICHT zu diesem Repo.** Sie
+zeigen auf die Dateien des **externen** Crates `serde_json` 1.0.151 (verlinkt in
+`Cargo.lock`; Quelltext im Registry-Cache des Hosts unter
+`~/.cargo/registry/src/*/serde_json-1.0.151/`). Es gibt **keine** Datei
+`ser.rs` (oder `de.rs`/`lib.rs` aus `serde_json`) in diesem Repo — die
+Schreibweise `crates/…/ser.rs` wäre falsch. Die repo-eigenen Anker
+(`crates/lumina-core/…`, `crates/lumina-sidecar/…`) nennen dagegen den
+**heutigen** repo-relativen Pfad; die inhaltlichen Aussagen dieses Plans sind
+**unverändert** — umgestellt wurde nur die Anker-Form.
+
 **Chronologie-Hinweis (benannte Abweichung, geschlossen — nicht repariert):**
 Dieser Plan wurde **atomar mit dem Flip** committet.
 `git log --diff-filter=A -- feature/quality/json-float-roundtrip-plan.md` zeigt
@@ -36,14 +55,14 @@ Dezimalzahl schreibt". Diese Behauptung wurde gegen die tatsächlich verlinkte
 `serde_json`-Version geprüft, weil davon abhängt, welche Bytes sich ändern
 können.
 
-Verlinkte Version: `serde_json` 1.0.151 (`Cargo.lock:3720`).
+Verlinkte Version: `serde_json` 1.0.151 (`Cargo.lock`).
 
 | Behauptung | Prüfung | Ergebnis |
 |---|---|---|
-| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext | **22** Treffer: 19 in `src/de.rs`, 2 in `src/value/de.rs`, 1 in `src/lib.rs:435` (die `mod lexical;`-Deklaration des Feature-eigenen Parsers). `src/ser.rs` enthält **0** Treffer; ein Verzeichnis `src/ser/` existiert nicht. Berührt ist also nur die Parser-Seite |
+| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext (externes Crate `serde_json` 1.0.151) | **22** Treffer: 19 in `src/de.rs`, 2 in `src/value/de.rs`, 1 in `src/lib.rs` → `mod lexical;` (die `mod lexical;`-Deklaration des Feature-eigenen Parsers). `src/ser.rs` enthält **0** Treffer; ein Verzeichnis `src/ser/` existiert nicht. Berührt ist also nur die Parser-Seite |
 | Feature ist abhängigkeitsfrei | `[features]` in `serde_json/Cargo.toml` | `float_roundtrip = []` — keine Kraten, also keine `Cargo.lock`-Änderung |
-| Float-Parser im Feature ist korrekt gerundet | `src/de.rs:674` `parse_long_integer` speist die Ganzzahl- und Bruchstellen an `crate::lexical` | eigenes, im Krat gepacktes `lexical` (`src/lexical/`, 20 Dateien) — kein `ryu` mehr (0 Treffer für `ryu` im ganzen Krat) |
-| Serialisierer schreibt kürzeste exakte Form | `src/ser.rs:1716` `write_f64` → `zmij::Buffer::format_finite` | unabhängig vom Feature; `zmij` wird vom Serialisierer in **beiden** Builds benutzt |
+| Float-Parser im Feature ist korrekt gerundet | `src/de.rs` → `parse_long_integer` (externes Crate `serde_json` 1.0.151) speist die Ganzzahl- und Bruchstellen an `crate::lexical` | eigenes, im Krat gepacktes `lexical` (`src/lexical/`, 20 Dateien) — kein `ryu` mehr (0 Treffer für `ryu` im ganzen Krat) |
+| Serialisierer schreibt kürzeste exakte Form | `src/ser.rs` → `write_f64` → `zmij::Buffer::format_finite` (externes Crate `serde_json` 1.0.151 — die Datei liegt **nicht** in diesem Repo) | unabhängig vom Feature; `zmij` wird vom Serialisierer in **beiden** Builds benutzt |
 
 **Zwei Korrekturen an der übernommenen Formulierung** (belegt, nicht vermutet):
 
@@ -92,8 +111,9 @@ Dasselbe Kommando mit `serde_json = { version = "1", features =
 
 **Ergebnis 1: kein committetes Byte ändert sich.** Der Golden-Satz dieses
 Slices ist damit trivial erfüllt, aber nicht aus dem Bauch heraus, sondern
-deshalb, weil — geprüft an der Parser-Quelle (`src/de.rs:638`
-`#[cfg(not(feature = "float_roundtrip"))] f64_from_parts`) — der Verlust nur
+deshalb, weil — geprüft an der Parser-Quelle (`src/de.rs` → `f64_from_parts`,
+`#[cfg(not(feature = "float_roundtrip"))]`, externes Crate `serde_json` 1.0.151)
+— der Verlust nur
 eintritt, wenn
 
 * die Dezimalstelle als `u64`-Signifikant **nicht mehr exakt** in `f64` passt
@@ -200,14 +220,15 @@ grün" nicht als Verbesserung unterging. Gefunden: keine.
 
 | Digest | Quelle | Vom Feature berührt? |
 |---|---|---|
-| `RenderKey::recipe_hash` | blake3 über `serde_json::to_vec(recipe)` (`crates/lumina-core/src/pipeline.rs:194`) | nein — der Serialisierer ist identisch |
-| `RenderKey::mask_recipe_hash` | blake3 über `serde_json::to_vec(mask_recipe)` (`pipeline.rs:217`) | nein |
-| `LocalAdjustments::digest` | blake3 über `serde_json::to_vec(self)` (`local_adjustments.rs:430`) | nein |
-| `mask_layers_digest`, `MaskStateSnapshot::digest` | über serialisierte Bytes (`local_adjustments/mask_state.rs:23/88`) | nein |
+| `RenderKey::recipe_hash` | blake3 über `serde_json::to_vec(recipe)` (`crates/lumina-core/src/pipeline.rs` → `RenderKey::new`) | nein — der Serialisierer ist identisch |
+| `RenderKey::mask_recipe_hash` | blake3 über `serde_json::to_vec(mask_recipe)` (`crates/lumina-core/src/pipeline.rs` → `RenderKey::new`) | nein |
+| `LocalAdjustments::digest` | blake3 über `serde_json::to_vec(self)` (`crates/lumina-sidecar/src/local_adjustments.rs` → `LocalAdjustments::digest`) | nein |
+| `mask_layers_digest`, `MaskStateSnapshot::digest` | über serialisierte Bytes (`crates/lumina-sidecar/src/local_adjustments/mask_state.rs` → `mask_layers_digest` / `MaskStateSnapshot::digest`) | nein |
 | `PreviewKey::digest`, `source_fingerprint` | blake3/sha256 über Bytes/Felder | nein |
 
 Alle diese Digests gehen über **serialisierte** Bytes. Der Serialisierer ist in
-beiden Builds derselbe (`write_f64` → `zmij`, `src/ser.rs:1716`, ohne
+beiden Builds derselbe (`write_f64` → `zmij`, `src/ser.rs` → `write_f64` im
+externen Crate `serde_json` 1.0.151, ohne
 `#[cfg]`). Ein Digest kann sich also nur ändern, wenn das `f64` **vor** dem
 Serialisieren anders ist — und das heißt: nur, wenn es vorher aus einer Datei
 **gelesen** wurde.
@@ -226,7 +247,7 @@ kürzeste Form **dieses** Werts. Der Digest über diese Bytes ist nachher der
 |---|---|---|---|
 | D1 | Kein committeter Rezept-/Sidecar-Digest ändert sich | `diff` der 43-Datei-Messung vor/nach dem Flip: **leer**; `FLOAT_SUMMARY lost=0` in beiden Läufen | gemessen |
 | D2 | Kein committeter Golden (PNG) ändert sich | `git status --porcelain` nach dem Flip: `testdata/matrix/golden/` unverändert (22 PNGs); nachgezählt 2026-10-12: **alle 114 getrackten PNGs** des Workspace unverändert; Matrix- und GUI-Suiten grün (989 / 0) | gemessen |
-| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: 22 Treffer auf `float_roundtrip`, keiner davon in `src/ser.rs` (0 Treffer); `write_f64` (`ser.rs:1716`) hat kein `#[cfg]` | gemessen am Quelltext |
+| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: 22 Treffer auf `float_roundtrip`, keiner davon in `src/ser.rs` (0 Treffer); `write_f64` (`src/ser.rs` → `write_f64`, externes Crate `serde_json` 1.0.151) hat kein `#[cfg]` | gemessen am Quelltext |
 | D4 | Ein geladen-→-gespeichert-Zyklus ist nun bitstabil | neuer Test `every_persisted_f64_survives_a_save_load_save_cycle_bit_identically`, grün mit 284 / 0 in `lumina-sidecar`; rot unter Mutation M1 | gemessen (Test gelaufen) |
 | D5 | Ein im Speicher gebautes Rezept hat vorher und nachher denselben Digest | neuer Test `a_recipe_built_in_memory_keeps_its_digest_across_the_boundary`; außerdem die `RenderKey`-Digest-Tests der `lumina-core`-Suite (562 / 0, unverändert) | gemessen |
 | D6 | Die 44-von-240-Auto-Tone-Drift ist auf 0 gefallen | umgestellter Test `three_runs_write_the_same_literals` über dieselbe 40-Mitglieder-Familie, 240 Werte, grün | gemessen |
