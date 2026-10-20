@@ -115,7 +115,10 @@ beantwortet sind:
 - Eine Zahl, die man nicht nachzählen kann, wird **nicht hingesrieben**. Statt
   „27 offene Tasks" gehört der Zählweg daneben (`grep -c '^- \[ \]' Agents.todo.md`).
   Tabellensummen und Klassenbilanzen werden **maschinell ausgezählt** und die
-  Herleitung genannt.
+  Herleitung genannt. Fakten, die sich ohne Zutun ändern (Dateigroessen, Zaehlungen
+  aus dem Code), werden **erzeugt und per Drift-Gate geprueft** statt von Hand
+  hingesrieben — die Regeln dazu stehen in `Agents.md` §„Dokumentations- und
+  Todo-Regeln“.
 - Eine Coverage-Angabe („Control X ist angeklickt") verweist auf den Test **und
   die Geste** — nicht auf den Testnamen allein. Existiert der Test, führt er die
   Geste aber nicht aus, ist die Angabe falsch.
