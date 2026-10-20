@@ -152,6 +152,16 @@ Sidecars vollständig wiederherstellbar sein.
   (`scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`), und die
   Lückenliste zwischen den Stufen (jede Lücke mit Klasse, Grund, Owner und
   Task-ID) (LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84)
+- [security-review-register.md](quality/security-review-register.md):
+  Sicherheits-/Risikoregister nach Stage 6 des Skills `security-review` —
+  Zwei-Hälften-Form (erst *finden*: alle erreichbaren Oberflächen
+  programmatisch auflisten, jeder Befund mit reproduzierbarem Kommando und
+  Ausgabe belegt; dann *schließen*: Befunde in Wellen, je Welle ein
+  Regressionstest), Registertabelle mit Befund-ID, Klasse, Oberfläche,
+  Wellenstatus, Test, Owner, Beleg und Stand, und die Enumerationsbasis des
+  Projekts (19 erreichbare Oberflächen). **Bisher null Befunde** — die Form,
+  nicht das Ergebnis; die erste Review-Welle ist die offene Task
+  `SEC-REVIEW-WELLE-1-85` (SECURITY-REVIEW-REGISTER)
 
 ## Feature-Matrix
 
