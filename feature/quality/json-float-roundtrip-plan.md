@@ -18,8 +18,12 @@ bzw. der Datei im Registry-Cache) und in Pfad + Symbol umgestellt.
 zeigen auf die Dateien des **externen** Crates `serde_json` 1.0.151 (verlinkt in
 `Cargo.lock`; Quelltext im Registry-Cache des Hosts unter
 `~/.cargo/registry/src/*/serde_json-1.0.151/`). Es gibt **keine** Datei
-`ser.rs` (oder `de.rs`/`lib.rs` aus `serde_json`) in diesem Repo — die
-Schreibweise `crates/…/ser.rs` wäre falsch. Die repo-eigenen Anker
+`ser.rs` (oder `de.rs`/`lib.rs` aus `serde_json`) in diesem Repo — eine
+repo-relative Schreibweise (mit `crates/`-Präfix) wäre falsch. **Welle P (2026-10-20) hat diese
+Anker deshalb einzeln markiert:** die Form ist jetzt durchgehend
+`serde_json` → `<crate-relativer Pfad>` → `<Modul/Funktion>` — **ohne
+Zeilennummer**, mit dem Crate-Namen als Präfix, damit der Pfad nicht als
+repo-relativer Anker missverstanden wird. Die repo-eigenen Anker
 (`crates/lumina-core/…`, `crates/lumina-sidecar/…`) nennen dagegen den
 **heutigen** repo-relativen Pfad; die inhaltlichen Aussagen dieses Plans sind
 **unverändert** — umgestellt wurde nur die Anker-Form.
@@ -59,10 +63,10 @@ Verlinkte Version: `serde_json` 1.0.151 (`Cargo.lock`).
 
 | Behauptung | Prüfung | Ergebnis |
 |---|---|---|
-| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext (externes Crate `serde_json` 1.0.151) | **22** Treffer: 19 in `src/de.rs`, 2 in `src/value/de.rs`, 1 in `src/lib.rs` → `mod lexical;` (die `mod lexical;`-Deklaration des Feature-eigenen Parsers). `src/ser.rs` enthält **0** Treffer; ein Verzeichnis `src/ser/` existiert nicht. Berührt ist also nur die Parser-Seite |
-| Feature ist abhängigkeitsfrei | `[features]` in `serde_json/Cargo.toml` | `float_roundtrip = []` — keine Kraten, also keine `Cargo.lock`-Änderung |
-| Float-Parser im Feature ist korrekt gerundet | `src/de.rs` → `parse_long_integer` (externes Crate `serde_json` 1.0.151) speist die Ganzzahl- und Bruchstellen an `crate::lexical` | eigenes, im Krat gepacktes `lexical` (`src/lexical/`, 20 Dateien) — kein `ryu` mehr (0 Treffer für `ryu` im ganzen Krat) |
-| Serialisierer schreibt kürzeste exakte Form | `src/ser.rs` → `write_f64` → `zmij::Buffer::format_finite` (externes Crate `serde_json` 1.0.151 — die Datei liegt **nicht** in diesem Repo) | unabhängig vom Feature; `zmij` wird vom Serialisierer in **beiden** Builds benutzt |
+| Feature nur im Parser | `grep -rn float_roundtrip src/` im Registry-Quelltext (externes Crate `serde_json` 1.0.151) | **22** Treffer: 19 in `serde_json` → `src/de.rs`, 2 in `serde_json` → `src/value/de.rs`, 1 in `serde_json` → `src/lib.rs` → `mod lexical;` (die `mod lexical;`-Deklaration des Feature-eigenen Parsers). `serde_json` → `src/ser.rs` enthält **0** Treffer; ein Verzeichnis `serde_json` → `src/ser/` existiert nicht. Berührt ist also nur die Parser-Seite |
+| Feature ist abhängigkeitsfrei | `[features]` in `serde_json` → `Cargo.toml` (extern) | `float_roundtrip = []` — keine Kraten, also keine `Cargo.lock`-Änderung |
+| Float-Parser im Feature ist korrekt gerundet | `serde_json` → `src/de.rs` → `parse_long_integer` (externes Crate `serde_json` 1.0.151) speist die Ganzzahl- und Bruchstellen an `crate::lexical` | eigenes, im Krat gepacktes `lexical` (`serde_json` → `src/lexical/`, 20 Dateien) — kein `ryu` mehr (0 Treffer für `ryu` im ganzen Krat) |
+| Serialisierer schreibt kürzeste exakte Form | `serde_json` → `src/ser.rs` → `write_f64` → `zmij::Buffer::format_finite` (externes Crate `serde_json` 1.0.151 — die Datei liegt **nicht** in diesem Repo) | unabhängig vom Feature; `zmij` wird vom Serialisierer in **beiden** Builds benutzt |
 
 **Zwei Korrekturen an der übernommenen Formulierung** (belegt, nicht vermutet):
 
@@ -111,7 +115,8 @@ Dasselbe Kommando mit `serde_json = { version = "1", features =
 
 **Ergebnis 1: kein committetes Byte ändert sich.** Der Golden-Satz dieses
 Slices ist damit trivial erfüllt, aber nicht aus dem Bauch heraus, sondern
-deshalb, weil — geprüft an der Parser-Quelle (`src/de.rs` → `f64_from_parts`,
+deshalb, weil — geprüft an der Parser-Quelle (`serde_json` → `src/de.rs` →
+`f64_from_parts`,
 `#[cfg(not(feature = "float_roundtrip"))]`, externes Crate `serde_json` 1.0.151)
 — der Verlust nur
 eintritt, wenn
@@ -227,7 +232,8 @@ grün" nicht als Verbesserung unterging. Gefunden: keine.
 | `PreviewKey::digest`, `source_fingerprint` | blake3/sha256 über Bytes/Felder | nein |
 
 Alle diese Digests gehen über **serialisierte** Bytes. Der Serialisierer ist in
-beiden Builds derselbe (`write_f64` → `zmij`, `src/ser.rs` → `write_f64` im
+beiden Builds derselbe (`write_f64` → `zmij`, `serde_json` → `src/ser.rs` →
+`write_f64` im
 externen Crate `serde_json` 1.0.151, ohne
 `#[cfg]`). Ein Digest kann sich also nur ändern, wenn das `f64` **vor** dem
 Serialisieren anders ist — und das heißt: nur, wenn es vorher aus einer Datei
@@ -247,7 +253,7 @@ kürzeste Form **dieses** Werts. Der Digest über diese Bytes ist nachher der
 |---|---|---|---|
 | D1 | Kein committeter Rezept-/Sidecar-Digest ändert sich | `diff` der 43-Datei-Messung vor/nach dem Flip: **leer**; `FLOAT_SUMMARY lost=0` in beiden Läufen | gemessen |
 | D2 | Kein committeter Golden (PNG) ändert sich | `git status --porcelain` nach dem Flip: `testdata/matrix/golden/` unverändert (22 PNGs); nachgezählt 2026-10-12: **alle 114 getrackten PNGs** des Workspace unverändert; Matrix- und GUI-Suiten grün (989 / 0) | gemessen |
-| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: 22 Treffer auf `float_roundtrip`, keiner davon in `src/ser.rs` (0 Treffer); `write_f64` (`src/ser.rs` → `write_f64`, externes Crate `serde_json` 1.0.151) hat kein `#[cfg]` | gemessen am Quelltext |
+| D3 | Der Serialisierer ist byte-identisch in beiden Builds | Serde-Quelle: 22 Treffer auf `float_roundtrip`, keiner davon in `serde_json` → `src/ser.rs` (0 Treffer); `write_f64` (`serde_json` → `src/ser.rs` → `write_f64`, externes Crate `serde_json` 1.0.151) hat kein `#[cfg]` | gemessen am Quelltext |
 | D4 | Ein geladen-→-gespeichert-Zyklus ist nun bitstabil | neuer Test `every_persisted_f64_survives_a_save_load_save_cycle_bit_identically`, grün mit 284 / 0 in `lumina-sidecar`; rot unter Mutation M1 | gemessen (Test gelaufen) |
 | D5 | Ein im Speicher gebautes Rezept hat vorher und nachher denselben Digest | neuer Test `a_recipe_built_in_memory_keeps_its_digest_across_the_boundary`; außerdem die `RenderKey`-Digest-Tests der `lumina-core`-Suite (562 / 0, unverändert) | gemessen |
 | D6 | Die 44-von-240-Auto-Tone-Drift ist auf 0 gefallen | umgestellter Test `three_runs_write_the_same_literals` über dieselbe 40-Mitglieder-Familie, 240 Werte, grün | gemessen |

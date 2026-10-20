@@ -253,7 +253,8 @@ benannte Grenzen, kein Streichgrund — beide als Lücke geführt (F2/F3):
   (im Audit-Stand `c2c2ce1`; heute in
   `crates/lumina-core/tests/downscale_anchor/resampler_gate.rs` →
   `exactly_one_resampler_exists`) prüft per `include_str!`/`contains` nur
-  `core/src/lib.rs`, `gui/src/filmstrip.rs`, `gui/src/preview_jobs.rs` auf die
+  `crates/lumina-core/src/lib.rs`, `crates/lumina-gui/src/filmstrip.rs`,
+  `crates/lumina-gui/src/preview_jobs.rs` auf die
   Abwesenheit der drei Altnamen. Weitere Downscale-/Resampler-Implementierungen
   außerhalb dieser drei Dateien — z. B. `crates/lumina-core/src/render.rs` →
   `resample_plane_bilinear`, `crates/lumina-core/src/mask_alignment.rs` →

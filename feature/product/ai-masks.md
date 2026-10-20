@@ -342,7 +342,7 @@ die Reihenfolge ab.
 
 **Implementierungsstatus GPU-Pixelpass (`GPU-RENDER-MASK-19`, 2026-10-15):** Die
 lokal ausgewertete Maske moduliert auf der GPU die Pixel über
-`crates/lumina-gpu/src/local_mask_pass.rs` (+ `src/local_mask_gpu.rs`): pro
+`crates/lumina-gpu/src/local_mask_pass.rs` (+ `crates/lumina-gpu/src/local_mask_gpu.rs`): pro
 nicht-neutralem Layer wird das lokale Rezept GPU-gerendert und über die exakte
 `blend_local_layer`-Formel gemischt. **Zweiter, isolierter Einstieg (Slice B1):**
 `GpuContext::apply_gpu_local_masks` zieht die Maskenkette isoliert auf einen
@@ -359,7 +359,7 @@ P1.2-/GUI-Grenze stehen im SOLL-Abschnitt unten und in
 sichere lokale Anpassungsebene wird als versioniertes, typed `MaskLayer`-Objekt
 umgesetzt und nicht als undokumentierte `adjustment_*`-Extras. Die lokale
 CPU-Schicht ist P0. **`GPU-RENDER-MASK-19` ist als GPU-Pixelpass umgesetzt:**
-`crates/lumina-gpu/src/local_mask_pass.rs` + `src/local_mask_gpu.rs` wenden die
+`crates/lumina-gpu/src/local_mask_pass.rs` + `crates/lumina-gpu/src/local_mask_gpu.rs` wenden die
 lokal ausgewertete Maske (`R16Uint`-Alpha) pixelgenau auf den Composite an
 (relative WB + P0-Basic im Float-Kernel, delta-freies P0 über die globale
 Ton-Pipeline, Blend exakt nach `blend_local_layer`). Am Adapter gemessen
@@ -1914,7 +1914,7 @@ Verhaltensabsicherung der Backend-Pfade.
 - **Hash-gepinntes ONNX-Fixture:** `crates/lumina-onnx/tests/fixtures/
   lumina-crafted-reducemax.onnx` ist als committetes Behavior-Fixture
   hinterlegt (139 B, SHA-256-Pin `2a2ede66…`, Provenienz in
-  `tests/fixtures/README.md`, Regenerierung via
+  `crates/lumina-onnx/tests/fixtures/README.md`, Regenerierung via
   `scripts/regenerate_onnx_fixture.sh`). Tests laden das Fixture per
   `include_bytes!`, prüfen den Pin, laden es via `OrtBackend` mit
   `model_hash` = Pin (`Verified`) und inferieren; ein Drift zwischen

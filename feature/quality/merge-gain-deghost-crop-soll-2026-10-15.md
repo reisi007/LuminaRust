@@ -515,9 +515,9 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
   Handler als `InvalidParams` **und** in `recipe.validate()` als `Invalid`
   (`merge failed:`) geprüft — keine Clamp, kein Default (B-T5-Matrix).
 - **Dritte dokumentierte Abweichung (Modul-Lage):** Maske und HDR-Pass
-  liegen im Modul `crates/lumina-merge/src/hdr_deghost.rs` (Ratchet-getrieben,
+  liegen im Modul `crates/lumina-merge/src/hdr_deghost/` (Ratchet-getrieben,
   nicht wie in der §B-Tabelle genannt in `merge.rs`/`bundle.rs`); die
-  Baseline-Kommentare und die Modul-Doku in `merge.rs`/`hdr_deghost.rs`
+  Baseline-Kommentare und die Modul-Doku in `merge.rs`/`mod.rs`
   dokumentieren den Move. **Stand 2026-10-20:** das Modul ist heute ein
   **Verzeichnis** `crates/lumina-merge/src/hdr_deghost/` (`mod.rs`, `merge.rs`,
   `mask.rs`); `merge_hdr_weighted_deghost` liegt in

@@ -481,10 +481,10 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 | ID | Art | Ort (SOLL) | Prüft | Fixture |
 | --- | --- | --- | --- | --- |
-| T11 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (Spiegel von `library_parity.rs:41-80` + `merge_parity.rs:74-148`) | gleiche Eingabemenge über CLI-Binary und MCP-Server → **identischer** `digest` **und** `checksum` (String-Gleichheit, `assert_eq!`), `command`/`status` identisch | 2× 64×48 PNG (`merge_parity.rs:34-49`), Exposition explizit |
-| T12 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` | DNG-Bytes auf Platte identisch: `blake3(MCP-DNG) == blake3(CLI-DNG)` und `== checksum`-Feld | wie T11, zwei Bäume (Prinzip: CLI-Prozess auf Baum 1, MCP in-process auf byte-identischem Baum 2 — Modul-Doc `crates/lumina-cli/tests/library_parity_common/mod.rs:1-24`) |
-| T13 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` | Sidecar-Bytes identisch (`assert_unchanged`-Muster, `library_parity_common/mod.rs:277-284`): `"type": "merge"`, `merge_recipe.mode`, `merge_version 1`, `status ok`, keine Absolutpfade (`merge_e2e.rs:158-199,232-279`) | wie T11 |
-| T14 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` | Pano-Parität: gleiche Eingabemenge, gleicher Digest/Checksum, Canvas wächst um den geschätzten Offset (`merge_e2e.rs:286-321`) | 2 PNG, einer um 4 px verschoben |
+| T11 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) (Spiegel von `library_parity.rs:41-80` + `merge_parity.rs:74-148`) | gleiche Eingabemenge über CLI-Binary und MCP-Server → **identischer** `digest` **und** `checksum` (String-Gleichheit, `assert_eq!`), `command`/`status` identisch | 2× 64×48 PNG (`merge_parity.rs:34-49`), Exposition explizit |
+| T12 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | DNG-Bytes auf Platte identisch: `blake3(MCP-DNG) == blake3(CLI-DNG)` und `== checksum`-Feld | wie T11, zwei Bäume (Prinzip: CLI-Prozess auf Baum 1, MCP in-process auf byte-identischem Baum 2 — Modul-Doc `crates/lumina-cli/tests/library_parity_common/mod.rs:1-24`) |
+| T13 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | Sidecar-Bytes identisch (`assert_unchanged`-Muster, `library_parity_common/mod.rs:277-284`): `"type": "merge"`, `merge_recipe.mode`, `merge_version 1`, `status ok`, keine Absolutpfade (`merge_e2e.rs:158-199,232-279`) | wie T11 |
+| T14 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | Pano-Parität: gleiche Eingabemenge, gleicher Digest/Checksum, Canvas wächst um den geschätzten Offset (`merge_e2e.rs:286-321`) | 2 PNG, einer um 4 px verschoben |
 | T15 | [P] | neu | **Cache-Hit**: zweiter identischer MCP-Aufruf → `cached: true`, `status: "ok"`, DNG-/Sidecar-Bytes unverändert (`assert_unchanged`), kein `saved`/`action`-Feld | wie T11 |
 | T16 | [P] | neu | `force`-Kette: Quelle mutieren → MCP meldet `stale` (mapped, `bundle.rs:801+`); mit `force: true` → Erfolg **und** Digest == CLI-Digest nach Force-Merge | wie T11 + mutiertes PNG (`library_parity_common/mod.rs:105-127`) |
 | T17 | [P] | neu | Fehlerklassen-Gleichheit: für dieselbe Eingabe liefern CLI-stderr-Präfix und MCP-`data.error` dieselbe Klasse (Tabelle §3); Fehlertext identisch | HDR ohne EXPLIZIT/EXIF, 8×8 zu klein (`merge_e2e.rs:502-527`), Dimension-Mismatch (`:477-500`) |
@@ -591,7 +591,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 | `crates/lumina-mcp/src/tools/merge_hdr.rs` | `NAME`/`DESCRIPTION`/`schema()` + `run` → `merge_common::run_mode(MergeMode::Hdr, args)` | ~40 Z. |
 | `crates/lumina-mcp/src/tools/merge_pano.rs` | dito, `MergeMode::Panorama` | ~40 Z. |
 | `crates/lumina-mcp/tests/merge_tools.rs` (+ `merge_tools_common/mod.rs`) | T1, T3, T4, T5–T10 | ~250 Z. |
-| `crates/lumina-mcp/tests/merge_parity.rs` | T11–T20 (mit Fixture-Bäumen wie `library_parity_common/mod.rs`) | ~300 Z., droht >500 → dann aufteilen in `merge_parity.rs` + `merge_parity_errors.rs` (Muster `library_parity*.rs`) |
+| `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | T11–T20 (mit Fixture-Bäumen wie `library_parity_common/mod.rs`) | ~300 Z., droht >500 → dann aufteilen in `merge_parity.rs` + `merge_parity_errors.rs` (Muster `library_parity*.rs`) |
 
 **Zu modifizierende Dateien (minimal-invasiv):**
 

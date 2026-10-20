@@ -4,7 +4,8 @@
 HEAD `ddebe7f`; `git status --porcelain` war beim Schreiben **leer** (außer diesem
 Dokument).
 
-**Scope (eingegrenzt seit User-Order 2026-09-26, `Agents.todo.md:409`):** Byte- und
+**Scope (eingegrenzt seit User-Order 2026-09-26, `Agents.todo.md` → Eintrag
+`MCP-PARITY-C`):** Byte- und
 Verhaltens-Parität zwischen `lumina matrix` (CLI, `crates/lumina-cli/src/matrix.rs`)
 und einem **einen** neuen MCP-Tool `lumina_matrix`. Der Merge-Teil
 (`lumina_merge_hdr`/`lumina_merge_pano`) ist geliefert und verifiziert
@@ -17,12 +18,14 @@ spiegelt die Struktur jenes SOLL — es erfindet nichts Neues.
 **Anker-Form (Stand 2026-10-20, Welle H zu `PROSE-ANCHOR-POLICY-88`):** die
 Fundstellen auf **Code** nennen den vollständigen repo-relativen **Pfad +
 Symbol- bzw. Testnamen** — auf **Code-Dateien (`.rs`) steht keine
-Zeilennummer mehr**. Zeilennummern auf **Nicht-Code-Dateien** (Doku,
-Konfiguration, Workflow, Rezept-Set) bleiben als datierte Verweise stehen;
-sie zeigen auf Doku, nicht auf Code. Die Zeilennummern dieses SOLLs
+Zeilennummer mehr**. **Welle P (2026-10-20) hat zusätzlich die Verweise auf
+**Nicht-Code-Dateien** (Doku, Konfiguration, Workflow, Rezept-Set) auf
+**Pfad + Abschnittsüberschrift bzw. Pfad + Schlüssel/Wert** umgestellt — in
+diesem SOLL steht **keine Zeilennummer** mehr. Die früheren Zeilennummern
 galten gegenüber dem **Plan-Stand `59cc0b5`** (2026-10-14) und wurden über die
 Historie rekonstruiert (`git show 59cc0b5:<pfad> | sed -n '<zeile>p'` — der
-umschließende Symbolträger). **Stand 2026-10-20:** der Matrix-Runner ist heute
+umschließende Symbolträger); sie sind jetzt auf die heutigen Abschnitte
+bzw. Schlüssel abgebildet. **Stand 2026-10-20:** der Matrix-Runner ist heute
 aus der CLI in `lumina-stages` extrahiert — `crates/lumina-stages/src/matrix_run.rs`
 → `run`, `crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set` /
 `prepare_recipes` / `reject_artifact_backed_stages` / `resolve_relative` /
@@ -40,13 +43,14 @@ die Anker-Form, nicht die Aussage.
 `testdata/matrix/golden/` (22 committete PNG-Goldens, 7,0 MB),
 `crates/lumina-cli/tests/matrix_e2e.rs` (451 Z.), `crates/lumina-cli/tests/matrix_paths.rs`
 (151 Z.), `crates/lumina-gui/src/matrix.rs` (507 Z., GUI-Slice 2),
-`feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix" (:125-361),
+`feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix (LRPAR-MATRIX-RECIPE)",
 `.github/workflows/matrix-nightly.yml` (126 Z.),
 `crates/lumina-mcp/src/tools/merge_common.rs` (300 Z.), `merge_hdr.rs` (42 Z.),
-`src/error.rs` (266 Z.), `tools/mod.rs` (179 Z.), `tests/tool_names/mod.rs` (115 Z.),
+`crates/lumina-mcp/src/error.rs` (266 Z.), `crates/lumina-mcp/src/tools/mod.rs`
+(179 Z.), `crates/lumina-mcp/tests/tool_names/mod.rs` (115 Z.),
 `crates/lumina-mcp/tests/merge_tools.rs` + `merge_tools_validation.rs`,
 `crates/lumina-cli/tests/merge_mcp_parity.rs` + `_errors.rs` + `_envelope.rs`
-+ `_gate.rs` + `merge_mcp_parity_common/{mod,fixtures,graders,job}.rs`,
++ `_gate.rs` + `crates/lumina-cli/tests/merge_mcp_parity_common/{mod,fixtures,graders,job}.rs`,
 `crates/lumina-cli/src/tests/mcp_onnx.rs` (`mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools`,
 `EXPECTED_TOOLS`),
 `crates/lumina-cli/src/stages.rs` (Decode-/Error-Shims),
@@ -55,16 +59,19 @@ die Anker-Form, nicht die Aussage.
 `RegenerateRequest`, Request-Struktur), `crates/lumina-stages/src/decode.rs`,
 `crates/lumina-stages/src/pipeline.rs`,
 `crates/lumina-mcp/src/util.rs` (MCP-eigener Render-Pfad),
-`crates/lumina-mcp/Cargo.toml` (:1-49), `scripts/check_file_sizes.sh`,
-`scripts/file_size_baseline.txt`, `Agents.todo.md` :409, `Agents.md` :608-628
-(GPU-Regel), `feature/platform/mcp-server.md` (:1-23, :740-795).
+`crates/lumina-mcp/Cargo.toml` (Abschnitte `[package]`, `[dependencies]`,
+`[features]`, `[dev-dependencies]`), `scripts/check_file_sizes.sh`,
+`scripts/file_size_baseline.txt`, `Agents.todo.md` → Eintrag `MCP-PARITY-C`,
+`Agents.md` § „Änderungsregeln" (Regel „Volle GPU-Parität"),
+`feature/platform/mcp-server.md` (Kopf-Status-Block und § „CLI-Abdeckung — Ist-Stand
+und offene Lücke").
 
 ## 1. Ziel
 
 - MCP erhält **ein** path-basiertes Tool (ein Aufruf = ein Matrix-Lauf, **kein**
   `image_id`, kein Session-State): `lumina_matrix`. Analogie:
   `lumina_generative`/`lumina_relocate` (MCP-PARITY-B,
-  `feature/quality/mcp-parity-c-soll.md:36-39`).
+  `feature/quality/mcp-parity-c-soll.md` § „1. Ziel").
 - Das Tool ruft **dieselbe** Runner-Funktion auf wie die CLI
   (`crates/lumina-cli/src/matrix.rs` → `matrix`; der Runner heute in
   `crates/lumina-stages/src/matrix_run.rs` → `run`) — über einen gemeinsamen, clap-freien
@@ -92,7 +99,7 @@ MCP-Schema ist er ein echtes JSON-Array (`recipes`).
 | `--golden-dir` | `golden_dir` | string \| null | nein | `null` → `<recipe-set-dir>/golden` (`crates/lumina-stages/src/matrix_run.rs` → `run`) | rel. oder abs.; der Runner legt es nur im Baseline-Modus an (ebendort) |
 | `--work-dir` | `work_dir` | string \| null | nein | `null` → frisches `tempfile::tempdir()`, danach entfernt (`crates/lumina-stages/src/matrix_run.rs` → `run`) | MCP **muss** dasselbe Tempdir-Verhalten erben (kein Repo-Müll, Kommentar ebendort) |
 | `--recipe` (wiederholbar) | `recipes` | string[] | nein | `[]` = **alle** Rezepte des Sets, in Set-Reihenfolge | unbekannte Id → lauter Abbruch **vor** jedem Render (`crates/lumina-stages/src/matrix_validate.rs` → `prepare_recipes`) |
-| `--comparison-width` | `comparison_width` | integer \| null | nein | `null` → `set.comparison_width` (committet: 384, `recipe-set.v1.json`) | `minimum: 1` **beschreibend**; `0` ist ein lauter Domain-Fehler (`crates/lumina-stages/src/matrix_run.rs` → `run`), nicht `InvalidParams` |
+| `--comparison-width` | `comparison_width` | integer \| null | nein | `null` → `set.comparison_width` (committet: 384, `testdata/matrix/recipe-set.v1.json`) | `minimum: 1` **beschreibend**; `0` ist ein lauter Domain-Fehler (`crates/lumina-stages/src/matrix_run.rs` → `run`), nicht `InvalidParams` |
 | `--update-goldens` | `update_goldens` | boolean | nein | `false` | Baseline-Modus: CPU-gepinnt, plattformneutral (`crates/lumina-stages/src/matrix_run.rs` → `run`, F4) |
 | `--require-gpu` | `require_gpu` | boolean | nein | `false` | GPU-Paritätsgate; in dieser Slice **nur** gespiegelt, nicht neu bewiesen (§5) |
 | `--json` | — (entfällt) | — | — | — | MCP antwortet **immer** `structuredContent`; `--json` ist reines CLI-Transport-Flag (`crates/lumina-cli/src/main.rs` → `emit`) |
@@ -206,13 +213,15 @@ des JSON und damit
 kein Paritätsgegenstand; er kann als `content[0].text` ergänzt werden —
 Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 
-## 4. `expected_route`-Schutz (Semantik-Punkt 1 aus `Agents.todo.md:409`)
+## 4. `expected_route`-Schutz (Semantik-Punkt 1 aus `Agents.todo.md` → Eintrag
+`MCP-PARITY-C`)
 
 Festgeschriebene Semantik, wörtlich: „**Kein Blindschreiben von `expected_route`**
 — … dieses Slice darf daran **nichts** ändern, und ein Tool darf `expected_route`
 weder setzen noch auswerten, um sich selbst zu validieren." Gepflegt wird das Feld
 laut `testdata/matrix/recipe-set.v1.json` und
-`feature/quality/conflicts-and-acceptance.md` (:152-156, :240-252).
+`feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix (LRPAR-MATRIX-RECIPE)"
+(Absatz „Zweck", Absatz „Route-Gate `--require-gpu` (Slice 2)").
 
 ### 4.1 Die Grenze, code-seitig
 
@@ -288,16 +297,22 @@ Befund aus den Quellen:
   (`crates/lumina-stages/src/matrix_run.rs` → `run` → `route-fail`).
 - Die committeten Recipes deklarieren 10× `"gpu"` und 1× die dokumentierte
   CPU-Ausnahme `g06-lens-perspective` = `{ "cpu": "geometry (default content crop)" }`
-  (`recipe-set.v1.json:133-137`; Tabelle `conflicts-and-acceptance.md:158-170`).
+  (`testdata/matrix/recipe-set.v1.json` → `recipes[]`-Eintrag
+  `g06-lens-perspective`, Feld `expected_route`; Tabelle in
+  `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix
+  (LRPAR-MATRIX-RECIPE)").
 
 **Einordnung (SOLL-Entscheid):** der MCP-Pfad braucht den GPU-Paritätsbeweis
 **nicht**, und er darf ihn auch nicht behaupten. Der Merge-Teil hat genau dieselbe
 Grenze gezogen (Merge-SOLL §8 „Gates, die ausdrücklich **nicht** behauptet
-werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `Agents.md:374-383:
-ein GPU-Thema gilt ohne lokalen Lauf als nicht getestet`). Die Matrix ist
+werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `Agents.md`
+§ „Verifizierung und Tests" (Regel „GPU-Tests (lumina-gpu)": ein GPU-Thema gilt
+ohne lokalen Lauf als nicht getestet). Die Matrix ist
 CPU-reproduzierbar gebaut — das nightly beweist die CPU-Referenz-Regression
-(`.github/workflows/matrix-nightly.yml:14-18, :100-104`) und hält die
-GPU-Aussage explizit aus dem Workflow heraus (:121-125).
+(`.github/workflows/matrix-nightly.yml` → Kopfkommentar „Honest scope on
+GitHub-hosted runners" und Schritt „CLI matrix (CPU regression, JSON report)")
+und hält die
+GPU-Aussage explizit aus dem Workflow heraus (Schritt „GPU-parity note").
 
 Was der MCP-Pfad **leisten** muss: die **Vertragsparität** des Gates, nicht den
 Beweis. Konkret:
@@ -310,7 +325,9 @@ Beweis. Konkret:
    gegen eine gemockte Route gepinnt werden kann.
 2. Der **Hardware**-Beweis („GPU↔CPU-Pixelgleichheit") bleibt eigener Task und
    eigener Host; dieses Doc behauptet ihn nicht. Er ist in
-   `conflicts-and-acceptance.md:240-252` bereits als lokaler, Metal-gebundener
+   `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix
+   (LRPAR-MATRIX-RECIPE)" (Absatz „Route-Gate `--require-gpu` (Slice 2)") bereits
+   als lokaler, Metal-gebundener
    Gate geführt.
 
 **Risiko, offen zu klären (TODO §13 Punkt 3):** `RenderRoute` lebt heute als
@@ -333,7 +350,7 @@ Frontends nur gelesen wird.
    `duration_ms` ist die einzige inhaltlich nicht vergleichbare Größe und wird
    nur im **Vergleich** maskiert, nicht aus dem Payload entfernt.
 3. **Sample-Pfade sind relativ:** das Set referenziert Samples relativ zu seiner
-   eigenen Datei (`recipe-set.v1.json`, `crates/lumina-stages/src/matrix_validate.rs` → `resolve_relative`); absolute
+   eigenen Datei (`testdata/matrix/recipe-set.v1.json`, `crates/lumina-stages/src/matrix_validate.rs` → `resolve_relative`); absolute
    Sample-Pfade lehnt die Set-Validierung laut ab (`crates/lumina-stages/src/matrix_validate.rs` → `load_recipe_set`). Der
    Runner backt keinen Build-Host-Pfad ein (`crates/lumina-stages/src/matrix_validate.rs` → `default_recipe_set_path` /
    `resolve_default_matrix_dir`).
@@ -352,7 +369,8 @@ Frontends nur gelesen wird.
 7. **`expected_route` wird nicht angefasst** (§4): kein Schreibpfad, Auswertung nur
    unter `require_gpu`, Inertheit im Default.
 8. **Exit-Codes sind CLI-Sache, nicht Tool-Sache:** `0` grün, `1` Matrix-Fehler,
-   `2` clap-Nutzungsfehler (`conflicts-and-acceptance.md:269-272`;
+   `2` clap-Nutzungsfehler (`feature/quality/conflicts-and-acceptance.md`
+   § „Rezept-Matrix (LRPAR-MATRIX-RECIPE)", Absatz „Exit-Codes.";
    `CliError::exit_code` (`crates/lumina-cli/src/main.rs` → `CliError` → `exit_code`)). MCP bildet jeden
    Nicht-Grün-Fall auf
    `isError: true` ab; ein „grüner" Report mit `failed > 0` ist im CLI ein Fehler
@@ -432,10 +450,14 @@ unverändert in `structuredContent`, es braucht dort keine Änderung.
 - **Committed-Set-Pinning (T2):** `testdata/matrix/recipe-set.v1.json` wird
   **gelesen** (nicht geschrieben): 2 Samples, 11 Rezepte, 22 kommittete Goldens,
   10× `gpu` + 1× dokumentierte CPU-Ausnahme. Verankert an
-  `conflicts-and-acceptance.md:158-170` und `recipe-set.v1.json`.
+  `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix
+  (LRPAR-MATRIX-RECIPE)" (Tabelle „Rezept-ID | Abgedeckte Stufen | Goals |
+  Toleranz | `expected_route`") und `testdata/matrix/recipe-set.v1.json`.
 - **Real-RAW-Gate:** die committeten CR3-Samples
   (`sample-data/raw/aircraft-landscape.cr3`, `-portrait.cr3`; Inventar +
-  Lizenz in `sample-data/raw/README.md`, `golden-fixtures.md:44`) sind **keine**
+  Lizenz in `sample-data/raw/README.md`, `feature/quality/golden-fixtures.md`
+  § „2. Fixture-Klassen (normativ)", Klasse „R1 — echtes RAW-Fixture") sind
+  **keine**
   Belichtungsreihe — derselbe Inventar-Befund wie im Merge-Slice (Merge-SOLL §7).
   Ein MCP-Lauf dagegen ist technisch möglich (derselbe Runner, dieselben Goldens),
   aber teuer und RAW-abhängig → `#[ignore]` + env-gated `LUMINA_MATRIX=1`
@@ -458,7 +480,7 @@ MCP-Run, gleiche Eingabemenge), **[N]** Negativ/Fehlerpfad, **[G]** Gate
 `all_five_library_tools_are_registered_in_both_paths`,
 `crates/lumina-mcp/tests/tool_names/mod.rs` →
 `tools_list_reports_exactly_the_documented_tool_names` | keine |
-| T2 | [U] | `crates/lumina-mcp/tests/matrix_tools.rs` | committetes Set liegt vor und ist unberührt: 2 Samples, 11 Rezepte, 10× `gpu` + 1× `geometry (default content crop)`, `comparison_width` 384 — Lesen, kein Schreiben | `recipe-set.v1.json` |
+| T2 | [U] | `crates/lumina-mcp/tests/matrix_tools.rs` | committetes Set liegt vor und ist unberührt: 2 Samples, 11 Rezepte, 10× `gpu` + 1× `geometry (default content crop)`, `comparison_width` 384 — Lesen, kein Schreiben | `testdata/matrix/recipe-set.v1.json` |
 | T3 | [U] | `crates/lumina-mcp/tests/matrix_tools.rs` | `tools/list` liefert das Schema: `additionalProperties:false`, Property-Menge == §2-Felder, `required == []`, Typen, `comparison_width` Integer mit `minimum: 1` | keine |
 | T4 | [U] | `lumina-mcp` Unit im Tool-Modul | `reject_unknown_fields`-Vorab-Check: unbekanntes Feld → `InvalidParams` **vor** jedem Datei-Zugriff (Shape-Gate zuerst) | keine |
 | T5 | [U] | `crates/lumina-cli/src/tests/mcp_onnx.rs` →
@@ -583,13 +605,14 @@ zwei Rezepte `exact` und `strict`):**
    wachsen — nur ein dünner Dispatch bleibt (`crates/lumina-cli/src/main.rs` →
    `run`).
 3. **Impl-B — Tool-Modul:** `crates/lumina-mcp/src/tools/matrix.rs` angelegt,
-   analog `merge_hdr.rs`/`dust_removal.rs`; Register in `tools/mod.rs` (list +
-   dispatch) und `tool_names/mod.rs` (1 Name).
+   analog `merge_hdr.rs`/`dust_removal.rs`; Register in
+   `crates/lumina-mcp/src/tools/mod.rs` (list +
+   dispatch) und `crates/lumina-mcp/tests/tool_names/mod.rs` (1 Name).
 4. **Impl-C — Error-Mapping:** `McpError::Matrix` (name `MatrixError`, Code
    `-32014`) inklusive `data.report` für den roten Lauf (§7.1).
 5. **Impl-D — Paritäts-Tests:** `matrix_mcp_parity.rs` + `_errors.rs` +
    `_gate.rs` mit gemeinsamem Harness (Modul-Doku + `fixtures`/`graders`/`job`,
-   Spiegel `merge_mcp_parity_common/`); MCP-Oberflächen-Tests
+   Spiegel `crates/lumina-cli/tests/merge_mcp_parity_common/`); MCP-Oberflächen-Tests
    `crates/lumina-mcp/tests/matrix_tools.rs`.
 
 ### 11.1 Phase-1-Scaffold-Entwurf
@@ -601,7 +624,7 @@ zwei Rezepte `exact` und `strict`):**
 | gemeinsamer Kern (Impl-A, Crate offen) | `MatrixRequest`, Runner-Logik, Report-Bau, Route-Port | ~400 Z., droht >500 → dann aufteilen (`matrix_run.rs` + `matrix_report.rs`) |
 | `crates/lumina-mcp/src/tools/matrix.rs` | `NAME`/`DESCRIPTION`/`schema()` + `run` → gemeinsamer Kern | ~120 Z. |
 | `crates/lumina-mcp/tests/matrix_tools.rs` | T1–T4 | ~150 Z. |
-| `crates/lumina-cli/tests/matrix_mcp_parity_common/{mod,fixtures,graders,job}.rs` | Harness (Spiegel `merge_mcp_parity_common/`) | ~250 Z. gesamt |
+| `crates/lumina-cli/tests/matrix_mcp_parity_common/{mod,fixtures,graders,job}.rs` | Harness (Spiegel `crates/lumina-cli/tests/merge_mcp_parity_common/`) | ~250 Z. gesamt |
 | `crates/lumina-cli/tests/matrix_mcp_parity.rs` | T15–T18, T22–T25 | ~300 Z., droht >500 → dann aufteilen (Muster `merge_mcp_parity*.rs`) |
 | `crates/lumina-cli/tests/matrix_mcp_parity_errors.rs` | T19–T21 | ~200 Z. |
 | `crates/lumina-cli/tests/matrix_mcp_parity_gate.rs` | T26, `#[ignore]` | ~120 Z. |
@@ -629,7 +652,8 @@ zwei Rezepte `exact` und `strict`):**
   die Datei liegt unter der 500er-Schwelle, `scripts/file_size_baseline.txt`) —
   die MCP-Fehlerpfade gehen in die **neue** `matrix_mcp_parity_errors.rs`, nicht
   hierhin; der bestehende CLI-Anker bleibt.
-- `crates/lumina-gui/src/matrix.rs` (507 Z., baseline :68) — GUI-frei in diesem
+- `crates/lumina-gui/src/matrix.rs` (507 Z., Baseline-Eintrag in
+  `scripts/file_size_baseline.txt`) — GUI-frei in diesem
   Slice; sein Render-Port bleibt unberührt.
 - `crates/lumina-core/**`, `crates/lumina-stages/**` (außer der Impl-A-Aufnahme),
   `crates/lumina-sidecar/**`.
@@ -704,9 +728,12 @@ sind als TODO/Placeholder markiert:
    `LUMINA_MATRIX=1` — als **Abnahme** dieses Slices gelten, oder genügt die
    synthetische Parität und T26 bleibt reine Regression? TODO.
 9. **Docs-Nachzug:** welche Doks der Slice fortschreiben muss (SOLL-Phase nur
-   benannt, nicht getan): `feature/platform/mcp-server.md` (Tool-Tabelle
-   :740-747, Offen-Liste :749-750, Kopfzahl :4-23), `Agents.todo.md` :409,
-   `feature/quality/conflicts-and-acceptance.md` §Modi (:220-232) falls der
+   benannt, nicht getan): `feature/platform/mcp-server.md` (Tabelle „CLI-Befehl |
+   MCP-Tool | Status" in § „CLI-Abdeckung — Ist-Stand und offene Lücke",
+   Offen-Liste „Offen — kein MCP-Weg", Kopfzahl im Kopf-Status-Block),
+   `Agents.todo.md` → Eintrag `MCP-PARITY-C`,
+   `feature/quality/conflicts-and-acceptance.md` § „Rezept-Matrix
+   (LRPAR-MATRIX-RECIPE)" (Absatz „Modi (User-Entscheid 2026-09-03)") falls der
    MCP-Pfad ins Nightly soll.
 
 

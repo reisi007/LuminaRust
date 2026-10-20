@@ -1846,7 +1846,9 @@ zuvor als gemessene Grenze festgeschrieben hatte, ist **entfallen**.
 zurückgenommen** (DoD §9), weil sie beim Nachschlagen in die Irre führen:
 
 1. Der Serialisierer ist seit `serde_json` 1.0.151 **nicht mehr `ryu`, sondern
-   `zmij`** (`src/ser.rs:1716`, `write_f64` → `zmij::Buffer::format_finite`).
+   `zmij`** (`serde_json` → `src/ser.rs` → `write_f64` →
+   `zmij::Buffer::format_finite`; **externes** Crate `serde_json` 1.0.151, die
+   Datei liegt **nicht** in diesem Repo).
    `grep -rn ryu src/ Cargo.toml` im verlinkten Krat liefert **0 Treffer**. Für
    die Eigenschaft unerheblich (beide schreiben die kürzeste
    exakt-wiederlesbare Form), für die Fehlerdiagnose nicht.
@@ -1856,11 +1858,15 @@ zurückgenommen** (DoD §9), weil sie beim Nachschlagen in die Irre führen:
 
 **Was das Feature nicht tut:** es berührt ausschließlich den **Parser**
 (`grep -rn float_roundtrip src/` → 22 Treffer, korrigiert in der
-Verifikationsrunde 2026-10-12 von „23, alle in `src/de.rs` und
-`src/value/de.rs`": 19 Treffer in `src/de.rs`, 2 in `src/value/de.rs`, einer in
-`src/lib.rs:435` — die Deklaration `mod lexical;` des Feature-eigenen,
-korrekt gerundeten Parsers. `src/ser.rs` enthält **null**, ein Verzeichnis
-`src/ser/` existiert nicht). Der Serialisierer ist in beiden Builds
+Verifikationsrunde 2026-10-12 von „23, alle in `serde_json` → `src/de.rs` und
+`serde_json` → `src/value/de.rs`": 19 Treffer in `serde_json` → `src/de.rs`,
+2 in `serde_json` → `src/value/de.rs`, einer in
+`serde_json` → `src/lib.rs` → `mod lexical;` — die Deklaration `mod lexical;`
+des Feature-eigenen,
+korrekt gerundeten Parsers. `serde_json` → `src/ser.rs` enthält **null**, ein
+Verzeichnis `serde_json` → `src/ser/` existiert nicht; alle `src/…`-Pfade
+dieses Absatzes sind Pfade **innerhalb des externen** Crates `serde_json`
+1.0.151, **nicht** Pfade dieses Repos). Der Serialisierer ist in beiden Builds
 derselbe. Ein Digest über serialisierte Bytes kann sich deshalb nur ändern, wenn
 ein Wert **vorher geparst** wurde — also nur über einen Ladevorgang, und dort ist
 die Änderung der Zweck des Features.
@@ -1878,8 +1884,8 @@ die der Workspace linkt:**
 
 **Warum kein committetes Byte betroffen war.** Der Verlust tritt auf, wenn der
 `u64`-Signifikant **größer als 2^53** ist und deshalb als `f64` nicht mehr exakt
-gehalten wird (`serde_json/src/de.rs:638`,
-`#[cfg(not(feature = "float_roundtrip"))] f64_from_parts`), oder wenn der
+gehalten wird (`serde_json` → `src/de.rs` → `f64_from_parts` mit
+`#[cfg(not(feature = "float_roundtrip"))]`, externes Crate `serde_json` 1.0.151), oder wenn der
 Skalierfaktor `10^|exp|` in `f64` nicht exakt ist (`|exp| > 22`). **Nicht** die
 Stellenzahl ist die Bedingung: die Fassung dieses Absatzes, die „mindestens 17
 signifikante Stellen" als Grenze nannte, ist an der Fundstelle zurückgenommen
@@ -2108,7 +2114,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Roundtrip byte-exakt getestet) macht evaluierte Ebenen im VRAM-Composite
   sichtbar. **GPU-RENDER-MASK-19 (2026-10-15): der GPU-Masken-Pixelpass
   existiert.** `crates/lumina-gpu/src/local_mask_pass.rs` +
-  `src/local_mask_gpu.rs` wenden die lokal ausgewertete Maske (Alpha,
+  `crates/lumina-gpu/src/local_mask_gpu.rs` wenden die lokal ausgewertete Maske (Alpha,
   `R16Uint`) pixelgenau auf den Composite an: pro nicht-neutralem Layer wird
   das lokale Rezept GPU-gerendert (relative WB + P0-Basic im Float-Kernel; das
   delta-freie P0-Rezept über die bereits byte-identische globale Ton-Pipeline)

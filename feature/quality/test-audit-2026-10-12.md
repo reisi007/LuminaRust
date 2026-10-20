@@ -125,7 +125,8 @@ Migrationsschleife + Refusal, unterschiedlich ist nur der eingeschleuste Block.
 
 `brush_zero_width`/`brush_zero_height_resolution_rejects_invalid_sidecar`
 (`crates/lumina-sidecar/src/tests/mask_prompts.rs:133/138`) teilen den
-Produktionszweig `src/lib.rs:4174` (`resolution.0 == 0 || resolution.1 == 0`) —
+Produktionszweig `crates/lumina-sidecar/src/lib.rs` → `validate_prompt`
+(`resolution.0 == 0 || resolution.1 == 0`) —
 jeder pinned ein Disjunkt; das ist Condition-Coverage, **kein**
 Streichkandidat.
 
@@ -156,9 +157,10 @@ Begründung.
 
 **Naht-Scan über den ganzen Workspace: 0 bestätigte Befunde.** Produktions-
 funktionen, die nur aus Testcode referenziert werden: 2 Rohtreffer, beide falsch
-positiv — `run_merge` (`lumina-merge/src/bundle.rs:357`, Aliase-Import
-`run_merge_bundle` in `cli/src/merge.rs:24`, Produktionsaufruf `:105` und
-`gui/src/merge_gui.rs:230`) und `classify_required`
+positiv — `run_merge` (`crates/lumina-merge/src/bundle.rs` → `run_merge`, Aliase-Import
+`run_merge_bundle` in `crates/lumina-cli/src/merge.rs` → `run_merge_bundle`,
+Produktionsaufruf ebendort und in `crates/lumina-gui/src/merge_gui.rs` →
+`run_merge_sync`) und `classify_required`
 (`lumina-testskip/src/lib.rs:103`, wird von
 `lumina-onnx/tests/face_real_weights.rs:86` gerufen — testskip ist per Definition
 Testinfrastruktur). Der LENSFUN-DB-33-Defekt (Naht ohne Produktionsaufruf)

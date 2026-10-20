@@ -721,8 +721,10 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   `clear_metadata_history`/`apply_meta_preset`/`sync_metadata`. Der
   Instrumentierungs-Kern (Namenstabelle, RAII-Timer, Makro) ist dazu in
   `crates/lumina-gui/src/gui_action.rs` extrahiert (File-Size-Ratchet), die
-  Rest-Sektions-Log-Tests liegen in `crates/lumina-gui/src/tests/instrdbg.rs`
-  (der Audit liegt in `lib.rs`: `f100_action_button` ohne `_`-Arm).
+  Rest-Sektions-Log-Tests liegen in
+  `crates/lumina-gui/src/tests/action_log_direct_triggers.rs` (Nachfolger; der alte
+  Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt — Anker **überholt**;
+  der Audit liegt in `lib.rs`: `f100_action_button` ohne `_`-Arm).
   **GUI-INSTRDBG-17b-REST (implementiert, Verifizierung offen):** Über die 66
   `GuiAction`s aus Teil 1 hinaus sind 17 weitere user-sichtbare Schaltflächen
   aus Spot-Extras, Detail/Rote Augen, Optics, Tone Curve und Presets
@@ -737,8 +739,10 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   (`set_spot_visualize`) aufrufen, laufen über eine eigene instrumentierte
   Button-Methode; verschachtelte Instrumentierung unterdrückt der Tiefen-Guard
   (genau eine Zeile). Klick-Tests je Button liegen in
-  `crates/lumina-gui/src/tests/instrdbg_rest.rs` (Button → instrumentierte
-  Methode → genau eine Logzeile) plus No-op-Log-Regressionstest; der Audit
+  `crates/lumina-gui/src/tests/action_log_click_spot_detail_optics_presets.rs`
+  (Button → instrumentierte Methode → genau eine Logzeile; Nachfolger — der alte
+  Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt, Anker **überholt**)
+  plus No-op-Log-Regressionstest; der Audit
   prüft die neuen Oberflächen `Detail`, `Optics`, `Tone Curve` und `Presets`
   mit. **GUI-INSTRDBG-17c (Rework 2026-09-17, Verifizierung offen):** Über die
   83 `GuiAction`s aus 17b-REST hinaus sind die user-sichtbaren Schaltflächen
@@ -766,16 +770,19 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Stelle den identischen Debug-Pfad explizit, und beide Merge-Buttons
   (HDR/Panorama) laufen durch denselben instrumentierten Handler — kein
   zweiter, ungetracter Pfad. Klick-Tests je Button liegen in
-  `crates/lumina-gui/src/tests/instrdbg_last.rs` (17c) und
-  `crates/lumina-gui/src/tests/instrdbg_rework.rs` (Rework: generative
+  `crates/lumina-gui/src/tests/action_log_click_basic_color_generative.rs` (17c) und
+  `crates/lumina-gui/src/tests/action_log_click_section_controls_and_filmstrip.rs`
+  (Rework: generative
   Checkboxen, Previous/Reset aller acht Panels, Lens-Blur-Enable, beide
   Merge-Buttons, die drei Filmstreifen-Buttons, die KI-Denoise-Enable-Checkbox
-  (F-A)) plus No-op-Log-Regressionstests; der Audit prüft die neuen
+  (F-A); Nachfolger — der alte Dateiname wurde in `5fc2486` / TEST-ORPHAN-97
+  entfernt, Anker **überholt**) plus No-op-Log-Regressionstests; der Audit prüft die neuen
   Oberflächen `Color` (Point Color), `Generative` und `Filmstrip` mit, die Klick-Tests der
-  ersten Slices in `instrdbg_rest.rs` und die Kern-Tests (Format,
+  ersten Slices in `action_log_click_spot_detail_optics_presets.rs` und die Kern-Tests (Format,
   Nested-Suppression, Namenstabelle, Release-Passthrough) in
-  `crates/lumina-gui/src/tests/instrdbg_core.rs` (aus `gui_action.rs`
-  extrahiert, File-Size-Ratchet). Die beiden WB-Abbruch-Affordanzen
+  `crates/lumina-gui/src/tests/action_log_contract.rs` (aus `gui_action.rs`
+  extrahiert, File-Size-Ratchet; Nachfolger — der alte Dateiname wurde in
+  `5fc2486` / TEST-ORPHAN-97 entfernt, Anker **überholt**). Die beiden WB-Abbruch-Affordanzen
   (`WbEyedropperActive`/`Cancel` setzen nur `wb_pick_mode = false`) bleiben wie
   `disarm_preview_pickers`/`Esc` bewusster reiner Session-State ohne eigene
   `GuiAction`. Tone-Curve-Kanalwahl ist ebenfalls reiner Session-State
@@ -822,8 +829,10 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   `crates/lumina-gui/src/face_gui.rs`) ist jetzt eine `GuiAction`
   (`create_face_mask`) mit `instrument_gui_action!` als erster Anweisung,
   eigener Audit-Oberfläche `People` (`f100_action_button`, ohne `_`-Arm) und
-  Klick-Test (`crates/lumina-gui/src/tests/instrdbg_face.rs`: Button → genau
-  eine Logzeile → Maskendefinition im Rezept und im Sidecar). Das People-Panel
+  Klick-Test (`crates/lumina-gui/src/tests/action_log_click_people_use_as_mask.rs`:
+  Button → genau eine Logzeile → Maskendefinition im Rezept und im Sidecar;
+  Nachfolger — der alte Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt,
+  Anker **überholt**). Das People-Panel
   ist für den File-Size-Ratchet nach
   `crates/lumina-gui/src/people_panel.rs` extrahiert (`face_gui.rs`
   1095→899); die H-1-Aussage „kein user-sichtbarer Edit-Rezept-/Masken-
@@ -1574,7 +1583,7 @@ laut benannte Abwägung und keine stille Optimierung:
     schon seit längerem) bleiben zulässig — für neue Testdateien gilt
     weiterhin "flach", für Ratchet-Splits in einem bereits gegliederten
     Bereich ebenso. Neu angelegt wird kein weiterer Domänen-Unterordner.
-  - Gemeinsame Test-Helfer bleiben in `tests/support.rs`; neue Testdateien
+  - Gemeinsame Test-Helfer bleiben in `crates/lumina-gui/src/tests/support.rs`; neue Testdateien
     entstehen von Anfang an thematisch benannt.
   **Ist-Stand 2026-09-27:** 16 ID-benannte Dateien auf Feature-Namen umgestellt.
   Nachzählweg: `instrdbg_*` ×7, `f100_*` ×4, `r3_*` ×4, `g01_*` ×1.
@@ -2740,8 +2749,11 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   stiller Hänger. Code: `crates/lumina-gui/src/library_scan.rs` (Scan-Engine
   `run_scan`, `ScanRequest`/`ScanResult`, `spawn_scan`, `begin_scan`/
   `poll_scan`; `scan_entry` + rekursiver/flacher Driver aus `lib.rs`
-  extrahiert). Headless-Tests: `tests/r3_f8_scan.rs` (Worker läuft asynchron,
-  sichtbarer Status, superseded-Drop, lauter Disconnect, async == sync). Unter
+  extrahiert). Headless-Tests: `crates/lumina-gui/src/tests/library_scan_async.rs`
+  (Worker läuft asynchron,
+  sichtbarer Status, superseded-Drop, lauter Disconnect, async == sync;
+  Nachfolger — der alte Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt,
+  Anker **überholt**). Unter
   `cfg(test)` läuft `list_directory` synchron über dieselbe Engine (Test-Seam,
   kein Produktions-Fallback), damit die bestehende Listing-Suite ohne Event-Loop
   grün bleibt.
@@ -2894,10 +2906,11 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   ohne Aussetzung scheitert der `composite_auto_fill`-Dimensionscheck),
   generative Expand (Render-Source exakt `400×300`; ohne Aussetzung `256×192`)
   und eine Kontrolle ohne aktive Stufe.
-  Headless-Tests: `tests/r3_render_size.rs`
+  Headless-Tests: `crates/lumina-gui/src/tests/preview_viewport_cap.rs`
   (Formel, dpr-Skalierung, Draft-Cap, Export-Full-Res, 1:1-Ausnahme,
   absolute-Stufen-Ausnahme + Kontrolle, laute Missing-Warnung genau einmal,
-  kleine Quellen unberührt). Bestehende
+  kleine Quellen unberührt; Nachfolger — der alte Dateiname wurde in `5fc2486` /
+  TEST-ORPHAN-97 entfernt, Anker **überholt**). Bestehende
   GUI-DRAFT-JUMP-/REVIEW-GUI-N6-Tests auf die Cap-Semantik nachgezogen. **Die
   Cap-Logik selbst ändert kein kittest-Golden** (die Golden-Fixtures liegen
   unter der 256-px-Floor); die vier geänderten Goldens stammen ausschließlich
@@ -2919,7 +2932,9 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Test: `neighbor_denoise_stage_follows_the_app_policy` (Warn → Ok, Strict →
   lauter Abbruch; Mutationsbeweis: erzwingt man Strict, schlägt der Warn-Zweig
   fehl). Für den File-Size-Ratchet sind Fensterplanung + Worker-Render nach
-  `preview_jobs.rs` extrahiert (Test in `tests/r3_fixes.rs`).
+  `preview_jobs.rs` extrahiert (Test in
+  `crates/lumina-gui/src/tests/crop_display_and_denoise_policy.rs`; Nachfolger — der
+  alte Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt, Anker **überholt**).
   **Rework 2026-09-20 (B4):** Derselbe Pfad-Split bestand im **Navigator**:
   `navigator_zoomed_overview` renderte `render_frame` (Strict-Default) und
   verschluckte den Fehler via `.ok()?` → bei aktiver `denoise_ai` (Session
@@ -2945,9 +2960,11 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Iterationen): mindestens ein Writer rebased, **beide** konkurrierenden Felder
   überleben (kein Datenverlust), und das gemergte Dokument ist byte-deterministisch
   über wiederholte Läufe (`document_revision`-Set kollabiert auf einen Wert).
-  Tests: `tests/r3_conflict.rs::two_real_writers_rebase_without_data_loss`,
+  Tests: `crates/lumina-gui/src/tests/sidecar_rebase_race.rs` →
+  `two_real_writers_rebase_without_data_loss`,
   `race_outcome_is_deterministic_across_runs`,
-  `fresh_document_never_rebases_over_a_concurrent_file`. **Nicht automatisierbar
+  `fresh_document_never_rebases_over_a_concurrent_file` (Nachfolger — der alte
+  Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt, Anker **überholt**). **Nicht automatisierbar
   und daher nur manuell reproduzierbar:** ein echter zweiter **Prozess/Instanz**
   (zwei `lumina-gui`-Binaries auf einem Sidecar) — braucht die native App mit
   Fenster und ein Live-Sidecar-Verzeichnis; die dabei ausgeführte Logik ist
