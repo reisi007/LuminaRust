@@ -148,20 +148,28 @@ Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
   Skill verlangt zwei benannte, dokumentierte und lokal lauffähige
   Gate-Stufen, einen Floor für die schnelle Stufe und eine Lückenliste
   zwischen den Stufen. Umgesetzt in `scripts/gates.sh` (Stufen `fast`
-  (Sekunden, ohne Codegen, Floor `MIN_CHECKS=8`), `slow` (Minuten, CI-Mirror)
+  (Sekunden, ohne Codegen, Floor `MIN_CHECKS=9`), `slow` (Minuten, CI-Mirror)
   und `list` als Quelle der Wahrheit für die Tier-Tabelle), in
   `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu
   `sh scripts/gates.sh list`, Floor-Regel, Lückenliste mit Klasse, Grund,
   Owner und Task-ID je Lücke), in `Agents.md` §„Verifizierung und Tests" und
   im CI-Schritt „Run fast tier (scripts/gates.sh fast)" (Job „Rust fast
   checks"), damit Definition und Ausführung dieselbe sind. Zusätzlich
-  tragen die **zehn** `scripts/check_*.sh` den Gate-Header (Defektklasse, der
+  tragen die **elf** `scripts/check_*.sh` den Gate-Header (Defektklasse, der
   konkrete Anlass, die Ratchet-Richtung, die benannte Grenze) — reine
   Kommentarzeilen, keine Verhaltensaenderung.
-- `generated-docs` (`00dbd22`, hidden) — trifft zu, ist aber nicht drin: die
-  Zahlen in der Prosa sind quellenabhaengig und bereits veraltet
-  (`Agents.todo.md` `GUI-LIB-SPLIT-65`), ein Generator und ein Drift-Gate
-  fehlen → offene Position `DOC-ZAHLEN-DRIFT-82`.
+- `generated-docs` (`00dbd22`, hidden) — trifft zu und ist **angewendet**: der
+  Generator `scripts/gen_doc_facts.sh` (regelbasiert, deterministisch, git-frei,
+  POSIX sh) und das Drift-Gate `scripts/check_doc_facts_drift.sh` (erzeugen →
+  Block aus der Zieldatei extrahieren → diff; meldet, schreibt nie) sind umgesetzt,
+  dazu das Hygiene-Gate `scripts/check_doc_facts_generator.sh` (`fast-9`:
+  Vollständigkeit, Determinismus, Git-Freiheit). Zehn Blöcke in sieben Dateien sind
+  generiert; die Prosa-Zahlen dieser Populationen stehen nur im generierten Block.
+  **Offen** (Position `DOC-ZAHLEN-DRIFT-82`, Welle 3): der R/C-Split der Goldens
+  (14/52) und die Verteilung auf die Test-Targets bleiben handgepflegt (ihre
+  Klassifikation ist es auch), Testlaufzahlen sind nicht ableitbar, und das
+  CLI-Coverage-Handinventar „Abgedeckt (29)“ in `feature/platform/mcp-server.md`
+  altert stumm (eine eigene Population, kein Gate) — Folgeaufgabe.
 
 **Geändert**
 
