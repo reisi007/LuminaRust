@@ -8,7 +8,7 @@
 # ist die EINZIGE Quelle der Wahrheit fuer die Doku
 # (`feature/quality/local-gates.md`).
 #
-#   fast  — Sekunden, OHNE Codegen. Sechs Checks in fester Reihenfolge:
+#   fast  — Sekunden, OHNE Codegen. Sieben Checks in fester Reihenfolge:
 #           1) cargo fmt --all -- --check   (nur rustfmt, kein Compile)
 #           2) sh scripts/check_file_sizes.sh
 #           3) sh scripts/check_plan_format.sh
@@ -16,6 +16,8 @@
 #           5) sh scripts/check_core_prod_fs_free.sh
 #           6) sh scripts/check_ci_tier_drift.sh  (Drift-Gate: die Tier-Liste
 #              gegen die generierte Liste aus `ci.yml`; nur Textvergleich)
+#           7) sh scripts/check_file_ceiling.sh (Zeilen-Obergrenze 3000:
+#              harte Grenze + Ratchet-Richtung; nur Textvergleich)
 #           `fast` ruft KEIN `cargo build/check/clippy/test/bench` auf. Das
 #           Skript prueft das VOR dem Lauf (Verstoss = harter Fehler), damit
 #           die Definition nicht still in eine Codegen-Stufe kippt.
@@ -40,14 +42,15 @@
 #
 # FLOOR (Skill `ratchet-gates`): eine auswahlbasierte Stufe laeuft in einem
 # clean checkout 0 Checks und meldet gruen — eine tote Schranke. Der Runner
-# zaehlt deshalb die GESTARTETEN Checks und erzwingt MIN_CHECKS=6 fuer die
+# zaehlt deshalb die GESTARTETEN Checks und erzwingt MIN_CHECKS=7 fuer die
 # Stufe `fast`: darunter ist das Ergebnis ein FEHLER (Exit 1), kein Pass.
 # Eine leere Tier-Liste ist ebenfalls ein Fehler, kein Pass. Ein fehlendes
 # Pruefskript zaehlt als FEHLSCHLAG, nicht als Ueberspringen.
 # MIN_CHECKS wurde von 5 auf 6 gehoeben, weil die Stufe `fast` um
-# `fast-6` (Drift-Gate) gewachsen ist — die Untergrenze muss die Zahl der
-# Checks abbilden, sonst bleibt das Entfernen eines Checks still (2026-10-20,
-# GATE-DRIFT-UND-LUECKEN-84).
+# `fast-6` (Drift-Gate) gewachsen ist, und von 6 auf 7, weil sie um
+# `fast-7` (Zeilen-Obergrenze 3000) gewachsen ist — die Untergrenze muss die
+# Zahl der Checks abbilden, sonst bleibt das Entfernen eines Checks still
+# (2026-10-20, GATE-DRIFT-UND-LUECKEN-84 / FILE-SIZE-CEILING-3K-83).
 #
 # Das Skript schreibt NICHTS ins Repo, legt keine Dateien an, braucht keine
 # Sonderrechte und laeuft ohne Netz.
@@ -60,7 +63,7 @@ cd "$ROOT"
 
 # Mindeststand der schnellen Stufe: unterhalb dieser Zahl gestarteter Checks
 # ist das Ergebnis ein Fehler (Floor), nicht ein Pass.
-MIN_CHECKS=6
+MIN_CHECKS=7
 
 # `cargo` steht in manchen nicht-interaktiven Shells nicht im PATH (z. B. auf
 # diesem Host); dann wird die rustup-Installation des Benutzers benutzt. In der
@@ -98,6 +101,12 @@ fi
 # erfinden. Die Herkunft ist damit automatisch exakt: der Job-Name steht nicht
 # mehr nur hier, sondern wird aus `ci.yml` gelesen; Feld 7 ist der (mit
 # `list-ci`) maschinell verglichene Wert.
+#
+# `fast-7` (Zeilen-Obergrenze 3000, FILE-SIZE-CEILING-3K-83) ist der ZWEITE
+# Ratchet ueber Dateigroessen: `fast-2` verbietet Wachstum ueber 500 Zeilen,
+# `fast-7` setzt eine harte Obergrenze 3000 mit Ratchet-Richtung (die Werte
+# duerfen nur sinken). Zwei Klassen, zwei Gates, beide in dieser Stufe — die
+# SOLL-Zielsemantik steht in `feature/quality/file-size-policy.md`.
 # ---------------------------------------------------------------------------
 
 FAST_ENTRIES='fast-1|1|Repo-Wurzel|.|keine Infrastruktur|cargo fmt --all -- --check||
@@ -105,7 +114,8 @@ fast-2|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_file_sizes.sh||
 fast-3|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_plan_format.sh||
 fast-4|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_env_gate_reasons.sh||
 fast-5|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_core_prod_fs_free.sh||
-fast-6|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_ci_tier_drift.sh||'
+fast-6|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_ci_tier_drift.sh||
+fast-7|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_file_ceiling.sh||'
 
 # CI-Mirror. Quelle ist `.github/workflows/ci.yml` (Stand 2026-10-20); der
 # Job-Name steht je Eintrag (Feld 7). **kein Schritt** setzt ein schrittweises
@@ -148,8 +158,8 @@ usage() {
     cat <<'EOF'
 Usage: sh scripts/gates.sh <fast|slow|all|list|list-ci|help>
 
-  fast   Schnelle Stufe (Sekunden, kein Codegen): cargo fmt + 5 Textgates.
-         Floor: mindestens 6 gestartete Checks, sonst FAIL (Exit 1).
+  fast   Schnelle Stufe (Sekunden, kein Codegen): cargo fmt + 6 Textgates.
+         Floor: mindestens 7 gestartete Checks, sonst FAIL (Exit 1).
   slow   Langsame Stufe (Minuten): CI-Mirror der Rust-Jobs aus
          .github/workflows/ci.yml, Fail fast.
   all    fast, danach slow.

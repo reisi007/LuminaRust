@@ -15,7 +15,7 @@ geprüft am: 2026-10-20
 | `ghcr-visibility` | ja | `.github/workflows/ci.yml` — `ghcr.io/reisi007/luminarust/lumina-ci:latest` in denselben fünf `container:`-Jobs | |
 | `security-review` (neu) | ja | Register: `feature/quality/security-review-register.md` (Form nach Stage 6 — Zwei-Hälften-Form, Registertabelle, Pflege durch den Build-Agent; Enumerationsbasis mit 19 erreichbaren Oberflächen, **bisher null Befunde**; die erste Review-Welle ist die offene Task `SEC-REVIEW-WELLE-1-85`; die **Scope-Frage GUI** ist eine offene Eigentuemerentscheidung und im Register ausdrücklich nicht vorweggenommen) | |
 | `ui-review` | nein | als Playwright-Flow trifft es nicht zu: native egui-GUI, der visuelle Review läuft über `egui_kittest`-Goldens/PSNR und den Fenster-Review `UI-VISION-REVIEW-70`. Die **geänderte** Regel derselben Runde (kein Vision-Subagent: das konfigurierte Modell liest die Bilder selbst) trifft die Projekt-Pflicht in `DoD.md` §6 → dort **umgesetzt** | |
-| `ratchet-gates` (neu) | ja | `scripts/gates.sh` (Stufen `fast`/`slow`/`all`/`list`/`list-ci`, Floor `MIN_CHECKS=6`, keine Codegen-Stufe `fast`), `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu `gates.sh list`, Floor-Regel, Lückenliste), `Agents.md` §„Verifizierung und Tests", CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`), Gate-Header der **acht** `scripts/check_*.sh` (Defektklasse, Anlass, Ratchet-Richtung, benannte Grenze) | |
+| `ratchet-gates` (neu) | ja | `scripts/gates.sh` (Stufen `fast`/`slow`/`all`/`list`/`list-ci`, Floor `MIN_CHECKS=7`, keine Codegen-Stufe `fast`), `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu `gates.sh list`, Floor-Regel, Lückenliste), `Agents.md` §„Verifizierung und Tests", CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`), Gate-Header der **neun** `scripts/check_*.sh` (Defektklasse, Anlass, Ratchet-Richtung, benannte Grenze) | |
 | `generated-docs` (neu) | nein | | Die Zahlen in der Prosa sind quellenabhaengig und altern still (`Agents.todo.md` `GUI-LIB-SPLIT-65` nennt 12 571/12 573 Zeilen, `scripts/file_size_baseline.txt` führt andere Werte); ein Generator + Drift-Gate fehlt | `Agents.todo.md` → `DOC-ZAHLEN-DRIFT-82` |
 | `agent-config` | nein | | Maschinenkonfiguration (globale `opencode.jsonc`, globale `AGENTS.md`); die projektbezogene Aussage der Änderung — ein Projekt verweist auf die Regeldatei, statt den Flow zu wiederholen — ist im Projekt erfüllt; die versteckten Skills der Range (`70d49e0`, `00dbd22`) sind für dieses Projekt ohne Wirkung |
 | `laravel` | nein | | Rust-Workspace, kein PHP |
@@ -147,14 +147,14 @@ Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
   Skill verlangt zwei benannte, dokumentierte und lokal lauffähige
   Gate-Stufen, einen Floor für die schnelle Stufe und eine Lückenliste
   zwischen den Stufen. Umgesetzt in `scripts/gates.sh` (Stufen `fast`
-  (Sekunden, ohne Codegen, Floor `MIN_CHECKS=6`), `slow` (Minuten, CI-Mirror)
+  (Sekunden, ohne Codegen, Floor `MIN_CHECKS=7`), `slow` (Minuten, CI-Mirror)
   und `list` als Quelle der Wahrheit für die Tier-Tabelle), in
   `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu
   `sh scripts/gates.sh list`, Floor-Regel, Lückenliste mit Klasse, Grund,
   Owner und Task-ID je Lücke), in `Agents.md` §„Verifizierung und Tests" und
   im CI-Schritt „Run fast tier (scripts/gates.sh fast)" (Job „Rust fast
   checks"), damit Definition und Ausführung dieselbe sind. Zusätzlich
-  tragen die **acht** `scripts/check_*.sh` den Gate-Header (Defektklasse, der
+  tragen die **neun** `scripts/check_*.sh` den Gate-Header (Defektklasse, der
   konkrete Anlass, die Ratchet-Richtung, die benannte Grenze) — reine
   Kommentarzeilen, keine Verhaltensaenderung.
 - `generated-docs` (`00dbd22`, hidden) — trifft zu, ist aber nicht drin: die

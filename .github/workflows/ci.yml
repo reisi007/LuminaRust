@@ -145,21 +145,23 @@ jobs:
           # Stable across the three Rust shards; do not use the job ID here.
           shared-key: lumina-rust-shards
 
-      # LOCAL-GATE-TIERS-81: die sechs schnellen Checks laufen über DENSELBEN
+      # LOCAL-GATE-TIERS-81: die sieben schnellen Checks laufen über DENSELBEN
       # Runner wie lokal (`sh scripts/gates.sh fast`), damit Definition und
       # Ausführung nicht auseinanderlaufen. Der Runner zählt die gestarteten
-      # Checks (Floor: mindestens 6) und führt keinen Codegen aus.
-      # Die sechs Checks laufen gebündelt am Job-Anfang (vorher: „Check
-      # formatting" zuerst, die vier Textgates zuletzt); alle sechs sind
+      # Checks (Floor: mindestens 7) und führt keinen Codegen aus.
+      # Die sieben Checks laufen gebündelt am Job-Anfang (vorher: „Check
+      # formatting" zuerst, die vier Textgates zuletzt); alle sieben sind
       # artefaktfrei (kein Build, kein Adapter, kein Netz).
       # Abgedeckter Kommando-Satz — gegenüber den fünf vorherigen Einzel-
-      # schritten unverändert, plus der Drift-Gate:
+      # schritten unverändert, plus der Drift-Gate und die Zeilen-Obergrenze
+      # 3000 (FILE-SIZE-CEILING-3K-83):
       #   cargo fmt --all -- --check
       #   sh scripts/check_file_sizes.sh
       #   sh scripts/check_plan_format.sh
       #   sh scripts/check_env_gate_reasons.sh
       #   sh scripts/check_core_prod_fs_free.sh
       #   sh scripts/check_ci_tier_drift.sh
+      #   sh scripts/check_file_ceiling.sh
       - name: Run fast tier (scripts/gates.sh fast)
         run: sh scripts/gates.sh fast
 

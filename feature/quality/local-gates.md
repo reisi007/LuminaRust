@@ -50,7 +50,7 @@ Dieses Dokument und der Runner `scripts/gates.sh` liefern diese Antwort:
 1. **zwei benannte Stufen** — `fast` (Sekunden) und `slow` (Minuten), beide
    lokal startbar, beide mit fester Kommando-Menge;
 2. **ein Floor für die schnelle Stufe** — sie meldet nur „grün", wenn
-   tatsächlich mindestens sechs Checks gelaufen sind (§4);
+   tatsächlich mindestens sieben Checks gelaufen sind (§4);
 3. **eine Lückenliste** — jede Defektklasse, die keine Stufe abdeckt, steht
    mit Grund, Owner und Task-ID hier (§5);
 4. **einen Drift-Gate gegen die CI** — die Tier-Liste wird aus `ci.yml`
@@ -73,11 +73,15 @@ sh scripts/gates.sh fast
 - **Budget:** Sekunden (gemessen: unter zehn Sekunden auf diesem Host).
 - **Bedarf:** keine Infrastruktur — kein Server, keine Datenbank, kein
   Netz, kein Build-Artefakt, kein Adapter. Nur `cargo fmt` (rustfmt, **kein**
-  Compile) und fünf POSIX-Shell-Gates.
+  Compile) und sechs POSIX-Shell-Gates.
 - **Deckt ab:** Formatierung des gesamten Workspace; die vier Textschranken
   (Dateigrößen-Ratchet, Plan-Format, Env-Gate-Begründungen,
   Produktions-Dateisystemfreiheit von `lumina-core`) und den **Drift-Gate**
-  (§7), der die Tier-Liste gegen die aus `ci.yml` generierte Liste prüft.
+  (§7), der die Tier-Liste gegen die aus `ci.yml` generierte Liste prüft; neu
+  dazu die **Zeilen-Obergrenze 3000** (`fast-7`,
+  `scripts/check_file_ceiling.sh`) — die harte Grenze je Datei plus
+  Ratchet-Richtung, deren SOLL-Zielsemantik in
+  [`file-size-policy.md`](file-size-policy.md) steht.
 - **Deckt nicht ab:** alles, was kompiliert, linkt, läuft oder einen Adapter
   braucht. `fast` ruft **kein** `cargo build/check/clippy/test/bench` auf; der
   Runner prüft das vor dem Lauf und bricht ab, falls die Definition
@@ -150,6 +154,7 @@ Wortgleich mit `sh scripts/gates.sh list`:
 | fast-4 | fast | `sh scripts/check_env_gate_reasons.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-5 | fast | `sh scripts/check_core_prod_fs_free.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-6 | fast | `sh scripts/check_ci_tier_drift.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
+| fast-7 | fast | `sh scripts/check_file_ceiling.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | slow-1 | slow | `cargo check --workspace --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-2 | slow | `cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-3 | slow | `cargo clippy -p lumina-core --features lensfun -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
@@ -188,15 +193,16 @@ zu unterscheiden — wer das grüne Gate liest, hat nichts gelernt.
 Der Runner zählt deshalb die **gestarteten** Checks der Stufe `fast` und
 erzwingt einen Mindeststand:
 
-- `MIN_CHECKS=6` — die Zahl der gestarteten Checks muss mindestens 6 sein.
+- `MIN_CHECKS=7` — die Zahl der gestarteten Checks muss mindestens 7 sein.
 - Darunter ist das Ergebnis ein **Fehler** (Exit 1), kein Pass. Meldung:
-  `floor nicht erreicht: nur N von 6 Checks ausgefuehrt`.
+  `floor nicht erreicht: nur N von 7 Checks ausgefuehrt`.
 - Eine **leere Tier-Liste** ist ebenfalls ein Fehler (Exit 1), kein Pass.
 - Ein **fehlendes Prüfskript** zählt als **Fehlschlag** (Exit 127), nicht als
   Überspringen: ein Check, der nicht startet, ist ein toter Check.
 - Der Floor ist selbst eine Schranke mit nur einer Richtung: er kann sinken,
   aber nicht ohne Kommentar steigen. Wer die Stufe erweitert, hebt `MIN_CHECKS`
   im selben Commit an. (Erhöht von 5 auf 6, als `fast-6` — der Drift-Gate —
+  hinzukam, und von 6 auf 7, als `fast-7` — die Zeilen-Obergrenze 3000 —
   hinzukam; ein Floor, der unter der Zahl der Checks liegt, würde das
   Entfernen eines Checks still werden lassen.)
 
@@ -292,7 +298,7 @@ tests") und steht deshalb in §5.1.
 
 ## 6. CI-Spiegelung der schnellen Stufe
 
-Die CI führt die sechs schnellen Checks **über denselben Runner** wie lokal:
+Die CI führt die sieben schnellen Checks **über denselben Runner** wie lokal:
 der Job „Rust fast checks" in `.github/workflows/ci.yml` hat einen Schritt
 „Run fast tier (scripts/gates.sh fast)". Definition und Ausführung sind
 damit dieselbe — ein Check, der lokal existiert und in der CI fehlt (oder
@@ -306,12 +312,12 @@ umgekehrt), kann nicht mehr unbemerkt auseinanderlaufen.
 „Run fast tier (scripts/gates.sh fast)" → `sh scripts/gates.sh fast`.
 
 Der abgedeckte Kommando-Satz ist damit **identisch**: der Runner führt genau
-`fast-1`…`fast-6` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
+`fast-1`…`fast-7` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
 Quelle, aus der der Runner seine Liste liest (`sh scripts/gates.sh list`).
 Die Kommando-Liste steht damit **nur** an einer Stelle; §6 führt sie nicht
-noch einmal auf. Die sechs Checks laufen dabei **gebündelt am Job-Anfang**
+noch einmal auf. Die sieben Checks laufen dabei **gebündelt am Job-Anfang**
 (vorher lief „Check formatting" zuerst, die vier Textgates zuletzt); alle
-sechs sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
+sieben sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
 Reihenfolge **innerhalb** der Stufe ist unverändert.
 
 Die übrigen Jobs der CI („Rust GUI tests", „Rust tests (excluding GUI)",

@@ -145,13 +145,22 @@ Sidecars vollständig wiederherstellbar sein.
   benanntes Goldens-Gate (DOWNSCALER-UNIFY-71)
 - [local-gates.md](quality/local-gates.md):
   Lokale Gate-Stufen — `scripts/gates.sh` mit den benannten Stufen `fast`
-  (Sekunden, ohne Codegen, Floor: mindestens 6 gestartete Checks) und `slow`
+  (Sekunden, ohne Codegen, Floor: mindestens 7 gestartete Checks) und `slow`
   (Minuten, CI-Mirror), die wortgleiche Tier-Tabelle aus
   `sh scripts/gates.sh list`, der Drift-Gate, der die Tier-Liste gegen die
   aus `.github/workflows/ci.yml` generierte Liste diffst
   (`scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`), und die
   Lückenliste zwischen den Stufen (jede Lücke mit Klasse, Grund, Owner und
   Task-ID) (LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84)
+- [file-size-policy.md](quality/file-size-policy.md):
+  Zeilen-Obergrenze 3000 je Rust-Datei — die SOLL-Zielsemantik der
+  Eigentuemervorgabe (2026-10-20): die harte Grenze, die Zusage „einmal unter
+  der Grenze = dauerhaft darunter", nur **sinkende** Baseline-Werte, der
+  Bezahlpfad (Eintrag senken → Eintrag entfernen → harte Grenze dauerhaft),
+  das Verhältnis zur 500-Zeilen-Wachstumsschranke (zwei Klassen, zwei Gates)
+  und die ehrlichen Grenzen des Gates
+  (`scripts/check_file_ceiling.sh` + `scripts/file_size_ceiling.txt`, Eintrag
+  `fast-7` der Stufe `fast`) (FILE-SIZE-CEILING-3K-83)
 - [security-review-register.md](quality/security-review-register.md):
   Sicherheits-/Risikoregister nach Stage 6 des Skills `security-review` —
   Zwei-Hälften-Form (erst *finden*: alle erreichbaren Oberflächen
