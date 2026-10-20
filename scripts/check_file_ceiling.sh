@@ -40,7 +40,8 @@
 # `feature/quality/file-size-policy.md`.
 #
 # Population: alle `.rs`-Dateien unter `crates/` UND `agent-harness/`
-# (830 Dateien am 2026-10-20). `target/` (Build-Artefakte) gehoeren nicht
+# (die aktuelle Dateizahl steht im generierten Block `population` in
+# feature/quality/file-size-policy.md). `target/` (Build-Artefakte) gehoeren nicht
 # dazu. Die Population ist bewusst breiter als die des 500er-Gates
 # (`check_file_sizes.sh` deckt nur `crates/` ab).
 #
