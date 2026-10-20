@@ -244,7 +244,7 @@ kein EXIF-Ersatzgain, wenn die Statistik nicht reicht.
 
 | ID | Art | Ort | Prüft | Fixture |
 |---|---|---|---|---|
-| A-T1 | [U] | `lumina-merge` `tests/pano_gain.rs` | synthetische Helligkeitsrampe: Frame B = Frame A × 2.0 im Overlap ⇒ `gains == [1.0, 0.5]` (±1e-6); B = A ⇒ `[1.0, 1.0]` | 2× 32×24 Solid + Rampe, Offset (8,0) |
+| A-T1 | [U] | `lumina-merge` → `crates/lumina-merge/tests/pano_gain.rs` | synthetische Helligkeitsrampe: Frame B = Frame A × 2.0 im Overlap ⇒ `gains == [1.0, 0.5]` (±1e-6); B = A ⇒ `[1.0, 1.0]` | 2× 32×24 Solid + Rampe, Offset (8,0) |
 | A-T2 | [U] | dto. | Outlier-Robustheit: 10 % der Overlap-Pixel als Geist (s. B) verunreinigt ⇒ Median-Gain driftet < 1 % gegenüber sauberem Overlap (Mittelwert würde versagen — Negativ-Kontrolle im Test dokumentieren) | wie A-T1 + synthetischer Geist-Block |
 | A-T3 | [U] | dto. | Negativ: Overlap < `A_MIN_OVERLAP_STAT_PX` ⇒ `Unsupported`, Text enthält Pixelzahlen | 8×8 Frames, Offset (7,0) |
 | A-T4 | [U] | dto. | Negativ: Helligkeitsverhältnis 16× ⇒ Gain > MAX ⇒ `Unsupported` (kein Clamp: Output-Byte darf nie dem geclampten Wert entsprechen — Assert auf Fehler, nicht auf Pixel) | Solid 0.05 vs. 0.8 |

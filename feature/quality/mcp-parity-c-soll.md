@@ -19,9 +19,9 @@ historischen Abschnitte beziehen sich auf diesen Stand und sind ueber
 `crates/lumina-sidecar/src/merge_recipe.rs` (Grenzen :26-44, `digest` :182-188,
 `merge_digest` :247-261, `validate_merge_alignment` :355-379),
 `crates/lumina-mcp/src/tools/mod.rs` (vollständig), `crates/lumina-mcp/src/error.rs` → `McpError` (vollständig),
-`tools/generative.rs`, `tools/dust_removal.rs`, `tools/import.rs`,
-`tools/spot.rs`, `tools/stage_common.rs`, `tools/library_common.rs`,
-`util.rs`, `output_guard.rs`, `crates/lumina-mcp/Cargo.toml`,
+`crates/lumina-mcp/src/tools/generative.rs`, `crates/lumina-mcp/src/tools/dust_removal.rs`, `crates/lumina-mcp/src/tools/import.rs`,
+`crates/lumina-mcp/src/tools/spot.rs`, `crates/lumina-mcp/src/tools/stage_common.rs`, `crates/lumina-mcp/src/tools/library_common.rs`,
+`crates/lumina-mcp/src/util.rs`, `crates/lumina-mcp/src/output_guard.rs`, `crates/lumina-mcp/Cargo.toml`,
 `crates/lumina-mcp/tests/tool_names/mod.rs`,
 `crates/lumina-cli/src/tests/mcp_onnx.rs`,
 `crates/lumina-cli/tests/merge_parity.rs`,
@@ -504,7 +504,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 - Real-RAW-I/O (§7, T21): offen, bis Fixture vorhanden.
 - GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust
-  (`lumina-merge/Cargo.toml:7-22`); kein GPU-Gate nötig und keines behauptet.
+  (`crates/lumina-merge/Cargo.toml` → `[dependencies]`); kein GPU-Gate nötig und keines behauptet.
 - `cargo`-Läufe sind in der SOLL-Phase verboten (§9); alle Commands stehen als
   Soll-Kommandos in der Verify-Phase.
 
@@ -578,8 +578,8 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
    `crates/lumina-stages/src/merge.rs` → `decode_source`/`resolve_exposure`
    gelandet — CLI und MCP rufen dieselben Adapter.)
 3. **Impl-B — Tool-Module:** `crates/lumina-mcp/src/tools/merge_hdr.rs`,
-   `merge_pano.rs` angelegt, analog `crates/lumina-mcp/src/tools/generative.rs` → `NAME`/`schema()`/`run`; Register in
-   `tools/mod.rs` (list + dispatch) und `tool_names/mod.rs` (2 Namen).
+   `crates/lumina-mcp/src/tools/merge_pano.rs` angelegt, analog `crates/lumina-mcp/src/tools/generative.rs` → `NAME`/`schema()`/`run`; Register in
+   `crates/lumina-mcp/src/tools/mod.rs` (list + dispatch) und `crates/lumina-mcp/tests/tool_names/mod.rs` (2 Namen).
    Gemeinsamer Kern `merge_common` (§4.3), damit `MergeMode` die einzige
    Variable ist.
 4. **Impl-C — Error-Mapping:** CLI-`MergeRunError` (Missing/Stale/Unsupported/Failed)
@@ -600,8 +600,8 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 | `crates/lumina-mcp/src/tools/merge_common.rs` | `NAME`-loses Kernmodul: `run_mode(mode, args)`, Argument-Parsing (§2), Validierung, `map_merge_run_error`, Payload-Bau (§5) | ~200 Z., unter 500 |
 | `crates/lumina-mcp/src/tools/merge_hdr.rs` | `NAME`/`DESCRIPTION`/`schema()` + `run` → `merge_common::run_mode(MergeMode::Hdr, args)` | ~40 Z. |
 | `crates/lumina-mcp/src/tools/merge_pano.rs` | dito, `MergeMode::Panorama` | ~40 Z. |
-| `crates/lumina-mcp/tests/merge_tools.rs` (+ `merge_tools_common/mod.rs`) | T1, T3, T4, T5–T10 | ~250 Z. |
-| `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | T11–T20 (mit Fixture-Bäumen wie `library_parity_common/mod.rs`) | ~300 Z., droht >500 → dann aufteilen in `merge_parity.rs` + `merge_parity_errors.rs` (Muster `library_parity*.rs`) |
+| `crates/lumina-mcp/tests/merge_tools.rs` (+ `crates/lumina-mcp/tests/merge_tools_common/mod.rs`) | T1, T3, T4, T5–T10 | ~250 Z. |
+| `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | T11–T20 (mit Fixture-Bäumen wie `crates/lumina-cli/tests/library_parity_common/mod.rs`) | ~300 Z., droht >500 → dann aufteilen in `merge_parity.rs` + `merge_parity_errors.rs` (Muster `library_parity*.rs`) |
 
 **Zu modifizierende Dateien (minimal-invasiv):**
 
@@ -637,7 +637,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 **Rollback-Kriterium (ein Satz, vorab festgelegt):** schlägt einer der Schritte
 T11–T16 (Byte-Parität, Cache-Hit, Force-Kette) fehl und lässt sich **nicht**
 durch Adapter-Anpassung allein reparieren — d.h. der Fix würde
-`lumina-merge`- oder `lumina-cli/src/merge.rs`-Verhalten ändern — wird der
+`lumina-merge`- oder `crates/lumina-cli/src/merge.rs`-Verhalten ändern — wird der
 gesamte Code-Slice verworfen (`git revert`/Branch-Verwerfen), statt die
 CLI-Referenz zu verbiegen. Zusatz: jedes neue Modul, das 500 Z. überschreitet,
 wird vor dem Commit aufgeteilt (Ratchet, `check_file_sizes.sh`).
@@ -679,7 +679,7 @@ sind als TODO/Placeholder markiert:
    (näher an `run_merge`, braucht dann `clap`-Freiheit nur im Adapter) oder
    `lumina-stages` (näher an den anderen Frontend-Adaptern)? Beide Crates sind
    heute frei von einer Abhängigkeit auf die jeweils andere
-   (`lumina-stages/Cargo.toml:26-27`, `lumina-merge/Cargo.toml:7-22`); die
+   (`crates/lumina-stages/Cargo.toml` → `[dependencies]`, `crates/lumina-merge/Cargo.toml` → `[dependencies]`); die
    Entscheidung ändert den Dependency-Graph.
 2. **Zusatzfeld `mode` im MCP-Payload** (§5): `MergeRunOutcome` hat es
    (`bundle.rs:279`), das CLI-JSON gibt es nicht aus. Eins-zu-eins oder

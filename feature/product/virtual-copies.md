@@ -96,7 +96,7 @@ Roundtrip über Neustarts hinweg erhalten bleiben.
 Ein Preset ist eine wiederverwendbare Rezeptvorlage. Es ist an kein Bild, kein
 Sidecar und keine virtuelle Kopie gebunden: Ein Preset enthält keinen
 Quellhash, keine Quellidentität, keine Geometrie- oder Maskenbezugswerte und
-keine binären Maskenpayloads (siehe auch `architecture/sidecar.md`). Es enthält
+keine binären Maskenpayloads (siehe auch `feature/architecture/sidecar.md`). Es enthält
 nur die vom Nutzer beim Erstellen explizit ausgewählten Rezeptfelder.
 
 ### Dateiformat
@@ -192,7 +192,7 @@ still übersprungen.
 - Jede Anwendung erzeugt auf der aktiven virtuellen Kopie genau einen neuen
   History-Schritt; die Quellhistorie des Presets wird nicht kopiert
   (Akzeptanzszenario „Preset-Anwendung“ in
-  `quality/conflicts-and-acceptance.md`).
+  `feature/quality/conflicts-and-acceptance.md`).
 
 ### Plattformgrenze und Umsetzungsstand
 

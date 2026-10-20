@@ -1374,14 +1374,14 @@ ungenutzt). Ein Rezept mit gesetzter Referenz bricht in jedem Caller
 Matrix-Runner) laut ab — nie ein stiller Heuristik-Fallback. Dieser laut-abbrechende
 v1-Vertrag ist getestet: CLI `lens_blur_missing_depth_artifact_fails_render_loudly`,
 GUI `g05_lens_blur_preview_changes_and_missing_depth_fails_loudly`, GPU-Parität
-in `lumina-gpu/tests/parity.rs` — und damit keine stille Lücke. Begründung: Es gibt
+in `crates/lumina-gpu/tests/parity.rs` — und damit keine stille Lücke. Begründung: Es gibt
 weder ein definiertes Tiefenkarten-Format (kein `.lumina.zdata`-Record-Typ,
 keine Dimensions-/Quantisierungs-/Prüfsummensemantik) noch einen Producer
 (Tiefenschätzung) im v1-Umfang; ein geratenes Format würde Reproduzierbarkeit
 durch Laufzeit-Annahmen ersetzen. Die Bindung wird erst mit einer eigenen
 Format-/Schemaentscheidung (im SOLL zuerst) und einem Producer nachgezogen;
 bis dahin bleibt die Fokus-Rechteck-Heuristik die einzige renderbare
-Tiefenquelle. Details der reservierten Referenz: `architecture/sidecar.md`
+Tiefenquelle. Details der reservierten Referenz: `feature/architecture/sidecar.md`
 § Externe Tiefenkarte.
 
 **Render-Semantik:** Pro Pixel Tiefenwert `d`, Schärfegewicht 0 im Band
@@ -1689,7 +1689,7 @@ Adjustment-Schreibvorgänge genau einmal finden, und alle Fundstellen müssen im
 Writer liegen. Der GUI-Raum ist durch einen zweiten Strukturcheck abgedeckt:
 das Algorithmus-Literal darf in den vier contract-schreibenden Crates
 (`lumina-stages`, `lumina-gui`, `lumina-cli`, `lumina-mcp`) an **genau einer**
-Stelle stehen (`lumina-gui/src/tests/auto_tone_contract.rs`).
+Stelle stehen (`crates/lumina-gui/src/tests/auto_tone_contract.rs`).
 
 **Zurückgenommene Behauptung (AUTO-TONE-CLI-6, 2026-09-30, `DoD.md` §9).**
 Zuerst stand in Code **und** `Cargo.toml`, die zweite Kopie mache *jedes*
@@ -2025,13 +2025,13 @@ Exposure Matching sind umgesetzt:
   mit dokumentierter 1e-9-Toleranz — zwei verschiedene f64-Summationspfade,
   sortiert vs. zeilenweise). Fallzahlen: 64 Cases für die schweren
   Frame-/Masken-Properties, 256 (proptest-Default) für die leichten; die
-  3 aufgenommenen Regression-Seeds (`proptest-regressions/tone_props.txt`)
+  3 aufgenommenen Regression-Seeds (`crates/lumina-core/proptest-regressions/tone_props.txt`)
   sind eingecheckt und laufen grün.
 - **Referenzbildtests** (`crates/lumina-core/tests/reference_images.rs` +
   `tests/fixtures/`): drei 8×8-PNG-Fixtures (`reference_gradient`,
   `reference_checker`, `reference_zone`) mit programmatischer Provenance —
   deterministisch aus dokumentierten Pixelfunktionen erzeugt, keine externen
-  Quellen, keine Lizenzpflicht (`tests/fixtures/README.md` dokumentiert die
+  Quellen, keine Lizenzpflicht (`crates/lumina-core/tests/fixtures/README.md` dokumentiert die
   exakten Formeln und die Regeneration). Seit R2-PERF-01 wird der
   `analyze_tone`-**Mittelwert** gegen die geschlossenen Formeln mit 1e-9
   geprüft; **Median/p01/p99** mit der normierten R2-PERF-01-Toleranz von
@@ -2122,7 +2122,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   delta-freie P0-Rezept über die bereits byte-identische globale Ton-Pipeline)
   und über `blend_local_layer` gemischt — Endpunkte `alpha == 0` unverändert,
   `alpha == u16::MAX` volle Kopie, sonst die u16-Integer-Formel mit der
-  Rundungskonstante `32767`. Am Adapter gemessen (`tests/local_mask_parity.rs`,
+  Rundungskonstante `32767`. Am Adapter gemessen (`crates/lumina-gpu/tests/local_mask_parity.rs`,
   Metal): P0-only und der Mehr-Layer-Fall **byte-identisch** zum CPU-Orakel,
   die relative-WB-Zelle `maxAbsDiff ≤ 1`; die Mutationsprobe (Rundungskonstante
   `32767u` → `0u`) macht die Byte-identischen Zellen rot. **Grenze (laut, kein
@@ -2248,7 +2248,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
      durch diese Änderung, der Poolzustand nicht.
      **Erreichter Stand (2026-09-27, Verifikations-Runde 3) — seit 2026-10-02
      überholt, der geltende Stand steht daneben:** Die dritte Bedingung ist
-     **per Konstruktion** erfüllbar: `src/present_mask_plane.rs` schrieb am Ende
+     **per Konstruktion** erfüllbar: `crates/lumina-gui/src/present_mask_plane.rs` schrieb am Ende
      **jedes** Renders Nullen über den *aktiven* Pool-Eintrag, sobald der Frame
      keine Coverage trug (`MaskPlaneIntent::Clear`, Zeilenbänder mit
      1-MiB-Budget über `upload_mask_tile`, damit die transiente Puffergröße
@@ -2326,12 +2326,12 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `develop_*`-Goldens werden durch diese Änderung **nicht** neu geschrieben —
   `GOLDEN-BASELINE-32` bleibt der einzige Ort, der Goldens anfasst.
   **Teststand (Stand 2026-09-27, Verifikations-Runde 3):** `lumina-gui --lib`
-  917 grün (912 + 5 neu: 4 in `src/tests/gpu_mask_plane.rs`, 1 Multi-Ebenen-Fall
-  in `src/tests/gpu_mask_gate.rs`; die beiden Draft-Sub-Cases sind als reiner
-  Umzug nach `src/tests/gpu_mask_drafts.rs` gewandert, ohne Assertion-Änderung).
-  Beide Adapter-Cells in `tests/kittest_parity_support/mask_gate.rs` grün
+  917 grün (912 + 5 neu: 4 in `crates/lumina-gui/src/tests/gpu_mask_plane.rs`, 1 Multi-Ebenen-Fall
+  in `crates/lumina-gui/src/tests/gpu_mask_gate.rs`; die beiden Draft-Sub-Cases sind als reiner
+  Umzug nach `crates/lumina-gui/src/tests/gpu_mask_drafts.rs` gewandert, ohne Assertion-Änderung).
+  Beide Adapter-Cells in `crates/lumina-gui/tests/kittest_parity_support/mask_gate.rs` grün
   (`--ignored`). Die Mutationsmenge M1–M8 mit den **gemessenen** Reaktionen
-  steht als Tabelle im Modul-Doc von `src/tests/gpu_mask_gate.rs`; M6 (Clear
+  steht als Tabelle im Modul-Doc von `crates/lumina-gui/src/tests/gpu_mask_gate.rs`; M6 (Clear
   zurückbauen) wird ausschließlich von der Adapter-Cell gefangen, M8 (den
   `KeepLiveBrush`-Arm zur Löschung umbiegen) von **keinem** Test.
   **M8 ist ein Verhaltensrisiko, nicht nur eine Beobachtbarkeitslücke** (am
@@ -2417,7 +2417,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Lens-Schritt in der Geometriekette. Abnahme (lokal, Metal):
   Oracle-vs-GPU-Parität byte-identisch (`maxAbsDiff == 0`, PSNR ∞) für
   Nicht-TCA- und TCA-Profile auf Gradient+Rauschen
-  (`lensfun_corrector_map_matches_cpu_oracle`, `lumina-gpu/tests/parity.rs`;
+  (`lensfun_corrector_map_matches_cpu_oracle`, `crates/lumina-gpu/tests/parity.rs`;
   Test-Feature `lumina-gpu/lensfun`, Default aus — Default-Builds linken kein
   liblensfun; CI kompiliert den GPU-Pfad nur, der lokale Metal-Lauf ist der
   Beleg). Die CPU bleibt vollständige Referenz. **GUI-Wiring abgeschlossen
@@ -2463,7 +2463,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   bindet die `LensfunMap` analog (`crates/lumina-cli/src/lensfun_gpu.rs`;
   `crates/lumina-cli/src/main.rs` → `render_best_effort` netto ±0); CPU-Routen nur bei Build-/Bind-Fehler und Distortion
   ohne expliziten Crop (laut). **Offen:** MCP baut nie einen Corrector
-  (`lumina-mcp/src/util.rs`, `lensfun: None`) — kein stiller Verlust, aber
+  (`crates/lumina-mcp/src/util.rs`, `lensfun: None`) — kein stiller Verlust, aber
   keine Lensfun-Korrektur auf dem MCP-Pfad (Folge, kein Task). Niedrig bekannt:
   CLI-Backend-Retry bei hartem `GpuContext`-Init-Fehler (L1, keine
   Korrektheitsfolge).

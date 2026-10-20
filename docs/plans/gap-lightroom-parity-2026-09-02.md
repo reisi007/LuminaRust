@@ -7,7 +7,9 @@
 **Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
 Plans (Spalte „Datei" der Shortcut-Tabelle) beziehen sich auf den Commit `153d4ba`
 (Analyse vom 2026-09-02); nackte `lib.rs`-Anker wurden auf
-`crates/lumina-gui/src/lib.rs` umgestellt.
+`crates/lumina-gui/src/lib.rs` umgestellt; der Store-Verweis (2026-10-20) auf das
+Baseline-/Budgets-Paar `scripts/perf/preview-cache-baseline.json` +
+`scripts/perf/preview-cache-budgets.json` mit `scripts/perf/compare.mjs` umgestellt.
 **Bezug:** `Agents.md`, `Agents.todo.md` (Block A/C, F-103-INTEGRATION-PREVIEW-SIDECAR 43b1b73, CI-ONNX-RT 953987e), `feature/README.md`, `feature/platform/cli-gui-wasm.md` (F-100, F-103, F-010), `feature/architecture/pipeline.md` (F-089..099, F-036, F-042), `feature/architecture/sidecar.md` (F-001), `feature/product/virtual-copies.md` (F-002/F-014/F-009), `feature/product/ai-masks.md` (F-004/F-079..F-083), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/export.md` (F-037), `feature/platform/capability-matrix.md` (F-006/F-069..F-071), `feature/platform/wasm-limits.md`, `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-gui/src/lib.rs` (Module, Shortcuts, Library/Develop Slices), `crates/lumina-core` (`pipeline.rs`, `render.rs`), `crates/lumina-cli`, `crates/lumina-mcp`
 Alle Fundstellen sind ueber `git show `153d4ba`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
@@ -171,7 +173,7 @@ Grundsatz: Deterministische Fixture + Seed + Golden/PSNR-Gate + Histogram-Digest
 | LR-11 Inpaint generativ | StubInpaint Backend deterministisch (Crafted ONNX ReduceMax 1024²), hash-gepinnte Fixture `pending-integration` bis Modell committet | `lumina-onnx` (`onnx-rt`) | PSNR-Gate, `artifact_status` Corrupt eager BLAKE3 |
 | LR-12 Snapshot | Roundtrip `snapshot: {id,name,recipe}`; kittest History Panel | `lumina-sidecar` | JSON roundtrip |
 | LR-13 Filter/QuickDev | Unit `apply_adjustment_to_selection` auf 3 Sidecars batch, Filter `focal==50mm` synthetische EXIF | `lumina-sidecar` | `-batch --jobs` deterministisch |
-| LR-14 GUI Outcome | T01-T10 `preview_ctrl` (LRU vor Disk, Stale-Badge, korrupt `.tmp` nie Hit, OneToOne Invalidierung, Prio +1>+2>-1>+3>-2>+4, WB-Gate) | `lumina-gui`/`lumina-core` | `preview-cache-baseline/budgets.json` `compare.mjs --mode warn` 6/6 OK |
+| LR-14 GUI Outcome | T01-T10 `preview_ctrl` (LRU vor Disk, Stale-Badge, korrupt `.tmp` nie Hit, OneToOne Invalidierung, Prio +1>+2>-1>+3>-2>+4, WB-Gate) | `lumina-gui`/`lumina-core` | `scripts/perf/preview-cache-baseline.json` + `scripts/perf/preview-cache-budgets.json`, `scripts/perf/compare.mjs --mode warn` 6/6 OK |
 | LR-15 RenderKey | Unit `source_action_artifact_hashes` + `canvas` in `stage_digest` (non-decode), `export_options` analog | `lumina-core` `pipeline.rs` | `digest !=` bei Hash-Wechsel, `decode` digest unverändert |
 | LR-19 Capability | `cargo check --target wasm32-unknown-unknown -p lumina-onnx --features onnx-rt` grün (`RuntimeDisabled`), Matrix Zeile `inpaint` | `capability-matrix.md` | wasm Gate grün |
 | Allgemein | Golden-Image Toleranz: `LuminanceHistogram::digest` + `analyze_tone` Median/p01/p99 Delta `≤1/256` (R2-PERF-01); Dithering/Seed deterministisch (`seed` + `image` Encoder) | `lumina-core` | 1/256 Schranke |

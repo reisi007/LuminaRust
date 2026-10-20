@@ -358,7 +358,7 @@ Abnahme der Implementierung gegen dieses SOLL:
 - **Doku-first (2026-09-01):** SOLL-Architektur verfasst, im
   `feature/README.md` verlinkt, PREVIEW-CACHE-FEATURE in `Agents.todo.md`
   um das asymmetrische +4/-2-Fenster ergänzt.
-- **Implementierung Phase 1 (2026-09-01, verifiziert NICHT BESTANDEN):** Kern-Primitive in `lumina-core/src/preview_cache.rs` + `lumina-gui/src/preview_ctrl.rs` vorhanden (PreviewKey, Fenster +4/-2, LRU 7 pinned, WebP Alpha, Disk atomar, Worker-Pool Prio). Gates grün (core 277+7, gui 131, clippy/fmt/wasm). **Offene Lücken (Verifikation 2026-09-01, A1-A6/B7):**
+- **Implementierung Phase 1 (2026-09-01, verifiziert NICHT BESTANDEN):** Kern-Primitive in `crates/lumina-core/src/preview_cache.rs` + `crates/lumina-gui/src/preview_ctrl.rs` vorhanden (PreviewKey, Fenster +4/-2, LRU 7 pinned, WebP Alpha, Disk atomar, Worker-Pool Prio). Gates grün (core 277+7, gui 131, clippy/fmt/wasm). **Offene Lücken (Verifikation 2026-09-01, A1-A6/B7):**
   - **A1** RAM-LRU wird nur befüllt, nie für Anzeige gelesen — Bildwechsel nutzt weiter vollen Decode statt Cache-Hit.
   - **A2** Keine sichtbare Cell-UI (wird vorbereitet/Veraltet/Fehler nur geloggt).
   - **A3** Stale-Re-Job-Lücke: `done` per Probe-ID statt Key-Digest — Rezept-/Quell-Änderung löst keinen Re-Render, evicteter Nachbar nie neu geplant.

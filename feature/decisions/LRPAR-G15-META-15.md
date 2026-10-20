@@ -4,7 +4,7 @@
 **Goal:** G-15 Metadaten-Verwaltung · **Release:** 1.0 (MVP; per User-Entscheid
 2026-09-04 von 1.5 vorgezogen — vorher: Release-Staffel 2026-09-03) ·
 **Stand:** Doku-first (Entscheid, kein Code) ·
-**Normatives SOLL:** [`product/iptc-metadata.md`](../product/iptc-metadata.md)
+**Normatives SOLL:** [`feature/product/iptc-metadata.md`](../product/iptc-metadata.md)
 
 Dieses Dokument ist der verbindliche **Entscheid** für IPTC-Metadaten. Es
 legt Speicher, Schreib-Backend, Format-Scope, Presets, Sync, MCP und GUI-Umfang
@@ -28,7 +28,7 @@ Nicht-Ziele (explizit):
 - Keine XMP-/IPTC-**Lesung** als Bearbeitungsquelle (Import-Pfad Post-MVP);
   XMP-Sidecars bleiben verboten (`SidecarError::XmpUnsupported`).
 - Kein EXIF-Write (Kamera-/Objektiv-/Aufnahmezeit-Daten) — bleibt Post-MVP
-  gemäß `product/export.md`.
+  gemäß `feature/product/export.md`.
 - Kein IPTC-Extension-Set, keine Veröffentlichungsdienste (nie Ziel).
 
 ## Festgelegte Entscheidungen

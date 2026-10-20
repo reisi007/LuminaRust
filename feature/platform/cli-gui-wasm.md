@@ -313,7 +313,7 @@ hier nur genutzt — keine Schemaänderung, kein Bump.
 ### HDR-/Panorama-Merge (G-13, Release 1.5: CLI, LRPAR-G13-MERGE-15)
 
 Normativer CLI-SOLL für den Merge-Mehrbild-Vorlauf (Entscheid:
-`decisions/LRPAR-G13-MERGE-15.md`). Beide Befehle rufen denselben
+`feature/decisions/LRPAR-G13-MERGE-15.md`). Beide Befehle rufen denselben
 Merge-Einstiegspunkt auf wie die GUI-Aktionen `Cmd/Ctrl+H`/`Cmd/Ctrl+M`
 (keine GUI-eigene Bildlogik). Quell-Sidecars werden nie verändert; das
 Merge-Ergebnis ist ein neues lineares DNG plus eigenes Sidecar-Bundle.
@@ -557,7 +557,7 @@ einer späteren Architekturentscheidung erneut bewertet werden.
 Die Desktop-GUI folgt verbindlich den UI-Konventionen von **Lightroom Classic**
 als Referenz (User-Vorgabe 2026-09-17: kein reines 1:1, sondern leicht
 modernerer Feinschliff — jeder Lightroom-Nutzer fühlt sich sofort zu Hause;
-Details: `platform/lightroom-ux-parity.md`). Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
+Details: `feature/platform/lightroom-ux-parity.md`). Diese Vorgaben beschreiben die Bedien- und Anordnungssemantik,
 nicht eine pixelgenaue Kopie der Adobe-Oberfläche. Abweichungen von den
 folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 
@@ -943,8 +943,8 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 
     | Aktion(en) | Badge-Grund | Normative Quelle |
     | --- | --- | --- |
-    | `set_lens_profile`, `analyze_upright`, `set_upright_enabled` | `geometry (default content crop)` | CROP-MAXRECT-1 / GPU-MAXRECT-WELLE (`architecture/pipeline.md` § GPU-Pfad): Lens-/Perspektiv-Korrektur ohne explizites `geometry.crop` aktiviert den datenabhängigen MaxRect-Crop. |
-    | `set_crop_aspect`, `rotate_step` | `geometry (dimension-changing output…)` | GUI-LENSFUN-GATE-3 F1 (`architecture/pipeline.md` § GPU-Pfad): die readback-freie VRAM-Present-Textur ist quellgroß; ein dimensionsänderndes Rezept wird laut verweigert und exakt auf der CPU präsentiert (Export/Readback bleibt GPU-fähig). |
+    | `set_lens_profile`, `analyze_upright`, `set_upright_enabled` | `geometry (default content crop)` | CROP-MAXRECT-1 / GPU-MAXRECT-WELLE (`feature/architecture/pipeline.md` § GPU-Pfad): Lens-/Perspektiv-Korrektur ohne explizites `geometry.crop` aktiviert den datenabhängigen MaxRect-Crop. |
+    | `set_crop_aspect`, `rotate_step` | `geometry (dimension-changing output…)` | GUI-LENSFUN-GATE-3 F1 (`feature/architecture/pipeline.md` § GPU-Pfad): die readback-freie VRAM-Present-Textur ist quellgroß; ein dimensionsänderndes Rezept wird laut verweigert und exakt auf der CPU präsentiert (Export/Readback bleibt GPU-fähig). |
     | `set_expand_canvas`, `generate_generative_canvas`, `set_expand_beyond_image`, `set_auto_fill_transparent` | `generative_edit (…)` | GEN-ONNX-1 Welle 2b: der readback-freie VRAM-Present ist artifact-blind; Preview/Export laufen per Design über den artifact-aware CPU-Pfad (kein VRAM-Injektionspunkt ohne Readback). |
     | `set_denoise_enabled` | `denoise_ai (not GPU-wired)` | LRPAR-G14-DENOISE-IMPL-20: additive KI-Denoise-Stufe (Release 2.0) hat noch keinen WGSL-Pass; aktive Stufe routet laut auf CPU. |
 
@@ -1612,8 +1612,8 @@ laut benannte Abwägung und keine stille Optimierung:
   Testdateien sind per Extraktion gesplittet: `crates/lumina-gui/src/tests/navigator.rs`
   500 → **366** (`preview_zoom_mode.rs`, 157),
   `crates/lumina-gui/src/tests/library_sort.rs` 500 → **404**
-  (`library_sort/clickable_sort_controls.rs`, 116), `g15_stacks.rs` 500 →
-  **382** (`g15_stacks/clickable_stack_controls.rs`, 137). Nachweis: 0
+  (`crates/lumina-gui/src/tests/library_sort/clickable_sort_controls.rs`, 116), `g15_stacks.rs` 500 →
+  **382** (`crates/lumina-gui/src/tests/g15_stacks/clickable_stack_controls.rs`, 137). Nachweis: 0
   entfernte inhaltliche Zeilen, 158 assert-Zeilen unverändert, 33 `#[test]`
   unverändert, `crates/lumina-gui/src/lib.rs` bei 12819 Zeilen. **Gemessen dabei und
   neu aufgenommen:
@@ -1622,9 +1622,9 @@ laut benannte Abwägung und keine stille Optimierung:
   Null-Reserve-Lage.
   **Produktionscode 2026-09-27: ebenfalls erledigt.** Die beiden im selben Zug
   gemessenen Produktionsdateien sind nach derselben Regel gesplittet:
-  `jank_log.rs` 500 → **435** (`jank_log/threshold.rs`, 85 — die Schwellen-Policy
+  `jank_log.rs` 500 → **435** (`crates/lumina-gui/src/jank_log/threshold.rs`, 85 — die Schwellen-Policy
   ohne Record-State, während `JankKind` als Record-Label im Parent bleibt) und
-  `render_tick.rs` 500 → **347** (`render_tick/draft_error.rs`, 170 — die
+  `render_tick.rs` 500 → **347** (`crates/lumina-gui/src/render_tick/draft_error.rs`, 170 — die
   Draft-Fehlerberichterstattung samt ihrem Testmodul, das ohnehin nur aus genau
   diesen Tests bestand). `take_draft_tick_throttles` blieb bewusst im Parent,
   weil `timing_instrumentation.rs:359` es über `crate::render_tick::` erreicht
@@ -1721,7 +1721,7 @@ laut benannte Abwägung und keine stille Optimierung:
   persistierte Analysegrößen sind `masks` (AI-Masken-Inferenz), `auto-tone`
   (Auto-Tone: sechs Regler + `analysis_fingerprint`, enthält „Auto-Exposure“
   als `auto_exposure`) und `matching` (F-008 Exposure Matching /
-  `matched_exposure`). **Auto-WB** ist in `architecture/pipeline.md` normativ
+  `matched_exposure`). **Auto-WB** ist in `feature/architecture/pipeline.md` normativ
   in der optionalen Reihenfolge genannt, aber in 1.0 **nicht implementiert**
   (es gibt nur den As-Shot-WB-Kontext aus RAW-Metadaten, keine persistierte
   Auto-WB-Analyse); es erhält daher noch keine eigene Aktion und hängt sich
@@ -1828,7 +1828,7 @@ laut benannte Abwägung und keine stille Optimierung:
   Muster `upright --analyze` bzw. `spot --detect-objects`/`--detect-apply`:
   CLI `lumina red-eye --detect` (listen) / `--detect-apply` (persistieren),
   GUI „Detect pupils" / „Apply detected". Details und Schwellen:
-  `architecture/pipeline.md` § G-14.
+  `feature/architecture/pipeline.md` § G-14.
 
 ### Tastaturkürzel (F-100, LR-01/LR-09/LR-10, Welle 2, Welle 3)
 
@@ -1933,7 +1933,7 @@ Zweit-Mechanismus.
   non-destruktiv. Seit MERGE-IMPL-15 ruft die GUI **denselben** gemeinsamen Pfad
   `lumina_merge::bundle::run_merge` wie die CLI auf (keine GUI-eigene
   Merge-Schrittfolge; nur Decode-Adapter + Exposure-Policy bleiben frontend-
-  spezifisch), Paritätsanker via `lumina-cli/tests/merge_parity.rs`. Shortcuts
+  spezifisch), Paritätsanker via `crates/lumina-cli/tests/merge_parity.rs`. Shortcuts
   `Cmd/Ctrl+H` (HDR-Merge) / `Cmd/Ctrl+M` (Panorama-Merge).
 - **AI-Denoise-Panel (G-14, DENOISE-GUI, 2026-09-16):** Detail-Sektion
   (enabled/strength/preserve_detail, Modell-Identität lesbar), Status-Badge
@@ -2605,7 +2605,7 @@ der frühere glow/wgpu-Dual-Backend-Konflikt ist aufgelöst.
 
 **Hinweis:** Der On-Screen-Present ist headless nicht automatisiert testbar
 (eframe-Laufzeit nötig); die Pixel-Gleichheit der Stufen ist gegen die
-CPU-Referenz getestet (`tests/golden.rs`, `tests/stages.rs`), der UI-Renderer-
+CPU-Referenz getestet (`crates/lumina-gpu/tests/golden.rs`, `crates/lumina-gpu/tests/stages.rs`), der UI-Renderer-
 Wechsel durch unverändert grüne kittest-Snapshots abgesichert. Der nächste
 manuelle GUI-Test (Block C) verifiziert den Present-Pfad visuell.
 
@@ -3003,7 +3003,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Pure-Math (Pan→Box→ROI) war konsistent (Coverage-Welle). **Fix:**
   `navigator_drag_pans_preview` gattert den Drag auf `zoom > 1.0` **und**
   Überlauf des Vollquell-Draws — dieselbe Regel wie der Preview-Hand-Tool-Pan
-  (`pan_gesture_pins_custom`). **Tests:** `tests/navigator_r4.rs` fährt den
+  (`pan_gesture_pins_custom`). **Tests:** `crates/lumina-gui/src/tests/navigator_r4.rs` fährt den
   **echten Draw-Pfad** (persistenter egui-Kontext, Pointer-Drag, test-only
   Last-Nav-Rect-Seam `navigator::last_navigator_view_rect`):
   `navigator_viewport_drag_moves_box_and_roi_at_zoom` (Box + ROI folgen),

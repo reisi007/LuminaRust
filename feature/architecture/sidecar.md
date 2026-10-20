@@ -131,7 +131,7 @@ oder Prüfsummensemantik). Die Referenz wird serialisiert und validiert
 GUI und MCP binden `RenderContext::depth = None`, `GpuContext::set_depth_plane`
 bleibt ungenutzt. Ein Render mit gesetzter Referenz bricht laut ab — nie ein
 stiller Heuristik-Fallback (Entscheid und Begründung:
-`architecture/pipeline.md` § „External-Depth-Bindung“). Ein zdata-Record-Typ
+`feature/architecture/pipeline.md` § „External-Depth-Bindung“). Ein zdata-Record-Typ
 wird erst mit einem Producer (Tiefenschätzung) und einer eigenen
 Format-/Schemaentscheidung ergänzt.
 

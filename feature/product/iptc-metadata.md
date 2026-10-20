@@ -243,7 +243,7 @@ laut); Exit-Codes 0/≠ 0 mit klarer stderr-Meldung.
 
 Pfadbasierte Tools (Muster der F-101-F1-Bulk-Tools: neben der Single-Image-
 Session, keine Session-Mutation). Normative Details zusätzlich in
-`platform/mcp-server.md`:
+`feature/platform/mcp-server.md`:
 
 - `lumina_get_metadata_draft { path }` → `{ path, embedded, draft, keywords,
   history_len, status }`.

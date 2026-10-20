@@ -49,7 +49,7 @@ Nicht Gegenstand: Golden-Image-Tests (deferred F-043/F-073), zentrale DB
 
 ### 3.1 Synthetische Benchmark-Fixtures
 
-Vollständig lokal und deterministisch erzeugt (`bench/common/mod.rs`), kein
+Vollständig lokal und deterministisch erzeugt (`crates/lumina-bench/bench/common/mod.rs`), kein
 Netzwerk:
 
 - `FIXTURE_SEED: u64 = 0x5EED` (eingefroren);
@@ -292,8 +292,8 @@ PSNR-Toleranzen stehen normativ in
 
 | Datei | Bytes | SHA-256-Pin | Verwendung |
 | --- | ---: | --- | --- |
-| `crates/lumina-onnx/tests/fixtures/lumina-crafted-reducemax.onnx` | 139 | `2a2ede6659e8c59b3fd972242b27677ef23cb98d3c422616a1c65f50dcaca18d` | `OrtBackend`-Verhalten: Tensor-Namen, Hash-Pin `Verified`, Output-Validierung, Inferenz; Resolver-Test; **Face-ORT-Gates** (`tests/face_ort.rs`): `OrtFaceDetector`/`OrtFaceEmbedder` (MissingModel, Stale-Gate, Tensor-Namen, kontraktwidrige Output-Form) und `try_load_face_engine` (Resolver, kein Stub-Fallback) |
-| `crates/lumina-onnx/tests/fixtures/lumina-crafted-yunet.onnx` | 2 490 | `b4c76993b06bcccf1a0495fa795b2de8be8263c448b83f62630d4227da8324b1` | FACE-20-FACE-ADAPTER-25: YuNet-Per-Stride-Adapter (`tests/face_adapter_ort.rs`) — zwölf `cls_/obj_/bbox_/kps_{8,16,32}`-Outputs, Decode + NMS über den echten ORT-Pfad, fehlender Tensor/Tensor-Kontrakt laut |
+| `crates/lumina-onnx/tests/fixtures/lumina-crafted-reducemax.onnx` | 139 | `2a2ede6659e8c59b3fd972242b27677ef23cb98d3c422616a1c65f50dcaca18d` | `OrtBackend`-Verhalten: Tensor-Namen, Hash-Pin `Verified`, Output-Validierung, Inferenz; Resolver-Test; **Face-ORT-Gates** (`crates/lumina-onnx/tests/face_ort.rs`): `OrtFaceDetector`/`OrtFaceEmbedder` (MissingModel, Stale-Gate, Tensor-Namen, kontraktwidrige Output-Form) und `try_load_face_engine` (Resolver, kein Stub-Fallback) |
+| `crates/lumina-onnx/tests/fixtures/lumina-crafted-yunet.onnx` | 2 490 | `b4c76993b06bcccf1a0495fa795b2de8be8263c448b83f62630d4227da8324b1` | FACE-20-FACE-ADAPTER-25: YuNet-Per-Stride-Adapter (`crates/lumina-onnx/tests/face_adapter_ort.rs`) — zwölf `cls_/obj_/bbox_/kps_{8,16,32}`-Outputs, Decode + NMS über den echten ORT-Pfad, fehlender Tensor/Tensor-Kontrakt laut |
 | `crates/lumina-onnx/tests/fixtures/lumina-crafted-sface.onnx` | 659 | `d2919decc20b9fe62e0d99e544fd0243fda0f847f3b99f32500491f6d6a5738e` | FACE-20-FACE-ADAPTER-25: SFace-Vertrag (`data` → `fc1`) mit 5-Punkt-Alignment + `BYTE_RANGE`-Vorverarbeitung + L2-Decode |
 
 - **Provenance:** programmatisch erzeugt aus der dokumentierten
@@ -517,11 +517,11 @@ zählt zur F-078-Abnahme.
 | Artefakt | Pin-Mechanismus | Wert |
 | --- | --- | --- |
 | Rust-Baum gesamt | committetes `Cargo.lock`, `resolver = "2"` | autoritativ |
-| `ort` / `ort-sys` | exakte Version in `lumina-onnx/Cargo.toml` | `=2.0.0-rc.13` |
+| `ort` / `ort-sys` | exakte Version in `crates/lumina-onnx/Cargo.toml` | `=2.0.0-rc.13` |
 | `libraw-sys` | `[patch.crates-io]` → `vendor/libraw-sys` | gepatcht `0.1.1` |
 | LibRaw (nativ) | CI-Image OCI-Label `lumina.libraw_version` | `0.22.2` |
 | Benchmark-Fixtures | eingefrorener `FIXTURE_SEED = 0x5EED` + `SplitMix64` | Änderung ⇒ Re-Baseline |
-| ONNX-Behavior-Fixture | SHA-256-Pin in `tests/fixtures/README.md` + `tests/ort_backend.rs` | `2a2ede66…` (committetes Binär-Fixture) |
+| ONNX-Behavior-Fixture | SHA-256-Pin in `crates/lumina-onnx/tests/fixtures/README.md` + `crates/lumina-onnx/tests/ort_backend.rs` | `2a2ede66…` (committetes Binär-Fixture) |
 | Modellgewichte | `ModelManifest.model_hash` als Identität | BiRefNet/SAM 2 `pending-integration`; Face YuNet/SFace **gepinnt** (`sha256:<hex>`, FACE-20-S6 2026-09-20), keine Gewichte committet |
 
 Policy: `Cargo.lock` committet halten; native Abhängigkeiten über das immutable

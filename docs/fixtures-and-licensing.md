@@ -41,7 +41,7 @@ Determinism contract (must NOT change without re-recording baselines):
 - Changing the seed invalidates `perf/baseline.json`; re-record before
   comparing medians/p95s (see `feature/quality/performance-benchmarks.md`).
 
-Consumers: `bench/core.rs`, `bench/batch.rs`, `bench/decode.rs` (decode only
+Consumers: `crates/lumina-bench/bench/core.rs`, `crates/lumina-bench/bench/batch.rs`, `crates/lumina-bench/bench/decode.rs` (decode only
 reads committed RAW fixtures, see §1.2).
 
 ### 1.2 Committed RAW fixtures — `sample-data/raw/`
@@ -181,7 +181,7 @@ static embedding.
 | Artifact | Pin mechanism | Value |
 | --- | --- | --- |
 | Whole Rust tree | committed `Cargo.lock` + `resolver = "2"` | authoritative for reproducible builds |
-| `ort` / `ort-sys` | exact version in `lumina-onnx/Cargo.toml` | `=2.0.0-rc.13` |
+| `ort` / `ort-sys` | exact version in `crates/lumina-onnx/Cargo.toml` | `=2.0.0-rc.13` |
 | `libraw-sys` | `[patch.crates-io]` → `vendor/libraw-sys` (path) | patched `0.1.1` |
 | LibRaw (native) | CI container `lumina-ci` OCI label `lumina.libraw_version` | `0.22.2` (Homebrew-equivalent) |
 | Benchmark fixtures | frozen `FIXTURE_SEED = 0x5EED` + `SplitMix64` | change ⇒ re-record `perf/baseline.json` |

@@ -857,7 +857,7 @@ Core-`GenerativeCacheKey`-Digest, fehlendes Modell laut. `lumina-core` —
 `composite_expand`/`composite_auto_fill` adoptieren das Artefakt byteweise,
 laut bei fehlendem/falschem/verkehrt-dimensionalem Artefakt; der Renderpfad
 ruft **kein** BFS mehr auf (`bfs_runs`-Zähler bleibt konstant). GPU-Parität:
-`lumina-gpu/tests/parity.rs::generative_canvas_compositing_is_gpu_parity`
+`crates/lumina-gpu/tests/parity.rs::generative_canvas_compositing_is_gpu_parity`
 (CPU-Oracle-Compositing == GPU über dem adoptierten Canvas, `maxAbsDiff == 0`,
 Metal lokal) plus die verschärfte Refusal-Parität für Expand ohne Artefakt.
 `lumina-sidecar` — `GenerativeArtifactRef::from_generative_canvas`,

@@ -1117,7 +1117,7 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
     neben dem globalen Graph keine egui-Interaktionszustände teilt.
     **Anker (Verifikationsbefund F-2):** ein Id-Vergleich wäre der
     „Konstante gegen sich selbst"-Defekt, also wird das **Verhalten** gefahren —
-    `tests/mask_local_editors_wiring.rs::the_local_and_global_curve_graphs_do_
+    `crates/lumina-gui/tests/mask_local_editors_wiring.rs::the_local_and_global_curve_graphs_do_
     not_share_interaction_state` öffnet Masking **und** Tone Curve nebeneinander,
     zieht den **globalen** Graphen und prüft, dass die lokale Kurve unverändert
     bleibt, und umgekehrt — jeweils ausgehend von einem **nicht-neutralen**
@@ -1133,7 +1133,7 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
     `mutate_selected_local_curve` (`crates/lumina-gui/src/mask_local_curves.rs` →
     `mutate_selected_local_curve`) und
     `reset_mask_local_curves` armieren beide `mark_recipe_dirty`;
-    `tests/mask_local_editors_wiring.rs::the_mask_local_curve_gesture_reaches_the_sidecar_file`
+    `crates/lumina-gui/tests/mask_local_editors_wiring.rs::the_mask_local_curve_gesture_reaches_the_sidecar_file`
     liest die **konkreten** Kurvenpunkte aus der Sidecar-Datei und belegt, dass der
     Block-Reset sie wieder **herausnimmt**. Mutation M7 (genau diese
     `mark_recipe_dirty` auskommentiert) macht den Test rot — vorher war diese
@@ -1162,10 +1162,10 @@ ein echtes egui-Widget, und ein Klick/drag darauf schreibt über den
   Endpunkt, ungültige Punktliste) verlässt den Masken-Layer und den
   ausstehenden History-Snapshot **strukturell** unverändert und setzt eine
   sichtbare Statuszeile. Anker:
-  `src/tests/mask_local_curves.rs::invalid_local_curve_edits_are_refused_without_mutating`
+  `crates/lumina-gui/src/tests/mask_local_curves.rs::invalid_local_curve_edits_are_refused_without_mutating`
   (`assert_eq!` über `active_mask_layers_snapshot()` plus unveränderte
   History-Länge) und
-  `src/tests/mask_local_curve_graph.rs::the_local_graph_refuses_to_move_an_endpoint`
+  `crates/lumina-gui/src/tests/mask_local_curve_graph.rs::the_local_graph_refuses_to_move_an_endpoint`
   (der Endpunkt-Drag aus dem echten Gesten-Decoder). Auch hier ist „unverändert"
   ein `PartialEq` über die Strukturen, **kein** Bytevergleich der Datei.
 
@@ -1178,17 +1178,17 @@ Je mask-local Editor gilt verbindlich **beides**:
    `draw_masking`-Kette gezeichnet, und die zum Ansteuern benutzten Labels
    gehören dem **lokalen** Editor, nicht dem globalen Develop-Abschnitt) und
    „ist anklickbar" (Eingabevertrag) sind verschiedene Ansprüche und liegen
-   deshalb in verschiedenen Zielen: `tests/mask_local_editors_wiring.rs`
+   deshalb in verschiedenen Zielen: `crates/lumina-gui/tests/mask_local_editors_wiring.rs`
    (Paint-Provenienz plus der Graph-Vertrag UXG-16, dessen Wert eine Punktliste
    und kein Skalar ist, plus dessen **Datei-Readback**, plus die
    Id-Unabhängigkeit beider Graphen) und
-   `tests/mask_local_editors.rs` (Presence/Color/Detail, deren Wert ein Skalar
+   `crates/lumina-gui/tests/mask_local_editors.rs` (Presence/Color/Detail, deren Wert ein Skalar
    ist). Ein Miswire bricht das eine Ziel, ein nicht anklickbares Widget das
    andere. Zwei weitere Ziele kamen in der Verifikationsrunde dazu:
-   `tests/mask_local_color_controls.rs` (die fünf vorher ungeklickten Controls
-   der Farb-Fläche, DoD §3) und `tests/mask_local_reload.rs` (das Reload-Glied
+   `crates/lumina-gui/tests/mask_local_color_controls.rs` (die fünf vorher ungeklickten Controls
+   der Farb-Fläche, DoD §3) und `crates/lumina-gui/tests/mask_local_reload.rs` (das Reload-Glied
    der Kette aus DoD §1). Ein drittes kam mit `HSL-BAND-KLICK-43` hinzu:
-   `tests/mask_local_hsl_bands.rs` (die HSL-`Hue`- und HSL-`Luminance`-Schiene
+   `crates/lumina-gui/tests/mask_local_hsl_bands.rs` (die HSL-`Hue`- und HSL-`Luminance`-Schiene
    mit Zeugenband und Datei-Assertion). Geteilte Testhilfen liegen in
    `tests/mask_local_editors_support/` (Harness, Frame-Uhr, Label-Lookups,
    Persistenz-Readback), `tests/mask_local_slider_support/` (Regler-Drags),
@@ -1212,7 +1212,7 @@ Je mask-local Editor gilt verbindlich **beides**:
    in 6.1 gemessen: die 150-ms-Uhr des entprellten Saves wird von jedem Edit neu
    gestartet, eine Datei-Assertion am Testende könnte also von einem *späteren*
    Gest erfüllt werden, ohne dass das geprüfte Gest etwas gespeichert hat.
-2. **Reload-Glied (F-6, DoD §1):** `tests/mask_local_reload.rs` schließt die
+2. **Reload-Glied (F-6, DoD §1):** `crates/lumina-gui/tests/mask_local_reload.rs` schließt die
    Kette `Edit → Commit/Debounce → Sidecar-Datei → Reload → Wert wieder da`:
    ein **zweites** `LuminaApp` über demselben tempdir liest den Wert über den
    Produktionspfad (`open_file` → Decode → `finish_decode` adoptiert das
@@ -1288,9 +1288,9 @@ Was der Code tatsächlich tut:
   oeffnen. Reine View-Edits (Zoom/Pan) armieren keinen Token und schreiben
   damit weiterhin nichts.
 
-  **Anker:** `tests/slider_sidecar_save.rs::a_render_apply_click_inside_the_debounce_window_does_not_strand_the_save`
+  **Anker:** `crates/lumina-gui/tests/slider_sidecar_save.rs::a_render_apply_click_inside_the_debounce_window_does_not_strand_the_save`
   (rot ohne den Fix) und
-  `src/tests/render_dirty.rs::the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs`
+  `crates/lumina-gui/src/tests/render_dirty.rs::the_scheduler_rearms_an_owed_save_only_while_a_drag_clock_runs`
   (pinnt beide Richtungen, auch die Antiretry-).
 
 **Warum der Ausschluss gewollt ist.** `GuiAction`/`ALL_GUI_ACTIONS` ist die
@@ -1384,7 +1384,7 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   enthaelt meinen Edit *jetzt*" gilt erst nach dem Debounce. Deshalb folgt in allen Interaktionszielen auf
   **jedes Wertgest** ein `settle_persisted` **und** eine Datei-Assertion, bevor
   das nächste Gest kommt (F-4). Die eine benannte Ausnahme — zwei `Add
-  color`-Klicks ohne Settle — steht in `tests/mask_local_color_controls.rs` und
+  color`-Klicks ohne Settle — steht in `crates/lumina-gui/tests/mask_local_color_controls.rs` und
   ist im Doc-Kommentar derselben Datei begründet. Ein erster Entwurf von
   `mask_local_color_controls.rs` hatte genau diesen Defekt (kein Settle
   zwischen zwei Drags), und der Trace zeigte, dass der erste Commit sein
@@ -1437,7 +1437,7 @@ nennt den Loop/Setter, und die letzte Spalte ist ehrlich gefüllt.
 | 16 | Grading **Hue** | ja — `mask_local_editors`, `mask_local_color_controls` | `set_mask_local_grading_field(range, "hue")` | — |
 | 17 | Grading **Saturation** | ja — `mask_local_color_controls` (Zeuge) | dito, Feld `"saturation"` | — |
 | 18 | Grading **Luminance** | **nein** | dito, Feld `"luminance"` | nur Mechanik (Hue/Saturation/Luminance sind **drei** ausgeschriebene `Slider`-Blöcke mit **derselben** Aufrufform `set_mask_local_grading_field(<range>, "<feld>", wert)`; die Validierung pro Feld ist durch die Lib-Tests der P1.2b-Fassung abgedeckt) |
-| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Der Annahmepfad ist getestet (`crates/lumina-gui/src/tests/mask_local_color.rs` → `local_color_setters_and_resets_cover_every_area`: setzt, liest zurück, belegt das Überleben eines Bereichs-Resets) und der Ablehnungspfad **ebenfalls**, auf Crate-Ebene: `lumina-sidecar/src/tests/local_adjustments_color.rs::local_color_uses_the_existing_global_ranges` verweigert genau `("balance","value",1.2)` und `("blending","value",1.2)` **und** das unbekannte Target `("whites","hue",30.0)` und belegt `local.color_grading == before`. Die Zeile heißt `nein`, weil der **Klick** fehlt — nicht, weil die Semantik ungetestet wäre. (Korrektur 2026-09-26: eine frühere Fassung behauptete hier, der Ablehnungspfad sei ungedeckt, und dass der genannte Test kein unbekanntes Target kenne. Beides ist falsch; dieser Absatz war zweimal falsch.) |
+| 19 | Grading **Balance** | **nein** | `set_mask_local_grading_field("balance", "value", …)` | nur Mechanik — **schwächer als Zeile 18**: Range **und** Feldname sind hier hart kodiert (`"balance"`, `"value"`) statt durchgereicht, also ein anderer Zweig *innerhalb* desselben Setters. Der Annahmepfad ist getestet (`crates/lumina-gui/src/tests/mask_local_color.rs` → `local_color_setters_and_resets_cover_every_area`: setzt, liest zurück, belegt das Überleben eines Bereichs-Resets) und der Ablehnungspfad **ebenfalls**, auf Crate-Ebene: `crates/lumina-sidecar/src/tests/local_adjustments_color.rs::local_color_uses_the_existing_global_ranges` verweigert genau `("balance","value",1.2)` und `("blending","value",1.2)` **und** das unbekannte Target `("whites","hue",30.0)` und belegt `local.color_grading == before`. Die Zeile heißt `nein`, weil der **Klick** fehlt — nicht, weil die Semantik ungetestet wäre. (Korrektur 2026-09-26: eine frühere Fassung behauptete hier, der Ablehnungspfad sei ungedeckt, und dass der genannte Test kein unbekanntes Target kenne. Beides ist falsch; dieser Absatz war zweimal falsch.) |
 | 20 | Grading **Blending** | **nein** | `set_mask_local_grading_field("blending", "value", …)` | dito wie Zeile 19 |
 | 21 | Reset pro Bereich | ja — `mask_local_color_controls` (Bereichs-Scope mit Zeuge) | `reset_mask_local_grading(range)` | — |
 | 22 | `all local color reset` | ja — `mask_local_editors` | `reset_mask_local_color` | — |
@@ -1476,7 +1476,7 @@ der von der Testabdeckungs-Politik verlangte **unnötige** Test.
 Click-Test — und haben ihn.** Sie waren die einzige Stelle, an der der
 Nachweis „angeklicktes Geschwister genügt" **nicht** trug: der
 Saturation-Klick pinnt nur Index 1, eine Vertauschung 0↔2 zwischen Hue und
-Luminance blieb grün. `tests/mask_local_hsl_bands.rs` schließt das mit je einem
+Luminance blieb grün. `crates/lumina-gui/tests/mask_local_hsl_bands.rs` schließt das mit je einem
 Test und einem **zweiten, nicht-neutralen Zeugenband** (`yellow`, jeweils über
 das *andere* Feld vorbelegt: Saturation zeugt für Hue, Hue zeugt für Luminance),
 sowie je einer Datei-Assertion direkt nach `settle_persisted` (F-4). Der

@@ -257,7 +257,7 @@ prüfen Listen↔Dispatch-Verhalten.
 | 1073 / 996 / 77 | GUI-Ziele: listbar / ausgeführt / ignoriert | echter Lauf `cargo test -p lumina-gui --all-targets` |
 | 955 (950+5) | GUI-lib-Unit | `--lib -- --list` + Lauf |
 | 2972 / 108 | `#[test]` / test-tragende Ziele, **statische Untergrenze** | eigenes Mod-Baum-Resolver-Skript; verifiziert gegen dep-info (`target/debug/deps/*.d`) |
-| 3116 / 445 | globaler Dateisystem-Walk | **nur zur Abgrenzung** — die Methode, an der `TEST-DEDUP-100` scheiterte: zählt feature-ausgeschaltete Module (z. B. 7 Tests in `src/jank_log.rs`, nur hinter `feature="janklog"`; CI deckt sie über den eigenen Schritt `cargo test -p lumina-gui --lib --features janklog`, Kommentar `ci.yml:287`), Test-Support-Dateien ohne Ziel und `#[cfg]`-tote Attribute, und ordnet keinen Test seiner ausführenden Binary zu |
+| 3116 / 445 | globaler Dateisystem-Walk | **nur zur Abgrenzung** — die Methode, an der `TEST-DEDUP-100` scheiterte: zählt feature-ausgeschaltete Module (z. B. 7 Tests in `crates/lumina-gui/src/jank_log.rs`, nur hinter `feature="janklog"`; CI deckt sie über den eigenen Schritt `cargo test -p lumina-gui --lib --features janklog`, Kommentar `ci.yml:287`), Test-Support-Dateien ohne Ziel und `#[cfg]`-tote Attribute, und ordnet keinen Test seiner ausführenden Binary zu |
 
 **Bekannte Untergrenze der statischen Zählung:** GUI-lib statisch 936 vs. 955
 gelistet (10 per `#[path]`/verschachtelt eingebundene Dateien fehlen);

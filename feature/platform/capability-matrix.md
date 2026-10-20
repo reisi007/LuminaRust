@@ -369,13 +369,13 @@ und `tests::production_seam::production_does_not_report_an_absent_update_directo
 #### Pflicht des Aufrufers von `load_system()` (F2 — **geschlossen 2026-09-26**)
 
 **Stand: beide Produktaufrufer sind verdrahtet (LENSFUN-CALLER-37).**
-`lumina-gui` (`src/lensfun_auto.rs`) nutzt `load_system_with` mit dem
-GUI-eigenen `LogDiagnostics` (`src/lensfun_diag.rs`): eigener Log-Level je
+`lumina-gui` (`crates/lumina-gui/src/lensfun_auto.rs`) nutzt `load_system_with` mit dem
+GUI-eigenen `LogDiagnostics` (`crates/lumina-gui/src/lensfun_diag.rs`): eigener Log-Level je
 Ereignis (`resolved` = `debug`, `file_rejected`/`layer_skipped`/
 `pin_displaced` = `warn`, `failed` = `error`) und eine prozessweite
 Deduplizierung über Ereignis-Identitäten, damit eine nicht auflösbare
 Datenbank **genau einen** Datensatz erzeugt und nicht einen pro Render.
-`lumina-cli` (`src/lensfun_cli.rs`) nutzt `load_system_with` mit einem
+`lumina-cli` (`crates/lumina-cli/src/lensfun_cli.rs`) nutzt `load_system_with` mit einem
 prozessweiten `ReportOnce`-Sink über `with_diagnostics(|sink| …)`.
 **Der Lookup wird in beiden Pfaden nicht gecacht** — ein Miss lässt den Cache
 leer, damit eine später installierte Datenbank noch aufgefaellt wird; nur das
@@ -389,7 +389,7 @@ Zähler weiterlaufen lässt, blieb mit der gesamten `lumina-gui`-lib-Suite grün
 Wer die Eigenschaft "ein Miss cacht nichts" *beweisen* will, braucht daher
 **zwei** Belege: den aufruferseitigen Zähler (Verdrahtung) **und** eine Größe, die
 der Load selbst erzeugt. Im GUI-Pfad ist das `lensfun_load_outcomes` in
-`src/lensfun_diag.rs`: es zählt die beiden Ergebnisereignisse der Senke
+`crates/lumina-gui/src/lensfun_diag.rs`: es zählt die beiden Ergebnisereignisse der Senke
 (`resolved`/`failed`), die `report_with` genau einmal pro `load_system_with`
 emittiert und im Erfolgszweig erst nach einem erfolgreichen `lf_db_load_file`.
 Ein Aufrufer, der diese Bindung braucht, zählt folglich **nicht** neben seinem
@@ -773,12 +773,12 @@ self.preview_roi.is_some()` (Z. 147) und der **Masken-Gate**
 `!self.gpu_mask_overlay_is_selected()` (Z. 155).
 
 Entscheidend ist die Unterscheidung zweier Arten von Umleitung, die der Code
-selbst trifft (`src/gpu_routing.rs`, `format_routing_fallback_reason` und
+selbst trifft (`crates/lumina-gui/src/gpu_routing.rs`, `format_routing_fallback_reason` und
 dessen Doc-Kommentar):
 
 | Art | Beispiel | Sichtbar? | Log? |
 | --- | --- | --- | --- |
-| **Capability** | nicht unterstützte Stufen, `geometry (default content crop)`, `lens_correction (Lensfun corrector; …)` | **ja** — gelbes Badge mit exakten Gründen plus Tooltip (`app_frame.rs:148-156`), getestet in `src/tests/gpu_routing.rs` | ja, `gpu present refused, keeping CPU route: {stage}` |
+| **Capability** | nicht unterstützte Stufen, `geometry (default content crop)`, `lens_correction (Lensfun corrector; …)` | **ja** — gelbes Badge mit exakten Gründen plus Tooltip (`app_frame.rs:148-156`), getestet in `crates/lumina-gui/src/tests/gpu_routing.rs` | ja, `gpu present refused, keeping CPU route: {stage}` |
 | **Editorial** | Masken-Gate, Before/After-Ansicht, ROI | **nein** — bewusst: `None`, „wenn nur eine editoriale Ursache vorliegt" | **nein** |
 
 Fuer **B12** ist das die entscheidende Lesart: die Capability-Umleitung ist

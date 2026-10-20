@@ -70,8 +70,8 @@ Verifizierung BESTANDEN):** CLI nutzt die volle Matrix
 (`blend_panorama_transformed`, Rotation wirkt end-to-end, rotierter
 E2E-Test), Envelope-`\"type\": \"merge\"`-Diskriminator, HDR-Residual-Warnung.
 **Stand 2026-09-17 (MERGE-IMPL-15, F6-Dedup + F-074-N7, Verifizierung
-ausstehend):** Die früher in `lumina-cli/src/merge.rs` und
-`lumina-gui/src/merge_gui.rs` gespiegelte Orchestrierung ist in
+ausstehend):** Die früher in `crates/lumina-cli/src/merge.rs` und
+`crates/lumina-gui/src/merge_gui.rs` gespiegelte Orchestrierung ist in
 `lumina-merge::bundle` zusammengeführt: `run_merge` ist der eine Pfad
 (Validierung → Decode-Adapter → Exposure-Policy → Alignment → Blend → Rezept →
 Digest → Envelope-/Stale-/Missing-Gate → linearer DNG → atomare

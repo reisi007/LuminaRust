@@ -106,9 +106,9 @@ The GPU init sequence (`init_gpu_resources`) is: `Instance` (Metal backend) →
 
 | Module                  | Owns                                                        |
 |-------------------------|-------------------------------------------------------------|
-| `lumina-gpu/src/lib.rs` | `GpuContext`, `Frame`, `GpuError`, init. **Do not break API** |
-| `lumina-gpu/src/shaders.rs` | decode-base texture, color/tone UBO stage, 3D LUT bake, FP16 FBO |
-| `lumina-gpu/src/tiling.rs`  | 512² tiling scheduler, VRAM LRU, draft pyramid, read-back   |
+| `crates/lumina-gpu/src/lib.rs` | `GpuContext`, `Frame`, `GpuError`, init. **Do not break API** |
+| `crates/lumina-gpu/src/shaders.rs` | decode-base texture, color/tone UBO stage, 3D LUT bake, FP16 FBO |
+| `crates/lumina-gpu/src/tiling.rs`  | 512² tiling scheduler, VRAM LRU, draft pyramid, read-back   |
 
 When the stages exist, `GpuContext::render_with_gpu` switches from the CPU
 fallback to the GPU DAG; the CPU path remains the fallback and the test oracle.
@@ -210,7 +210,7 @@ two RGBA8 outputs on the policy below.
 | `PSNR` (global, MAX=255) | **≥ 45 dB** | RMS error ≤ ~1.4/255; the two renders are visually indistinguishable. |
 | `ΔE` / blake3 hash | **reported only** | A blake3 content hash of each output is logged; equality is informational and **never asserted** (a future FP16 GPU path may legitimately differ by sub-LSB rounding). |
 
-These constants live in `tests/golden.rs` (`MAX_ABS_DIFF_TOLERANCE = 1`,
+These constants live in `crates/lumina-gpu/tests/golden.rs` (`MAX_ABS_DIFF_TOLERANCE = 1`,
 `MIN_PSNR_DB = 45.0`) so the gate is reviewable in one place.
 
 ### Recipes exercised

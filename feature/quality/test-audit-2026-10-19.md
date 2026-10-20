@@ -36,7 +36,7 @@ Aussage.
 gui `filmstrip::downscale_rgba`, gui `preview_jobs::downscale_to_target`) auf
 **einen** f64-Kernel `lumina_core::downscale` mit zwei Zielformen. Damit ist
 `crates/lumina-core/tests/downscale_anchor.rs` (10 Tests +
-`downscale_anchor_support/mod.rs`) neu im Baum. Die Vorrunden-Befunde **B1** und
+`crates/lumina-core/tests/downscale_anchor_support/mod.rs`) neu im Baum. Die Vorrunden-Befunde **B1** und
 **G3** sind behoben, **B2** und **G1** sind geschlossen, **G2** ist als
 dokumentierte Grenze geschlossen. Die neue Datei trägt die Lücken F1–F3.
 
