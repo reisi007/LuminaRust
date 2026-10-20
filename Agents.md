@@ -32,20 +32,17 @@ sondern in `feature/`/`docs/` bzw. die Projekt-Doku; offene Punkte nach
 
 ## Produktprinzipien
 
-- LuminaRust ist ein nicht-destruktiver RAW-Prozessor mit Lightroom-ähnlichem
-  Bearbeitungsmodell.
-- Das Originalbild wird niemals verändert, verschoben, überschrieben oder
-  durch einen Export ersetzt.
-- Eine Bearbeitung wird als deklaratives, versioniertes Rezept gespeichert.
-- Vorschauen, Histogramme, Renderings, Exporte und AI-Ergebnisse sind aus dem
-  Original und dem Rezept ableitbare Artefakte.
-- Ein erneutes Öffnen eines Projekts darf keine erneute AI-Inferenz benötigen,
-  wenn eine gültige persistierte Maske vorhanden ist.
-- Reproduzierbarkeit ist wichtiger als ein stiller Fallback. Fehlende oder
-  inkompatible Artefakte werden sichtbar als veraltet oder nicht verfügbar
-  gemeldet.
-- Jede sichtbare Funktion muss im passenden Feature-Dokument beschrieben sein,
-  bevor ihre Implementierung beginnt.
+Die Produktprinzipien und Invarianten sind **nicht** in dieser Datei
+festgelegt. Ihre normative Quelle ist [`feature/README.md`](feature/README.md):
+§„Leitbild" beschreibt das Zielbild, §„Invarianten" die verbindlichen
+Zusicherungen; die Detaildokumente stehen in der Feature-Matrix derselben
+Datei. Diese Datei hält daraus nur die Regeln, die für jede Arbeit gelten:
+
+- Das Original wird nie verändert, verschoben, überschrieben oder durch einen
+  Export ersetzt — ein Export ist immer ein zusätzliches Ziel.
+- Eine gültige persistierte AI-Maske wird wiederverwendet; eine erneute
+  Inferenz darf nicht ungefragt erfolgen (Gültigkeit, Veraltung und
+  Neuberechnung siehe „Persistenz und Sidecars" → „AI-Masken").
 
 ## Persistenz und Sidecars
 
