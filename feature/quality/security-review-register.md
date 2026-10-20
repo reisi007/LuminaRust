@@ -248,7 +248,7 @@ Ausgabepfade / Vertrauensgrenze / zu prüfende Klassen / Beleg).
 | **MCP-Pfad-/Zielbehandlung** | `crates/lumina-mcp/src/output_guard.rs` (`reject_protected_target`), `crates/lumina-mcp/src/util.rs` (`build_source_identity`, `write_output_guarded`, `parse_bounded_uint`, `validate_output_extension`) | Eingabe: Datei- und Zielpfade, Zahlen- und Formatparameter; Ausgabe: abgewiesene Schreibziele, Source-Identität | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: jede der Wurzelfunktionen wäre einzeln zu betrachten |
 | **MCP-Session-Zustand** | `crates/lumina-mcp/src/session.rs` | Eingabe: Tool-Aufrufe mit `image_id`; Ausgabe: Sitzungszustand, Vorschau-/Temp-Dateien | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Sitzung-Lebenszyklus und Aufräumen |
 | **CLI-Kommando-Oberfläche** | `crates/lumina-cli/src/main.rs` (`enum Command`, clap-`Parser`), Argument-Strukturen ab `struct FileArgs` ff., Kommando-Implementierungen ab `fn run(cli: Cli)` | Eingabe: Kommandozeile (Argumente, Pfade, Zahlen); Ausgabe: Dateien, stdout/stderr, Exit-Code | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: Population wäre das `Command`-Enum (32 Varianten mit Argument-Strukt, zusätzlich die Feature-gate-Variante `Mcp`); **SOLL-Quelle**: `feature/platform/cli-gui-wasm.md` |
-| **CLI-Submodule** | `crates/lumina-cli/src/{auto_tone_cli,cull_cli,lensfun_cli,lensfun_gpu,local_mask_gpu,mask_local,mask_local_color,mask_local_curves,mask_local_detail,mask_local_presence,merge,matrix,stages,library}.rs` | Eingabe: je Subcommand eigene Argumente; Ausgabe: Rezept-/Sidecar-/Status-Änderungen | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: jede Kommando-Gruppe wäre getrennt zu zählen. **Ausnahme:** `lensfun_gpu.rs` und `local_mask_gpu.rs` sind **keine** Subcommands mit eigenen Argumenten, sondern GPU-Binder/-Compositing-Module des CLI-Crates, die `fn run(cli: Cli)` über `render_best_effort` erreicht (`lensfun_gpu::classify`, `lensfun_gpu::bind`, `local_mask_gpu::mask_layer_routing_reasons`, `local_mask_gpu::composite`) |
+| **CLI-Submodule** | `crates/lumina-cli/src/{auto_tone_cli,cull_cli,lensfun_cli,lensfun_gpu,local_mask_gpu,mask_local,mask_local_color,mask_local_curves,mask_local_detail,mask_local_presence,merge,matrix,stages,library}.rs` (die vier GPU-/Lensfun-Module stehen unter `#[cfg(feature = "gpu")]` bzw. `#[cfg(feature = "lensfun")]` — im Default-Build sind sie **nicht** kompiliert) | Eingabe: je Subcommand eigene Argumente; Ausgabe: Rezept-/Sidecar-/Status-Änderungen | **enumeriert (Welle 1, §5.1)** — offen für die Prüfung: jede Kommando-Gruppe wäre getrennt zu zählen. **Ausnahme:** `lensfun_gpu.rs` und `local_mask_gpu.rs` sind **keine** Subcommands mit eigenen Argumenten, sondern GPU-Binder/-Compositing-Module des CLI-Crates, die `fn run(cli: Cli)` über `render_best_effort` erreicht (`lensfun_gpu::classify`, `lensfun_gpu::bind`, `local_mask_gpu::mask_layer_routing_reasons`, `local_mask_gpu::composite`) |
 | **Gemeinsame Pfad-/Dateischicht (`lumina-stages`)** | `crates/lumina-stages/src/paths.rs` (`require_sidecar`, `collect_target_sidecars`, `collect_sidecars`, `collect_tree_files`, `move_file_cross_volume`, `load_smart_catalog`), `crates/lumina-stages/src/relocate.rs` (`run`), `crates/lumina-stages/src/collections.rs` (`run`), `crates/lumina-stages/src/merge.rs` (`decode_source`), `crates/lumina-stages/src/matrix_run.rs` (`run`) | Eingabe: Bild-, Sidecar-, Ziel- und Verzeichnispfade; Ausgabe: verschobene Dateien samt Begleitdateien, geschriebene Sidecars, DNG- und Report-Dateien | **enumeriert (Welle 1, §5.1)** — **Basis-Erweiterung** (Eigentümerentscheid 2026-10-20) — enumeriert in §5.1 |
 | **Culling-Sidecar-Bindung (`lumina-cull`)** | `crates/lumina-cull/src/sidecar_io.rs` (`load_culling`, `save_culling`, `record_culling`, `clear_culling`, `evaluate_culling`, `evaluate_section`), `crates/lumina-cull/src/identity.rs` (`identity_mismatches`), `crates/lumina-cull/src/analyze.rs` (`analyze_heuristic`, `analyze_selection`) | Eingabe: Sidecar-Datei von Platte, Culling-Identität; Ausgabe: `CullingReadState`, persistierter `culling`-Block in der `.lumina.json` | **enumeriert (Welle 1, §5.1)** — **Basis-Erweiterung** (Eigentümerentscheid 2026-10-20) — enumeriert in §5.1 |
 | **Verzeichnis-/Ordnerbaum-Ebene** | `crates/lumina-mcp/src/util.rs` (`collect_tree_files`, `collect_tree_files_inner`), `crates/lumina-stages/src/paths.rs` (`collect_tree_files`, `collect_tree_files_inner`, `collect_sidecars`, `collect_target_sidecars`) | Eingabe: Verzeichnispfad als Werkzeugargument; Ausgabe: die Liste der darunter gefundenen Dateien (Menge, Reihenfolge, Pfade) | **enumeriert (Welle 1, §5.1)** — **Basis-Erweiterung** (Eigentümerentscheid 2026-10-20) — enumeriert in §5.1 |
@@ -398,11 +398,15 @@ Klammern dahinter):
   `relocate` (`lumina_stages::relocate` → `move_file_cross_volume`),
   `generative`/`regenerate` (`lumina_stages::generative`/`lumina_stages::regenerate`
   → `save_sidecar`), `merge_hdr`/`merge_pano` (`lumina_stages::merge` →
-  `run_merge` → DNG-Datei); `preview` schreibt eine PNG-Datei in
+  `run_merge` → DNG-Datei), `spot`/`lens_blur`/`geometry`/`upright`
+  (`stage_common::execute` → `commit` → `save_sidecar_if_unchanged`),
+  `matrix` (`lumina_stages::matrix_run::run` → `std::fs::write`);
+  `preview` schreibt eine PNG-Datei in
   `server.preview_dir` (`crates/lumina-mcp/src/tools/preview.rs`,
   `write_atomically`); `meta_get::resource_read` liefert eine Ressource über
   `resources/read`. Rein lesend: `inspect`, `analyze`, `copies`, `recipe`,
-  `smart_collections`, `meta_get`.
+  `smart_collections`, `meta_get`, `reindex` (liest den Verzeichnisbaum über
+  `collect_tree_files` und gibt das Ergebnis als JSON zurück — **kein** Schreibpfad).
 - **Vertrauensgrenze** — Werkzeugargument (Modell-Eingabe) → Dateisystem des
   Serverprozesses: die Werkzeugargumente sind der **einzige** Weg vom
   aufrufenden Modell in den Pfadraum des Prozesses.
@@ -706,7 +710,7 @@ Klammern dahinter):
   `PreviewKey::digest`, `decode_webp(bytes)` (dekodiert Cachebytes);
   `crates/lumina-core/src/stage_cache.rs`: `StageFrameCache::insert`/`get`
   (Schlüsselstring).
-- **Ausgabepfade** — **im Speicher** (kein Dateizugriff in `lumina-core`):
+- **Ausgabepfade** — **im Speicher** (kein Dateizugriff in `crates/lumina-core/src`):
   Bildframes (`ImageFrame`) und Byte-Puffer; Löschpfade `prune_orphans`
   (`FolderCache`), `LruPreviewCache::remove_entry`, `StageFrameCache::clear`.
 - **Vertrauensgrenze** — Quellname/Virtual-Copy-ID/Rezept-Digest →
@@ -759,7 +763,8 @@ Klammern dahinter):
   `previews/` (`PREVIEWS_DIR`): angelegt durch `fs::create_dir_all` in
   `in_folder`; darin `settings.json` (`settings_path`) und die Vorschau-Dateien
   (`disk.rs` `store_preview`, `preview_disk.rs` `store` — letztere schreibt
-  zusätzlich eine `.{digest}.{pid}.tmp`-Zwischendatei).
+  zusätzlich eine `{digest}.{pid}.tmp`-Zwischendatei **ohne** führenden Punkt — im
+  Unterschied zur Sidecar-Schreibweise `.{name}.tmp-*`).
 - **Vertrauensgrenze** — Bildordner → Prozess: die Cachewurzel liegt **im
   Ordner der Bilder**, also in einer vom Benutzer (und von jedem anderen
   Werkzeug im selben Ordner) beschreibbaren Zone; das Verzeichnis wird
@@ -778,7 +783,7 @@ Klammern dahinter):
   `decode_bytes(bytes, name)`, `decode_bytes_with_options(bytes, name, options)`,
   `read_metadata(path)`, `read_metadata_bytes(bytes, name)`; Formatwahl über
   `RAW_EXTENSIONS` und `is_raw_extension(extension)`. Rasterbilder laufen
-  parallel über `ImageFrame::decode` (`crates/lumina-core`). Der Dateiname
+  parallel über `ImageFrame::decode` (`crates/lumina-core/src/lib.rs`). Der Dateiname
   geht als **Kontext** in die Fehlermeldungen ein.
 - **Ausgabepfade** — `RawImage`/`ImageFrame` (dekodierte Pixel) und
   `RawMetadata` (EXIF-Felder) im Speicher; die Freigabeentscheidung trifft
@@ -1059,7 +1064,7 @@ Befunde** (§3 bleibt bei null Befunden). Sie betreffen die **Vollständigkeit d
    *Verzeichnis-/Ordnerbaum-Ebene*, *`.lumina`-Cachewurzel im Bildordner* und
    *Meta-Präsets (Dateiformat + Benutzerkonfigurationsverzeichnis)* — jede mit
    enumeriertem Abschnitt in §5.1 (5.1.7, 5.1.8, 5.1.9, 5.1.15, 5.1.20).
-3. **Nicht aufgenommen: `crates/lumina-gpu`.** Das Crate hat **kein**
+3. **Nicht aufgenommen: `crates/lumina-gpu/src`.** Das Crate hat **kein**
    Datei-I/O — `grep -rln "std::fs\|fs::read\|fs::write\|File::open" crates/lumina-gpu/src/ || echo "(keine Treffer)"`
    liefert **keine** Treffer; es ist damit keine eigene
    Datei-Eingabe-/Ausgabe-Oberfläche.
@@ -1082,7 +1087,7 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   Sidecar-Format ist; sie fällt derzeit unter die Zeile *Gemeinsame
   Pfad-/Dateischicht*.
 - **Der Rezept-Export der GUI** (`crates/lumina-gui/src/presets.rs`
-  `save_preset_file`) und der **Meta-Präset-Export** der CLI teilen sich ein
+  `save_preset_file`) und der **Meta-Präset-Leser** der CLI (`meta preset list|show|apply` — die CLI schreibt nichts ins Präsets-Verzeichnis) teilen sich ein
   Verzeichnis (`<config base>/lumina/presets`), aber **nicht** das Format — die
   Zeile *Meta-Präsets* deckt beide Formate in einer Zeile ab.
 
