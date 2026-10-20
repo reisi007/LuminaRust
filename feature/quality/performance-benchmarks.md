@@ -856,7 +856,7 @@ Zwei Gründe machen sie zur echten Entscheidung, nicht zum Selbstläufer:
 führt genau diese Buchführung ein und muss mit `live_brush_plane_stale`,
 `KeepLiveBrush` und dem Pool-LRU zusammenspielen; (2) ein GPU-seitiges
 `clear_texture` wäre die zweite Abhilfe, ist aber **kein Drop-in**: das Gerät
-wird mit `Features::empty()` angefordert (`lumina-gpu/src/lib.rs:4741`),
+wird mit `Features::empty()` angefordert (`crates/lumina-gpu/src/lib.rs` -> `init_gpu_resources`),
 `CommandEncoder::clear_texture` verlangt die `CLEAR_TEXTURE`-Erweiterung und
 würde ohne Feature-Aushandlung paniken — bei geteiltem eframe-Gerät ist das
 ein breiterer Eingriff. Die Messung liefert die **Obergrenze der Ersparnis**

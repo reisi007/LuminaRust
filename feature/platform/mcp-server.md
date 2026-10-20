@@ -656,7 +656,7 @@ gelesen werden:**
 
 - `lumina_generative` bleibt die **einzige** `masks: none`-Renderpfad —
   sein einziger Render ist der **geteilte** Staging-Render
-  (`crates/lumina-stages/src/generative_artifact.rs:266`), den auch die CLI
+  (`crates/lumina-stages/src/generative_artifact.rs` -> `generative_expand_input`), den auch die CLI
   (`resolve_generative_artifacts`) und die GUI fahren. Die Masken-Stage
   laeuft im vollstaendigen Render **nach** der Generativ-Stage, also muss
   die Canvas-Erstellung vom **unmaskierten** Rahmen geschehen; eine
@@ -667,7 +667,7 @@ gelesen werden:**
   Paritaet, kein Divergenzfall.
 - `lumina_regenerate op="matching"` wendet Masken **an** — mit Policy
   `warn`, ueber die geteilte `lumina-stages`-Schicht
-  (`crates/lumina-stages/src/regenerate.rs:376-392`). Das ist **Paritaet**
+  (`crates/lumina-stages/src/regenerate.rs` -> `run`). Das ist **Paritaet**
   mit der CLI, kein Divergenzfall; der Renderpfad ist gemeinsam
   (`RenderContext` inkl. Masken-Ebenen baut die geteilte Schicht, nicht
   der Adapter — siehe MCP-PARITY-B-Abschnitt). Mit `MCP-MASK-APPLY` ist es
@@ -1211,7 +1211,7 @@ eine Aussage und keine Hoffnung ist.
   Divergenzfall (Abschnitt „Masken im MCP-Renderpfad").
 - `lumina_generative op="generate"` rendert die Auto-Fill-/Expand-Ebene
   mit **`masks: none`** (geteilte Schicht
-  `crates/lumina-stages/src/generative_artifact.rs:266`) — der einzige
+  `crates/lumina-stages/src/generative_artifact.rs` -> `generative_expand_input`) — der einzige
   `masks: none`-Renderpfad, weil der Render geteilt mit CLI/GUI ist und die
   Masken-Stage nach der Generativ-Stage laeuft (Begruendung: Abschnitt
   „Masken im MCP-Renderpfad", Ausnahme 1).

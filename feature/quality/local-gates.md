@@ -270,8 +270,8 @@ endet es mit **Exit 2** („cannot conclude"):
 4. die dep-info nennt den **Sentinel**
    `crates/lumina-gui/src/tests/lensfun_diagnostics.rs` — der ist
    feature-gegatet (`#[cfg(feature = "lensfun")] mod lensfun_diagnostics;`,
-   `crates/lumina-gui/src/lib.rs:10078-10079`, im Test-Modul-Block ab
-   `crates/lumina-gui/src/lib.rs:9987-9988`), und nur ein Default-Feature-
+   `crates/lumina-gui/src/lib.rs` -> `mod lensfun_diagnostics;`, im Test-Modul-Block ab
+   `crates/lumina-gui/src/lib.rs` -> `mod tests`), und nur ein Default-Feature-
    Build enthält ihn (`default = ["lensfun", "gpu"]`,
    `crates/lumina-gui/Cargo.toml:74`).
 
