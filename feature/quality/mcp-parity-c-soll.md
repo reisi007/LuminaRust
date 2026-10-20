@@ -118,7 +118,7 @@ keine `MergeRunError`-Klasse.
    `resolve_dng_path`); das ist **kein** Fehler. Nur ein **vorhandenes,
    nicht-String**-Feld ist ein Typfehler → `InvalidParams`. Die **Form**
    (`.dng`-Endung, `resolve_dng_path`), ein fehlender Dateiname
-   (`resolve_dng_path`) und ein Ziel, das auf eine Quelle zeigt (`Ablehnungszweig
+   (`resolve_dng_path`) und ein Ziel, das auf eine Quelle zeigt (`Ablehnungszweig`
    `resolve_dng_path`, Prüfschleife `resolve_dng_path`) prüft der Handler **nicht**: das tut
    `resolve_dng_path` (Hüll-Verweis `crates/lumina-merge/src/bundle.rs` →
    `resolve_dng_path`) und liefert dafür
