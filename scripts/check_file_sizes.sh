@@ -5,6 +5,18 @@
 # exceed it. Shrink or extract at any time; after an extraction, lower the
 # baseline entry (or drop it once the file is at or below 500 lines).
 # New files over 500 lines fail until a baseline entry is added consciously.
+#
+# Zwei Durchlaeufe:
+#   FAIL (Gate): beurteilt werden nur Dateien ueber 500 Zeilen — kein Eintrag
+#     => FAIL, ueber den Eintrag hinaus gewachsen => FAIL. Der Abgleich laeuft
+#     ueber Feld 2, ein angehaengter `#`-Kommentar stoert ihn nicht.
+#   INFO (Hinweis, nie ein Gate, ohne Wirkung auf den Exit-Code): durchlaeuft
+#     JEDEN Baseline-Eintrag und meldet die, die entfernt werden koennen — die
+#     Datei ist auf <= 500 Zeilen geschrumpft oder existiert nicht mehr. Der
+#     Eintrag wird ueber `NF >= 2` erkannt (Wert + Pfad); ein angehaengter
+#     `#`-Kommentar fuegt weitere Felder hinzu und darf den Eintrag diesem
+#     Durchlauf NICHT verbergen. Uebersprungen werden nur Zeilen, die mit `#`
+#     BEGINNEN (echte Kommentarzeilen der Baseline).
 # POSIX sh only (macOS ships bash 3.2 without associative arrays).
 #
 # Gate-Header (Skill `ratchet-gates`, Invariante 8 — je Defektklasse eine
@@ -54,7 +66,7 @@ find "$ROOT/crates" -name '*.rs' -not -path '*/target/*' | while IFS= read -r f;
   fi
 done || fail=1
 
-awk '!/^#/ && NF == 2 {print $2}' "$BASELINE" | while IFS= read -r path; do
+awk '!/^#/ && NF >= 2 {print $2}' "$BASELINE" | while IFS= read -r path; do
   if [ -f "$ROOT/$path" ]; then
     n=$(wc -l < "$ROOT/$path" | tr -d ' ')
     if [ "$n" -le "$THRESHOLD" ]; then
