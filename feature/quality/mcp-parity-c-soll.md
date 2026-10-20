@@ -358,7 +358,7 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 
 ## 6. Invarianten
 
-1. **Eine Implementierung:** MCP nutzt `run_merge` (wie CLI `merge.rs:83-90`),
+1. **Eine Implementierung:** MCP nutzt `run_merge` (wie CLI `crates/lumina-cli/src/merge.rs` → `merge_hdr`/`merge_pano` → `run_merge`),
    kein eigenes Decode/Blend. F6-Dedup bleibt unangetastet.
 2. **Decode-Kontext spiegelt die Quelle:** CLI-Adapter setzt `decoder` auf
    `"libraw"` wenn `raw.is_some()` sonst `"image"`, plus `libraw_decode_version()`
@@ -370,21 +370,22 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
    `bundle.rs:369,482-494` — MCP-seitig kein eigener Count-Check, §2 Punkt 1);
    explizite Listen (`exposure_times`/`isos`/
    `f_numbers`) sind entweder leer oder genau `len(inputs)`
-   (`check_explicit_list_lengths`, `merge.rs:142-156`; Unit
-   `merge.rs:374-384`). Abbruch laut, keine Teil-Ergebnisse.
+   (`check_explicit_list_lengths`, `crates/lumina-stages/src/merge.rs` → `check_explicit_list_lengths`; Unit
+   `crates/lumina-stages/src/merge.rs` → `explicit_lists_accept_empty_or_exactly_per_input`). Abbruch laut, keine Teil-Ergebnisse.
 4. **HDR-Exposure nie geraten:** explicit wins, sonst EXIF
    `exposure_time_s`/`iso`/`f_number`, sonst `unsupported`
-   (`resolve_hdr_exposure`, `merge.rs:239-300`; Range-Checks
-   `merge.rs:247-293`). Units: `merge.rs:386-404`.
+   (`resolve_hdr_exposure`, `crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure`; die Range-Checks
+   selbst: `crates/lumina-sidecar/src/merge_recipe.rs` → `MAX_MERGE_EXPOSURE_TIME_S`/`MAX_MERGE_ISO`/
+   `MAX_MERGE_F_NUMBER`). Units: `crates/lumina-stages/src/merge.rs` → `hdr_without_explicit_or_exif_exposure_is_unsupported`/`hdr_rejects_out_of_range_explicit_values`.
 5. **Pano-Exposure ist nur Provenienz:** EXIF oder neutrale Defaults
    `PANO_DEFAULT_EXPOSURE_S/_ISO/_F_NUMBER` (0,01 s / 100 / f/8,
    `bundle.rs:78-80`); Pixel-Merge nutzt Exposure nicht
-   (`resolve_pano_exposure`, `merge.rs:302-340`; Unit `merge.rs:406-413`).
+   (`resolve_pano_exposure`, `crates/lumina-stages/src/merge.rs` → `resolve_pano_exposure`; Unit `crates/lumina-stages/src/merge.rs` → `pano_without_exif_uses_the_documented_neutral_default`).
    Wichtig für MCP: auch ein MCP-Aufruf ohne jede Exposure-Liste darf für Pano
    **nicht** scheitern.
 6. **Stale/Missing ist hart:** fehlende Quelle/DNG/Sidecar → `missing`;
    Hash-/Decode-/DNG-Prüfsummen-Abweichung → `stale`; Re-Merge nur mit
-   `force` (`merge.rs:14-19`, `bundle.rs:801+`; E2E
+   `force` (`crates/lumina-cli/src/merge.rs` → Modul-Doc, `bundle.rs:801+`; E2E
    `merge_e2e.rs:350-415`). Persistenz-Invarianten in
    `feature/decisions/LRPAR-G13-MERGE-15.md` §Normative Invarianten.
 7. **Originale unverändert; relative Pfade; atomarer Write; kein stiller
@@ -393,11 +394,11 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
    `merge_source_outside_bundle_is_unsupported` für
    Quellen außerhalb des Bundles).
 8. **Rückgabe identisch:** MCP liefert `command/output/sidecar/digest/checksum/
-   cached/status` 1:1 wie CLI-JSON (`merge.rs:123-135`, §5).
+   cached/status` 1:1 wie CLI-JSON (`crates/lumina-cli/src/merge.rs` → `run_merge`, §5).
    Cache-Hit (`cached=true`) schreibt nichts neu, exit-equivalent 0
    (`bundle.rs:275-277`, E2E `merge_e2e.rs:323-348`).
 9. **Residual-Warnung erhalten:** `residual_warning` wird als `warning: ...` auf
-   stderr gemeldet, nicht unterdrückt (`merge.rs:108-116`, E2E
+   stderr gemeldet, nicht unterdrückt (`crates/lumina-cli/src/merge.rs` → `run_merge`, E2E
    `merge_e2e.rs:697-723`).
 10. **Merge-seitige Ablehnungen bleiben Merge-seitig:** `blend_width_px >
     65536` und `residual_px`-Grenzen laufen über `recipe.validate()` →
@@ -406,7 +407,7 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
     das kein `Unsupported` ist, ebenfalls (`map_dng_error`,
     `bundle.rs:588-593`). `merge unsupported:` bleibt reserviert für die
     Merge-Domäne (Alignment/Geometrie/Belichtung, `map_merge_error`
-    `bundle.rs:579-585`, `align.rs:233`) und für Writer-Grenzen
+    `bundle.rs:579-585`, `crates/lumina-merge/src/align.rs` → `estimate_pano_transform`) und für Writer-Grenzen
     (`DngError::Unsupported`, `bundle.rs:588-593`). Der MCP-Handler darf
     diese nicht in `InvalidParams` umdeuten — sonst unterscheiden sich CLI
     und MCP in der Fehlerklasse für dieselbe Eingabe (T17).
@@ -425,20 +426,20 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
   - **→ `merge failed:`** — 0, 1 oder 257 Quellen. Code:
     `validate_source_count` (`bundle.rs:482-494`, Aufruf :369). Ein
     merge-eigener **Unit**-Test dafür existiert **nicht** (in
-    `merge.rs:374-413` stehen nur die vier unten genannten); der Nachweis
+    `crates/lumina-stages/src/merge.rs` → `mod tests` stehen nur die vier unten genannten); der Nachweis
     läuft über die E2E-Spiegel (`merge_e2e.rs:459-475` prüft „at least 2" für
     1 Quelle).
   - **→ `merge unsupported:`** — HDR ohne EXIF/Explicit-Belichtung
-    (`resolve_hdr_exposure`, `merge.rs:239-300`; Unit
-    `merge.rs:386-392`), Out-of-Range explizite Werte (`merge.rs:247-293`;
-    Unit `merge.rs:394-404`), Dimension-Mismatch und zu kleine Frames
+    (`resolve_hdr_exposure`, `crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure`; Unit
+    `crates/lumina-stages/src/merge.rs` → `hdr_without_explicit_or_exif_exposure_is_unsupported`), Out-of-Range explizite Werte (`crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure`;
+    Unit `crates/lumina-stages/src/merge.rs` → `hdr_rejects_out_of_range_explicit_values`), Dimension-Mismatch und zu kleine Frames
     (`merge_e2e.rs:477-527`). Pano ohne Exposure ist dagegen **kein**
     Fehlerfall, sondern die dokumentierten neutralen Defaults (Unit
-    `merge.rs:406-413`).
+    `crates/lumina-stages/src/merge.rs` → `pano_without_exif_uses_the_documented_neutral_default`).
   - **→ CLI-seitiger `InvalidParams`-Äquivalent (MCP: `InvalidParams`)** —
     Listen-Arity: eine explizite Liste mit 0 < len ≠ `inputs.len()`
-    (`check_explicit_list_lengths`, `merge.rs:142-156`; Unit
-    `merge.rs:374-384`). Die CLI meldet das als `CliError::Message` (exit 1),
+    (`check_explicit_list_lengths`, `crates/lumina-stages/src/merge.rs` → `check_explicit_list_lengths`; Unit
+    `crates/lumina-stages/src/merge.rs` → `explicit_lists_accept_empty_or_exactly_per_input`). Die CLI meldet das als `CliError::Message` (exit 1),
     nicht als `MergeRunError`.
 - **Real-RAW-Gate (Abnahme-Gate, Agents.todo.md MCP-PARITY-C):** mindestens
   eine echte Kamera-RAW-Belichtungsreihe (≥3 Frames) und eine Panorama-Reihe;
@@ -476,7 +477,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 | ID | Art | Ort (SOLL) | Prüft | Fixture |
 | --- | --- | --- | --- | --- |
-| T5 | [U] | `lumina-mcp` Unit (Spiegel `merge.rs:374-384`) | `inputs` fehlt oder ist kein Array → `InvalidParams`; **0, 1 oder 257 Elemente → `MergeFailed`** (über `validate_source_count`, `bundle.rs:482-494` — **nicht** `InvalidParams`, §2 Pkt. 1); Listen-Arity 0/N-Regel sonst Fehler | keine |
+| T5 | [U] | `lumina-mcp` Unit (Spiegel `crates/lumina-stages/src/merge.rs` → `explicit_lists_accept_empty_or_exactly_per_input`) | `inputs` fehlt oder ist kein Array → `InvalidParams`; **0, 1 oder 257 Elemente → `MergeFailed`** (über `validate_source_count`, `bundle.rs:482-494` — **nicht** `InvalidParams`, §2 Pkt. 1); Listen-Arity 0/N-Regel sonst Fehler | keine |
 | T6 | [U] | `lumina-mcp` Unit | `output` vorhanden, aber kein String → `InvalidParams`; `output` **ohne** `.dng`-Endung, `output == inputs[i]`, `output` leer → `MergeFailed` (über `resolve_dng_path`, `bundle.rs:608-637` — **nicht** `InvalidParams`, §2 Pkt. 3) | 1 PNG (32×24) |
 | T7 | [U] | `lumina-mcp` Unit | **JSON-Typfehler** → `InvalidParams`: `isos: [1.5]` (kein Integer), `exposure_times: ["x"]` (keine Zahl), `force` als Nicht-Bool. **Range**-Verstoß `blend_width_px: 65537` → `MergeFailed` über `recipe.validate()` (`bundle.rs:427-429`, `merge_recipe.rs:36,365-370`) — **nicht** `InvalidParams`, §2 Pkt. 4 | keine |
 | T8 | [U] | `lumina-mcp` Unit | unbekanntes Feld → `InvalidParams` via `reject_unknown_fields` | keine |
@@ -518,7 +519,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 - MCP+CLI Produzieren denselben `digest`+`checksum` auf synthetischem Anker
   (SOLL-Test grün) und auf Real-RAW-Gate.
 - Fehlerpfade loud: missing/stale/unsupported **und** failed mit denselben
-  Präfixen (Kanon `merge.rs:14-19` + `bundle.rs:229-241`), keine
+  Präfixen (Kanon `crates/lumina-cli/src/merge.rs` → Modul-Doc + `crates/lumina-merge/src/bundle.rs` → `MergeRunError::Failed`), keine
   silent partial, keine `cached`-Fälschung.
 - `cargo test -p lumina-mcp` + `cargo test -p lumina-cli --test merge_parity`
   grün; `cargo fmt --all -- --check` grün. (Kein `cargo` während SOLL-Phase.)
@@ -559,7 +560,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
    `command == "merge-pano"` und einem um den Offset verbreiterten Canvas
    (`merge_e2e.rs:286-321`); HDR ohne Exposure scheitert laut als
    `unsupported` (`merge_e2e.rs:444-457`), Pano ohne Exposure gelingt mit den
-   neutralen Defaults (`merge.rs:406-413`).
+   neutralen Defaults (`crates/lumina-stages/src/merge.rs` → `pano_without_exif_uses_the_documented_neutral_default`).
 9. Jede Fehleraussage trägt den kanonischen Präfix-Text im `message` und den
    stabilen Namen in `data.error` (§3-Tabelle); `dispatch_tool` kennt beide
    Namen (kein `MethodNotFound`-Durchreichnen, `crates/lumina-mcp/src/tools/mod.rs` → `dispatch_tool`).
@@ -570,11 +571,14 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 1. **SOLL (dieses Doc):** Review/Sign-off; ggf. Tool-Namen finalisieren.
 2. **Impl-A — geteilten Adapter freilegen:** Merge-Decode-Adapter aus
-   `merge.rs:158-340` in `lumina-stages` (oder `lumina-merge`-Crate) ziehen,
-   damit MCP exakt dieselbe Decode-Logik wie CLI nutzt (keine Kopie).
+   `crates/lumina-cli/src/merge.rs` in `lumina-stages` (oder `lumina-merge`-Crate)
+   ziehen, damit MCP exakt dieselbe Decode-Logik wie CLI nutzt (keine Kopie).
    Ziel-Crate offen (§13 Punkt 1).
+   (**Anker überholt:** der Adapter ist inzwischen in
+   `crates/lumina-stages/src/merge.rs` → `decode_source`/`resolve_exposure`
+   gelandet — CLI und MCP rufen dieselben Adapter.)
 3. **Impl-B — Tool-Module:** `crates/lumina-mcp/src/tools/merge_hdr.rs`,
-   `merge_pano.rs` angelegt, analog `generative.rs`; Register in
+   `merge_pano.rs` angelegt, analog `crates/lumina-mcp/src/tools/generative.rs` → `NAME`/`schema()`/`run`; Register in
    `tools/mod.rs` (list + dispatch) und `tool_names/mod.rs` (2 Namen).
    Gemeinsamer Kern `merge_common` (§4.3), damit `MergeMode` die einzige
    Variable ist.
@@ -684,15 +688,15 @@ sind als TODO/Placeholder markiert:
    Woher kommt die Belichtungsreihe, und wer dokumentiert Provenienz/Lizenz
    nach dem Muster von `sample-data/raw/README.md` §Provenienz-Block?
 4. **Obergrenze `max_shift_px`** (§2): im Code gibt es nur `>= 0`
-   (`bundle.rs:370-375`, `align.rs:90,210`), kein dokumentiertes Maximum.
+   (`bundle.rs:370-375`, `crates/lumina-merge/src/align.rs` → `estimate_hdr_translation`/`estimate_pano_transform`), kein dokumentiertes Maximum.
    Schema ohne `maximum` (Vertrag folgt dem Code) oder bewusstes Limit?
 5. **Form der Residual-Warnung im MCP-Payload** (§3, §6 Invariante 9): Feldname `warning`
    vs. `warnings[]`, und genau welcher Text (CLI-Zeile
-   `merge.rs:110-113` vs. gekürzt)? Ein `warnings[]`-Array wäre die einzige
+   `crates/lumina-cli/src/merge.rs` → `run_merge`, die Residual-Warnzeile vs. gekürzt)? Ein `warnings[]`-Array wäre die einzige
    Stelle, an der MCP ein Feld mehr hat als die CLI.
 6. **Erfolgstext im `content[0].text`** (§5): `tool_result_response`
    serialisiert automatisch das Payload; soll der CLI-Satz `merged <path>` /
-   `merge already current: <path>` (`merge.rs:118-122`) ergänzend erscheinen?
+   `merge already current: <path>` (`crates/lumina-cli/src/merge.rs` → `run_merge`, Erfolgstext) ergänzend erscheinen?
 7. **Neue `McpError`-Varianten vs. Recycling** (§3): vier eigene Varianten
    (klare Namen, neue -32011..-32013) oder bestehende mappen
    (`Sidecar`/`Decode`/`Internal`) mit Prefix im Text? Das ist die einzige
