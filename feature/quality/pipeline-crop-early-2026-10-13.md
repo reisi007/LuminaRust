@@ -87,7 +87,8 @@ einem weichen Gradientenbild um ein Vielfaches kleiner werden.
    heute **vor** Geometry; hinter Crop geschoben ändert es Bytes, sobald ein Warp
    aktiv ist. Crop-only-Rezepte bleiben byte-identisch.
 3. **Sind exempt von der Umordnung (vermutbar):** `GEOMETRY_STAGE_ORDER`
-   (Pipeline, `pipeline.rs:50`) — nur der Koordinaten-Ausdruck in den coarse-
+   (Pipeline, `crates/lumina-core/src/pipeline.rs` → `GEOMETRY_STAGE_ORDER`) —
+   nur der Koordinaten-Ausdruck in den coarse-
    Stadien Counts. `mask_input_width/height` stays pre-Crop (Zeilen 611/612) —
    die Masken-Komposition geschieht in beiden Ordnungsrichtungen nach Crop.
 4. **Auto-Tone-Domäne:** unverändert — `AUTO-TONE-ANALYSIS-INPUT-8` ist
@@ -124,7 +125,8 @@ Ohne diese Freigabe ist E2b nicht wertbar ("nein-Bytes sind Abnahmevertrag").
   Klasse (14,58 % @ max Δ12 @ 10 % crop) als Verweiswert in `pipeline.md` und
   `Agents.md`.
 - Crop 50 / 25 / 10 % vor/nach-Bench auf der Referenzmaschine neu.
-- `check_file_sizes.sh` grün; keine Baseline-Anhebung; `pipeline.rs`-Docs-als-
+- `check_file_sizes.sh` grün; keine Baseline-Anhebung;
+  `crates/lumina-core/src/pipeline.rs` → `GEOMETRY_STAGE_ORDER`-Docs-als-
   Test passen (Coarse-Liste unverändert).
 
 ## 9. Nicht-Bezogenes / Lücken

@@ -95,7 +95,7 @@ führt `system_load::report_with()` aus, aufgerufen von `resolve_system_with()`:
 | # | Quelle | Herkunft | Verhalten, wenn unbrauchbar |
 | --- | --- | --- | --- |
 | 1 | Explizite Umgebungs-Override `LUMINA_LENSFUN_DB` (**absolutes** Verzeichnis) | Laufzeit, Operator | **Harter, benannter Fehler** — *kein* stilles Weiterfallen auf Quelle 2–4: eine explizit gesetzte, aber defekte Absicht darf nie stillschweigend durch eine andere ersetzt werden. Zusätzlich **Fixierung**: die Override-Ebene *ist* die geladene Systemebene, kein Update-Paket kann sie verdrängen (siehe „Fixierung und Verdrängung") |
-| 2 | Kompiliertes `LUMINA_LENSFUN_COMPILED_DATADIR` | `build.rs` über `pkg-config --variable=datadir lensfun` (⇒ `…/share/lensfun`) | wird in der Reihenfolge übersprungen (Quelle 3 kann treffen) |
+| 2 | Kompiliertes `LUMINA_LENSFUN_COMPILED_DATADIR` | `crates/lumina-lensfun/build.rs` → `emit_compiled_datadir` über `pkg-config --variable=datadir lensfun` (⇒ `…/share/lensfun`) | wird in der Reihenfolge übersprungen (Quelle 3 kann treffen) |
 | 3 | Plattformabhängiger Default | `db_path::platform_default_dirs()` | wird in der Reihenfolge übersprungen |
 | 4 | — | — | **Lauter, benannter Fehler** `SystemDbError` |
 
@@ -104,7 +104,8 @@ pkg-config-Abfrage ist **nicht** zielabhängig, sondern **hostseitig**. Sie meld
 das `datadir` der lensfun-Installation, die diese *Build*-Maschine sieht. Für
 einen nativen Build ist das korrekt; für ein **Cross-Compile** ist es falsch und
 der Wert zeigt ins Leere. Zielabhängig ist ausschließlich der **Fallback**:
-meldet pkg-config nichts (oder scheitert es), bäckt `build.rs` den konventionellen
+meldet pkg-config nichts (oder scheitert es), bäckt `crates/lumina-lensfun/build.rs` →
+`emit_compiled_datadir` den konventionellen
 Ort des **Ziel**-OS ein (`/opt/homebrew/share` bzw. `/usr/share`) und gibt
 zusätzlich ein `cargo:warning` aus. Ein Cross-Build gegen eine fremd installierte
 lensfun-Version ist damit **nicht** korrekt — eine bekannte Grenze dieser Quelle,

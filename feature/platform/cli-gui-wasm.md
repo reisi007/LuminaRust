@@ -161,15 +161,17 @@ hier dokumentiert, damit dieselbe Klasse nicht zurückkehrt.
   --features gpu,lensfun` und `--features lensfun` kompilierten,
   `--features gpu` allein brach mit 6 Fehlern
   (`cannot find type GpuContext/Frame`, `unsupported_gpu_stages_with_context`).
-  Die echten Lensfun-Importe liegen separat (`main.rs`, `#[cfg(feature =
-  "lensfun")] mod lensfun_cli;` / `use lensfun_cli::build_lensfun_corrector;`)
+  Die echten Lensfun-Importe liegen separat (`crates/lumina-cli/src/main.rs` →
+  `lensfun_cli`, `#[cfg(feature = "lensfun")] mod lensfun_cli;` /
+  `use lensfun_cli::build_lensfun_corrector;`)
   und waren nie betroffen — das Attribut hatte **keinen Besitzer** und wurde
   entfernt. Die Lensfun-Prüfung ist dadurch **nicht** abgeschwächt: die
   `lensfun`-Suite (`cargo test … -p lumina-cli --features lensfun`, CI-Schritt
   „Run Lensfun feature tests") lädt weiterhin die native Bibliothek und ist
   unverändert.
 - **Warum relevant:** Die GPU-first-CLI-Route (`init_render_backend` /
-  `render_backend` in `main.rs`) hängt an genau diesem Feature; ein Build mit
+  `init_render_backend` in `crates/lumina-cli/src/main.rs`) hängt an genau diesem
+  Feature; ein Build mit
   `--features gpu` erhielt einen Compile-Bruch statt GPU-Rendering. Die CI
   prüfte nur `cargo check -p lumina-gpu --features gpu`, nie das CLI-Feature.
 - **Gate (CI + Skript):** `scripts/check_cli_features.sh` liest die
@@ -724,7 +726,8 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   Rest-Sektions-Log-Tests liegen in
   `crates/lumina-gui/src/tests/action_log_direct_triggers.rs` (Nachfolger; der alte
   Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt — Anker **überholt**;
-  der Audit liegt in `lib.rs`: `f100_action_button` ohne `_`-Arm).
+  der Audit liegt in `crates/lumina-gui/src/tests/button_audit_actions.rs` →
+  `f100_action_button` ohne `_`-Arm).
   **GUI-INSTRDBG-17b-REST (implementiert, Verifizierung offen):** Über die 66
   `GuiAction`s aus Teil 1 hinaus sind 17 weitere user-sichtbare Schaltflächen
   aus Spot-Extras, Detail/Rote Augen, Optics, Tone Curve und Presets
@@ -789,7 +792,8 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
   (keine Rezept-Aktion) und bleibt bewusst uninstrumentiert. Die drei
   Filmstreifen-Handler und ihre CAS-Sidecar-Helfer sind für den File-Size-
   Ratchet nach `crates/lumina-gui/src/selection_actions.rs` extrahiert; dort
-  steht `instrument_gui_action!` als erste Anweisung, `lib.rs` wächst nicht.
+  steht `instrument_gui_action!` als erste Anweisung, `crates/lumina-gui/src/lib.rs`
+  wächst nicht.
   Analog ist das Detail-Denoise-Panel nach
   `crates/lumina-gui/src/denoise_panel.rs` extrahiert (Ratchet); die
   Instrumentierung steht in `denoise_gui.rs` als erste Anweisung in
@@ -1128,7 +1132,8 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
 > (`0` = aus mit einmaligem `info!`, unparsbar = `warn!` + Default).
 > Andockstellen: `dirty.rs` (Dirty-Key), `render_tick.rs`/`render_entry.rs`
 > (Teil-Dauern), `present.rs` (Route/Badge), `gui_action.rs` (Makro-Scope),
-> `lib.rs` (nur `mod`-Zeile). Tests: `jank_log::tests::*` — Slow-Render und
+> `crates/lumina-gui/src/lib.rs` → `mod jank_log` (nur `mod`-Zeile). Tests:
+> `jank_log::tests::*` — Slow-Render und
 > Slow-Action erzeugen genau eine attribuierte Zeile, Normalbetrieb bleibt
 > still (Stille-Test), U6-Lautheit per Regressionstest gepinnt (Re-Verifizierung BESTANDEN
 > 2026-09-19). Einzige bekannte Grenze: Route/Badge wird beim Scope-Eintritt gelesen (Stand des zuletzt gemalten Frames — Verifizierungsbefund 3,
@@ -1252,12 +1257,13 @@ Empfehlung; ein Zwei-Zeilen-Fallback mit `seq=<n>` bleibt Freigabefrage U4.
   `set_adjustment`-Duplikat bleiben unangetastet).
 - `render_tick.rs` (W1 S1.1) / `present.rs` (W1 S1.4a): `gpu_ms`,
   `cpu_draft_ms`, `analyse_ms` aus `DragTickTimings` bzw. Present-Ergebnis und
-  Badge-Grund fließen in denselben Record; `gpu_routing.rs` (S1.4b) liefert die
-  Route.
+  Badge-Grund fließen in denselben Record; `crates/lumina-gui/src/gpu_routing.rs` →
+  `routing_fallback_reason` (S1.4b) liefert die Route.
 - `gui_action.rs`: der bestehende `GuiActionTimer` bleibt Debug-Format; der
   Jank-Record hängt sich an denselben äußersten Scope (kein zweiter Timer).
 - `logger.rs`: `RUST_LOG`-/`LUMINA_JANK_LOG`-Auswertung, Default-Level `info`.
-- `LUMINA_PERF`-Frame-Pfad (`lib.rs`): liefert weiter `slow_frame` und bleibt
+- `LUMINA_PERF`-Frame-Pfad (`crates/lumina-gui/src/lib.rs` → `LuminaApp::ui`):
+  liefert weiter `slow_frame` und bleibt
   unverändert; JANKLOG ist Aktions-Attribution, keine zweite Per-Frame-Quelle.
 
 **5. Test-/Abnahmeanker (Stille-Test, DoD).**
@@ -1317,9 +1323,11 @@ Empfehlung; ein Zwei-Zeilen-Fallback mit `seq=<n>` bleibt Freigabefrage U4.
 **Befund (gemessen 2026-09-25 bei `GOLDEN-FIXT-31`).** Der UI-Thread hat
 **jede sichtbare Quelldatei in jedem Frame vollständig gelesen und BLAKE3-gehasht.**
 Kette: `ensure_thumbnail_priority` (`library_grid.rs`, `filmstrip_frame.rs`,
-`library_views.rs`) → `ensure_thumbnail` → `FilmstripManager::refresh_source` →
+`crates/lumina-gui/src/library_views.rs` → `ensure_thumbnail_priority`) →
+`ensure_thumbnail` → `FilmstripManager::refresh_source` →
 `source_identity` → `persisted_action_identity` (`sidecar_snapshot.rs`) →
-`FileContentIdentity::from_path` (`source_actions.rs`), das die Datei in
+`FileContentIdentity::from_path` (`crates/lumina-gui/src/source_actions.rs` →
+`FileContentIdentity::from_path`), das die Datei in
 64-KB-Blöcken ganz liest — **vor** jedem Early-Out. Zweiter Voll-Lesepfad mit
 derselben Wirkung: der Fail-closed-Quellabgleich in
 `read_sidecar_recipe_snapshot_detailed` (`std::fs::read(source)` plus Hash).
@@ -1579,7 +1587,9 @@ laut benannte Abwägung und keine stille Optimierung:
   - Das Verzeichnis ist **flach**; Untergliederung in Domänen-Unterordner ist
     **nicht** Teil dieser Welle. **Präzisierung 2026-09-27 (User-Entscheid):**
     bestehende Unterordner wie `tests/library_sort/` und `tests/g15_stacks/`
-    (dort liegen `rejections.rs`, `migration.rs`, `r5_sort.rs`, `r5_stacks.rs`
+    (dort liegen `rejections.rs`,
+    `crates/lumina-gui/src/tests/library_sort/migration.rs`, `r5_sort.rs`,
+    `r5_stacks.rs`
     schon seit längerem) bleiben zulässig — für neue Testdateien gilt
     weiterhin "flach", für Ratchet-Splits in einem bereits gegliederten
     Bereich ebenso. Neu angelegt wird kein weiterer Domänen-Unterordner.
@@ -1599,12 +1609,14 @@ laut benannte Abwägung und keine stille Optimierung:
   **Ratchet-Grenze 2026-09-27: erledigt.** `check_file_sizes.sh` wertet nur
   Dateien **> 500** Zeilen, also war „exakt 500" legal, aber ohne jede Reserve —
   und neue Baseline-Einträge sind per User-Entscheid verboten. Die drei
-  Testdateien sind per Extraktion gesplittet: `navigator.rs` 500 → **366**
-  (`preview_zoom_mode.rs`, 157), `library_sort.rs` 500 → **404**
+  Testdateien sind per Extraktion gesplittet: `crates/lumina-gui/src/tests/navigator.rs`
+  500 → **366** (`preview_zoom_mode.rs`, 157),
+  `crates/lumina-gui/src/tests/library_sort.rs` 500 → **404**
   (`library_sort/clickable_sort_controls.rs`, 116), `g15_stacks.rs` 500 →
   **382** (`g15_stacks/clickable_stack_controls.rs`, 137). Nachweis: 0
   entfernte inhaltliche Zeilen, 158 assert-Zeilen unverändert, 33 `#[test]`
-  unverändert, `lib.rs` bei 12819 Zeilen. **Gemessen dabei und neu aufgenommen:
+  unverändert, `crates/lumina-gui/src/lib.rs` bei 12819 Zeilen. **Gemessen dabei und
+  neu aufgenommen:
   es sind fünf Dateien bei exakt 500, nicht drei** — `jank_log.rs` und
   `render_tick.rs` sind **Produktionscode** und tragen dieselbe
   Null-Reserve-Lage.
@@ -1619,10 +1631,12 @@ laut benannte Abwägung und keine stille Optimierung:
   und der Zähler zu dem Tick gehört, der ihn erhöht. Nachweis: 0 entfernte
   inhaltliche Zeilen (die vier `comm`-Treffer sind drei verschobene Definitionen
   mit `pub(crate)` und ein geteilter `use`-Import), assert-Multiset 45 = 45,
-  `#[test]` 11 = 11, `lib.rs` bei 12819 Zeilen, Suite 936/0/76 unverändert.
+  `#[test]` 11 = 11, `crates/lumina-gui/src/lib.rs` bei 12819 Zeilen, Suite
+  936/0/76 unverändert.
   **Dabei gemessen und anschließend geschlossen:** `jank_log.rs` wurde von
   **keinem** CI-Job gebaut — das Opt-in-Feature `janklog` war in keinem Workflow
-  aktiviert, und `lib.rs:100` gated die Datei zusätzlich hinter
+  aktiviert, und `crates/lumina-gui/src/lib.rs` → `mod jank_log` gated die Datei
+  zusätzlich hinter
   `debug_assertions` (905 Lib-Tests ohne das Feature, **912** mit). Der
   `rust-test-gui`-Job hat jetzt einen additiven Schritt
   `cargo test -p lumina-gui --lib --features janklog`, der die 7
@@ -2748,8 +2762,8 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   getrennter Worker wird laut als „directory not readable" gemeldet, kein
   stiller Hänger. Code: `crates/lumina-gui/src/library_scan.rs` (Scan-Engine
   `run_scan`, `ScanRequest`/`ScanResult`, `spawn_scan`, `begin_scan`/
-  `poll_scan`; `scan_entry` + rekursiver/flacher Driver aus `lib.rs`
-  extrahiert). Headless-Tests: `crates/lumina-gui/src/tests/library_scan_async.rs`
+  `poll_scan`; `scan_entry` + rekursiver/flacher Driver aus
+  `crates/lumina-gui/src/lib.rs` extrahiert). Headless-Tests: `crates/lumina-gui/src/tests/library_scan_async.rs`
   (Worker läuft asynchron,
   sichtbarer Status, superseded-Drop, lauter Disconnect, async == sync;
   Nachfolger — der alte Dateiname wurde in `5fc2486` / TEST-ORPHAN-97 entfernt,
@@ -3075,7 +3089,8 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   `false, false` (`library_grid.rs`, `select_filmstrip_path`) — Cmd-/Shift-
   Modifikatoren werden ignoriert, immer nur ein Bild selektiert. Der Filmstrip
   liest sie korrekt (`filmstrip_frame.rs`); Compare/Survey sind gleich
-  betroffen (`library_views.rs`).
+  betroffen (`crates/lumina-gui/src/library_views.rs` → `draw_library_compare`/
+  `draw_library_survey`).
 - **R5-STACK-2 (hoch, User-Bug):** Das per-Stack-Badge an der Grid-Zelle
   toggelt den einzelnen Stack nicht sichtbar; nur das Panel-⊞/⊟ schaltet
   (global), im Log belegt (`collapsed`/`expanded`).

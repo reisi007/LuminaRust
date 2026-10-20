@@ -389,7 +389,7 @@ Domain-Abbruch ist ein `CliError::Message` mit einem satzartigen Text (Beispiele
 Der Kanon sind damit die **Texte**, nicht
 Präfix-Klassen. SOLL-Vertrag:
 
-| Fall | CLI (`matrix.rs`) | MCP-`McpError`-Variante | stabiler `error`-Name (`data.error`) | JSON-RPC-Code |
+| Fall | CLI (`crates/lumina-cli/src/matrix.rs` → `matrix`) | MCP-`McpError`-Variante | stabiler `error`-Name (`data.error`) | JSON-RPC-Code |
 | --- | --- | --- | --- | --- |
 | `--require-gpu` + `--update-goldens` | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`), Exit 1 | **neu: `McpError::Matrix`** | `MatrixError` | `-32014` |
 | `--require-gpu` ohne GPU-Backend | `Message` (`crates/lumina-stages/src/matrix_run.rs` → `run`), Exit 1 | `McpError::Matrix` | `MatrixError` | `-32014` |
@@ -601,9 +601,9 @@ zwei Rezepte `exact` und `strict`):**
    `RegenerateRequest`) plus ein Render-Port
    (Muster `MatchingRender`, `crates/lumina-stages/src/regenerate.rs` →
    `MatchingRender`) und der Report-Rückgabe.
-   `main.rs` bleibt baseline-gesperrt, also darf der Runner **nicht** dort
-   wachsen — nur ein dünner Dispatch bleibt (`crates/lumina-cli/src/main.rs` →
-   `run`).
+   `crates/lumina-cli/src/main.rs` bleibt baseline-gesperrt, also darf der Runner
+   **nicht** dort wachsen — nur ein dünner Dispatch bleibt
+   (`crates/lumina-cli/src/main.rs` → `run`).
 3. **Impl-B — Tool-Modul:** `crates/lumina-mcp/src/tools/matrix.rs` angelegt,
    analog `merge_hdr.rs`/`dust_removal.rs`; Register in
    `crates/lumina-mcp/src/tools/mod.rs` (list +
@@ -637,7 +637,7 @@ zwei Rezepte `exact` und `strict`):**
 | `crates/lumina-mcp/src/error.rs` | +1 Variante `Matrix(String)` + `code()`/`name()`/`message()`/`data()` (`McpError`). 266 Z. → bleibt unter 500 |
 | `crates/lumina-mcp/tests/tool_names/mod.rs` | +1 Name in `TOOL_NAMES` |
 | `crates/lumina-cli/src/tests/mcp_onnx.rs` | +1 Name in `EXPECTED_TOOLS`, in `mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools` 28 → 29 |
-| `crates/lumina-cli/src/main.rs` | **nur** falls Impl-A es erzwingt: Dispatch-Zeile bleibt `Command::Matrix(args) => matrix::matrix(args)` (in `run`); jede Zeile Wachstum bricht `check_file_sizes.sh` (Baseline 7874, `scripts/file_size_baseline.txt`) — der Runner zieht daher **raus** aus `main.rs` |
+| `crates/lumina-cli/src/main.rs` | **nur** falls Impl-A es erzwingt: Dispatch-Zeile bleibt `Command::Matrix(args) => matrix::matrix(args)` (in `run`); jede Zeile Wachstum bricht `check_file_sizes.sh` (Baseline 7874, `scripts/file_size_baseline.txt`) — der Runner zieht daher **raus** aus `crates/lumina-cli/src/main.rs` |
 | `crates/lumina-cli/src/matrix.rs` | wird zum dünnen Wrapper (Args → `MatrixRequest` → Kern); 1007 Z. → erst unter 500, wenn der Kern raus ist → Baseline-Eintrag senken (`check_file_sizes.sh` meldet das) |
 
 **NICHT anfassen:**
@@ -690,7 +690,8 @@ sind als TODO/Placeholder markiert:
 
 1. **Ziel-Crate für den gemeinsamen Kern** (Impl-A, §11 Schritt 2):
    `lumina-stages` (näher an den anderen Frontend-Adaptern, hat bereits
-   `decode.rs`/`pipeline.rs`/`regenerate.rs` als Vorbilder) oder `lumina-core`
+   `crates/lumina-stages/src/decode.rs`/`crates/lumina-stages/src/pipeline.rs`/`crates/lumina-stages/src/regenerate.rs`
+   als Vorbilder) oder `lumina-core`
    (näher am Render)? Die Entscheidung ändert den Dependency-Graph; `lumina-mcp`
    hängt bereits an `lumina-core`, `lumina-stages`, `lumina-raw`
    (`crates/lumina-mcp/Cargo.toml`), ein Zyklus wäre in beiden Fällen neu zu

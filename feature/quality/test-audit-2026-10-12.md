@@ -139,7 +139,7 @@ Streichkandidat.
 `initialize_*` (`lumina-mcp/tests/mcp.rs:182` vs. `meta_mcp.rs:142`) —
 Überlapp nur protocolVersion+tools, je eindeutige Hälften.
 
-**Abgrenzung zum 2026-09-28-Befund:** `g15_stacks.rs`/`library_sort.rs`
+**Abgrenzung zum 2026-09-28-Befund:** `g15_stacks.rs`/`crates/lumina-gui/src/tests/library_sort.rs`
 (1.202 Zeilen geteilte Helfer) und Testinfrastruktur-Duplikate werden
 **nicht** erneut gemeldet — sie gehören zu `GUITEST-STRUCT-34`.
 
@@ -221,7 +221,8 @@ prüfen Listen↔Dispatch-Verhalten.
   Streichen der Tests.
 - **G2:** Die Polarität der cull-Fixture-Generatoren ist unverankert (M-C:
   invertiert → alles grün). Wenn `checkerboard`/`gray_frame` semantisch kippen,
-  merkt es niemand; nur die Struktur ist durch `fixtures.rs:147` gepinnt.
+  merkt es niemand; nur die Struktur ist durch `crates/lumina-cull/tests/fixtures.rs` →
+  `heuristic_precision_and_recall_on_synthetic_fixtures` gepinnt.
   Aufgabe: eine Polarity-Anker-Assertion (oder Fixture-Kommentar, der sagt:
   Polarität egal).
 - **G3:** `cpu_gpu_path_parity_matrix` (siehe (e)) ist der einzige

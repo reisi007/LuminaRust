@@ -79,7 +79,9 @@ Artefakt nach `final_view`) und durch
 **nicht mehr** als Reason; ein artifact-blinder Render (rezept-only
 `render_with_gpu`, CPU-`render_frame`, `render_to_vram` ohne Readback) lehnt
 eine aktive generative Stufe **laut** ab statt sie pauschal auf die CPU zu
-routen (CLI-Reason `main.rs` entfernt; die CLI ruft den artifact-aware Pfad).
+routen (CLI-Reason in `crates/lumina-cli/src/main.rs` → `gpu_routing_reasons`
+entfernt; die CLI ruft den artifact-aware Pfad über `crates/lumina-cli/src/main.rs` →
+`render_best_effort`).
 **(2) Negativ-Prompt-Schema:** additives Top-Level-Feld `negative_prompt`
 (`GenerativeEdit::negative_prompt`/`set_negative_prompt`, extras-gestützt, siehe
 Schema-Entscheid unten); Produzent (`produce_canvas`) und CLI-Verifier nutzen es

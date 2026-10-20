@@ -104,7 +104,7 @@ Ausgabeformat einer Stufe dem Eingabeformat der folgenden entspricht.
 `crates/lumina-core/src/pipeline.rs` ist normativ; dieses Dokument spiegelt
 ihn und wird bei jeder Änderung des Codes nachgezogen. Ein quelltextbasierter
 Drift-Test (`render_stage_order_matches_nominal_pipeline_order` in
-`pipeline.rs`) sichert zusätzlich ab, dass die tatsächliche Stufenfolge in
+`crates/lumina-core/src/pipeline/tests/drift_order_tests.rs`) sichert zusätzlich ab, dass die tatsächliche Stufenfolge in
 `crates/lumina-core/src/render.rs` nicht von dieser nominalen Reihenfolge
 abweicht.
 
@@ -1218,7 +1218,8 @@ Corrector wird nur mit `LF_MODIFY_DISTORTION` geometrisch verwendet
 (`has_distortion`/`has_vignetting` aus der Initialize-Bitmaske;
 Regressionstest mit Vignetting-only-Fixture verlangt exakte
 Geometrie-Identität). Zusätzlich ersetzt ein Build-time-Offset-Probe in
-`build.rs` (offsetof gegen installierte Header; lauter Abbruch bei
+`crates/lumina-lensfun/build.rs` → `verify_lfcamera_layout` (offsetof gegen
+installierte Header; lauter Abbruch bei
 lensfun ≠ 0.3.x ohne verifizierbaren Compiler) die ABI-Wette des
 hartkodierten `lf_camera_crop_factor`-Offsets.
 **Thread-Sicherheit (lensfun 0.3.4):** Die Datenbank-/Suchpfade der
@@ -1505,8 +1506,8 @@ Auto- und die Explizit-Ebene berühren `source_actions` nicht, deshalb genügt
 eine Auflösung an dieser Stelle für Analyse **und** Render.
 
 Die beiden anderen Aufrufstellen von `resolve_source_actions` in der CLI
-(`main.rs`: der Headless-Render von `dust-removal`, der Render von
-`denoise --render`) haben **keine** Preset- und keine Auto-Ebene; sie lesen
+(`crates/lumina-cli/src/main.rs` → `dust_removal`/`denoise_render`: der
+Headless-Render von `dust-removal`, der Render von `denoise --render`) haben **keine** Preset- und keine Auto-Ebene; sie lesen
 bereits das wirksame Rezept. Die Anforderung, dass Analyse- und Render-Aufruf
 dieselbe Quelle sehen, ist damit erfüllt — sie waren aber nie der Fundort des
 Fehlers, und sie werden hier nur der Vollständigkeit halber genannt.
@@ -1627,7 +1628,7 @@ ist von der Quantisierung nicht betroffen (exakt).
 > (`crates/lumina-core/src/tone.rs`) nutzt statt eines `Vec<f64>` pro Pixel
 > (~8 Byte/Pixel ≈ 192 MB bei 24 MP) plus vollständiger O(n log n)-Sortierung
 > jetzt einen gemeinsamen Single-Pass (`accumulate_bins_and_luminance_sum`,
-> `histogram.rs`) über 256 Bins plus exakte Luminanzsumme (2 KB Stack-State,
+> `crates/lumina-core/src/histogram.rs`) über 256 Bins plus exakte Luminanzsumme (2 KB Stack-State,
 > O(n)). Die Signatur ist unverändert; neu ist additiv
 > `analyze_tone_with_histogram(frame) -> (ToneAnalysis, LuminanceHistogram)`:
 > EIN Pass liefert Histogramm-Panel UND Tone-Panel dieselbe Pass-Struktur und
@@ -1677,7 +1678,8 @@ dieselbe Funktion: `process_selected` (mit `--auto-tone`),
 `lumina regenerate --module auto-tone`, das MCP-Werkzeug
 `lumina_regenerate op="auto_tone"` und — seit AUTO-TONE-CLI-6 Klausel (1),
 2026-09-30 — `LuminaApp::auto_tone`. Die GUI hatte bis dahin eine **zweite
-Kopie** dieser dreizehn Felder in `lib.rs` mit handkopiertem
+Kopie** dieser dreizehn Felder in `crates/lumina-gui/src/lib.rs` →
+`LuminaApp::auto_tone` mit handkopiertem
 Algorithmus-Literal; der Defekt war die **Duplikation mit latentem Risiko**,
 kein Benutzerfehler (siehe unten). Ein zweiter, schlankerer Kopierpfad
 existiert nicht mehr, und die Tests pinnen das strukturell ab: ein Quellscan
@@ -2149,8 +2151,9 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `render_best_effort` rendert global, wertet die Ebenen über
   `evaluate_local_mask_layers` mit `input = Decode-Frame` und `frame =
   GPU-Global-Ausgabe` aus (dieselbe Abbildung wie der CPU-Render:
-  `mask_input_width` vor der Geometrie, `render.rs:611-612`; `frame_width` nach
-  `Crop`, `render.rs:697-698`), paart sie id-basiert mit dem persistierten Rezept
+  `mask_input_width` vor der Geometrie, `crates/lumina-core/src/render.rs` →
+  `render_frame_from_base_impl`; `frame_width` nach `Crop`,
+  `crates/lumina-core/src/render.rs` → `render_frame_from_base_impl`), paart sie id-basiert mit dem persistierten Rezept
   und wendet `apply_gpu_local_masks` an; `RenderOutput.mask_layers` /
   `mask_warnings` werden gefüllt. **Kein stiller Fallback:** verweigert der Pass
   (Dimensions-Guard, fehlender Adapter, `RenderFailed`), wird der Grund laut
@@ -2458,7 +2461,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   report-only, kein Gate).
 - **F7 CLI-Wiring (2026-09-18, verifiziert BESTANDEN):** Der CLI-GPU-Renderpfad
   bindet die `LensfunMap` analog (`crates/lumina-cli/src/lensfun_gpu.rs`;
-  `main.rs` netto ±0); CPU-Routen nur bei Build-/Bind-Fehler und Distortion
+  `crates/lumina-cli/src/main.rs` → `render_best_effort` netto ±0); CPU-Routen nur bei Build-/Bind-Fehler und Distortion
   ohne expliziten Crop (laut). **Offen:** MCP baut nie einen Corrector
   (`lumina-mcp/src/util.rs`, `lensfun: None`) — kein stiller Verlust, aber
   keine Lensfun-Korrektur auf dem MCP-Pfad (Folge, kein Task). Niedrig bekannt:

@@ -157,15 +157,17 @@ braucht `scripts/check_test_orphans.sh lumina-cli` einen frischen
      (`bundle.rs:279`), das CLI-JSON gibt es nicht aus. Eins-zu-eins oder
      additive Abweichung? (Additiv würde CLI und MCP textuell unterscheiden.)
    - **Pkt. 4 — oberes Limit `max_shift_px`:** im Code gibt es nur `>= 0`
-     (`bundle.rs:370-375`, `align.rs:90,210`), kein dokumentiertes Maximum.
+     (`bundle.rs:370-375`, `crates/lumina-merge/src/align.rs` →
+     `estimate_hdr_translation`/`estimate_pano_transform`), kein dokumentiertes Maximum.
      Schema ohne `maximum` (Vertrag folgt dem Code) oder bewusstes Limit?
    - **Pkt. 5 — Form der Residual-Warnung:** Feldname `warning` vs.
-     `warnings[]`, und genau welcher Text (CLI-Zeile `merge.rs:110-113` vs.
-     gekürzt)? Ein `warnings[]`-Array wäre die einzige Stelle, an der MCP ein
+     `warnings[]`, und genau welcher Text (CLI-Zeile `crates/lumina-cli/src/merge.rs` →
+     `run_merge` vs. gekürzt)? Ein `warnings[]`-Array wäre die einzige Stelle, an der MCP ein
      Feld mehr hat als die CLI.
    - **Pkt. 6 — CLI-Erfolgssatz im `content[0].text`:** `tool_result_response`
      serialisiert automatisch das Payload; soll der CLI-Satz `merged <path>` /
-     `merge already current: <path>` (`merge.rs:118-122`) ergänzend erscheinen?
+     `merge already current: <path>` (`crates/lumina-cli/src/merge.rs` →
+     `run_merge`) ergänzend erscheinen?
    - **Pkt. 8 — `structuredContent`-Immer-Gefüllt-Annahme:** der CLI erzwingt
      `--json` nicht (Default ist der menschenlesbare Satz); Parität ist damit
      nur über `--json` definiert — zu bestätigen, dass MCP-seitig

@@ -461,7 +461,7 @@ abgeglichen. Vollständige Tabelle: `THIRD-PARTY-NOTICES.md`.
 ### 6.3 LibRaw (einzige reale Verpflichtung)
 
 `lumina-raw` → `vendor/libraw-sys` (MIT, © David Cuddeback, via
-`[patch.crates-io]` gepinnt). Dessen `build.rs` linkt die **System**-Bibliothek
+`[patch.crates-io]` gepinnt). Dessen `vendor/libraw-sys/build.rs` → `main` linkt die **System**-Bibliothek
 `libraw_r` über `pkg-config` (**dynamisch**, nicht vendored/statisch).
 
 - Upstream LibRaw (0.22.2) ist **dual lizenziert**: LGPL-2.1-or-later **ODER**
@@ -500,7 +500,7 @@ zählt zur F-078-Abnahme.
 | Rolle | Automatische Objektivkorrektur (Distortion + Vignetting + TCA/CA via Lensfun seit G-06; manuelles `ca_red`/`ca_blue`-Modell nur noch für Profile ohne TCA-Kalibrierung) |
 | Integration | Pre-MVP (F-098-N1), verifiziert 2026-08-20; TCA-Vollausbau + EXIF-Lens-Erkennung + CLI/GUI-Parität mit G-06 (LRPAR-G06-GEO, MVP/1.0) |
 | Feature-Gating | `native`-Feature im Crate `lumina-lensfun` — **Standard AUS**; Default- und CI-Builds linken nichts und bleiben grün |
-| Linkart | **dynamisch** über `pkg-config` (`build.rs` → `cargo:rustc-link-lib=dylib=lensfun`), nur wenn `native` an |
+| Linkart | **dynamisch** über `pkg-config` (`crates/lumina-lensfun/build.rs` → `main` → `cargo:rustc-link-lib=dylib=lensfun`), nur wenn `native` an |
 | Version (bewiesen) | **0.3.4** — `brew info lensfun` **und** `LF_VERSION_*` in `/opt/homebrew/include/lensfun/lensfun.h` (`LF_VERSION_MAJOR 0` / `_MINOR 3` / `_MICRO 4`) |
 | Bibliotheks-Lizenz | **LGPL-3.0-or-later** laut Projekt-FFI und Header-Text („version 2 … or (at your option) any later version“); Homebrew-Formel deklariert `LGPL-3.0-only AND GPL-3.0-only AND CC-BY-3.0 AND LicenseRef-Homebrew-public-domain` → **zu verifizieren** (exakte SPDX gegen upstream `COPYING`/`README`) |
 | Datenbank-Lizenz | Profil-DB (`/opt/homebrew/share/lensfun/version_1/*.xml`): **CC-BY-SA-3.0** laut Projektdoku/F-098-N4; Homebrew-Formel nennt nur `CC-BY-3.0` → **zu verifizieren** (SA vs. kein-SA gegen `lensfun-data`) |

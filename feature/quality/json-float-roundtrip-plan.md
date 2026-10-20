@@ -18,7 +18,7 @@ bzw. der Datei im Registry-Cache) und in Pfad + Symbol umgestellt.
 zeigen auf die Dateien des **externen** Crates `serde_json` 1.0.151 (verlinkt in
 `Cargo.lock`; Quelltext im Registry-Cache des Hosts unter
 `~/.cargo/registry/src/*/serde_json-1.0.151/`). Es gibt **keine** Datei
-`ser.rs` (oder `de.rs`/`lib.rs` aus `serde_json`) in diesem Repo — eine
+`serde_json` → `src/ser.rs` (oder `src/de.rs`/`src/lib.rs`) in diesem Repo — eine
 repo-relative Schreibweise (mit `crates/`-Präfix) wäre falsch. **Welle P (2026-10-20) hat diese
 Anker deshalb einzeln markiert:** die Form ist jetzt durchgehend
 `serde_json` → `<crate-relativer Pfad>` → `<Modul/Funktion>` — **ohne

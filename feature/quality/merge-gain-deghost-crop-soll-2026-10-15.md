@@ -131,7 +131,7 @@ Begründung (code-belegt):
 | Eingriff | Datei + Symbol | Was |
 |---|---|---|
 | Gain-Schätzung (neu, pure Funktion) | `crates/lumina-merge/src/pano_gain.rs` (neu; `crates/lumina-merge/src/merge.rs` extrahiert, neben `merge_hdr_weighted`) | `estimate_pano_gains(frames, matrices/offsets) -> Result<PanoGainEstimate, MergeError>` — Median-Verhältnis Luminanz im Overlap vs. Frame 0; Gain[0] = 1.0 per Definition |
-| Gain-Anwendung vor Blend | `pano_gain.rs`-Kerne via `crates/lumina-merge/src/merge.rs` → `blend_panorama` (translations) + `crates/lumina-merge/src/merge.rs` → `blend_panorama_transformed` (inkl. `radiance`-Fallback) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; Seed/`acc`-Startwert ebenfalls gain-skaliert |
+| Gain-Anwendung vor Blend | `crates/lumina-merge/src/pano_gain.rs` → `estimate_pano_gains` via `crates/lumina-merge/src/merge.rs` → `blend_panorama` (translations) + `crates/lumina-merge/src/merge.rs` → `blend_panorama_transformed` (inkl. `radiance`-Fallback) | Sample mit Gain multiplizieren (`sample * gain[i]`) **vor** `feather_weight`-Kombination; Seed/`acc`-Startwert ebenfalls gain-skaliert |
 | Orchestrierung | `crates/lumina-merge/src/bundle.rs` → `align_and_merge` (Pano-Arm) + `crates/lumina-merge/src/bundle.rs` → `MergeRunOptions` | neues Options-Feld (A.3), Gain-Schätzung nach Alignment, vor Blend; Gains an `crates/lumina-merge/src/bundle.rs` → `build_recipe` durchreichen |
 | Rezept + Digest | `crates/lumina-sidecar/src/merge_recipe.rs` → `MergeAlignment`, `merge_digest`, `validate_merge_alignment` | neues Feld `gain_compensation` (A.3); Digest-relevant (Teil von `alignment`, damit automatisch im Digest) |
 | CLI | `crates/lumina-cli/src/merge.rs` → `MergeArgs` (Options-Mapping in `run_merge`) | neues Flag (A.3) |
@@ -231,7 +231,7 @@ Interaktion mit `blend_width_px`:
 
 | Situation | Klasse | Text-Präfix | Ort |
 |---|---|---|---|
-| Overlap-Pixel < `A_MIN_OVERLAP_STAT_PX` | `MergeError::Unsupported` → `merge unsupported:` | `gain compensation needs ≥ N overlap pixels, got M` | neue Schätzfunktion, `pano_gain.rs` |
+| Overlap-Pixel < `A_MIN_OVERLAP_STAT_PX` | `MergeError::Unsupported` → `merge unsupported:` | `gain compensation needs ≥ N overlap pixels, got M` | neue Schätzfunktion, `crates/lumina-merge/src/pano_gain.rs` → `estimate_pano_gains` |
 | Gain > `MAX_PANO_GAIN` | `Unsupported` → `merge unsupported:` | `gain {g} exceeds {MAX}` (A.4) | dto. |
 | `--gain-compensation` bei `merge-hdr` | `MergeRunError::Failed` → `merge failed:` (Options-Validierung, wie `max_shift_px < 0`, in `crates/lumina-merge/src/bundle.rs` → `run_merge`) | `invalid --gain-compensation …: panorama only` | `crates/lumina-merge/src/bundle.rs` → `run_merge` |
 | Unbekannter Methoden-String (MCP/CLI) | Transport-Ebene: CLI clap-Usage / MCP `InvalidParams` (Shape, per Trennregel) | — | Frontend |
@@ -457,7 +457,7 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
 
 | ID | Art | Ort | Prüft | Fixture |
 |---|---|---|---|---|
-| B-T1 | [U] | `merge.rs` | synthetischer Geist: 3 Frames gleiche Radiance, Frame 1 mit hellem Block (1 Region) ⇒ Block-Pixel fallen auf Referenz zurück (±1e-6), Rest bleibt Mittel | 16×16 Solid + Block, gleiche Exposure, Shifts 0 |
+| B-T1 | [U] | `crates/lumina-merge/src/hdr_deghost/merge.rs` → `merge_hdr_weighted_deghost` | synthetischer Geist: 3 Frames gleiche Radiance, Frame 1 mit hellem Block (1 Region) ⇒ Block-Pixel fallen auf Referenz zurück (±1e-6), Rest bleibt Mittel | 16×16 Solid + Block, gleiche Exposure, Shifts 0 |
 | B-T2 | [U] | dto. | Schwellen-Sensitivität: Abweichung 10 % bei Schwelle 0.25 ⇒ kein Eingriff (Mittel wie heute); bei Schwelle 0.05 ⇒ Eingriff | wie B-T1, zwei Schwellen |
 | B-T3 | [U] | dto. | Alle-maskiert-Fallback: alle Nicht-Referenz maskiert ⇒ Pixel == Referenz-Radiance (nicht Mittel!) | 2 Frames, Frame 1 vollflächig abweichend |
 | B-T4 | [U] | dto. | Negativ-Dok: Abweichung unter Schwelle ⇒ bit-identisch zum heutigen Mittel (kein Over-Blocking) | B-T1 mit Schwelle 2.0 |
@@ -516,11 +516,15 @@ Kein neuer `MergeError`-Variant: Masken-Logik scheitert nie eigenständig
   (`merge failed:`) geprüft — keine Clamp, kein Default (B-T5-Matrix).
 - **Dritte dokumentierte Abweichung (Modul-Lage):** Maske und HDR-Pass
   liegen im Modul `crates/lumina-merge/src/hdr_deghost/` (Ratchet-getrieben,
-  nicht wie in der §B-Tabelle genannt in `merge.rs`/`bundle.rs`); die
-  Baseline-Kommentare und die Modul-Doku in `merge.rs`/`mod.rs`
+  nicht wie in der §B-Tabelle genannt in `crates/lumina-merge/src/merge.rs`/
+  `crates/lumina-merge/src/bundle.rs`); die Baseline-Kommentare und die
+  Modul-Doku in `crates/lumina-merge/src/merge.rs`/
+  `crates/lumina-merge/src/hdr_deghost/mod.rs`
   dokumentieren den Move. **Stand 2026-10-20:** das Modul ist heute ein
-  **Verzeichnis** `crates/lumina-merge/src/hdr_deghost/` (`mod.rs`, `merge.rs`,
-  `mask.rs`); `merge_hdr_weighted_deghost` liegt in
+  **Verzeichnis** `crates/lumina-merge/src/hdr_deghost/`
+  (`crates/lumina-merge/src/hdr_deghost/mod.rs`,
+  `crates/lumina-merge/src/hdr_deghost/merge.rs`,
+  `crates/lumina-merge/src/hdr_deghost/mask.rs`); `merge_hdr_weighted_deghost` liegt in
   `crates/lumina-merge/src/hdr_deghost/merge.rs`, die Maske in
   `crates/lumina-merge/src/hdr_deghost/mask.rs`. Öffentlichkeit unverändert
   (`merge_hdr_weighted` = `deghost == None`-Spelling,

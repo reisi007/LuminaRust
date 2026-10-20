@@ -26,7 +26,8 @@ Tasks `GPU-RENDER-NONDETERMINISM-69` nach der Regel
 - `cargo test -p lumina-cli --features gpu --bin lumina-cli tests::auto_tone_float::the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move -- --exact`
   → **3/3 grün** (`1 passed; 158 filtered out`).
 - Grund: ohne Adapter nimmt `render_best_effort`
-  (`crates/lumina-cli/src/main.rs:350`) im `_ =>`-Arm (`main.rs:403-410`)
+  (`crates/lumina-cli/src/main.rs:350`) im `_ =>`-Arm
+  (`crates/lumina-cli/src/main.rs` → `render_best_effort`)
   die CPU-Route: `render_frame_with_generative(...)` →
   `Ok((output, RenderRoute::Cpu { reasons }))`.
 - Die grünen Läufe belegen die **CPU-Route**, **nicht** die GPU-Route.
@@ -38,15 +39,17 @@ Der Auto-Tone-GPU-Pfad ist **synchron/blocking**:
 (`crates/lumina-gpu/src/lib.rs:3615-3628`, `gpu_util.rs:96-107`).
 
 Der Pass nutzt `LoadOp::Clear(0,0,0,1)` + `StoreOp::Store` +
-Fullscreen-Triangle (`lib.rs:3442-3467`).
+Fullscreen-Triangle (`crates/lumina-gpu/src/lib.rs` → `render_with_gpu_inner`).
 
 Das Readback liest exakt `width*4` Bytes je Zeile und überspringt Padding
-(`lib.rs:3633-3638`).
+(`crates/lumina-gpu/src/lib.rs` → `render_with_gpu_inner`).
 
-Das GPU-Ressourcen-Pooling ist ein `Mutex<HashMap<…>>` (`lib.rs:810`, `:3234`).
+Das GPU-Ressourcen-Pooling ist ein `Mutex<HashMap<…>>` (`crates/lumina-gpu/src/lib.rs` →
+`GpuContext`, `render_with_gpu_inner`).
 
 Der Tone-Shader verwendet **keine** Atome (die einzige `atomicMax`-Verwendung
-steht in `stages.rs:2056`, im Fixture inaktiv).
+steht in `crates/lumina-gpu/src/stages.rs` → `SHARPEN_GRADIENT_SRC`, im Fixture
+inaktiv).
 
 **Verbleibende Kandidaten liegen in der Treiber-/wgpu-Schicht.**
 

@@ -210,7 +210,8 @@ Beim Aktivieren von Bild N wird ein **asymmetrisches Fenster** vorbereitet:
   Hintergrund-Worker-Threads** (fester kleiner Pool, Ergebnis-Channel zum
   UI-Thread). **Nicht** über die `IdleQueue` (deferred Work im UI-Thread).
 - Vorbild ist die bestehende Filmstrip-Thumbnail-Pipeline
-  (`crates/lumina-gui/src/filmstrip.rs` + Worker-Pool in `lib.rs`), die seit
+  (`crates/lumina-gui/src/filmstrip.rs` + Worker-Pool in
+  `crates/lumina-gui/src/thumb_worker.rs` → `spawn_thumbnail_pool`), die seit
   dem review.notes-Befund echte Worker-Threads nutzt. Der Nachbar-Prefetch
   teilt sich diesen Pool nicht unbegrenzt: Die Prefetch-Priorität muss in der
   Auftragsvergabe des Pools berücksichtigt werden (Prioritätswarteschlange

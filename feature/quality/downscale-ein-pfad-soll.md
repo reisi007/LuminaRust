@@ -36,14 +36,14 @@ GPU-fähig gedacht, aber GPU-Implementierung ist **nicht** Teil dieses Tasks.
   `filmstrip::downscale_rgba`) und der Wrapper `downscale_to_target` werden
   auf diesen einen Pfad konsolidiert.
 - **Genau ein Resampling-Kernel**: die f64-bilineare Schleife aus
-  `downscale_bilinear` (`lib.rs:206-229`) bleibt **arithmetisch unverändert**
+  `downscale_bilinear` (`crates/lumina-core/src/lib.rs` → `downscale`) bleibt **arithmetisch unverändert**
   (f64-Interpolation, `.round().clamp(0.0,255.0)`). Die beiden Zielformen
   (`MaxWidth`, `LongEdge`) unterscheiden sich **nur** in der
   Geometrie-Funktion davor. Kein zweiter Schleifendurchlauf, keine
   Nearest-Nachbildung.
 - Das Ergebnis wird über **`ImageFrame::new`** gebaut
-  (`lib.rs:395-414`); der (beweisbar unmögliche) Fehler wird **weitergegeben,
-  nicht geschluckt** — Begründung und Formulierung aus `lib.rs:191-193`
+  (`crates/lumina-core/src/lib.rs` → `ImageFrame::new`); der (beweisbar unmögliche) Fehler wird **weitergegeben,
+  nicht geschluckt** — Begründung und Formulierung aus `crates/lumina-core/src/lib.rs` → `downscale`
   übernehmen.
 
 ## 2. SOLL-API (Vertrag)
@@ -61,20 +61,20 @@ pub enum DownscaleTarget {
 }
 ```
 
-**Begruendung aus `lib.rs:191-193`:** Die Funktion gibt `Result` zurück
+**Begruendung aus `crates/lumina-core/src/lib.rs` → `downscale`:** Die Funktion gibt `Result` zurück
 (statt zu panikieren), weil der fallible `ImageFrame::new`-Vertrag
 **weitergegeben, nicht geschluckt** wird. Der Fehler ist für die exakte
 Allokation `new_width * new_height * 4` beweisbar unmöglich, aber das
 Contract-Design von `ImageFrame::new` wird nicht umgangen.
 
 **`ImageFrame::new` bleibt der einzige oeffentliche Konstruktor**
-(`lib.rs:395-414`). Das Struktliteral in `ImageFrame::downscale`
-(`lib.rs:533-537`) entfaellt; das Ergebnis laeuft ab sofort durch dieselbe
+(`crates/lumina-core/src/lib.rs` → `ImageFrame::new`). Das Struktliteral in `ImageFrame::downscale`
+(`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`) entfaellt; das Ergebnis laeuft ab sofort durch dieselbe
 gepruefte Fabrik wie jeder andere Frame.
 
 ## 3. Der eine Resampling-Kernel
 
-Die bilinearen f64-Ausgabe-Schleife (`lib.rs:207-228`) ist der einzige Kernel.
+Die bilinearen f64-Ausgabe-Schleife (`crates/lumina-core/src/lib.rs` → `downscale`) ist der einzige Kernel.
 Sie wird aus `downscale_bilinear` uebernommen und bleibt **Byte-identisch**
 in der Arithmetik:
 
@@ -92,8 +92,8 @@ mit der Geometrie-Funktion aus, die `downscale_bilinear` heute schon hat.
 
 | Zielform | Geometrie | Herkunft |
 | --- | --- | --- |
-| `MaxWidth(w)` | `new_width = width.min(w).max(1)`; `new_height = ((new_width as f64 / width as f64) * height as f64).round().max(1.0) as u32` | `lib.rs:199-202` (unveraendert) |
-| `LongEdge(d)` | `long = max(width, height)`; `scale = d as f64 / long as f64`; `new_width = (width as f64 * scale).round().max(1.0) as u32`; `new_height = (height as f64 * scale).round().max(1.0) as u32` | f64-Fassung der bisherigen f32-Rechnung (`lib.rs:491-493`) |
+| `MaxWidth(w)` | `new_width = width.min(w).max(1)`; `new_height = ((new_width as f64 / width as f64) * height as f64).round().max(1.0) as u32` | `crates/lumina-core/src/lib.rs` → `downscale` (unveraendert) |
+| `LongEdge(d)` | `long = max(width, height)`; `scale = d as f64 / long as f64`; `new_width = (width as f64 * scale).round().max(1.0) as u32`; `new_height = (height as f64 * scale).round().max(1.0) as u32` | f64-Fassung der bisherigen f32-Rechnung (`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`) |
 
 **Ganzzahl-Fallstrick — die `as f64`-Casts sind Teil des Byte-Ankers, nicht
 Kosmetik:** In Rust ist `new_width / width` mit `u32`-Operanden
@@ -105,10 +105,10 @@ der Unterschied zwischen „gleiche Bytes wie `downscale_bilinear`" und
 
 **`MaxWidth` reproduziert `downscale_bilinear` byte-identisch** (gleiche
 Geometrie inkl. der Early-Returns bei `width==0||height==0` und bei
-`new == old`, `lib.rs:196-205`). Das ist der **Byte-Anker** des Tasks.
+`new == old`, `crates/lumina-core/src/lib.rs` → `downscale`). Das ist der **Byte-Anker** des Tasks.
 
 **`LongEdge` ist die f64-Fassung** der bisherigen f32-Rechnung
-(`lib.rs:491-493`). Die Umstellung f32->f64 ist eine **bewusste, benannte
+(`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`). Die Umstellung f32->f64 ist eine **bewusste, benannte
 Aenderung** (besseres Runden, Qualitaet zuerst). Der SOLL verlangt eine
 **Messung**, an wie vielen von N repraesentativen Groessen sich die Geometrie
 dadurch unterscheidet (Abschnitt 7).
@@ -117,7 +117,7 @@ dadurch unterscheidet (Abschnitt 7).
 
 `filmstrip::downscale_rgba` (`filmstrip.rs:266-291`) wird **geloescht**.
 Die Aufrufer (Filmstreifen-Thumbnails `thumb_worker.rs:168`, Masken-Vorschau
-`preview_masks.rs:237`, Tests `histogram.rs:337,447` und
+`preview_masks.rs:237`, Tests `crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_histogram_matches_thumbnail`/`fit_preview_portrait_histogram_matches_thumbnail` und
 `sliders_filmstrip.rs:201,206`) gehen auf den kanonischen Pfad.
 
 **Die Aenderung ist eine Qualitaetsverbesserung** und wird als solche benannt
@@ -127,7 +127,7 @@ Histogramm-Abstand vorher/nachher), **nicht** als stiller Neu-Einfrier-Vorgang.
 **Reihenfolge `.round()`/`.max(1.0)` — `ImageFrame::downscale` ist massgeblich:**
 Die Ex-Nearest-Geometrie in `filmstrip.rs:278-279` rechnet
 `(width as f64 * scale).max(1.0).round()`, waehrend `ImageFrame::downscale`
-(`lib.rs:492-493`) `(self.width as f32 * scale).round().max(1.0)` rechnet —
+(`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`) `(self.width as f32 * scale).round().max(1.0)` rechnet —
 also `.round()` **vor** `.max(1.0)`. Fuer die Konsolidierung ist die
 Reihenfolge von `ImageFrame::downscale` **massgeblich**: der kanonische Pfad
 bildet `(… as f64 * scale).round().max(1.0)`. Die Ex-Nearest-Form darf
@@ -136,13 +136,13 @@ bildet `(… as f64 * scale).round().max(1.0)`. Die Ex-Nearest-Form darf
 `round` monoton und `max(1.0, ·) >= 1.0` ist — der Punkt ist die Form als
 Referenz, nicht ein Wertunterschied.)
 
-### 5.1 Histogramm-Paritaet (histogram.rs)
+### 5.1 Histogramm-Paritaet (`crates/lumina-gui/src/tests/histogram.rs`)
 
 `crates/lumina-gui/src/tests/histogram.rs:337,447` vergleicht das
 Preview-Histogramm (bilinear, `ImageFrame::downscale`) gegen das
 Thumbnail-Histogramm (**Nearest**, `downscale_rgba`) ueber
 `histogram_l1(&preview_hist.bins, &thumb_hist.bins)` mit Toleranz
-`< 0.35` (`histogram.rs:362-366`).
+`< 0.35` (`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_histogram_matches_thumbnail`).
 
 **Richtung der Aenderung durch den Wechsel auf bilinear:** Das Thumbnail
 bewegt sich bilinear-aekquivalent zur Preview; der L1-Abstand zwischen
@@ -152,7 +152,7 @@ Aufloesung, unterschiedliche Groessen), aber die Histogramme werden
 aehnlicher, weil beide Seiten dieselbe Interpolation nutzen.
 
 **Messung vorher/nachher:** Der Test `fit_preview_histogram_matches_thumbnail`
-bzw. `fit_preview_portrait_histogram_matches_thumbnail` (`histogram.rs:388-413`)
+bzw. `fit_preview_portrait_histogram_matches_thumbnail` (`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_portrait_histogram_matches_thumbnail`)
 muss **vorher** (HEAD) und **nachher** (nach Umstellung) laufen. Der gemessene
 `distance`-Wert wird dokumentiert. Erwartung: `distance` sinkt oder bleibt
 gleich (niemals groesser), weil beide Seiten dann dieselbe Arithmetik nutzen.
@@ -199,7 +199,7 @@ Er verdoppelt damit die Geometrie- und Guard-Logik der Zielmethode. Er wird
 Ersetzen bleibt die Tupel-Extraktion `max_edge = target.0.max(target.1)`
 erhalten; der eigene Guard (`max_edge == 0 || long <= max_edge`) entfaellt,
 weil der kanonische Pfad denselben Guard traegt (`LongEdge`:
-`d == 0 || long <= d` -> Klon, `lib.rs:488` / Abschnitt 4).
+`d == 0 || long <= d` -> Klon, `crates/lumina-core/src/lib.rs` → `downscale` / Abschnitt 4).
 
 **Die 5 infalliblen GUI-Aurufer von `ImageFrame::downscale`** (alle nutzen
 LongEdge-Semantik):
@@ -208,21 +208,21 @@ LongEdge-Semantik):
 | --- | --- |
 | `capped_preview_source` | `preview_size.rs:177` |
 | `refresh_preview_cap` | `preview_size.rs:206` |
-| `navigator_overview` (ohne Actions) | `navigator.rs:119` |
-| `navigator_overview` (mit Actions) | `navigator.rs:123` |
-| `draft_original` | `lib.rs:7090` |
+| `navigator_overview` (ohne Actions) | `crates/lumina-gui/src/navigator.rs` → `navigator_zoomed_overview` |
+| `navigator_overview` (mit Actions) | `crates/lumina-gui/src/navigator.rs` → `navigator_zoomed_overview` |
+| `draft_original` | `crates/lumina-gui/src/lib.rs` → `apply_decoded_frame` |
 
 **Die Methode `ImageFrame::downscale` bleibt** als duenne Delegation auf
 `downscale(self, LongEdge(max_dim))` mit dokumentiertem, beweisbar
 unmoeglichem `expect`. Begruendung:
 
-- `downscale` ist heute **infallibel** (`lib.rs:486`); sie kann nicht
+- `downscale` ist heute **infallibel** (`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`); sie kann nicht
   scheitern. Der `expect` ist damit heute schon impliziert.
 - Die Delegation auf `downscale(self, LongEdge(max_dim))` nutzt denselben
   Kernel, denselben Guard (`long <= max_dim` -> Klon), dieselbe Geometrie.
 - Ein `expect` mit dem Text, dass `ImageFrame::new` fuer die exakte
   `width*height*4`-Allokation nicht scheitern kann, ist die ehrliche
-  Dokumentation einer Tatsache, die `lib.rs:191-193` bereits nennt.
+  Dokumentation einer Tatsache, die `crates/lumina-core/src/lib.rs` → `downscale` bereits nennt.
 
 **Alternative (Ergebnis-Propagierung an 5 Stellen):** Die Aufrufer selbst
 `downscale(self, LongDim(max_dim))?` aufrufen. **Vorteil:** kein `expect`
@@ -234,7 +234,7 @@ dokumentiertem `expect` ist die kleinere, ehrlichere Aenderung.
 
 ## 7. Messung f32->f64 (LongEdge)
 
-Die Umstellung der Geometrie von f32 (`lib.rs:491-493`) auf f64 ist eine
+Die Umstellung der Geometrie von f32 (`crates/lumina-core/src/lib.rs` → `ImageFrame::downscale`) auf f64 ist eine
 bewusste Aenderung. Der SOLL verlangt eine **Messung**, an wie vielen von N
 repraesentativen Groessen sich die Geometrie dadurch unterscheidet.
 
@@ -255,7 +255,7 @@ wird dokumentiert und ist die **benannte Aenderung** (Qualitaet zuerst).
 
 1. **Determinismus:** Gleiche Eingabe -> gleiche Bytes, keine
    parallelitaetsabhaengige Rundung. `downscale_bilinear` ist heute bereits
-   deterministisch (`lib.rs:184-185`: "fully deterministic (pure math, no
+   deterministisch (`crates/lumina-core/src/lib.rs` → `downscale`: "fully deterministic (pure math, no
    randomness)"); der kanonische Pfad erbt diese Eigenschaft.
 2. **Originale unveraendert:** `downscale` nimmt `&ImageFrame` und gibt ein
    neues `ImageFrame` zurueck; das Original wird nie geschrieben.
@@ -264,7 +264,7 @@ wird dokumentiert und ist die **benannte Aenderung** (Qualitaet zuerst).
    Render-Pipeline und Goldens (ausser dem benannten Gate in Abschnitt 9)
    bleiben unangetastet.
 4. **`ImageFrame::new` bleibt der einzige oeffentliche Konstruktor**
-   (`lib.rs:395-414`). Das Struktliteral in `lib.rs:533-537` entfaellt.
+   (`crates/lumina-core/src/lib.rs` → `ImageFrame::new`). Das Struktliteral in `crates/lumina-core/src/lib.rs` → `ImageFrame::downscale` entfaellt.
 5. **Keine neue Abhaengigkeit:** `lumina-core` bleibt ohne GUI- oder
    Plattform-Importe (Entscheid `DOWNSCALE-EIN-PFAD`, `Agents.todo.md:43`).
 6. **Kein stiller Fallback:** `ImageFrame::downscale` delegiert auf den
@@ -313,7 +313,7 @@ diese Thumbnails zeigen.
   S2-Szenarien, kein Filmstreifen-/Thumbnail-Inhalt.
 - Die **Develop**-Goldens (Zeilen 1-20): nutzen `sample_image_png()` (4x3),
   die **hoch**skaliert wird — der Downscale-Pfad skaliert nie hoch
-  (`lib.rs:199`: `width.min(max_width)`).
+  (`crates/lumina-core/src/lib.rs` → `downscale`: `width.min(max_width)`).
 
 **Regenerations-Hardware:** Diese Goldens lassen sich **nur** auf der
 gepinnten macOS/Metal-Maschine neu erzeugen (Referenz: macOS 27.0, Apple
@@ -355,9 +355,9 @@ gleiche Early-Returns.
 | --- | --- | --- | --- |
 | `preview_size.rs:177` | LongEdge | **nein** (f32->f64) | infallibel |
 | `preview_size.rs:206` | LongEdge | **nein** (f32->f64) | infallibel |
-| `navigator.rs:119` | LongEdge | **nein** (f32->f64) | infallibel |
-| `navigator.rs:123` | LongEdge | **nein** (f32->f64) | infallibel |
-| `lib.rs:7090` | LongEdge | **nein** (f32->f64) | infallibel |
+| `crates/lumina-gui/src/navigator.rs` → `navigator_zoomed_overview` | LongEdge | **nein** (f32->f64) | infallibel |
+| `crates/lumina-gui/src/navigator.rs` → `navigator_zoomed_overview` | LongEdge | **nein** (f32->f64) | infallibel |
+| `crates/lumina-gui/src/lib.rs` → `apply_decoded_frame` | LongEdge | **nein** (f32->f64) | infallibel |
 | `preview_jobs.rs:167` (via `downscale_to_target`) | LongEdge | **nein** (f32->f64) | infallibel |
 
 **Byte-Verdikt:** Diese Aufrufer **duerfen sich aendern** (f32->f64). Die
@@ -370,8 +370,8 @@ infallibel (Delegation mit `expect`).
 | --- | --- | --- | --- |
 | `thumb_worker.rs:168` | LongEdge + Nearest | **nein** (Nearest->Bilinear) | `map_err` -> Worker error |
 | `preview_masks.rs:237` | LongEdge + Nearest | **nein** (Nearest->Bilinear) | `unwrap` (:243) |
-| `histogram.rs:337` | LongEdge + Nearest (Test) | **nein** (Nearest->Bilinear) | `unwrap` |
-| `histogram.rs:447` | LongEdge + Nearest (Test) | **nein** (Nearest->Bilinear) | `unwrap` |
+| `crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_histogram_matches_thumbnail` | LongEdge + Nearest (Test) | **nein** (Nearest->Bilinear) | `unwrap` |
+| `crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_portrait_histogram_matches_thumbnail` | LongEdge + Nearest (Test) | **nein** (Nearest->Bilinear) | `unwrap` |
 | `sliders_filmstrip.rs:201` | LongEdge + Nearest (Test) | **ja** fuer 2,1 (Early-Return) | `unwrap` |
 | `sliders_filmstrip.rs:206` | LongEdge + Nearest (Test) | **nein** (Nearest->Bilinear) | `unwrap` |
 
@@ -445,7 +445,7 @@ headless.
 
 1. **SOLL (dieses Doc):** Review/Sign-off durch den Eigentuemer.
 2. **Impl-A — Kernel-Extraktion:** Die f64-bilineare Schleife aus
-   `downscale_bilinear` (`lib.rs:206-229`) wird als gemeinsamer Kern
+   `downscale_bilinear` (`crates/lumina-core/src/lib.rs` → `downscale`) wird als gemeinsamer Kern
    in `downscale(frame, DownscaleTarget)` extrahiert. Die Geometrie-Funktionen
    (Abschnitt 4) werden davor geschaltet.
 3. **Impl-B — API-Einfuehrung:** `downscale` + `DownscaleTarget` werden in
