@@ -33,7 +33,8 @@ geprüft am: 2026-10-20
 
 ## Offen aus dem Bereich `86d677e..787670a`
 
-Geprüft am 2026-10-19 gegen `787670a` (27 Commits, 21 Skills berührt). Drei offene
+Geprüft am 2026-10-19 gegen `787670a` (26 Commits — `git -C <skills-repo> rev-list --count
+86d677e..787670a`; 21 Skill-Verzeichnisse berührt). Drei offene
 Positionen waren in `Agents.todo.md` angelegt: `VISION-SUBAGENT-PFLEGE`,
 `SECURITY-REVIEW-REGISTER`, `ALWAYSON-REGEL-WORTLAUT` — **keine davon ist heute
 noch offen**: `VISION-SUBAGENT-PFLEGE` ist am 2026-10-20 geschlossen und aus dem
@@ -187,8 +188,8 @@ Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
 
 1. `agents-skills-consumed` ablesen → `<alt>`.
 2. Im Skills-Repo die Range bilden:
-   `git -C /projects/agents-skills log --oneline <alt>..HEAD`
-   `git -C /projects/agents-skills log --name-only --format= <alt>..HEAD -- .agents/skills | sort -u`
+   `git -C <skills-repo> log --oneline <alt>..HEAD`
+   `git -C <skills-repo> log --name-only --format= <alt>..HEAD -- .agents/skills | sort -u`
 3. Jeden betroffenen Skill gegen **dieses** Projekt prüfen. Trifft eine Änderung zu, wenn
    sie eine Pflicht, Schwelle, Ausnahme, Konvention oder ein Kommando betrifft, das
    **hier** gilt:
@@ -201,7 +202,7 @@ Geprüft am 2026-10-20 gegen `00dbd22` (Range `787670a..00dbd22`).
    Sessions angefasst: Einträge nur an einem sicheren Ende einfügen und
    **niemals** die fremden Änderungen mit committen.
 5. Erst wenn für **jeden** Skill aus der Range eine Zeile steht:
-   `agents-skills-consumed: $(git -C /projects/agents-skills rev-parse --short HEAD)`,
+   `agents-skills-consumed: $(git -C <skills-repo> rev-parse --short HEAD)`,
    `geprüft am:` auf heute, Abschnitte ersetzen.
 6. Falls Regeln oder Skills betroffen waren: die eingebetteten Regeln in der
    globalen `~/.config/opencode/AGENTS.md` gegen ihre Quelle in
