@@ -266,7 +266,11 @@ Performance-Funde werden nach einem festen Prozess in umsetzbare Arbeit
    Kostenverteilung der Pipeline.
 3. **Priorisierte Performance-Feature-IDs ableiten:** Für jeden Hotspot wird
    eine Performance-Feature-ID vergeben und mit dem gemessenen Anteil als neue
-   offene Aufgabe in `Agents.todo.md` eingetragen.
+   offene Aufgabe in `Agents.todo.md` eingetragen. Der Anteil ist dabei immer
+   gegen den **aktuellen** Baseline-Stand zu rechnen (siehe F-074-N4: eine
+   Baseline-Erneuerung kann eine Motivation tragen oder entkräften); die IDs
+   F-074-A1 bis A4 wurden am 2026-08-19 so eingetragen und am 2026-08-20 nach
+   der Umsetzung wieder geschlossen.
 
 **Hotspot-Definition:** Ein Hotspot ist die Pipeline-Stufe mit dem höchsten
 gemessenen Anteil am Gesamtlauf, beziehungsweise jede Stufe im interaktiven
@@ -296,13 +300,15 @@ die Kostenverteilung je Pipeline-Stufe und daraus abgeleitete,
 priorisierte Performance-Feature-IDs (siehe unten). F-074-N5 umgesetzt:
 `scripts/perf/compare.mjs` implementiert die drei Modi (report/warn/gate) mit
 korrekten Exit-Codes, ein kalibriertes `gate: true`-Subset (30 deterministische
-Core-/Batch-Benchmarks) ist in `perf/budgets.json` registriert, und ein
+Core-/Batch-Benchmarks — Zählregel: alle `core/*`- und `batch/*`-IDs mit
+`gate: true`) ist in `perf/budgets.json` registriert, und ein
 optionaler, nicht-blockierender `bench`-Job erzeugt ein Report-Artefakt und
 läuft CI-seitig nur im `warn`-Modus. F-074-N6 (GPU-Klasse) und F-074-N7
 (Merge-Klasse, MERGE-IMPL-15) sind ergänzt; die Re-Baseline vom 2026-09-17
 erfasste alle messbaren Core-/Batch-/GPU-IDs neu und registrierte die zehn
-Merge-IDs (siehe unten). F-074-N8 (2026-09-17) ergänzt die Denoise- und
-Culling-Klasse mit 21 report-only IDs (siehe unten).
+Merge-IDs (alle `merge/*`-IDs, `gate: false`; siehe unten). F-074-N8
+(2026-09-17) ergänzt die Denoise- und Culling-Klasse mit 21 report-only IDs
+(alle `denoise/*`- und `cull/*`-IDs; siehe unten).
 
 ### F-074-N3 — umgesetzte Benchmarks
 
@@ -331,63 +337,130 @@ Alle IDs folgen dem Schema `<klasse>/<operation>__<fixture>` und sind in beiden
 Stores (`perf/baseline.json`, `perf/budgets.json`) registriert. Gemessene
 Median-/P95-Werte (Nanosekunden) stehen in `perf/baseline.json`; Budgets sind
 mit dem 2-fachen Median und `tolerance_ratio` 1.2 angelegt. Das harte
-Regression-Gate (F-074-N5) ist kalibriert: 30 deterministische Core-/Batch-
-Benchmarks tragen `gate: true`, die beiden env-gated `decode/raw__*`-Benchmarks
-bleiben `gate: false` (siehe F-074-N5). Hinweis: Der harte `gate`-Modus vergleicht
-`median_ns` der Messung gegen `baseline.median_ns × tolerance_ratio`; das Feld
-`budget_ns` in `perf/budgets.json` ist aktuell informativ (Kalibrierwert ≈ 2× der
-Baseline) und kein eigenständig erzwungener Schwellwert.
+Regression-Gate (F-074-N5) ist kalibriert: **alle** `core/*`- und `batch/*`-IDs
+in `perf/budgets.json` mit `gate: true` tragen das harte Gate — 27 `core/*` +
+3 `batch/*` = **30** Benchmarks; die beiden env-gated `decode/raw__*`-Benchmarks
+(alle `decode/*`-IDs) bleiben `gate: false` (siehe F-074-N5). Zählregel: IDs mit
+Präfix `core/` oder `batch/` und `gate: true` — keine handgepflegte ID-Liste.
+Hinweis: Der harte `gate`-Modus vergleicht `median_ns` der Messung gegen
+`baseline.median_ns × tolerance_ratio`; das Feld `budget_ns` in
+`perf/budgets.json` ist aktuell informativ (Kalibrierwert ≈ 2× der Baseline)
+und kein eigenständig erzwungener Schwellwert.
 
 ### F-074-N4 — Baseline-Analyse und abgeleitete Performance-TODOs
 
 Kostenverteilung je Pipeline-Stufe, bezogen auf `core/render_frame` derselben
-Auflösung (Werte @2048, Quelle `perf/baseline.json`). Die Anteile sind über
-512/1024/2048 weitgehend stabil, mit einer Ausnahme: die Auto-Tone-/Exposure-
-Match-Stufen rampen mit der Auflösung (≈47 % → 59 % → 64 %), die @2048-Werte
-untermauern die A3-Motivation:
+Auflösung. **Quelle und Stand:** `perf/baseline.json`,
+`environment.recorded_at` = 2026-09-17 (Commit `9f8c632`), Host
+`MacBook-Pro-von-Florian.local`, Darwin/arm64, rustc 1.98.0, LibRaw 0.22.2.
+Die frühere Fassung dieser Tabelle stammte aus dem Baseline-Stand `3b07ed7`
+(2026-08-19) und war nach der Re-Baseline nicht nachgezogen; alle Zahlen
+unten sind neu aus dem genannten Store berechnet.
 
-| Pipeline-Stufe | @2048 (ns) | Anteil an `render_frame` | Anteil an `batch/render_export_png` |
-| --- | ---: | ---: | ---: |
-| `core/render_frame` (Gesamt) | 106 665 042 | 100 % | 64,0 % |
-| `apply_recipe_with_white_balance` | 97 447 354 | **91,4 %** | 58,4 % |
-| `analyze_tone` | 68 983 542 | 64,7 % | — |
-| `suggest_auto_tone` | 68 699 605 | 64,4 % | — |
-| `match_total_exposure` | 68 712 188 | 64,4 % | — |
-| `histogram` | 2 762 231 | 2,6 % | — |
-| `mask_graph_eval` | 105 771 | 0,1 % | — |
-| `cache_hit` / `cache_miss` | 8 / 6 | ~0 % | — |
-| PNG-Encode (Δ `batch` − `render_frame`) | 60 105 979 | 56,4 % | 36,0 % |
-| `decode/raw` (eigener Hot-Path, env-gated) | 321 892 250 (landscape) / 360 537 833 (portrait) | **3,0× / 3,4×** `render_frame` | — |
+Die Anteile sind über 512/1024/2048 **weitgehend stabil**; keine Stufe rampet
+**sprunghaft** mit der Auflösung (der PNG-Encode-Δ-Anteil wächst leicht, s. u.).
+`apply_recipe_with_white_balance`
+liegt bei 85,2 % → 85,7 % → 85,8 %, `analyze_tone` bei 4,7 % → 4,6 % → 4,6 %,
+`suggest_auto_tone` bei 4,7 % → 4,6 % → 4,6 %, `match_total_exposure` bei
+4,8 % → 4,7 % → 4,7 %. Die frühere Aussage „die Auto-Tone-/Exposure-Match-Stufen
+rampen mit der Auflösung (≈47 % → 59 % → 64 %)" galt für den Stand `3b07ed7`
+und **entfällt**: die Stufen sind heute über alle Auflösungen ~4,6–4,8 %
+konstant. Einzig der PNG-Encode-Δ-Anteil wächst leicht mit der Auflösung
+(53,7 % → 55,8 % → 57,6 % von `render_frame`).
+
+| Pipeline-Stufe | Quelle (ID in `perf/baseline.json`) | @2048 (ns) | Anteil an `core/render_frame__2048` | Anteil an `batch/render_export_png__2048` |
+| --- | --- | ---: | ---: | ---: |
+| `core/render_frame` (Gesamt) | `core/render_frame__2048` | 65 758 354 | 100 % | 63,4 % |
+| `apply_recipe_with_white_balance` | `core/apply_recipe_with_white_balance__2048` | 56 391 542 | **85,8 %** | 54,4 % |
+| `analyze_tone` | `core/analyze_tone__2048` | 3 000 248 | 4,6 % | 2,9 % |
+| `suggest_auto_tone` | `core/suggest_auto_tone__2048` | 3 001 195 | 4,6 % | 2,9 % |
+| `match_total_exposure` | `core/match_total_exposure__2048` | 3 061 821 | 4,7 % | 3,0 % |
+| `histogram` | `core/histogram__2048` | 2 869 948 | 4,4 % | 2,8 % |
+| `mask_graph_eval` | `core/mask_graph_eval__2048` | 224 257 | 0,3 % | 0,2 % |
+| `cache_hit` / `cache_miss` | `core/cache_hit__2048` / `core/cache_miss__2048` | 9 / 6 | ~0 % | ~0 % |
+| PNG-Encode (Δ `batch` − `render_frame`) | `batch/render_export_png__2048` − `core/render_frame__2048` | 37 902 834 | 57,6 % | 36,6 % |
+| `decode/raw` (eigener Hot-Path, env-gated) | `decode/raw__aircraft-landscape` / `decode/raw__aircraft-portrait` | 321 892 250 / 360 537 833 | **4,9× / 5,5×** `render_frame` | — |
+
+**Auswahlregel für die Tabelle (regelbasiert, keine handgepflegte ID-Liste).**
+Die Tabelle ist aus `perf/baseline.json` zu **erzeugen**, nicht von Hand zu
+pflegen. *Menge der Zeilen:* alle IDs mit Präfix `core/` und Suffix `__2048`
+(neun IDs), dazu `batch/render_export_png__2048` (Basis des Encode-Δ) sowie
+alle IDs mit Präfix `decode/raw__` (zwei IDs). Die PNG-Encode-Zeile ist die
+Differenz `batch/render_export_png__2048` − `core/render_frame__2048`.
+*Anteile:* Wert ÷ `core/render_frame__2048` bzw. ÷
+`batch/render_export_png__2048`. *Auflösungs-Rampe:* dieselbe Regel über alle
+IDs mit Präfix `core/` und Suffix `__512`, `__1024`, `__2048`, jeweils geteilt
+durch `core/render_frame__<dieselbe Auflösung>`. *Reihenfolge:* feste
+Pipeline-Reihenfolge dieses Dokuments (Render-Gesamt → Adjustments →
+Auto-Tone-Gruppe → Histogramm → Maske → Cache → Encode-Δ → Decode); sie ist
+eine Darstellungskonvention und ändert keine Zahl. *Format:* Tausendertrennzeichen
+als schmales Leerzeichen, Dezimalkomma, eine Nachkommastelle. Weicht der
+Store-Stand vom hier genannten ab (`recorded_at` ≠ 2026-09-17), ist die Tabelle
+neu zu erzeugen — die Zahlen in diesem Dokument werden nie manuell
+fortgeschrieben.
 
 **Hotspot-Schlussfolgerung:** `apply_recipe_with_white_balance` dominiert den
-interaktiven Render-Pfad mit **~91 %** von `render_frame` (und ~58 % des
-Batch-Exports) über alle Auflösungen hinweg – das ist der klare Regler-/Vorschau-
-Hotspot. Der RAW-Decode ist mit **~3,0–3,4× `render_frame`** (bei 2048; bei
-kleinen Auflösungen durch den fixen Decode-Overhead noch deutlich höher, z. B.
-~45× bei 512) ein eigener, env-gated Hot-Path für die Erst-Öffnen-Latenz.
-Auto-Tone/Exposure-Match (`analyze_tone`, `suggest_auto_tone`,
-`match_total_exposure`) kosten je ~64 % von `render_frame` und bilden den
-Auto-Tone-Interaktionspfad. Der PNG-Encode-Anteil am Batch-Export liegt bei
-~36 % (Δ zum reinen `render_frame`).
+interaktiven Render-Pfad weiterhin, jetzt mit **85,8 %** von
+`core/render_frame__2048` (56 391 542 ns) und **54,4 %** des Batch-Exports;
+der Anteil ist über alle Auflösungen stabil (85,2 % → 85,7 % → 85,8 %) — das
+ist der klare Regler-/Vorschau-Hotspot. Die Auto-Tone-/Exposure-Match-Stufen
+sind **kein** dominanter Pfad mehr: `analyze_tone` **4,6 %**,
+`suggest_auto_tone` **4,6 %**, `match_total_exposure` **4,7 %** von
+`render_frame` (3,0–3,1 ms @2048) — je Stufe Faktor ~14 unter der früher
+behaupteten ~64-%-Größenordnung. Der RAW-Decode ist mit **4,9× / 5,5×
+`core/render_frame__2048`** (321 892 250 ns / 360 537 833 ns) ein eigener,
+env-gated Hot-Path für die Erst-Öffnen-Latenz; die `decode/raw__*`-IDs tragen
+**kein** Auflösungs-Suffix (die beiden CR3-Fixtures in voller Auflösung), ein
+Verhältnis zu `core/render_frame__512` wäre ein Fixture- gegen einen
+Auflösungsvergleich und wird hier **nicht** behauptet (die frühere Angabe
+„~45× bei 512" entfällt). Der PNG-Encode-Anteil am Batch-Export liegt bei
+**36,6 %** (Δ zum reinen `render_frame` = 37 902 834 ns), am `render_frame`
+selbst bei 57,6 %.
 
-**Priorisierte Performance-Feature-IDs** (als neue offene Aufgaben in
-`Agents.todo.md` einzutragen – Kopplung F-043 Korrektheit, F-075 Speicherbudgets):
+**Priorisierte Performance-Feature-IDs** (Stand 2026-10-20: die vier IDs wurden
+am 2026-08-19 als offene Aufgaben in `Agents.todo.md` eingetragen und am
+2026-08-20 nach der Umsetzung wieder geschlossen — A1/A2/A3 in `1410542`, A4 in
+`35dc93a`. Sie
+stehen heute **nicht** als offene Aufgaben in `Agents.todo.md`, sondern nur noch
+als Prioritäts-Positionen in diesem Dokument und in Code-Kommentaren. Die
+Motivationszahlen sind unten gegen den aktuellen Baseline-Stand geprüft;
+Kopplung an F-043 (Korrektheit) und F-075 (Speicherbudgets) gilt unverändert):
 
-- **F-074-A1** — `apply_recipe_with_white_balance` Adjustments-Kernel
-  optimieren (WB + Regler pro Pixel). Motivierung: **91,4 %** von `render_frame`
-  (und ~58 % von `batch/render_export_png`) @2048 – dominanter interaktiver
-  Pfad.
-- **F-074-A2** — `decode/raw` Decode-Durchsatz (LibRaw-Overhead, Decode/Upload
-  überlappen, dekodierte Buffer cachen). Motivierung: **~3,0–3,4× `render_frame`**
-  @2048, eigener env-gated Hot-Path für Erst-Öffnen-Latenz.
-- **F-074-A3** — Auto-Tone/Exposure-Match Analyse-Kernel (`analyze_tone`,
-  `suggest_auto_tone`, `match_total_exposure`) optimieren (geteilte
-  Histogramm/Perzentil-Statistik). Motivierung: je **~64 %** von `render_frame`
-  @2048 – Auto-Tone-Button- und Exposure-Match-Interaktionspfad.
-- **F-074-A4** — PNG-Export-Encode-Durchsatz (`batch/render_export_png` −
-  `render_frame`) optimieren (Codec/Stufen, ggf. schnellere Kodierung).
-  Motivierung: Encode-Δ ≈ 60,1 Mio. ns ≈ **56 %** von `render_frame` /
-  **36 %** von `batch` @2048 – dominanter Batch-Export-Kostenanteil.
+- **F-074-A1 — bleibt (Prioritäts-Position, keine offene Aufgabe).**
+  `apply_recipe_with_white_balance` Adjustments-Kernel (WB + Regler pro Pixel).
+  Die A1-Optimierung (fusionierte Kanal-LUTs, Commit `8dacd3d`, 2026-08-20) ist
+  umgesetzt; der **verbleibende** Anteil ist der heutige Hotspot: **85,8 %**
+  von `core/render_frame__2048` (56 391 542 ns) und **54,4 %** von
+  `batch/render_export_png__2048` @2048, stabil über 512/1024/2048.
+- **F-074-A2 — bleibt, Zahl korrigiert.** `decode/raw` Decode-Durchsatz
+  (LibRaw-Overhead, Decode/Upload überlappen, dekodierte Buffer cachen). Die
+  A2-Optimierung (Commit `a03c272`, 2026-08-20: redundante Dateikopie entfernt,
+  schnelle RGBA-Promotion) ist umgesetzt; das Verhältnis Decode zu Render ist
+  durch die **schnellere** Render-Pipeline von ~3,0–3,4× auf **4,9× / 5,5×**
+  `core/render_frame__2048` gewachsen — die ID bleibt, die Zahl wird
+  korrigiert. Beleg-Einwand zum Stand: die Decode-Mediane **und** -P95 sind im
+  Baseline-Store vom 2026-09-17 **unverändert** aus dem Erfassungsstand
+  2026-08-19 (rustc 1.97.1) übernommen (identische Median- und P95-Werte in
+  `3b07ed7` und `9f8c632`; die Re-Baseline-Begründung in F-074-N7 führt die
+  `decode/raw__*`-IDs ausdrücklich als „unangetastet") — die Decode-Zahlen sind
+  damit **keine** Messung mit rustc 1.98.0.
+- **F-074-A3 — fällt weg (als priorisierte offene Position).** Die
+  ~64-%-Motivierung trägt mit der heutigen Baseline **nicht**: `analyze_tone`
+  **4,6 %**, `suggest_auto_tone` **4,6 %**, `match_total_exposure` **4,7 %**
+  von `core/render_frame__2048` (3 000 248 / 3 001 195 / 3 061 821 ns) — je
+  Stufe Faktor ~14 unter dem alten Wert (64,7 % / 64,4 % / 64,4 %) und
+  auflösungsunabhängig statt auflösungsabhängig. Die A3-Optimierung (Commit
+  `2253de5`, 2026-08-20: Single-Pass-`mean_luminance`, `analyze_tone` sortiert
+  `unstable`) ist umgesetzt und die ID am 2026-08-20 geschlossen; für die
+  verbleibenden ~3 ms je Stufe trägt eine eigene Task-ID nicht.
+- **F-074-A4 — bleibt (Prioritäts-Position, keine offene Aufgabe), Zahl
+  korrigiert.** PNG-Export-Encode-Durchsatz (`batch/render_export_png` −
+  `render_frame`; Codec/Stufen, ggf. schnellere Kodierung). Die A4-Optimierung
+  (Commit `7045da7`, 2026-08-20: direkter `PngEncoder` ohne 16-MB-Klon) ist
+  umgesetzt; das Encode-Δ beträgt **37 902 834 ns** = **57,6 %** von
+  `core/render_frame__2048` bzw. **36,6 %** von
+  `batch/render_export_png__2048` @2048 (alt: 56,4 % / 36,0 %) — weiterhin der
+  zweitgrößte Block des Batch-Exports nach dem Render-Pfad selbst (63,4 %).
 
 ### F-074-N5 — Regression-Gate
 
@@ -406,13 +479,17 @@ es werden keine Vergleichswerte erfunden. Pro Modus:
 - **gate:** prüft ausschließlich `gate: true`-Budgets; jede Überschreitung oder
   fehlende Baseline ist eine Verletzung → Exit 1. Exit 0, wenn alle bestehen.
 
-**Kalibriertes Gate-Subset (`perf/budgets.json`):** 30 deterministische
-`core/*`- und `batch/*`-Benchmarks tragen `gate: true` (kalibriert
-2026-08-19 gegen die erfasste Baseline; `tolerance_ratio` 1.2 absorbiert
-Same-Machine-Rauschen). Die beiden `decode/raw__*`-Benchmarks bleiben
-`gate: false` (env-gated, maschinen-/runner-abhängig, nicht im schnellen
-CI-Set). Budgets wurden **bewusst nicht still erhöht** – es wurden nur
-Gate-Flags und begründende `note`-Felder gesetzt.
+**Kalibriertes Gate-Subset (`perf/budgets.json`):** alle IDs mit Präfix
+`core/` oder `batch/` und `gate: true` — 27 `core/*` + 3 `batch/*` = **30**
+deterministische Benchmarks (kalibriert 2026-08-19; Baseline und `budget_ns`
+am 2026-09-17 nachgezogen, `gate`-Flags unverändert; `tolerance_ratio` 1.2
+absorbiert Same-Machine-Rauschen). Zusätzlich tragen die sechs `gpu/*`-IDs
+`gate: true`. Die beiden `decode/raw__*`-Benchmarks (alle `decode/*`-IDs)
+bleiben `gate: false` (env-gated, maschinen-/runner-abhängig, nicht im schnellen
+CI-Set). Insgesamt sind 69 IDs in beiden Stores registriert: 36 mit `gate: true`
+(30 `core`/`batch` + 6 `gpu`), 33 report-only (2 `decode/*`, 10 `merge/*`,
+10 `denoise/*`, 11 `cull/*`). Budgets wurden **bewusst nicht still erhöht** – es
+wurden nur Gate-Flags und begründende `note`-Felder gesetzt.
 
 **CI (`bench`-Job, `.github/workflows/ci.yml`):** optionaler, nicht-blockierender
 Job (`needs: detect`, `if: has_cargo == 'true'`), der `cargo bench -p lumina-bench`
@@ -486,10 +563,10 @@ Implementiert in `crates/lumina-bench/bench/merge.rs` (Criterion-Gruppe
 (`make_linear_gradient`, `make_linear_gradient_shifted`, `scale_linear`);
 deterministisch, kein Netzwerk, keine committeten Daten.
 
-Zehn neue IDs (alle `gate: false`, report-only, bis sie unabhängig kalibriert
-sind — F-074-Methodik wie bei der GPU-Klasse). Mediane der Erfassung
-2026-09-17 (gleiche Maschine, rustc 1.98.0; `merge/align_hdr__512` mit
-`max_shift_px = 8`):
+Zehn neue IDs (alle IDs mit Präfix `merge/` in `perf/budgets.json`, alle
+`gate: false`, report-only, bis sie unabhängig kalibriert sind — F-074-Methodik
+wie bei der GPU-Klasse). Mediane der Erfassung 2026-09-17 (gleiche Maschine,
+rustc 1.98.0; `merge/align_hdr__512` mit `max_shift_px = 8`):
 
 | Benchmark-ID | Median (ns) | P95 (ns) |
 | --- | ---: | ---: |
@@ -527,7 +604,9 @@ Benchmark-Klassen. Implementiert in `crates/lumina-bench/bench/denoise.rs`
 Fixtures in `bench/common/mod.rs`; deterministisch, kein Netzwerk, keine
 committeten Daten, keine Gewichte.
 
-**21 neue IDs, alle `gate: false` (report-only).** Neue Klassen starten nach
+**21 neue IDs, alle `gate: false` (report-only)** — Zählregel: alle IDs mit
+Präfix `denoise/` (10) oder `cull/` (11) in `perf/budgets.json`; keine weitere
+hat `gate: true`. Neue Klassen starten nach
 F-074-Methodik im Report-Modus und werden erst nach unabhängiger Kalibrierung
 auf `gate: true` gesetzt (Präzedenz: GPU-/Merge-Klasse). Die Denoise-Klasse
 ist ausdrücklich **kein Modell-Benchmark**: Da die ONNX-Gewichte
@@ -786,13 +865,20 @@ hinweg").
   nötig. Falls die Erfassung auf einer Maschine entfällt, sind die
   Decode-IDs in `perf/baseline.json` mit `median_ns`/`p95_ns = 0`
   registriert („pending") und werden in F-074-N5 nachgereicht.
+- **Decode-Werte sind nicht neu gemessen:** die `decode/raw__*`-Mediane und -P95
+  im Store vom 2026-09-17 sind **unverändert** aus der Erfassung vom 2026-08-19
+  (rustc 1.97.1) übernommen (identische Werte in `3b07ed7` und `9f8c632`; die
+  Re-Baseline-Begründung in F-074-N7 führt die Decode-IDs ausdrücklich als
+  „unangetastet"). Sie sind damit **keine** Messung mit rustc 1.98.0 — für
+  eine A2-Neumotivation wäre eine eigene Decode-Erfassung nötig.
 - **Umgebungsabhängigkeit:** Baseline-Werte sind nur innerhalb derselben
   Toolchain/Hardware aussagekräftig (siehe „Umgebung und Rauschen"); ein
   Wechsel erfordert eine neue Baseline-Erfassung.
 - Die Budgets waren vorläufige 2×-Schätzer; das harte Regression-Gate
   (F-074-N5) ist nun kalibriert: 30 deterministische `core/*`/`batch/*`-
-  Benchmarks tragen `gate: true`, die `decode/raw__*`-Benchmarks bleiben
-  `gate: false` (siehe F-074-N5 oben).
+  Benchmarks tragen `gate: true` (Zählregel: alle `core/*`- und `batch/*`-IDs
+  mit `gate: true`; zusätzlich die sechs `gpu/*`-IDs), die `decode/raw__*`-
+  Benchmarks bleiben `gate: false` (siehe F-074-N5 oben).
 - **GPU-Nichtdeterminismus:** Der Auto-Tone-GPU-Pfad war auf einer headless
   Maschine ohne Adapter nicht reproduzierbar; die CPU-Route ist grün. Die
   Grenze und der Beweisplan (Adapter-Nachweis) stehen in
