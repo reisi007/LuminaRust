@@ -15,8 +15,15 @@
 #                  tote Schranke, die nach dem zweiten Lauf abgeschaltet wird)
 #                  oder eine unerzwungene Empfehlung.
 #   Ratchet-Richtung: ceiling — der Baseline-Eintrag (Maximalgroesse je
-#                  Datei) darf nur sinken, nie steigen; gesenkt wird er
+#                  Datei) soll nur sinken, nie steigen; gesenkt wird er
 #                  zusammen mit der Extraktion, die die Datei schrumpft.
+#                  ACHTUNG: erzwungen wird nur die *Wachstumsgrenze*
+#                  (n > b -> FAIL). Eine Anhebung des Eintrags ist
+#                  maschinell NICHT gesperrt (die Baseline enthaelt
+#                  belegte Anhebungen, z. B. "BEWUSSTE Anhebung
+#                  12572 -> 12573") — die Richtung ist hier eine
+#                  Konvention, kein Gate. (Die 3000er-Liste in
+#                  scripts/file_size_ceiling.txt erzwingt sie ueber (D).)
 #   Nicht gedeckt:  Nicht-Rust-Dateien (Markdown, Shell, YAML) und Dateien
 #                  mit bis zu 500 Zeilen (bewusst ungeprueft); die Baseline
 #                  ist handgepflegt, nicht generiert (siehe Lueckenliste in
