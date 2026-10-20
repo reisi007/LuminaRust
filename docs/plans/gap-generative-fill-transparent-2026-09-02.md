@@ -3,7 +3,12 @@
 **Datum:** 2026-09-02  
 **Status:** Analyse (kein Code, Doku-first)  
 **Auftrag:** 3 Wünsche vor manuellem Test — Gap zwischen SOLL/Ist + priorisierte Lücken  
+**Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
+Plans beziehen sich auf den Commit `28b7782` (Analyse vom 2026-09-02); nackte
+`lib.rs`/`render.rs`/`pipeline.rs`-Anker wurden auf den vollstaendigen
+repo-relativen Pfad umgestellt.
 **Bezug:** `Agents.md`, `Agents.todo.md` (Phase 10b GEN-EXPAND-1 46f6baf), `feature/README.md`, `feature/product/generative-expand.md`, `feature/architecture/pipeline.md`, `feature/architecture/sidecar.md`, `feature/product/ai-masks.md`, `feature/product/export.md`, `feature/platform/capability-matrix.md`, `feature/platform/wasm-limits.md`, `feature/quality/fixtures-licensing.md`, `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-core/src/**`, `crates/lumina-gui/src/lib.rs`, `crates/lumina-mcp/src/tools/dust_removal.rs`, `crates/lumina-raw`, `crates/lumina-onnx` (inpaint)
+Alle Fundstellen sind ueber `git show `28b7782`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
 ---
 
@@ -46,7 +51,7 @@
 - Wunsch: **Auto-Fill** dieser transparenten Pixel generativ (inpaint/outpaint) unmittelbar nach Lens/Perspective, vor Crop.
 
 **Ist:**
-- Pipeline heute: `Decode → SourceActions → AutoAnalysis → Adjustments → Masks → Crop(→apply_geometry inkl. Lens/Perspective) → Output` (`crates/lumina-core/src/pipeline.rs:29-68`, `lib.rs:443 apply_geometry`).
+- Pipeline heute: `Decode → SourceActions → AutoAnalysis → Adjustments → Masks → Crop(→apply_geometry inkl. Lens/Perspective) → Output` (`crates/lumina-core/src/pipeline.rs:29-68`, `crates/lumina-core/src/lib.rs:443` (`apply_geometry`)).
 - `GenerativeEdit` existiert **nicht** als Stufe; kein Code (`grep generative` 0 Treffer außer Doku). `ImageFrame` hat `u8` RGBA, aber kein `alpha`-transparent Detection nach Lens (Alpha bleibt, schwarze Füllung dokumentiert).
 - Kein Inpaint/Outpaint-Modell im Workspace (`lumina-onnx` nur `subject_segmentation` BiRefNet + `box/point/mask_prompt` SAM 2.1, kein `inpaint/outpaint` Capability, `capability-matrix.md` keine Zeile dafür — GEN-EXPAND-1 schlägt `inpaint`/`outpaint` als neue Capability vor, nicht umgesetzt).
 - Kein transparent-Pixel Detektor, keine auto-trigger Logik, kein Masken-Pipeline für Rand.
@@ -66,31 +71,31 @@
 - Wunsch 2 detailliert: Checkbox default **"auf Bild beschneiden"** (Crop auf sichtbaren Bereich clippen), optional **"generative Inhalte behalten"** vs **"auf aktuelle Ansicht zuschneiden"**.
 
 **Ist:**
-- `EditRecipe.geometry` + `lens_correction` + `perspective` vorhanden, aber **kein** `GenerativeEdit.canvas` Feld. `Geometry.crop` `Free {x,y,width,height 0..=1}` bezieht sich auf die **Quellgeometrie**, nicht auf ein erweitertes Canvas. Kein `canvas` in `EditRecipe` (`lumina-sidecar/src/lib.rs:457-486` nur geometry/lens/perspective/effects/source_actions).
+- `EditRecipe.geometry` + `lens_correction` + `perspective` vorhanden, aber **kein** `GenerativeEdit.canvas` Feld. `Geometry.crop` `Free {x,y,width,height 0..=1}` bezieht sich auf die **Quellgeometrie**, nicht auf ein erweitertes Canvas. Kein `canvas` in `EditRecipe` (`crates/lumina-sidecar/src/lib.rs:457-486` nur geometry/lens/perspective/effects/source_actions).
 - Keine Checkbox in `lumina-gui/src/lib.rs` (Crop UI: `Aspect`/`Free` Presets, Rotation, Mirror — kein `keep_generative` Flag, kein "auf Bild beschneiden" Default).
 - Kein `keep_generative` / `crop_mode` Flag im Rezept, kein RenderKey-Eintrag dafür.
 - `RenderKey` kennt `output.width/height`, `geometry` via `recipe_hash`, aber keine `canvas` Identität.
 
 **Gap konkret:**
 - Rezept-Felder fehlen: `GenerativeEdit.canvas` (`output_width/height`, `source_offset_x/y`) oder alternativ `Geometry.canvas` + `crop.keep_generative: bool` (Entscheidung: wo lebt Checkbox — in `GenerativeEdit` oder in `Geometry.crop`? GEN-EXPAND-1 sieht Canvas als Teil von `GenerativeEdit`, Wunsch 2 braucht zusätzlich Crop-Flag).
-- Koordinatensystem: `crop_rect` (`lib.rs:508`) rechnet normiert auf `self.width/height` (Quell-Frame nach Lens). Bei Canvas>Quelle muss `crop_rect` auf Canvas-Dimensionen rechnen — Breaking Change.
+- Koordinatensystem: `crop_rect` (`crates/lumina-core/src/lib.rs:508`) rechnet normiert auf `self.width/height` (Quell-Frame nach Lens). Bei Canvas>Quelle muss `crop_rect` auf Canvas-Dimensionen rechnen — Breaking Change.
 - GUI: Checkbox-Steuerelement + Persistenz + History + Preview-Cache Invalidierung.
-- Export: `export_image` (`lib.rs:102`) rendert `render_frame` direkt — kein Canvas-Expand Pfad, kein `clip_to_image` vs `keep`.
+- Export: `export_image` (`crates/lumina-core/src/lib.rs:102`) rendert `render_frame` direkt — kein Canvas-Expand Pfad, kein `clip_to_image` vs `keep`.
 
 **Tests fehlen:** Kein Canvas-Bounds-Test (negativer Offset), kein Crop-auf-Canvas-Roundtrip, kein `keep_generative` Golden, kein Sidecar-Migrationstest.
 
 ### 2.3 Wunsch 3: Staub entfernen schnell (heuristisch/Clone) wie Lightroom, aber auch lokale generative KI
 
 **Soll laut F-042 + GEN-EXPAND-1 Abgrenzung:**
-- F-042: Source-Actions als kontext-übergebene Artefakte (u16 Region + RGBA8 Replacement) — heute persistiert als `SourceActionSpec {kind, artifact {id, relative_path, checksum}}` ( `lumina-sidecar/src/lib.rs:234-258`, `OPTION kind DustRemoval | AiReplacement`).
+- F-042: Source-Actions als kontext-übergebene Artefakte (u16 Region + RGBA8 Replacement) — heute persistiert als `SourceActionSpec {kind, artifact {id, relative_path, checksum}}` ( `crates/lumina-sidecar/src/lib.rs:234-258`, `OPTION kind DustRemoval | AiReplacement`).
 -GEN-EXPAND-1 Abgrenzung: `SourceActions` = kontext-Regionen **ohne** Canvas >100 % und ohne Modell/Prompt; `GenerativeEdit` = **mit** Modell/Prompt/Seed.
 - Wunsch: **schnell heuristisch** (Clone/Spot-Heal, keine KI) als Lightroom-ähnlich + **lokal generativ** (ONNX Inpaint, Maske malen/Prompt).
 
 **Ist — schnell/heuri:**
-- `SourceActionArtifact` exige **full-size** `region` + `replacement` identischer Frame-Dimension (`render.rs:435 apply_source_actions` prüft `region.width==frame.width` hart). Kein Clone-Stempel, kein billiger Single-Tap Heal.
+- `SourceActionArtifact` exige **full-size** `region` + `replacement` identischer Frame-Dimension (`crates/lumina-core/src/render.rs:435` (`apply_source_actions`) prüft `region.width==frame.width` hart). Kein Clone-Stempel, kein billiger Single-Tap Heal.
 - MCP `lumina_dust_removal` (`crates/lumina-mcp/src/tools/dust_removal.rs:1`) validiert region==source, replacement==region — kein heuristischer Fill, erfordert externes replacement Bild.
 - CLI `dust-removal` existiert (pipeline.md F-042-N1), aber GUI hat **kein** Staub-UI Panel (`grep Dust` in `lumina-gui/src/lib.rs` 0 Treffer). Kein Pinsel/Spot-Tool für Dust im GUI.
-- Tests: `source_action_*` in `render.rs:614-738` nur threshold und dimensions-mismatch.
+- Tests: `source_action_*` in `crates/lumina-core/src/render.rs:614-738` nur threshold und dimensions-mismatch.
 
 **Ist — generativ lokal:**
 - `SourceActionKind::AiReplacement` existiert im Schema, aber kein ONNX Inpaint-Modell dahinter. `lumina-onnx` Capabilities: `subject_segmentation`, `box_prompt`, `point_prompt`, `mask_prompt` — kein `inpaint` (`crates/lumina-onnx/src/manifest.rs`).
@@ -106,7 +111,7 @@
 
 ### 2.4 Querschnitt: Pipeline-Reihenfolge + Sidecar-Artefakt
 
-| Aspekt | GEN-EXPAND-1 SOLL | Ist Pipeline (`pipeline.rs` / `render.rs:152`) | Gap |
+| Aspekt | GEN-EXPAND-1 SOLL | Ist Pipeline (`crates/lumina-core/src/pipeline.rs` / `crates/lumina-core/src/render.rs:152`) | Gap |
 |---|---|---|---|
 | Stufen | `Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop` | `Decode→SourceActions→AutoAnalysis→Adjustments→Masks→Crop(apply_geometry)` | `GenerativeEdit` fehlt; Lens/Perspective sind **innerhalb** von `Crop` versteckt (`apply_geometry` 5-in-1), nicht eigene Stage |
 | Canvas | `canvas {output_width,height, source_offset}` Teil der Identität | Kein Canvas, kein offset — `OutputSpec width/height` nur Output, nicht Canvas | Neues Top-Level-Feld oder `GenerativeEdit` Struct |
@@ -124,7 +129,7 @@
 **Was für "alles getestet, so viel wie möglich automatisch" nötig ist:**
 - **Golden-Image** (toleranzbehaftet, nicht byte-identisch wegen Inpaint Nichtdeterminismus — Seed pinnen oder `seed` in Golden aufnehmen; Toleranz per PSNR/SSIM dokumentieren, z. B. PSNR > 35 dB wie Fixtures-Policy).
 - **Histogram-Delta** (vor/nach Dust/Inpaint/Canvas-Expand: `LuminanceHistogram::digest` Vergleich, `analyze_tone` Median/p01/p99 Delta schwellwert).
-- **Blende-Vergleich** (Before/After Toggle `Y` existiert (`lib.rs:916 before_after`), aber kein A/B Split-View für generative Artefakte).
+- **Blende-Vergleich** (Before/After Toggle `Y` existiert (`crates/lumina-gui/src/lib.rs:916` (`before_after`)), aber kein A/B Split-View für generative Artefakte).
 - **kittest Snapshot** für neuen Checkbox-Zustand (Crop-Panel mit "auf Bild beschneiden" default, "generative behalten" vs "zuschneiden") — 2 neue Snapshots.
 - **Bench** für Inpaint Latenz (Ziel < 200 ms für 8 MP Clone, < 2 s für 1024² ONNX Inpaint, F-071 Budget-Erweiterung).
 - **Keine manuelle Prüfung** = jede Pipeline-Stufe braucht deterministischen Seed + hash-gepinnte Fixture (F-073), sonst `#[ignore]`.
@@ -138,7 +143,7 @@
 | # | PRIO | Lücke | SOLL-Anker | Ist | Crate | Testbarkeit | Aufwand | Risiko |
 |---|---|---|---|---|---|---|---|---|
 | G1 | **hoch** | **GenerativeEdit Rezept + Sidecar** (`GenerativeEdit` v1 Felder, `canvas` >100 %, `prompt/seed/model`, `artifact` ref) fehlt — Doku 46f6baf, kein Code | `generative-expand.md` §Rezeptmodell, `sidecar.md` zdata, `pipeline.md` Reihenfolge | `EditRecipe` hat kein canvas/generative Feld, zdata nur 2 Kinds | `lumina-sidecar` | A (Roundtrip, Migration v1→v2, `serde(flatten)` extras) | M | Lizenz F-078 (Modell-Hash/Pin vor Commit), Schema-Bump Entscheidung |
-| G2 | **hoch** | **Pipeline Stufe `GenerativeEdit`** fehlt — Decode→GenerativeEdit→Lens→Perspective→Crop nicht existent; `apply_geometry` 5-in-1 muss entkoppelt werden | `generative-expand.md` §Pipeline-Platzierung, `pipeline.rs` Default | Stufe nicht in `Pipeline::default()`, kein `render_frame` Pfad | `lumina-core` | A (stage_digest Trennung, `Pipeline::validate`, `render_frame_from_base` byte-identisch) | M | Performance (zusätzlicher Full-Canvas Pass, 45 MP×RGBA8 ~180 MiB) |
+| G2 | **hoch** | **Pipeline Stufe `GenerativeEdit`** fehlt — Decode→GenerativeEdit→Lens→Perspective→Crop nicht existent; `apply_geometry` 5-in-1 muss entkoppelt werden | `generative-expand.md` §Pipeline-Platzierung, `crates/lumina-core/src/pipeline.rs` Default | Stufe nicht in `Pipeline::default()`, kein `render_frame` Pfad | `lumina-core` | A (stage_digest Trennung, `Pipeline::validate`, `render_frame_from_base` byte-identisch) | M | Performance (zusätzlicher Full-Canvas Pass, 45 MP×RGBA8 ~180 MiB) |
 | G3 | **hoch** | **Transparent-Detection nach Lens/Perspective** (Alpha/Randfüllung) + Auto-Fill Trigger fehlt | F-098/F-099 `transparent→schwarz`, Wunsch 1 | Kein Detektor, kein Job, schwarze Ränder sichtbar | `lumina-core` + `lumina-gui` | I (synthetische Lens-Distortion 15 % auf Checker-Fixture → transparente Ecken detektieren) | S | Modellwahl (welches Inpaint füllt Ränder ohne Artefakt) |
 | G4 | **hoch** | **zdata `kind=generative_canvas` Artefakt** (kompositiertes RGBA8 Canvas, BLAKE3, atomar) fehlt | `generative-expand.md` §Binärdaten | Nur `MaskTile`/`RepairRegion`, kein Canvas Record | `lumina-sidecar` + `lumina-core` | A (checksum mismatch→Corrupt, Bundle-Shift relativer Pfad, atomic `.zdata.lock`) | S | Native-only zstd, WASM `not available` Parity |
 | G5 | **hoch** | **Staub schnell (heuristisch Clone/Heal)** fehlt — GUI Tool + Core Algorithmus (Radius, Feather) | `pipeline.md` §Source-Actions (Schwellwert 50 % full-frame), Wunsch 3 Lightroom | Full-frame replacement Pflicht, kein Clone-Brush, kein GUI Panel | `lumina-core` (neuer `HealingPass`) + `lumina-gui` | A (heal 3×3 Clone deterministisch, `source_action` Heal vs replacement) + V (Golden Spot-Heal) | M | Performance (Heal muss <200 ms auf 24 MP, sonst Preview-Cache Budget gerissen) |
@@ -147,11 +152,11 @@
 | G8 | **mittel** | **Manueller Canvas Expand per Drag (Expand-Rahmen ziehen)** fehlt — GUI Interaktion, Zielformat-Aspekt als Orientierung | GEN-EXPAND-1 §UI-Flow 3, Wunsch 2 "größer ziehen" | Kein Drag-Handle, kein Canvas-Resize UI | `lumina-gui` (preview drag) + `lumina-sidecar` | I (headless drag → `canvas.source_offset` deterministisch) | M | Performance (Vorschau mit transparent/skizziertem Rand während Drag) |
 | G9 | **mittel** | **Dust GUI Panel** (Brush/Box/Pinsel für Staub, Radius/Feather, Toggle schnell vs generativ, Maske malen/Prompt) fehlt komplett | F-042, `gui-tests` nicht vorhanden | `lumina-gui/src/lib.rs` MaskTool nur Brush/Gradient/Radial für Masken, kein Dust Tool | `lumina-gui` | I (headless `rasterize_prompt` → Dust-Maske deterministisch, F-079 vorhanden) | M | Pre-MVP Schema-Entscheidung: Dust-Pinsel = `MaskPrompt::Brush` reuse oder neues `DustMark` |
 | G10 | **mittel** | **Visuelle Auto-Analyse in UI** (Golden Toleranz, Histogram-Delta, Blende Before/After, kittest diff, Bench Budget) unvollständig für generative Pfade | Wunsch 4, `gui-tests-2026-09-02.md` §3/5, F-074 | Unit/kittest vorhanden, aber keine generative Goldens/Hist-Delta/PSNR Gate | `lumina-core` (Histogram) + `lumina-gui` (kittest) + `scripts/perf` | V (PSNR>35 dB Gate, histogram p01/median/p99 1/256 Toleranz dokumentiert) + Bench (criterion Inpaint 1024²) | M | Toleranz-Entscheidung (Inpaint nicht byte-identisch ohne Seed-Pin — Seed muss Pflicht werden, sonst Gate flakey) |
-| G11 | **mittel** | **RenderKey/Cache Invalidierung für generative Artefakte** fehlt (canvas/prompt/seed/model in digest, Canvas-Wechsel invalidiert Geometrie sichtbar) | `generative-expand.md` §Identität/Veraltung, `pipeline.md` Reproduzierbarkeit | `RenderKey` kennt nur `source_actions` checksums + geometry, kein generative canvas | `lumina-core` (`pipeline.rs:98 RenderKey`) | A (stale/missing/corrupt bei jeder Identitätsabweichung, `recipe_hash` Änderung invalidiert ab GenerativeEdit, nicht Decode) | S | — |
-| G12 | **mittel** | **CLI/MCP Vervollständigung** (`dust-removal` → generativ Pfad, `generative-expand` CLI Command) fehlt | `mcp/src/tools/dust_removal.rs` nur Full-frame replacement, kein Heal/Inpaint | MCP/CLI nur Dummy/Passthrough | `lumina-mcp` + `lumina-cli` | I (CLI E2E `render_out` darf nicht auf Quelle schreiben, `reject_protected_target`) | S | — |
+| G11 | **mittel** | **RenderKey/Cache Invalidierung für generative Artefakte** fehlt (canvas/prompt/seed/model in digest, Canvas-Wechsel invalidiert Geometrie sichtbar) | `generative-expand.md` §Identität/Veraltung, `pipeline.md` Reproduzierbarkeit | `RenderKey` kennt nur `source_actions` checksums + geometry, kein generative canvas | `lumina-core` (`crates/lumina-core/src/pipeline.rs:98` `RenderKey`) | A (stale/missing/corrupt bei jeder Identitätsabweichung, `recipe_hash` Änderung invalidiert ab GenerativeEdit, nicht Decode) | S | — |
+| G12 | **mittel** | **CLI/MCP Vervollständigung** (`dust-removal` → generativ Pfad, `generative-expand` CLI Command) fehlt | `crates/lumina-mcp/src/tools/dust_removal.rs` nur Full-frame replacement, kein Heal/Inpaint | MCP/CLI nur Dummy/Passthrough | `lumina-mcp` + `lumina-cli` | I (CLI E2E `render_out` darf nicht auf Quelle schreiben, `reject_protected_target`) | S | — |
 | G13 | **niedrig** | **Capability-Matrix Erweiterung** (inpaint/outpaint lokal vs Cloud getrennt, WASM `onnx-wasm` off) nicht dokumentiert | GEN-EXPAND-1 §Modell/Capability | Matrix hat keine inpaint Zeile | `feature/platform/capability-matrix.md` | A (wasm32 `cargo check --features inpaint` grün, `RuntimeDisabled` sichtbar) | S | Cloud-Falle (kein stiller Fallback, explizite Entscheidung nötig) |
 | G14 | **niedrig** | **Lizenz/Fixtures für Inpaint/Outpaint Modelle** vor Integration dokumentieren (F-078) | `fixtures-licensing.md` §5/8, THIRD-PARTY-NOTICES | Nur BiRefNet MIT + SAM 2.1 Apache-2.0 geprüft, kein Inpaint Modell gepinnt | `docs` + `THIRD-PARTY-NOTICES.md` | — (Audit, kein Test) | S | **Hoch**: viele SOTA Inpaint Modelle non-commercial, AGPL-Falle via `ultralytics` analog dokumentieren |
-| G15 | **niedrig** | **Quantitative Limits erweitern** (Inpaint 24 MP→Preview-only, 45 MP Desktop Voll-Canvas, RAM+VRAM Budget für generative Canvas) | `wasm-limits.md` F-071 | Limits nur für Preview-Cache, kein generative Canvas Budget | `feature/platform/wasm-limits.md` + `preview_cache.rs` | Bench | M | 45 MP Canvas Expand → 180 MiB RGBA8 + Inpaint Tensor 1024² transient → Budget Riss |
+| G15 | **niedrig** | **Quantitative Limits erweitern** (Inpaint 24 MP→Preview-only, 45 MP Desktop Voll-Canvas, RAM+VRAM Budget für generative Canvas) | `wasm-limits.md` F-071 | Limits nur für Preview-Cache, kein generative Canvas Budget | `feature/platform/wasm-limits.md` + `crates/lumina-gui/benches/preview_cache.rs` | Bench | M | 45 MP Canvas Expand → 180 MiB RGBA8 + Inpaint Tensor 1024² transient → Budget Riss |
 
 ---
 

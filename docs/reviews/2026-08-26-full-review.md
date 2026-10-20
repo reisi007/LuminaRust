@@ -15,11 +15,18 @@ wurden; bereits behobene Punkte werden hier nicht erneut gemeldet).
   wo der WIP einen Teilagenten-Befund bereits adressierte, wurde der Befund
   verworfen oder auf den Restbestand eingegrenzt (explizit markiert bei
   R2-MCP-01/-02).
+- **Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Fundstellen-Zeilen
+  in diesem Audit beziehen sich auf den Arbeitsbaum vom 2026-08-26 —
+  rekonstruierbar als Baum des Audit-Commits `97e8206` (Basis-HEAD `59efbcf`
+  laut Basis oben); fuer die im Working Tree uncommitteten WIP-Aenderungen in
+  `crates/lumina-mcp/**` als Baum von `ae2b48c` — **Ausnahme**: fuer `R2-MCP-06` und `R2-MCP-07` gilt `97e8206`, **nicht** `ae2b48c` (dort liegen die Stellen bei 489/524 bzw. 101). Alle Fundstellen sind ueber `git show <stand>:<pfad> | sed -n '<zeile>p'` rekonstruierbar. Wo die zitierte Zeile im
+  jeweiligen Stand nicht das zitierte Symbol zeigt, nennt der Fund Pfad +
+  Symbol und den Stand; die zitierte Zeilennummer bleibt erhalten.
 - **Prüfläufe (LESEND):**
   - `cargo clippy --workspace --all-targets` → **0 Warnungen, sauber**.
   - `cargo test --workspace --no-run` → **grün** im finalen WIP-Stand.
     Anmerkung: Während des Reviews wurde transient ein Compile-Fehler in
-    `lumina-mcp` (E0282, `tools/batch.rs`) beobachtet, der sich mit dem
+    `lumina-mcp` (E0282, `crates/lumina-mcp/src/tools/batch.rs`) beobachtet, der sich mit dem
     Fortschreiten der parallelen WIP-Session auflöste. **Prozessrisiko:**
     Review/Verifikation und Refactoring auf demselben Baum konkurrenzieren
     sich; Gates sollten nur an ruhenden Bäumen gezogen werden.
@@ -37,14 +44,15 @@ Konvention: ID · Schwere · Dimension · Fundstelle · Beschreibung · Lösungs
 ### A. Performance
 
 **R2-PERF-01 · hoch · PERFORMANCE · `crates/lumina-core/src/tone.rs:111-145`
-( Aufrufer: `lumina-gui/src/lib.rs` Ende von `render_from`, ~Zeile 2577)**
+( Aufrufer: `crates/lumina-gui/src/render_pipeline.rs` → `render_from` → `analyze_tone`-Aufruf
+  (am Stand `97e8206` lag `render_from` noch in `crates/lumina-gui/src/lib.rs`, dort Zeile 2531) (zitiert: Ende von `render_from`, ~Zeile 2577))**
 `analyze_tone` allokiert pro Aufruf ein `Vec<f64>` mit **einem Eintrag pro
 Pixel** (24 MP ≈ 192 MB Heap) und sortiert es vollständig (O(n log n),
 `sort_unstable_by(total_cmp)`), um mean/median/p01/p99 zu gewinnen. Die GUI
 ruft es am Ende **jedes** `render_from` auf — also auch bei jedem Draft-Tick
 während eines Slider-Drag. Die Baseline bestätigt die Größenordnung
 (`core/analyze_tone__2048` ≈ 69 ms gegenüber `render_frame__2048` ≈ 107 ms).
-Ironie: Mit `LuminanceHistogram` existiert in `histogram.rs` bereits die
+Ironie: Mit `LuminanceHistogram` existiert in `crates/lumina-core/src/histogram.rs` bereits die
 bessere O(n)-Struktur mit dokumentierter Quantil-Genauigkeit (±1 Bin) und wird
 nur für den Histogramm-Cache genutzt, nicht für das Tone-Panel.
 *Lösung:* Tone-Analyse auf `LuminanceHistogram` (oder einen gemeinsamen
@@ -61,7 +69,7 @@ textures per render call"); der `VramPool` cacht nur Output+Maske.
 Quellwechsel (Content-Hash/Dims-Key). *Aufwand M · MVP-blockierend: nein.*
 
 **R2-GPU-02 · hoch · PERFORMANCE · `crates/lumina-gpu/src/lib.rs:1221-1223`,
-`shaders.rs:776-817`**
+`crates/lumina-gpu/src/shaders.rs:776-817`**
 `copy_vram_to_texture` baut Overlay-Pipeline (**inkl. Shader-Modul-Kompilierung**),
 `dest_view` und Bindgroup bei jedem Present neu — läuft über
 `gpu_present_if_ready` bei jedem Repaint mit frischem VRAM.
@@ -183,7 +191,9 @@ Pixel-Pass mit drei Plane-Writes ist cache-lokaler und bitidentisch.
 ### B. Architektur
 
 **R2-MCP-01 · hoch · ARCHITEKTUR (Pixel-Divergenz / stiller Fallback) ·
-`crates/lumina-mcp/src/util.rs:334-368` (GPU-Zweig ~355);
+`crates/lumina-mcp/src/util.rs` → `render_best_effort` (GPU-Zweig
+`Some(ctx) if ctx.is_available()`, Zeile 339 im Stand `ae2b48c`; zitiert waren
+334-368 mit GPU-Zweig ~355);
 Signatur `crates/lumina-gpu/src/lib.rs:1376-1380`; Spiegel
 `crates/lumina-cli/src/main.rs:127-175`** — **Re-verifiziert gegen WIP-Stand.**
 Der GPU-Zweig von `render_best_effort` ruft `ctx.render_with_gpu(frame, recipe)`
@@ -226,11 +236,11 @@ pinnen, dcraw_process-Referenz kommentieren. *Aufwand S · MVP-blockierend: nein
 
 **R2-CLI-02 · mittel · ARCHITEKTUR · `crates/lumina-cli/src/main.rs:1808-1857`
 vs. `crates/lumina-mcp/src/util.rs` (~50 Zeilen identischer Logik);
-Extension-Listen dreifach (`main.rs:1750`, `util.rs:BATCH_IMAGE_EXTENSIONS`,
-`main.rs:1232`)** — CLI und MCP bauen `SourceIdentity` unabhängig; Drift ist
-schon da (MCP fällt bei `fs::metadata`-Fehler auf `bytes.len()` zurück, CLI
-bricht hart ab). Gefährdet die Invariante „Sidecar-Identität ist
-backend-übergreifend gleich".
+Extension-Listen dreifach (`crates/lumina-cli/src/main.rs:1750`,
+`crates/lumina-mcp/src/util.rs` → `BATCH_IMAGE_EXTENSIONS`,
+`crates/lumina-cli/src/main.rs:1232`)** — CLI und MCP bauen `SourceIdentity` unabhängig;
+Drift ist schon da (MCP fällt bei `fs::metadata`-Fehler auf `bytes.len()` zurück, CLI bricht
+hart ab). Gefährdet die Invariante „Sidecar-Identität ist backend-übergreifend gleich".
 *Lösung:* `build_source_identity` + Extension-Konstante nach `lumina-sidecar`
 (bzw. `lumina-raw`) ziehen, alle Backends rufen gemeinsam auf.
 *Aufwand M · MVP-blockierend: nein.*
@@ -252,7 +262,7 @@ Matrix nicht ausgewiesen.
 die Capability-Matrix schreiben. *Aufwand S · MVP-blockierend: nein.*
 
 **R2-ONNX-03 · mittel · ARCHITEKTUR · `crates/lumina-onnx/src/ort_backend.rs:252-260`
-vs. `backend.rs:153-169`**
+vs. `crates/lumina-onnx/src/backend.rs:153-169`**
 Nur `StubBackend` implementiert die Brücke zu `lumina_core::MaskInference`
 (inkl. `is_available`); das reale `OrtBackend` kann heute nicht eingesteckt
 werden, ohne additiven Code — asymmetrischer Contract.
@@ -260,7 +270,7 @@ werden, ohne additiven Code — asymmetrischer Contract.
 *Aufwand S · MVP-blockierend: nein.*
 
 **R2-GAP-01 · mittel · GAP/DOKU · `feature/README.md:107,143` vs. Code**
-F-009 „Presets" ist in der Feature-Matrix auf `product/virtual-copies.md`
+F-009 „Presets" ist in der Feature-Matrix auf `feature/product/virtual-copies.md`
 gemappt — das Dokument enthält **keine einzige Preset-Erwähnung** (grep: 0
 Treffer). Die festgelegte Entscheidung „Presets werden als einzelne
 `<name>.lumina-preset.json`-Dateien exportiert" ist nirgends implementiert
@@ -268,8 +278,8 @@ Treffer). Die festgelegte Entscheidung „Presets werden als einzelne
 In-Memory-Presets (`create_preset`/`apply_preset`,
 `crates/lumina-gui/src/lib.rs:1083/1118`), die beim Schließen verschwinden.
 Relative-Exposure-Validierung ist korrekt umgesetzt (auto-tone-Kopplung beidseitig geprüft).
-*Lösung:* Doku-first: F-009-Soll in virtual-copies.md beschreiben (Dateiformat,
-Scope), dann Preset-File-I/O implementieren — oder Matrix-Eintrag bewusst auf
+*Lösung:* Doku-first: F-009-Soll in `feature/product/virtual-copies.md` beschreiben
+(Dateiformat, Scope), dann Preset-File-I/O implementieren — oder Matrix-Eintrag bewusst auf
 Post-MVP verschieben. *Aufwand M · MVP-blockierend: nein, aber Doku-Code-Divergenz.*
 
 **R2-GPU-11 · niedrig · DOKU/ARCHITEKTUR · `Agents.md` (Architekturgrenzen) vs.
@@ -282,11 +292,11 @@ Workspace** — `Agents.md` listet die Crate-Grenzen core/sidecar/raw/onnx/cli/g
 *Aufwand S · MVP-blockierend: nein.*
 
 **R2-GPU-10 · niedrig · ARCHITEKTUR (totes Gerüst) ·
-`crates/lumina-gpu/src/lib.rs:1691-1708`; `shaders.rs:70-115, 921-945`**
+`crates/lumina-gpu/src/lib.rs:1691-1708`; `crates/lumina-gpu/src/shaders.rs:70-115, 921-945`**
 `render_draft` baut `DraftPyramid`+`TiledCache(64)` nur für einen Debug-Log und
 rendert dann doch CPU; `bake_3d_lut` (Identity-Stub, 512-KB-Typ), `LUT_DIM` und
-`create_fp16_framebuffer` sind ungenutzt; gpu-shaders.md stimmt teils nicht
-mehr mit dem Code. *Lösung:* Schrumpfen oder klar als Scaffold ausweisen.
+`create_fp16_framebuffer` sind ungenutzt; `docs/gpu-shaders.md` stimmt teils
+nicht mehr mit dem Code. *Lösung:* Schrumpfen oder klar als Scaffold ausweisen.
 *Aufwand S · MVP-blockierend: nein.*
 
 ---
@@ -314,17 +324,17 @@ WIP-Stand; MVP-blockierend.** `lumina_save` guardt nur gegen die Quelle
 (`paths_resolve_equal(source, output)`). Der neue WIP hat in
 `crates/lumina-mcp/src/util.rs` bereits `reject_protected_target`/
 `write_output_guarded` (deckt `<input>.lumina.json`, `.lumina.zdata` und
-Hardlinks via `(dev,ino)` ab) und nutzt sie in `tools/batch.rs:185` — **aber
-`lumina_save` nicht**. Ein Symlink/Hardlink `out.png` aufs Sidecar überschreibt
-das autoritative Bundle mit PNG-Bytes. CLI-Guard (`reject_protected_output`,
-`main.rs:1888-1917`) deckt denselben Fall ab — MCP hinkt hinterher.
-*Lösung:* In `save.rs` `crate::util::write_output_guarded(source, target, &bytes)`
-statt `write_atomically` verwenden (Einzeiler, Guard existiert bereits).
-*Aufwand S · MVP-blockierend: JA.*
+Hardlinks via `(dev,ino)` ab) und nutzt sie in `crates/lumina-mcp/src/tools/batch.rs:185` —
+**aber `lumina_save` nicht**. Ein Symlink/Hardlink `out.png` aufs Sidecar überschreibt das
+autoritative Bundle mit PNG-Bytes. CLI-Guard (`reject_protected_output`,
+`crates/lumina-cli/src/main.rs:1888-1917`) deckt denselben Fall ab — MCP hinkt hinterher.
+*Lösung:* In `crates/lumina-mcp/src/tools/save.rs`
+`crate::util::write_output_guarded(source, target, &bytes)` statt `write_atomically`
+verwenden (Einzeiler, Guard existiert bereits). *Aufwand S · MVP-blockierend: JA.*
 
 **R2-CLI-01 · hoch · GAP/UX · `crates/lumina-cli/src/main.rs:1228-1238`
-(`has_image_extension`) vs. `main.rs:1743-1754` (`is_raw_path`) vs.
-`cli-gui-wasm.md:57-62`** — **Re-verifiziert gegen WIP-Stand.**
+(`has_image_extension`) vs. `crates/lumina-cli/src/main.rs:1743-1754` (`is_raw_path`) vs.
+`feature/platform/cli-gui-wasm.md:57-62`** — **Re-verifiziert gegen WIP-Stand.**
 `has_image_extension` akzeptiert nur 9 Extensions (png/jpg/jpeg/webp/arw/cr2/
 cr3/dng/nef), `is_raw_path`/Decode-Pfad und das SOLL aber 18 RAW-Formate (orf,
 raf, rw2, crw, pef, srw, 3fr, iiq, rwl, mos, erf, kdc, x3f). `lumina batch
@@ -336,7 +346,7 @@ Batch über Fixture-Dir findet RAF. *Aufwand S · MVP-blockierend: JA.*
 
 **R2-GUIMOD-06 · mittel · UX (stiller Fallback benutzer-sichtbar) ·
 `crates/lumina-gui/src/lib.rs:601-613`; `crates/lumina-gpu/src/lib.rs:328-341`;
-`i18n.rs` (grep „GPU": 0 Treffer)**
+`crates/lumina-gui/src/i18n.rs` (grep „GPU": 0 Treffer)**
 CPU↔GPU-Routing, Shared-Device-Fail und die VRAM-Divergenz-Warnung
 („Interactive preview may diverge") erscheinen **ausschließlich im stderr-Log**
 — kein i18n-String, kein Statusbadge. Agents.md fordert „keine stillen
@@ -346,7 +356,7 @@ nach einer Divergenz-Warnung trotzdem weiter im VRAM gerendert wird.
 *Aufwand S/M · MVP-blockierend: nein.*
 
 **R2-GUIMOD-07 · mittel · UX/DIAGNOSE · `crates/lumina-gui/src/main.rs:11`,
-`logger.rs:32-60`**
+`crates/lumina-gui/src/logger.rs:32-60`**
 Logger startet per Default auf **`LevelFilter::Trace`** (nur RUST_LOG override
 bar). Jede Zeile kostet format!/String-clone/Mutex/eprintln; Trace-Chatter aus
 wgpu/naga/egui ist ein realer Frame-Time-Faktor, und der Panic-Ring (512
@@ -372,27 +382,27 @@ obwohl gerade Agenten sie pro Bild brauchen — `render`/`export` weisen sie im
 JSON aus, `batch` nicht. *Lösung:* Progressline auf stderr + warnings ins
 Item-JSON. *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-03 · mittel · GAP/UX · `cli-gui-wasm.md:51-53` vs. `main.rs:442-445,
-1689-1741`**
+**R2-CLI-03 · mittel · GAP/UX · `feature/platform/cli-gui-wasm.md:51-53` vs.
+`crates/lumina-cli/src/main.rs:442-445, 1689-1741`**
 SOLL: „`inspect` zeigt den JSON-Status und die virtuellen Kopien". Implementierung
 gibt freien Text; `InspectArgs` hat als einziger Befehl kein `--json`. Auto-Tone/
 Matching werden gedruckt, aber nicht maschinenlesbar.
 *Lösung:* `--json` ergänzen oder SOLL-Formulierung anpassen (doku-first).
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-04 · mittel · PERFORMANCE/UX · `main.rs:1690-1698`;
+**R2-CLI-04 · mittel · PERFORMANCE/UX · `crates/lumina-cli/src/main.rs:1690-1698`;
 API-Check `lumina-raw` (nur decode_file/decode_bytes*)**
 `inspect` dekodiert das komplette RAW (alle Pixel, ~200 MB Frame), um 4 Zeilen
 EXIF/Maße zu drucken — keine Metadata-only-API vorhanden.
 *Lösung:* `lumina_raw::read_metadata(bytes)` ergänzen und nutzen.
 *Aufwand M · MVP-blockierend: nein.*
 
-**R2-MCP-03 · mittel · GAP (Doku-Code-Divergenz) · `mcp-server.md:484-485` vs.
-`tools/save.rs`**
+**R2-MCP-03 · mittel · GAP (Doku-Code-Divergenz) · `feature/platform/mcp-server.md:484-485`
+vs. `crates/lumina-mcp/src/tools/save.rs`**
 Doku behauptet SidecarConflict (-32010) bei CAS-Konflikt in `lumina_edit`/**`lumina_save`**;
 `lumina_save` hat gar keinen Sidecar-Write-Pfad (-32010 existiert nur in
-`edit.rs:136-140`). *Lösung:* Doku präzisieren oder Save-Write-Through
-spezifizieren/implementieren. *Aufwand S · MVP-blockierend: nein.*
+`crates/lumina-mcp/src/tools/edit.rs:136-140`). *Lösung:* Doku präzisieren oder
+Save-Write-Through spezifizieren/implementieren. *Aufwand S · MVP-blockierend: nein.*
 
 **R2-MCP-05 · mittel · GAP · `feature/platform/mcp-server.md` §
 „Schnellvorschau (`lumina_preview`)" vs. `crates/lumina-mcp/src/lib.rs` →
@@ -411,48 +421,52 @@ in Commit `00ed610`). Er räumt aber nur die **session-eigenen** Vorschau-Dateie
 Sessions bleiben liegen. Der Restbefund (Löschung am Loop-Ende über alle
 Sessions) ist damit **nicht** abgedeckt — Status unverändert: **GAP**.
 
-**R2-GUIMOD-09 · mittel · PERFORMANCE (Startup) · `lumina-gui/src/lib.rs:841`
-+ `main.rs:25-29`**
+**R2-GUIMOD-09 · mittel · PERFORMANCE (Startup) · `crates/lumina-gui/src/lib.rs:841`
++ `crates/lumina-gui/src/main.rs:25-29`**
 `LuminaApp::new` erzeugt einen standalone `GpuContext::new()` (blockierender
 Adapter/Device-Request), der kurz darauf von `attach_wgpu_render_state`/
 `from_parts` komplett ersetzt wird — doppelte GPU-Init pro Start.
 *Lösung:* Lazy erst in `attach_wgpu_render_state` erzeugen.
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-09 · niedrig · UX · `main.rs:538-543` (Insert ohne Range-Check);
-Validierung erst via save→validate (`lumina-sidecar/src/lib.rs:2111-2133`)**
+**R2-CLI-09 · niedrig · UX · `crates/lumina-cli/src/main.rs:538-543` (Insert ohne
+Range-Check); Validierung erst via save→validate
+(`crates/lumina-sidecar/src/lib.rs:2111-2133`)**
 `lumina develop --exposure 999` wird erst beim Save mit generischem
 `invalid adjustment \`exposure\`` (ohne Range) abgewiesen; MCP `lumina_edit`
 lehnt vorab strukturiert mit min/max ab. Inkonsistent für denselben fachlichen
 Vorgang. *Lösung:* Range-Check vor Insert, Meldung analog MCP.
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-10 · niedrig · UX · `main.rs:216-250`**
+**R2-CLI-10 · niedrig · UX · `crates/lumina-cli/src/main.rs:216-250`**
 `Command::Import(FileArgs)` erbt `--output/--format/--quality/--force-render/
 --virtual-copy/--mask-policy`, die still ignoriert werden — Nutzer können
 glauben, der Import habe konvertiert. *Lösung:* Eigenes schlankes `ImportArgs`.
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-07 · niedrig · GAP/UX · `main.rs:463-469`; SOLL `cli-gui-wasm.md:77`**
+**R2-CLI-07 · niedrig · GAP/UX · `crates/lumina-cli/src/main.rs:463-469`; SOLL
+`feature/platform/cli-gui-wasm.md:77`**
 Exit-Codes sind reproduzierbar (0/1, clap: 2), aber nirgends dokumentiert; ein
 Batch mit 500/1000 Fehlern exit-t identisch zu einem Laufzeitfehler.
 *Lösung:* Exit-Code-Tabelle ins SOLL; ggf. dedizierter Code für
 „Batch teilfehlerhaft". *Aufwand S · MVP-blockierend: nein.*
 
-**R2-MCP-09 · niedrig · UX/Konsistenz · `tools/edit.rs:28-53` vs.
-`mcp-server.md:139-149`**
+**R2-MCP-09 · niedrig · UX/Konsistenz · `crates/lumina-mcp/src/tools/edit.rs:28-53` vs.
+`feature/platform/mcp-server.md:139-149`**
 `lumina_edit` akzeptiert `vibrance`/`saturation`, obwohl Schema und Doku diese
 Keys nicht ausweisen. *Lösung:* Synchronisieren (Schema erweitern oder Keys
 ablehnen). *Aufwand S · MVP-blockierend: nein.*
 
-**R2-ONNX-05 · niedrig · UX · `backend.rs:127-131`, `sam2.rs:339-343`**
+**R2-ONNX-05 · niedrig · UX · `crates/lumina-onnx/src/backend.rs:127-131`,
+`crates/lumina-onnx/src/sam2.rs:339-343`**
 Simulations-Abwesenheit wird als `MissingModel { path: model_name }` gemeldet —
 Displaytext suggeriert einen Dateipfad, gemeint ist das Verfügbarkeitsflag; vom
 wirklich fehlenden `.onnx`-Artefakt nicht klar unterscheidbar.
 *Lösung:* Dediziertes Feld/Präfix („model reported unavailable").
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-MCP-07 · niedrig · UX · `lib.rs:100` vs. `preview.rs:57-62`**
+**R2-MCP-07 · niedrig · UX · `crates/lumina-mcp/src/lib.rs:100` vs.
+`crates/lumina-mcp/src/tools/preview.rs:57-62`**
 Preview-Dir-Anlage wird beim Start still ignoriert (`let _ = create_dir_all`);
 der Nutzer erfährt erst beim ersten `lumina_preview` etwas — dann als
 `Encode`-Error, der die Ursache verschleiert. *Lösung:* `log::warn!` beim Start.
@@ -467,7 +481,7 @@ der Nutzer erfährt erst beim ersten `lumina_preview` etwas — dann als
 Halten panikt; globaler State ist zudem testübergreifend.
 *Lösung:* `unwrap_or_else(|p| p.into_inner())`. *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-08 · niedrig · ROBUSTHEIT · `main.rs:1052, 1174`**
+**R2-CLI-08 · niedrig · ROBUSTHEIT · `crates/lumina-cli/src/main.rs:1052, 1174`**
 Zwei `unwrap()` auf `serde_json::to_string/to_vec` in Batch-Läufen (praktisch
 infallibel, aber ein Panik in einem Rayon-Worker reißt den Pool runter statt
 das Item als failed zu melden). Grep-bestätigt die einzigen Nicht-Test-unwraps
@@ -500,11 +514,12 @@ nach Cache-Dir schreiben. *Aufwand S · MVP-blockierend: nein.*
 
 ### E. Tests / Gap-Analyse
 
-**R2-ONNX-01 · hoch · GAP ai-masks.md · `crates/lumina-onnx/src/manifest.rs:225-232`**
+**R2-ONNX-01 · hoch · GAP `feature/product/ai-masks.md` ·
+`crates/lumina-onnx/src/manifest.rs:225-232`**
 — **Re-verifiziert.** `to_model_identity` lässt `extras` immer leer; die
-persistierte Maskenidentität besteht nur aus name/version/hash. ai-masks.md
-fordert „Vorverarbeitung und Inferenzauflösung" ausdrücklich als
-Identitätsbestandteil. Wird `InputNormalization`/`Resolution` im Manifest
+persistierte Maskenidentität besteht nur aus name/version/hash.
+`feature/product/ai-masks.md` fordert „Vorverarbeitung und Inferenzauflösung" ausdrücklich
+als Identitätsbestandteil. Wird `InputNormalization`/`Resolution` im Manifest
 geändert, ohne `model_version`/`model_hash` zu bumpen, bleiben persistierte
 Masken `valid`, obwohl die Inferenzsemantisch anders ist — die Stale-Erkennung
 (F-004-Kernabnahme) wird umgangen.
@@ -514,7 +529,7 @@ schreiben; Test „Normänderung ⇒ Identität ändert sich".
 
 **R2-GPU-12 · niedrig · TESTS · `crates/lumina-gpu/tests/`**
 Der Overlay-/Present-Composite-Shader (Tint-Mix, u16-Normalisierung,
-Alpha-Passthrough) hat keinen Pixeltest — `stages.rs` deckt SA-Stage und
+Alpha-Passthrough) hat keinen Pixeltest — `crates/lumina-gpu/src/stages.rs` deckt SA-Stage und
 Mask-Roundtrip ab, die Compositing-Mathematik nur den manuellen GUI-Test.
 *Lösung:* Golden-Test gegen CPU-Formel `mix(base, tint, mask·0.45)`.
 *Aufwand S/M · MVP-blockierend: nein.*
@@ -535,7 +550,7 @@ System-Upgrade von liblensfun (gleiches `-L`, neues Layout) wird nicht bemerkt.
 *Lösung:* `rerun-if-changed` auf die aufgelöste Library-Datei emittieren.
 *Aufwand S · MVP-blockierend: nein.*
 
-**R2-ONNX-06 · niedrig · TESTS · `preprocess.rs:29-31, 76-78`**
+**R2-ONNX-06 · niedrig · TESTS · `crates/lumina-onnx/src/preprocess.rs:29-31, 76-78`**
 Degenerations-Guards `dw<=1`/`dh<=1` des Nearest-Neighbor-Mappings ohne
 Testabdeckung. *Aufwand S · MVP-blockierend: nein.*
 
@@ -544,29 +559,30 @@ Der `name`-Parameter der Decode-API ist vollständig tot (`let _ = name;`) —
 `MissingName` wird aus diesen Pfaden nie geworfen, irreführende Signatur.
 Pre-MVP darf das breaking bereinigt werden. *Aufwand S · MVP-blockierend: nein.*
 
-**R2-MCP-06 · niedrig · ARCHITEKTUR · `util.rs:328-364`**
+**R2-MCP-06 · niedrig · ARCHITEKTUR · `crates/lumina-mcp/src/util.rs:328-364`**
 `downscale_bilinear` ist handgeschriebene Bildverarbeitung im Interface-Layer
 (MCP soll reiner Orchestrierungs-Layer sein); enthält zudem eines von genau
 zwei Nicht-Test-`expect`s des Crates (Zeile 363). Gehört nach `lumina-core`
 (golden-testbar, wiederverwendbar). *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-11 · niedrig · ROBUSTHEIT · `main.rs:1216-1218, 1029-1038`**
+**R2-CLI-11 · niedrig · ROBUSTHEIT · `crates/lumina-cli/src/main.rs:1216-1218, 1029-1038`**
 Kein Inode-Dedup der Batch-Inputs: Derselbe Inode unter zwei Namen wird bei
 `--jobs > 1` parallel verarbeitet; namensbasierte Kollisionserkennung greift
 nicht. Lock serialisiert zwar, aber doppelte History-Einträge/Last-wins bleiben.
 *Lösung:* Inputs per `(dev, inode)` deduplizieren (Primitive existiert in
 `paths_are_same_file`). *Aufwand S · MVP-blockierend: nein.*
 
-**R2-CLI-12 · niedrig · UX (kosmetisch) · `main.rs:1426`** — Formatstring
-`unknown virtual copy \`{id}` ohne schließenden Backtick. *Aufwand S · nein.*
+**R2-CLI-12 · niedrig · UX (kosmetisch) · `crates/lumina-cli/src/main.rs:1426`** —
+Formatstring `unknown virtual copy \`{id}` ohne schließenden Backtick. *Aufwand S · nein.*
 
 ---
 
 ## Executive Summary — Top 10 nach Schwere
 
 1. **R2-MCP-02** (hoch, MVP-blockierend): `lumina_save` kann Sidecar/zdata via
-   Symlink/Hardlink überschreiben — Fix existiert bereits in `util.rs`, wird in
-   `save.rs` nur nicht verwendet (S-Aufwand).
+   Symlink/Hardlink überschreiben — Fix existiert bereits in
+   `crates/lumina-mcp/src/util.rs`, wird in `crates/lumina-mcp/src/tools/save.rs` nur nicht
+   verwendet (S-Aufwand).
 2. **R2-GUIMOD-01** (hoch, MVP-blockierend): Nach Regler-Release bleibt das
    Draft-VRAM-Bild im Present-Pfad hängen; der Vollqualitäts-Render wird nie
    angezeigt (S-Aufwand).
@@ -593,17 +609,19 @@ nicht. Lock serialisiert zwar, aber doppelte History-Einträge/Last-wins bleiben
   `cargo test --workspace --no-run` grün im finalen WIP-Stand.
 - **Stage-Cache (PERF-GUI-1)** sauber designed: vollständige Identity-Digests,
   Clone-on-read, byte-budgetiertes LRU mit dokumentierter Refuse-Politik,
-  eigene Tests (`stage_cache.rs`).
+  eigene Tests (`crates/lumina-core/src/stage_cache.rs`).
 - **Sidecar-Persistenz robust:** atomare Writes mit fsync + Same-Dir-Persist
   (JSON wie zdata), TOCTOU-sicherer Lock-Reclaim via atomarem Rename mit
   Conflict für den Verlierer, umfangreiche Roundtrip-/Validierungs-/Cycle-Tests.
 - **GUI meldet Veraltet-Zustände sichtbar:** Mask-Status
-  Valid/Stale/Corrupt/Missing wird ausgewiesen (lib.rs:999-1007,
-  MaskStaleRecalc), RenderStateStale-Indikator (5770), Auto-Tone-Stale mit
-  Fingerprint-Check (2983-2991, eigene Tests).
+  Valid/Stale/Corrupt/Missing wird ausgewiesen
+  (`crates/lumina-gui/src/lib.rs:999-1007`, MaskStaleRecalc),
+  RenderStateStale-Indikator (`crates/lumina-gui/src/lib.rs:5770`),
+  Auto-Tone-Stale mit Fingerprint-Check
+  (`crates/lumina-gui/src/lib.rs:2983-2991`, eigene Tests).
 - **Thumbnail-Pipeline nutzt inzwischen echte Worker-Threads** (Channel +
-  poisoned-safe recv, lib.rs:720) — die kritischen Hauptthread-Blockaden aus
-  `review.notes.md` (2026-08-22) sind behoben.
+  poisoned-safe recv, `crates/lumina-gui/src/lib.rs:720`) — die kritischen
+  Hauptthread-Blockaden aus `review.notes.md` (2026-08-22) sind behoben.
 - **GPU-Testkultur:** SA-Stage byte-exakt getestet, Mask-Readback-Roundtrip,
   Golden-Harness skipped loudly statt grün zu lügen, VramPool-Eviction-Politik
   unit-getestet; WGSL/CPU-Duplikat ist sanktioniert (CPU = Oracle) und durch

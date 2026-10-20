@@ -3,7 +3,7 @@
 Owner: `lumina-gpu` (native GPU path). Companion to `docs/gpu-bootstrap.md`
 (bootstrap + workspace wiring). This document covers the **shader/tiling stage**
 implemented in `crates/lumina-gpu/src/{shaders,tiling}.rs` and wired through
-`GpuContext` in `lib.rs`.
+`GpuContext` in `crates/lumina-gpu/src/lib.rs`.
 
 All GPU code is gated behind `#[cfg(feature = "gpu")]`; `--no-default-features`
 builds a pure-CPU crate (the same CPU fallback `lumina-core` provides).
@@ -81,14 +81,15 @@ parallel tiling subagent plugs the actual GPU upload/dispatch into this call sit
 
 ## Module responsibilities
 
-- **`shaders.rs`** — `Uniforms` (uniform-buffer layout), `Lut32x32x32` +
+- **`crates/lumina-gpu/src/shaders.rs`** — `Uniforms` (uniform-buffer layout), `Lut32x32x32` +
   `bake_3d_lut` (32³ LUT; currently an identity-LUT stub + log), `FP16_FORMAT`
   and `create_fp16_framebuffer`, plus `create_uniform_buffer` / `write_uniforms`
-  helpers. Also holds the placeholder WGSL in `lib.rs` (`SHADER_SRC`).
-- **`tiling.rs`** — `TILE_SIZE = 512`, `Viewport`, `TileKey`, `TiledCache`
+  helpers. Also holds the placeholder WGSL in `crates/lumina-gpu/src/lib.rs`
+  (`SHADER_SRC`).
+- **`crates/lumina-gpu/src/tiling.rs`** — `TILE_SIZE = 512`, `Viewport`, `TileKey`, `TiledCache`
   (HashMap tile key → `wgpu::Texture` with an LRU eviction ring), and
   `DraftPyramid` (mip descriptors + `level_for_zoom` / `level_dimensions`).
-- **`lib.rs`** — `GpuContext` owns `GpuResources` (device/queue) + `PipelineState`
+- **`crates/lumina-gpu/src/lib.rs`** — `GpuContext` owns `GpuResources` (device/queue) + `PipelineState`
   (compiled pipeline + uniform buffer + bind group). Public surface:
   `new`, `is_available`, `device`, `queue`, `create_pipeline`,
   `update_uniforms(recipe)`, `render_with_gpu(frame, recipe)`,
@@ -97,7 +98,7 @@ parallel tiling subagent plugs the actual GPU upload/dispatch into this call sit
 
 ## Current bootstrap status
 
-- The color/tone **fragment shader is implemented** (`SHADER_SRC` in `lib.rs`):
+- The color/tone **fragment shader is implemented** (`SHADER_SRC` in `crates/lumina-gpu/src/lib.rs`):
   it samples the decoded source frame (uploaded as an `Rgba8Unorm` texture,
   nearest sampler) and applies the same integer-rounded per-channel math as
   `lumina-core::apply_channel_lut_adjustments` — white balance → exposure →
@@ -105,7 +106,7 @@ parallel tiling subagent plugs the actual GPU upload/dispatch into this call sit
   into an `Rgba8Unorm` target. `create_pipeline` builds this real pipeline
   (3-entry bind group: uniform + input texture + sampler) and `render_with_gpu`
   uploads the frame, draws a fullscreen triangle and reads the result back into a
-  `Frame` via `map_async`. The golden-image harness (`tests/golden.rs`) gates the
+  `Frame` via `map_async`. The golden-image harness (`crates/lumina-gpu/tests/golden.rs`) gates the
   GPU output against the CPU oracle at maxAbsDiff ≤ 1 / PSNR ≥ 45 dB; the
   readback path is a PERF TODO (a later stage should present to a swapchain or
   keep a persistent VRAM `Frame`).
@@ -129,5 +130,5 @@ cargo build -p lumina-gpu                 # with gpu feature (default) — green
 cargo build -p lumina-gpu --no-default-features   # pure CPU — green
 ```
 
-Never touch `lumina-gui/src/lib.rs` from this stage (owned by a separate job);
+Never touch `crates/lumina-gui/src/lib.rs` from this stage (owned by a separate job);
 the GUI `gpu` feature simply enables the `lumina-gpu` dependency.

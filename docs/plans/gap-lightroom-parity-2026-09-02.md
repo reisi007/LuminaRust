@@ -4,7 +4,12 @@
 **Status:** Analyse (kein Code, Doku-first)
 **Status 2026-09-03:** LR-PARITY-01 Wellen 1–3 umgesetzt + unabhaengig verifiziert BESTANDEN (c881a62, 1fe6353, 888a391, HEAD 711fe09). Scope-Ehrlichkeit: Compare/Split/Survey/Farbe/Stack/Snapshots sind light-Proxies (reine Anzeige-/Extras-Mechanik ohne Index-/Render-Vollsemantik). Post-MVP-Rest bleibt ausserhalb von Block A: HDR/Panorama-DNG-Merge, Rote-Augen, KI-Denoise/Unchaerfe, Smart-Sammlungen/Index. Die Tabellen unten bleiben Analyse-Stand 2026-09-02 (keine Umschreibung).  
 **Auftrag:** Lightroom-Aufzählung Bibliothek/Entwickeln vs LuminaRust Ist — SOLL/IST/Gap, Shortcuts, priorisierte Lücken, auto-Verifikation  
+**Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
+Plans (Spalte „Datei" der Shortcut-Tabelle) beziehen sich auf den Commit `153d4ba`
+(Analyse vom 2026-09-02); nackte `lib.rs`-Anker wurden auf
+`crates/lumina-gui/src/lib.rs` umgestellt.
 **Bezug:** `Agents.md`, `Agents.todo.md` (Block A/C, F-103-INTEGRATION-PREVIEW-SIDECAR 43b1b73, CI-ONNX-RT 953987e), `feature/README.md`, `feature/platform/cli-gui-wasm.md` (F-100, F-103, F-010), `feature/architecture/pipeline.md` (F-089..099, F-036, F-042), `feature/architecture/sidecar.md` (F-001), `feature/product/virtual-copies.md` (F-002/F-014/F-009), `feature/product/ai-masks.md` (F-004/F-079..F-083), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/export.md` (F-037), `feature/platform/capability-matrix.md` (F-006/F-069..F-071), `feature/platform/wasm-limits.md`, `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-gui/src/lib.rs` (Module, Shortcuts, Library/Develop Slices), `crates/lumina-core` (`pipeline.rs`, `render.rs`), `crates/lumina-cli`, `crates/lumina-mcp`
+Alle Fundstellen sind ueber `git show `153d4ba`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
 ---
 
@@ -80,31 +85,31 @@ SOLL laut Auftrag: Belichtung/Kontrast/Lichter/Tiefen/WB/Klarheit/Dynamik/Gradat
 
 | Gruppe | Shortcut | Lightroom Bedeutung | LuminaRust Bindung | Datei | Status |
 |---|---|---|---|---|---|
-| Module | `G` | Library Grid | `module_for_key(G)→Library` | `lib.rs:121` | **gebunden** |
-| | `E` | Loupe | Alias `E→Library` (kein separates Loupe-Modul) | `lib.rs:123` | **gebunden (alias)** |
-| | `D` | Develop | `module_for_key(D)→Develop` | `lib.rs:122` | **gebunden** |
-| Bibliothek | `C` | Compare | nicht gemappt (`_→None`) | `lib.rs:125` | **fehlt** |
+| Module | `G` | Library Grid | `module_for_key(G)→Library` | `crates/lumina-gui/src/lib.rs:121` | **gebunden** |
+| | `E` | Loupe | Alias `E→Library` (kein separates Loupe-Modul) | `crates/lumina-gui/src/lib.rs:123` | **gebunden (alias)** |
+| | `D` | Develop | `module_for_key(D)→Develop` | `crates/lumina-gui/src/lib.rs:122` | **gebunden** |
+| Bibliothek | `C` | Compare | nicht gemappt (`_→None`) | `crates/lumina-gui/src/lib.rs` → `module_for_key` (Zeile 124 im Stand `153d4ba`; zitiert 125) | **fehlt** |
 | | `N` | Survey | nicht gemappt | — | **fehlt** |
 | Bewertung | `1-5` | Sterne | ungebunden (kein Sterne-Feld) | — | **fehlt** |
 | | `6-9` | Farb-Label | ungebunden | — | **fehlt** |
 | | `P` / `X` / `U` | Pick/Reject/Unflag | ungebunden | — | **fehlt** |
 | Organisation | `Cmd/Ctrl+G` | Stack | ungebunden | — | **fehlt** |
-| | `Cmd/Ctrl+'` | Virtuelle Kopie | nur `duplicate_virtual_copy` API, kein Key | `lib.rs:1345` | **fehlt (API vorhanden)** |
+| | `Cmd/Ctrl+'` | Virtuelle Kopie | nur `duplicate_virtual_copy` API, kein Key | `crates/lumina-gui/src/lib.rs:1345` | **fehlt (API vorhanden)** |
 | | `Cmd/Ctrl+Shift+I` | Import | CLI `import`, GUI kein Shortcut | — | **fehlt** |
 | | `Cmd/Ctrl+Shift+E` / `E` | Export | GUI `export_path/format/quality` Modul, kein Shortcut | — | **fehlt** |
 | Develop | `R` | Crop | ungebunden (Crop via Panel) | — | **fehlt** |
 | | `Q` | Spot Removal | ungebunden (SPOT-REMOVE-1 Doku-first) | — | **fehlt** |
-| | `K` / `M` / `Shift+M` | Pinsel/Verlauf/Radial | `MaskTool` existiert, aber per Panel-Toggle, kein Key `K/M` | `lib.rs:135` | **fehlt (Tool vorhanden)** |
-| | `Y` / `Shift+Y` | Before/After | `before_after` Toggle vorhanden (`Y` in `update`) | `lib.rs:443,917` | **teilweise** — `Y` gebunden, `Shift+Y` fehlt |
+| | `K` / `M` / `Shift+M` | Pinsel/Verlauf/Radial | `MaskTool` existiert, aber per Panel-Toggle, kein Key `K/M` | `crates/lumina-gui/src/lib.rs:135` | **fehlt (Tool vorhanden)** |
+| | `Y` / `Shift+Y` | Before/After | `before_after` Toggle vorhanden (`Y` in `update`) | `crates/lumina-gui/src/lib.rs` → `before_after` (Zeilen 443 und 916 im Stand `153d4ba`; zitiert 443, 917; die `Y`-Bindung liegt in `update`, Zeile 6782) | **teilweise** — `Y` gebunden, `Shift+Y` fehlt |
 | | `V` | SW | ungebunden | — | **fehlt** |
 | | `J` | Clipping warn | ungebunden | — | **fehlt** |
 | | `L` | Lights Out | ungebunden | — | **fehlt** |
-| | `Cmd/Ctrl+Shift+C` / `V` | Copy/Paste Settings | ungebunden (nur `apply_preset`, `apply_adjustment_to_selection`) | `lib.rs:2017,1272` | **fehlt** |
-| | `Alt+Regler` | Feinjustierung | `slider.rs` `Alt`-Scroll dokumentiert (F-100) | `slider.rs` | **teilweise** — Alt-Scroll ja, Alt+Drag fehlt |
+| | `Cmd/Ctrl+Shift+C` / `V` | Copy/Paste Settings | ungebunden (nur `apply_preset`, `apply_adjustment_to_selection`) | `crates/lumina-gui/src/lib.rs:2017,1272` | **fehlt** |
+| | `Alt+Regler` | Feinjustierung | `crates/lumina-gui/src/slider.rs` `Alt`-Scroll dokumentiert (F-100) | `crates/lumina-gui/src/slider.rs` | **teilweise** — Alt-Scroll ja, Alt+Drag fehlt |
 | | `Tab` / `Shift+Tab` | Panels ein/aus | ungebunden | — | **fehlt** |
 | | `F` | Vollbild | ungebunden (eframe Fenster) | — | **fehlt** |
-| | `Alt+Reglerklick` | Reset | Doppelklick Reset vorhanden (F-100), Alt-Klick Reset ungebunden | `slider.rs` | **teilweise** |
-| | `Shift+Doppelklick` | Auto Weiß/Schwarz | Auto-Tone `auto_tone()` Button vorhanden, kein Shift+Doppelklick | `lib.rs:2231` | **fehlt** |
+| | `Alt+Reglerklick` | Reset | Doppelklick Reset vorhanden (F-100), Alt-Klick Reset ungebunden | `crates/lumina-gui/src/slider.rs` | **teilweise** |
+| | `Shift+Doppelklick` | Auto Weiß/Schwarz | Auto-Tone `auto_tone()` Button vorhanden, kein Shift+Doppelklick | `crates/lumina-gui/src/lib.rs:2231` | **fehlt** |
 | Filter | `\\` | Filterleiste | ungebunden | — | **fehlt** |
 | History | `Cmd/Ctrl+Alt+S` | Schnappschuss | nur `HistoryEntry`, kein Snapshot-Key | — | **fehlt** |
 | HDR/Pano | `Cmd/Ctrl+H` / `M` | HDR/Pano Merge | ungebunden | — | **fehlt** |
@@ -128,7 +133,7 @@ Legende: Aufwand `S<1d, M1-3d, L>1w`; Risiko `Lizenz/Modell/Performance/UX-Break
 | **LR-07** | **hoch** | **Pipeline Entkopplung** `apply_geometry` 5-in-1 → eigene Stages Lens/Perspective/Crop + `GenerativeEdit` Stufe | `pipeline.md` Pipeline-Reihenfolge; `gap-generative-fill` G2 | `lumina-core` | M | `stage_digest`/`RenderKey` Break | LR-06 | **teilweise** |
 | **LR-08** | **hoch** | **Presence/Dynamik GUI Finalisierung** F-094 Texture/Clarity/Dehaze + F-092 Vibrance/Saturation in F-100 Reihenfolge ColorGrading→Presence→Vibrance | `pipeline.md` F-094/092, `cli-gui-wasm.md` F-100 | `lumina-gui` | S | — | — | **teilweise** |
 | **LR-09** | **hoch** | **Core Shortcuts Prio** `Cmd+'` (VC duplizieren) + `C/V` (Copy/Paste Settings) + `Y` Shift+Y + `V/J/L` | Develop Shortcuts, `virtual-copies.md`, `cli-gui-wasm.md` F-100 `Y` | `lumina-gui` | S | — | — | **fehlt** |
-| **LR-10** | **mittel** | **Masken-Shortcuts `K/M/Shift+M/R/Q` + `Alt+Regler` + `Tab/F`** binden | `lib.rs` `MaskTool`, `slider.rs`, F-100 | `lumina-gui` | S | `geometry_blocks_source_mapping` muss Key-Gate | LR-05 | **fehlt (Tool vorhanden)** |
+| **LR-10** | **mittel** | **Masken-Shortcuts `K/M/Shift+M/R/Q` + `Alt+Regler` + `Tab/F`** binden | `crates/lumina-gui/src/lib.rs` `MaskTool`, `crates/lumina-gui/src/slider.rs`, F-100 | `lumina-gui` | S | `geometry_blocks_source_mapping` muss Key-Gate | LR-05 | **fehlt (Tool vorhanden)** |
 | **LR-11** | **mittel** | **Staub generativ lokal (ONNX Inpaint) `inpaint_heal`** + `lumina-onnx` Capability + GUI Maske malen + `kind=spot_heal_generative` | `spot-removal.md` generativ; `gap-generative-fill` G6 | `lumina-onnx` + `lumina-core` + `lumina-gui` | L | **Lizenz** (Inpaint oft CC BY-NC, SD-Inpaint Apache-2.0 Prüfpflicht, `pending-integration` bis LIZ) | LR-05/06, G13/G14 | **fehlt** |
 | **LR-12** | **mittel** | **Snapshot `Cmd+Alt+S` vs History** — benannte `Snapshot` Rezept-Freeze-Punkte (≠ History) | Develop SOLL, `virtual-copies.md` History | `lumina-sidecar` + `lumina-gui` | S | — | — | **teilweise** |
 | **LR-13** | **mittel** | **Quick Develop + Filterleiste `\\` + Import/Export Shortcuts** (Mehrbild `Cmd+Shift+I/E`, Filter nach Brennweite/Kamera/ISO) | Library SOLL, `cli-gui-wasm.md` CLI | `lumina-gui` + `lumina-cli` | M | CLI `reindex` nur Sidecar-Scan | — | **fehlt** |

@@ -4,6 +4,12 @@ Status: **Plan (SOLL), Version 0.1** — noch nicht implementiert.
 Umfang: strukturiertes Logging über alle Crates; Umsetzung in kleinen,
 unabhängig prüfbaren Schritten gemäß `Agents.md`.
 
+**Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
+Plans beziehen sich auf den Commit `87929c7` (Plan-Erstellung 2026-08-23). Die
+Tabellen in §3 nennen ihre Datei im Abschnittskopf; die nackten `lib.rs`-Anker
+wurden auf den vollstaendigen repo-relativen Pfad umgestellt.
+Alle Fundstellen sind ueber `git show `87929c7`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
+
 ## 1. Ziel und Umfang
 
 ### 1.1 Motivation
@@ -16,8 +22,10 @@ Der Zustand war danach nicht rekonstruierbar, weil:
 - die GUI ihren Zustand nur in `self.status`/`self.error` (Strings,
   `crates/lumina-gui/src/lib.rs`) hält, die bei einem Crash verloren gehen;
 - die CLI nur unstrukturiertes `eprintln!`/`println!`
-  (`crates/lumina-cli/src/main.rs:248`, `:429`, `:718–732`, `:853`,
-  `:1130`, `:1134`) ausgibt.
+  (`crates/lumina-cli/src/main.rs:248`, `crates/lumina-cli/src/main.rs:429`,
+  `crates/lumina-cli/src/main.rs:718–732`, `crates/lumina-cli/src/main.rs:853`,
+  `crates/lumina-cli/src/main.rs:1130`,
+  `crates/lumina-cli/src/main.rs:1134`) ausgibt.
 
 Ziele des Loggings:
 
@@ -83,7 +91,7 @@ Begründung gegen die Architekturgrenzen (Agents.md):
 **WASM-Adapter (bevorzugt):** `web-sys` ist für `wasm32` bereits Dependency
 mit dem Feature `console`
 (`crates/lumina-gui/Cargo.toml`, Block `[target.'cfg(target_arch = "wasm32")'.dependencies]`;
-genutzt in `lib.rs:3668` `web_sys::console::error_1`). Ein eigener
+genutzt in `crates/lumina-gui/src/lib.rs:3668` `web_sys::console::error_1`). Ein eigener
 `log::Log`-Mapper (`error_1/warn_1/info_1/log_1`) vermeidet jede neue
 Dependency im WASM-Pfad und erfüllt die Capability-Regel aus Agents.md
 („Keine native Dependency im WASM-kompatiblen Pfad ohne dokumentierte
@@ -95,7 +103,7 @@ Panic-Meldung inklusive Location als `error!` schreibt. Damit landen auch
 Panics (wie der White-Balance-Crash) im Log-Stream. Bekannte Panic-Kandidaten
 aus Code-Lektüre: `expect("loaded frame")` in
 `crates/lumina-gui/src/lib.rs:1543`, Indexierung `document.virtual_copies[0]`
-in `lib.rs:1536`.
+in `crates/lumina-gui/src/lib.rs:1536`.
 
 
 ### 2.3 App-Ringbuffer („Zustand VOR dem Crash")
@@ -159,7 +167,7 @@ primären Verdächtigen für den White-Balance-Crash-Pfad.
 | :147–153/:162–168 | Strict-Fehler | error | `MaskUnavailable`/`MaskEvaluation` mit copy_id/mask_id |
 | :176–180 | **Render erfolgreich** | debug (nicht info! Hot Path) | w/h, Layer-Anzahl, Dauer in ms |
 
-#### 3.2.2 Masken-Auswertung und Resample (`render.rs`)
+#### 3.2.2 Masken-Auswertung und Resample (`crates/lumina-core/src/render.rs`)
 
 | Ort | Ereignis | Severity | Meldungsinhalt |
 | --- | --- | --- | --- |

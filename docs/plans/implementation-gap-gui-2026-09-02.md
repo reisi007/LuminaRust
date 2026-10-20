@@ -109,16 +109,19 @@ Schema-Entscheidung: Pre-MVP `schema_version` bleibt 1, inkompatibel darf ohne M
 
 ## 5 Shortcuts — gebunden vs fehlend
 
-Quelle `crates/lumina-gui/src/lib.rs` `module_for_key` + Verifiz. 2026-09-02.
+Quelle `crates/lumina-gui/src/lib.rs` `module_for_key` + Verifiz. 2026-09-02
+(Stand-Commit `605a4ba`; nackte `lib.rs`-Anker wurden auf
+`crates/lumina-gui/src/lib.rs` umgestellt; alle Fundstellen sind ueber
+`git show 605a4ba:<pfad> | sed -n '<zeile>p'` rekonstruierbar).
 
 | Gebunden | Taste | Mod |
 |---|---|---|
-| `G` → Library Grid | `module_for_key` | `lib.rs:121` |
-| `E` → Library (Loupe-Alias) | alias, kein separates Loupe-Modul | `lib.rs:123` |
-| `D` → Develop | — | `lib.rs:122` |
-| `Y` → Before/After | `before_after` Toggle | `lib.rs:443,917` |
+| `G` → Library Grid | `module_for_key` | `crates/lumina-gui/src/lib.rs:121` |
+| `E` → Library (Loupe-Alias) | alias, kein separates Loupe-Modul | `crates/lumina-gui/src/lib.rs:123` |
+| `D` → Develop | — | `crates/lumina-gui/src/lib.rs:122` |
+| `Y` → Before/After | `before_after` Toggle | `crates/lumina-gui/src/lib.rs` → `before_after` (Zeilen 443 und 916 im Stand `605a4ba`; zitiert 443, 917; die `Y`-Bindung liegt in `update`, Zeile 6782) |
 | Zoom | `Fit/1:1/2:1/FitWidth/Custom` + Mausrad `+/-` + `preview_pan` | — |
-| Alt-Scroll / Doppelklick | Feinjustierung + Reset (slider) | `slider.rs` |
+| Alt-Scroll / Doppelklick | Feinjustierung + Reset (slider) | `crates/lumina-gui/src/slider.rs` |
 
 | Fehlend / nur API | Lightroom | Status |
 |---|---|---|
@@ -149,7 +152,7 @@ Fazit MVP-Pflicht: `1-5/P/X/U` + `K/M/Q/R` + Copy/Paste + `Cmd+'` vor Post-MVP S
 
 ## 6 Headless Test-Gap — fehlende Tests (≥13 neu, T-LR-01..13)
 
-Pflicht nach `Agents.md`: je sichtbarer GUI-Funktion ein `cargo test -p lumina-gui` grüner Headless-Test. Bestehend: 95 `lib.rs` + 7 `preview_ctrl` + 5 `filmstrip` + 8 `viewport` + 7 `theme` + 14 `presets`. Kittest Goldens decken nur 5 Module ab; **keine** Slider/Kurve/HSL/ColorGrading/Presence/Mask/Library-Headless-Outcome.
+Pflicht nach `Agents.md`: je sichtbarer GUI-Funktion ein `cargo test -p lumina-gui` grüner Headless-Test. Bestehend: 95 `crates/lumina-gui/src/lib.rs` + 7 `preview_ctrl` + 5 `filmstrip` + 8 `viewport` + 7 `theme` + 14 `presets`. Kittest Goldens decken nur 5 Module ab; **keine** Slider/Kurve/HSL/ColorGrading/Presence/Mask/Library-Headless-Outcome.
 
 | ID | Feature | Fehlender Headless-Test (SOLL) | kittest/PSNR/Histogram Vorschlag | Crate | Aufw | Risiko |
 |---|---|---|---|---|---|---|
@@ -188,7 +191,7 @@ Legende: Aufwand `S<1d, M1-3d, L>1w`; Risiko `Lizenz/Modell/Performance/UX-Break
 | **LR-07** | **hoch** | **Pipeline Entkopplung** `apply_geometry` 5-in-1 → Stages Lens/Perspective/Crop + `GenerativeEdit` | `pipeline.md` | `lumina-core` | M | `stage_digest`/`RenderKey` Break | **W2** Core |
 | **LR-08** | **hoch** | **Presence/Dynamik GUI** F-094 + F-092 Vibrance in `cli-gui-wasm.md` Reihenfolge | `pipeline.md` F-094/F-092 | `lumina-gui` | S | — | **W3** GUI |
 | **LR-09** | **hoch** | **Core Shortcuts Prio** `Cmd+'` + `Copy/Paste C/V` + `Shift+Y` + `V/J/L` + Headless `develop_shortcut_for_key` | Develop/Library Shortcuts, `virtual-copies.md` | `lumina-gui` | S | — | **W3** GUI |
-| **LR-10** | **mittel** | **Masken-Shortcuts `K/M/Shift+M/R/Q` + `Alt+Regler` + `Tab/F`** binden | `lib.rs` `MaskTool`, `slider.rs` | `lumina-gui` | S | `geometry_blocks_source_mapping` Gate | **W3** GUI |
+| **LR-10** | **mittel** | **Masken-Shortcuts `K/M/Shift+M/R/Q` + `Alt+Regler` + `Tab/F`** binden | `crates/lumina-gui/src/lib.rs` `MaskTool`, `crates/lumina-gui/src/slider.rs` | `lumina-gui` | S | `geometry_blocks_source_mapping` Gate | **W3** GUI |
 | **LR-11** | **mittel** | **Staub generativ lokal `inpaint_heal`** (`lumina-onnx` `inpaint` Capability + GUI Maske malen) | `spot-removal.md` generativ | `lumina-onnx` + `lumina-core` + `lumina-gui` | L | **Lizenz** (Inpaint CC BY-NC/AGPL, `pending-integration` bis LIZ) | **Nach LIZ** |
 | **LR-12** | **mittel** | **Snapshot `Cmd+Alt+S`** benannte Rezept-Freeze-Punkte vs History | `virtual-copies.md` History | `lumina-sidecar` + `lumina-gui` | S | — | **W1** Sidecar |
 | **LR-13** | **mittel** | **Quick Develop + Filter `\` + Import/Export Shortcuts** | Library SOLL, `cli-gui-wasm.md` | `lumina-gui` + `lumina-cli` | M | — | **W3** GUI |

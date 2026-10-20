@@ -86,12 +86,24 @@ Alle Angaben in diesem Abschnitt sind **wörtlich aus**
 liegt vollständig in `lumina-sidecar`; `lumina-cli` und `lumina-gui` rufen sie
 nur auf, sie implementieren keine eigene Logik.
 
+**Stand der Zeilenangaben (2026-10-20 nachgeprueft):** die `Z.`-Angaben dieses
+Dokuments beziehen sich auf den Arbeitsbaum vom 2026-08-19 — **der in keinem Commit existiert**: der Basis-Commit `b56c9f1` (der Commit, mit dem dieses Dokument committet wurde) hat dieselben Zeilennummern, aber **61 Zeilen frueher** (`SidecarError` 694, `recover_sidecar` 837, `acquire_write_lock` 860, `migrate_json` 927, `migrate_sidecar_file` 953, `atomic_write_bytes` 969; Testfunktionen 2339/2360/2504/2521) — die zitierten Nummern dieses Dokuments sind also **weder** gegen `b56c9f1` **noch** gegen `3b07ed7` direkt auflösbar; die Auflösung unten benennt **Symbole statt Zeilen**. Die Datei
+`crates/lumina-sidecar/src/lib.rs` wurde danach um drei Zeilen nach unten
+verschoben (Commit `3b07ed7`): dort liegen die zitierten Migrationsstellen drei
+Zeilen tiefer (`SidecarError` 758, `migrate_json` 991, `migrate_sidecar_file`
+1017, `atomic_write_bytes` 1033, `recover_sidecar` 901, `acquire_write_lock` 924)
+und die zitierten Testfunktionen sieben Zeilen tiefer (2418, 2439, 2583, 2600).
+`SCHEMA_VERSION` (Z. 19) trifft den Basis-Commit `b56c9f1` exakt; die Verweise
+auf `Agents.todo.md`, `feature/README.md` und `feature/architecture/pipeline.md`
+treffen ihn ebenfalls exakt.
+Alle Fundstellen sind ueber `git show `3b07ed7`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
+
 ### 2.1 Konstanten und Fehlertypen
 
-- `pub const SCHEMA_VERSION: u32 = 2;` (lib.rs, Z. 19) — die **aktuell** vom Code
-  geschriebene/gelesene Hauptversion.
-- `pub enum SidecarError` (lib.rs, Z. 755) mit den für Migration relevanten
-  Varianten:
+- `pub const SCHEMA_VERSION: u32 = 2;` (crates/lumina-sidecar/src/lib.rs, Z. 19) — die
+  **aktuell** vom Code geschriebene/gelesene Hauptversion.
+- `pub enum SidecarError` (`crates/lumina-sidecar/src/lib.rs`, Z. 755) mit den für Migration
+  relevanten Varianten:
   - `Missing(String)` — Sidecar nicht vorhanden.
   - `Io { operation, path, message }` — alle Dateisystemfehler, **inklusive
     Backup-Schreibfehler und atomarer Schreib-/Sync-Fehler** (es gibt *keine*
@@ -104,7 +116,8 @@ nur auf, sie implementieren keine eigene Logik.
 
 ### 2.2 `migrate_json` — reiner, nicht-schreibender Migrationstransform
 
-`pub fn migrate_json(json: &str) -> Result<String, SidecarError>` (lib.rs, Z. 988):
+`pub fn migrate_json(json: &str) -> Result<String, SidecarError>`
+(`crates/lumina-sidecar/src/lib.rs`, Z. 988):
 
 1. Parse zu `serde_json::Value`. Fehlt `schema_version` →
    `Err(Invalid("missing schema_version"))`.
@@ -132,8 +145,8 @@ Eigenschaften:
 ### 2.3 `migrate_sidecar_file` — expliziter, gesicherter Datei-Migrationsschritt
 
 `pub fn migrate_sidecar_file(path: &Path) -> Result<bool, SidecarError>`
-(lib.rs, Z. 1014). **Nur aufrufen, wenn der Aufrufer die Migration ausdrücklich
-will.** Ablauf:
+(`crates/lumina-sidecar/src/lib.rs`, Z. 1014). **Nur aufrufen, wenn der Aufrufer die
+Migration ausdrücklich will.** Ablauf:
 
 1. **Lock:** `acquire_write_lock(path)` (siehe §2.5). Bei Konflikt →
    `Err(Conflict("sidecar is locked: …"))`; das Originalsidecar wird **nicht**
@@ -154,7 +167,8 @@ Reihenfolge **Backup vor Ersatz** ist entscheidend für die Wiederherstellbarkei
 
 ### 2.4 `atomic_write_bytes` — Crash-sicheres Schreiben
 
-`fn atomic_write_bytes(path, bytes)` (lib.rs, Z. 1030):
+`fn atomic_write_bytes(path, bytes)`
+(`crates/lumina-sidecar/src/lib.rs`, Z. 1030):
 
 - `tempfile::NamedTempFile` im Elternverzeichnis.
 - `write_all` → `flush` → `sync_all` (Datei) → `persist()` (**atomarer Rename**
@@ -162,14 +176,15 @@ Reihenfolge **Backup vor Ersatz** ist entscheidend für die Wiederherstellbarkei
 
 Ein Abbruch **während** des Schreibens hinterlässt nur die Tempartei; das
 Ziel wird erst durch den Rename ersetzt. Verwaiste Temparteien werden über
-`recover_sidecar` (lib.rs, Z. 898, Präfix `.{dateiname}.tmp-`) aufgeräumt;
-`load_sidecar` ruft `recover_sidecar` automatisch auf. **Hinweis:** JSON- und
-zdata-Schreibvorgänge sind je einzeln atomar; eine gemeinsame Zwei-Dateien-
-Transaktion ist bewusst **noch offen** (siehe `sidecar.md` Binärdaten / `save_sidecar`-Kommentar).
+`recover_sidecar` (`crates/lumina-sidecar/src/lib.rs`, Z. 898, Präfix `.{dateiname}.tmp-`)
+  aufgeräumt; `load_sidecar` ruft `recover_sidecar` automatisch auf. **Hinweis:** JSON- und
+  zdata-Schreibvorgänge sind je einzeln atomar; eine gemeinsame Zwei-Dateien-Transaktion
+  ist bewusst **noch offen** (siehe `feature/architecture/sidecar.md` Binärdaten /
+  `save_sidecar`-Kommentar).
 
 ### 2.5 `acquire_write_lock` — parallele Schreibkonflikte vermeiden
 
-`fn acquire_write_lock(path)` (lib.rs, Z. 921):
+`fn acquire_write_lock(path)` (`crates/lumina-sidecar/src/lib.rs`, Z. 921):
 
 - Erzeugt `.{dateiname}.lock` per `create_new` (O_CREATE | O_EXCL).
 - Bis zu 100 Versuche mit 10 ms Pause bei `AlreadyExists`.
@@ -197,7 +212,8 @@ Transaktion ist bewusst **noch offen** (siehe `sidecar.md` Binärdaten / `save_s
 
 Es gibt **zwei unabhängige Versionsachsen**, die bewusst getrennt behandelt
 werden (`feature/README.md` Festgelegte Entscheidungen; `Agents.md` →
-Architekturgrenzen; `sidecar.md` → Manifest; `pipeline.md` → Bearbeitungsregler):
+Architekturgrenzen; `feature/architecture/sidecar.md` → Manifest;
+`feature/architecture/pipeline.md` → Bearbeitungsregler):
 
 ### 3.1 `schema_version` / `recipe_schema_version` (Datenform / Rezept)
 
@@ -205,22 +221,23 @@ Architekturgrenzen; `sidecar.md` → Manifest; `pipeline.md` → Bearbeitungsreg
   Sidecar-**Hülle** und das Rezept-Envelope.
 - Pro Rezeptinstanz existiert zusätzlich `recipe_version`
   (`EditRecipe.recipe_version`), unabhängig von `pipeline_version`.
-- Ein Bump `recipe_schema_version` 1 → 2 ist laut `pipeline.md` (Z. 304) nötig,
-  sobald verschachtelte Adjustment-Felder (`curves`, `hsl`, `color_grading`,
-  `presence`, `sharpening`, `noise_reduction`) oder neue Top-Level-Keys
-  (`geometry`, `lens_correction`, `perspective`, `effects`) verwendet werden.
+- Ein Bump `recipe_schema_version` 1 → 2 ist laut `feature/architecture/pipeline.md` (Z.
+  304) nötig, sobald verschachtelte Adjustment-Felder (`curves`, `hsl`, `color_grading`,
+  `presence`, `sharpening`, `noise_reduction`) oder neue Top-Level-Keys (`geometry`,
+  `lens_correction`, `perspective`, `effects`) verwendet werden.
 - **Cache-Wirkung:** Änderungen an Rezeptwerten/`-version` fließen in den
-  `recipe_hash` (RenderKey, `pipeline.md` Z. 560 ff.). Pro Stage gilt: eine
-  Änderung **invalidiert ab der betroffenen Stufe** alle abhängigen
-  Preview-/Export-Einträge — nicht jedoch Decode oder persistierte AI-Masken
-  (Beispiel F-089: Kurvenänderung invalidiert „ab `adjustments`“, nicht Decode/
-  Masken). `stage_digest` erlaubt stufenspezifische Invalidation
-  (`pipeline.md` Z. 575 ff.).
+  `recipe_hash` (RenderKey, `feature/architecture/pipeline.md` Z. 560 ff.). Pro Stage gilt:
+  eine Änderung **invalidiert ab der betroffenen Stufe** alle abhängigen
+  Preview-/Export-Einträge — nicht jedoch Decode oder persistierte AI-Masken (Beispiel
+  F-089: Kurvenänderung invalidiert „ab `adjustments`“, nicht Decode/Masken).
+  `stage_digest` erlaubt stufenspezifische Invalidation (`feature/architecture/pipeline.md`
+  Z. 575 ff.).
 
 ### 3.2 `pipeline_version` (Render-Identität, separat validiert)
 
-- `pipeline_version` ist Teil des **RenderKey** (`pipeline.md` Z. 560 ff.) und
-  wird **getrennt** von `recipe_schema_version` validiert (`pipeline.md` Z. 292).
+- `pipeline_version` ist Teil des **RenderKey** (`feature/architecture/pipeline.md` Z. 560
+  ff.) und wird **getrennt** von `recipe_schema_version` validiert
+  (`feature/architecture/pipeline.md` Z. 292).
 - Ein `pipeline_version`-Bump ändert die Render-Identität selbst → er
   invalidiert **alle** davon abgeleiteten Render-Caches (Preview/Export),
   unabhängig vom Rezeptinhalt, da der RenderKey insgesamt neu ist.
@@ -240,7 +257,7 @@ Validierung/Migration beider Achsen.
 
 Verbatim aus `Agents.todo.md` Phase 2 (Z. 137–150) und gespiegelt in
 `feature/README.md` (Festgelegte Entscheidungen, Z. 147–152) sowie
-`pipeline.md` Z. 308–315:
+`feature/architecture/pipeline.md` Z. 308–315:
 
 > **Produktentscheidung (2026-08-17, Pre-MVP, präzisiert):** Wir befinden uns in
 > der Pre-MVP-Phase — das Sidecar-Schema wird bei Bedarf **bewusst nicht
@@ -332,7 +349,7 @@ Flag“) und ADR 0001.
   aufgebaut; sie ist **nie** die Quelle der Migration. Nach einer
   Sidecar-Migration wird der Index aus dem (nun migrierten) Sidecar neu
   abgeleitet; ein widersprüchlicher Index verliert gegen das Sidecar
-  (`sidecar.md` → Migration und Konflikte).
+  (`feature/architecture/sidecar.md` → Migration und Konflikte).
 - Vorschauen/Exporte (Cache unter `.lumina/`, nicht autoritativ) werden über den
   geänderten RenderKey/`recipe_hash` automatisch als Cache-Miss neu gerendert
   (§3).
@@ -356,7 +373,7 @@ Was Konsumenten (CLI, GUI, zukünftige Releases) **annehmen dürfen**:
   §4). Diese Härte endet mit dem MVP.
 - **Seiteneffektfreiheit der Persistenz:** Das Originalbild bleibt byteweise
   unverändert; ein beschädigtes oder migriertes Sidecar macht das Original nicht
-  unlesbar (`sidecar.md` Persistenzregeln).
+  unlesbar (`feature/architecture/sidecar.md` Persistenzregeln).
 - **Single Source of Truth:** Rezept, virtuelle Kopien und Maskendefinitionen
   leben ausschließlich im Sidecar. Auch eine spätere zentrale DB (Phase 9) ist
   nie die Quelle dieser Daten und darf Lumina-spezifische Daten nicht
@@ -374,17 +391,20 @@ Gemäß `Agents.md` (Verifizierung und Tests) und den bestehenden Tests in
 `crates/lumina-sidecar/src/lib.rs`:
 
 - **JSON-Roundtrip- und Schema-Migrationstests** (vorhanden):
-  - `migration_unknown_fields_and_incompatible_version` (lib.rs, Z. 2411):
+  - `migration_unknown_fields_and_incompatible_version`
+    (`crates/lumina-sidecar/src/lib.rs`, Z. 2411):
     v0→v1→v2, `recipe_version` wird restauriert; v99 →
     `Err(Invalid("unsupported schema_version 99; explicit migration is required"))`.
-  - `explicit_v1_to_v2_migration_keeps_flat_adjustments` (lib.rs, Z. 2432):
+  - `explicit_v1_to_v2_migration_keeps_flat_adjustments`
+    (`crates/lumina-sidecar/src/lib.rs`, Z. 2432):
     v1-Sidecar → v2, flache `adjustments` (`exposure`, `contrast`) bleiben
     erhalten.
 - **Sidecar-Recovery-, Atomic-Write- und Konflikttests** (vorhanden):
   - `explicit_file_migration_creates_backup_and_rejects_newer_schema`
-    (lib.rs, Z. 2576): Datei-Migration erzeugt `<pfad>.bak`, danach
-    `schema_version == SCHEMA_VERSION`; v99 → `Err`.
-  - `atomic_compare_and_swap_and_recovery` (lib.rs, Z. 2593): Konflikt bei
+    (`crates/lumina-sidecar/src/lib.rs`, Z. 2576): Datei-Migration erzeugt `<pfad>.bak`,
+    danach `schema_version == SCHEMA_VERSION`; v99 → `Err`.
+  - `atomic_compare_and_swap_and_recovery`
+    (`crates/lumina-sidecar/src/lib.rs`, Z. 2593): Konflikt bei
     falscher Revision (`save_sidecar_if_unchanged`) sowie Aufräumen verwaister
     Temparteien.
 - **Ab MVP bindend:** Für **jeden** neuen Migrationsschritt ist ein eigener Test
@@ -427,6 +447,6 @@ Annahmen):
    kein Defekt.
 4. **Keine Zwei-Dateien-Transaktion (JSON + zdata).** JSON- und `.lumina.zdata`-
    Schreibvorgänge sind je einzeln atomar; eine gemeinsame Transaktion ist
-   bewusst offen (`sidecar.md` Binärdaten; `save_sidecar`-Kommentar). Eine
-   Schema-Migration des JSON-Sidecars sollte daher keine gleichzeitige,
+   bewusst offen (`feature/architecture/sidecar.md` Binärdaten; `save_sidecar`-Kommentar).
+   Eine Schema-Migration des JSON-Sidecars sollte daher keine gleichzeitige,
    atomaritätsbedürftige `.zdata`-Änderung erfordern.

@@ -156,7 +156,8 @@ Notes:
 
 `lumina-raw` depends on `vendor/libraw-sys` (MIT, © David Cuddeback), a patched
 fork pinned via `[patch.crates-io]` in the workspace root `Cargo.toml`. Its
-`build.rs` resolves the **system** `libraw_r` shared library through `pkg-config`
+`vendor/libraw-sys/build.rs` resolves the **system** `libraw_r` shared library
+through `pkg-config`
 and emits `cargo:rustc-link-lib` — i.e. **dynamic linking**, not vendoring or
 static embedding.
 
