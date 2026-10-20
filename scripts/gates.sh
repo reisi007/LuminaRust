@@ -8,12 +8,14 @@
 # ist die EINZIGE Quelle der Wahrheit fuer die Doku
 # (`feature/quality/local-gates.md`).
 #
-#   fast  — Sekunden, OHNE Codegen. Fuenf Checks in fester Reihenfolge:
+#   fast  — Sekunden, OHNE Codegen. Sechs Checks in fester Reihenfolge:
 #           1) cargo fmt --all -- --check   (nur rustfmt, kein Compile)
 #           2) sh scripts/check_file_sizes.sh
 #           3) sh scripts/check_plan_format.sh
 #           4) sh scripts/check_env_gate_reasons.sh
 #           5) sh scripts/check_core_prod_fs_free.sh
+#           6) sh scripts/check_ci_tier_drift.sh  (Drift-Gate: die Tier-Liste
+#              gegen die generierte Liste aus `ci.yml`; nur Textvergleich)
 #           `fast` ruft KEIN `cargo build/check/clippy/test/bench` auf. Das
 #           Skript prueft das VOR dem Lauf (Verstoss = harter Fehler), damit
 #           die Definition nicht still in eine Codegen-Stufe kippt.
@@ -28,15 +30,24 @@
 #           gemeldet (Exit-Code + Hinweis), macht die Stufe aber nicht rot —
 #           der lokale Runner ist nicht strenger als die CI.
 #   list  — die Tier-Tabelle (eine Quelle der Wahrheit fuer die Doku).
+#   list-ci — die ABLEITBARE Sicht der CI-Spiegelung (das, was der Generator
+#           `scripts/gen_ci_tiers.sh` aus `ci.yml` zieht): eine Zeile je
+#           Eintrag `blocking|wd-path|command|job`. Das ist die
+#           Vergleichsgrundlage des Drift-Gates
+#           (`scripts/check_ci_tier_drift.sh`).
 #   all   — fast, danach slow.
 #   help  — Usage.
 #
 # FLOOR (Skill `ratchet-gates`): eine auswahlbasierte Stufe laeuft in einem
 # clean checkout 0 Checks und meldet gruen — eine tote Schranke. Der Runner
-# zaehlt deshalb die GESTARTETEN Checks und erzwingt MIN_CHECKS=5 fuer die
+# zaehlt deshalb die GESTARTETEN Checks und erzwingt MIN_CHECKS=6 fuer die
 # Stufe `fast`: darunter ist das Ergebnis ein FEHLER (Exit 1), kein Pass.
 # Eine leere Tier-Liste ist ebenfalls ein Fehler, kein Pass. Ein fehlendes
 # Pruefskript zaehlt als FEHLSCHLAG, nicht als Ueberspringen.
+# MIN_CHECKS wurde von 5 auf 6 gehoeben, weil die Stufe `fast` um
+# `fast-6` (Drift-Gate) gewachsen ist — die Untergrenze muss die Zahl der
+# Checks abbilden, sonst bleibt das Entfernen eines Checks still (2026-10-20,
+# GATE-DRIFT-UND-LUECKEN-84).
 #
 # Das Skript schreibt NICHTS ins Repo, legt keine Dateien an, braucht keine
 # Sonderrechte und laeuft ohne Netz.
@@ -49,7 +60,7 @@ cd "$ROOT"
 
 # Mindeststand der schnellen Stufe: unterhalb dieser Zahl gestarteter Checks
 # ist das Ergebnis ein Fehler (Floor), nicht ein Pass.
-MIN_CHECKS=5
+MIN_CHECKS=6
 
 # `cargo` steht in manchen nicht-interaktiven Shells nicht im PATH (z. B. auf
 # diesem Host); dann wird die rustup-Installation des Benutzers benutzt. In der
@@ -75,16 +86,26 @@ fi
 # der Skill `ratchet-gates` vermeiden will ("a generated file that embeds a
 # hand-maintained list has a second source of truth"). Der Job-Name driftet
 # nicht, die Zeilennummer driftet — in einem einzigen Kommentar-Change schon
-# um drei Zeilen. Das Folgeticket `GATE-DRIFT-UND-LUECKEN-84` erzeugt die
-# Tier-Liste spaeter aus `ci.yml` (generate + diff); dann ist die Herkunft
-# automatisch exakt.
+# um drei Zeilen.
+#
+# GATE-DRIFT-UND-LUECKEN-84 (2026-10-20): die Kopie ist nicht mehr
+# handgepflegt, sondern **geprueft**. `scripts/gen_ci_tiers.sh` zieht die
+# ableitbaren Felder (blockierend, Arbeitsverzeichnis, Kommando, Job) aus
+# `ci.yml`; `scripts/check_ci_tier_drift.sh` (Eintrag `fast-6`) difft diese
+# generierte Liste gegen die committete Tier-Liste und wird rot bei jeder
+# Abweichung. ANNOTATIONEN bleiben handgepflegt: die `id`, die Anzeige des
+# Arbeitsverzeichnisses und der "Bedarf" — der Generator darf sie nicht
+# erfinden. Die Herkunft ist damit automatisch exakt: der Job-Name steht nicht
+# mehr nur hier, sondern wird aus `ci.yml` gelesen; Feld 7 ist der (mit
+# `list-ci`) maschinell verglichene Wert.
 # ---------------------------------------------------------------------------
 
 FAST_ENTRIES='fast-1|1|Repo-Wurzel|.|keine Infrastruktur|cargo fmt --all -- --check||
 fast-2|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_file_sizes.sh||
 fast-3|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_plan_format.sh||
 fast-4|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_env_gate_reasons.sh||
-fast-5|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_core_prod_fs_free.sh||'
+fast-5|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_core_prod_fs_free.sh||
+fast-6|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_ci_tier_drift.sh||'
 
 # CI-Mirror. Quelle ist `.github/workflows/ci.yml` (Stand 2026-10-20); der
 # Job-Name steht je Eintrag (Feld 7). **kein Schritt** setzt ein schrittweises
@@ -93,6 +114,12 @@ fast-5|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_core_prod_fs_free.sh
 # Angabe ist `agent-harness` (zweites Cargo-Workspace).
 # `slow-21` und `slow-22` sind im CI `continue-on-error: true` und deshalb
 # hier nicht blockierend.
+# `slow-10b` ist der Orphan-Test-Gate (TEST-ORPHAN-97): er haengt an
+# `slow-10`, weil nur der Test-Build die dep-info erzeugt, die das Skript
+# braucht (Vorbedingung, siehe `feature/quality/local-gates.md` §5.1). Die
+# `id` traegt ein `b`, damit die 22 bisherigen `slow`-Ids **unveraendert**
+# bleiben — eine Umnummerierung waere eine stille Aenderung an der
+# committeten Tier-Liste.
 SLOW_ENTRIES='slow-1|1|Repo-Wurzel|.|Build-Artefakt|cargo check --workspace --all-targets|Rust fast checks
 slow-2|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings|Rust fast checks
 slow-3|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy -p lumina-core --features lensfun -- -D warnings|Rust fast checks
@@ -103,6 +130,7 @@ slow-7|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_cli_features.sh|Rust fast
 slow-8|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_feature_matrix.sh|Rust fast checks
 slow-9|1|Repo-Wurzel|.|Build-Artefakt|cargo check -p lumina-bench --all-features|Rust fast checks
 slow-10|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --all-targets|Rust GUI tests
+slow-10b|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_test_orphans.sh lumina-gui|Rust GUI tests
 slow-11|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --lib --features janklog|Rust GUI tests
 slow-12|1|Repo-Wurzel|.|Build-Artefakt|cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench|Rust tests (excluding GUI)
 slow-13|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p libraw-sys|Rust tests (excluding GUI)
@@ -118,14 +146,16 @@ slow-22|0|Repo-Wurzel|.|Build-Artefakt|node scripts/perf/compare.mjs --mode warn
 
 usage() {
     cat <<'EOF'
-Usage: sh scripts/gates.sh <fast|slow|all|list|help>
+Usage: sh scripts/gates.sh <fast|slow|all|list|list-ci|help>
 
-  fast   Schnelle Stufe (Sekunden, kein Codegen): cargo fmt + 4 Textgates.
-         Floor: mindestens 5 gestartete Checks, sonst FAIL (Exit 1).
+  fast   Schnelle Stufe (Sekunden, kein Codegen): cargo fmt + 5 Textgates.
+         Floor: mindestens 6 gestartete Checks, sonst FAIL (Exit 1).
   slow   Langsame Stufe (Minuten): CI-Mirror der Rust-Jobs aus
          .github/workflows/ci.yml, Fail fast.
   all    fast, danach slow.
   list   Tier-Tabelle (eine Quelle der Wahrheit fuer die Doku) auf stdout.
+  list-ci  Ableitbare CI-Sicht (blocking|wd-pfad|kommando|job) auf stdout —
+         das Vergleichsformat des Drift-Gates (scripts/check_ci_tier_drift.sh).
   help   Diese Hilfe.
 
 Das Skript laeuft aus dem Repo-Wurzelverzeichnis (selbst ermittelt), schreibt
@@ -144,6 +174,17 @@ print_list() {
     printf '%s\n' "$SLOW_ENTRIES" |
         awk -F'|' -v tier=slow -v budget=Minuten \
             '{printf "| %s | %s | `%s` | %s | %s | %s |\n", $1, tier, $6, $3, budget, $5}'
+}
+
+# Die ABLEITBARE Sicht der CI-Spiegelung — genau die Felder, die der
+# Generator `scripts/gen_ci_tiers.sh` aus `ci.yml` zieht:
+#     blocking|wd-pfad|kommando|job
+# Die Annotationen (id, wd-Anzeige, Bedarf) stehen bewusst NICHT hier: sie
+# sind handgepflegt und werden nicht verglichen. Reihenfolge wie in der
+# Tier-Liste (= Reihenfolge wie in `ci.yml`).
+print_ci_mirror() {
+    printf '%s\n' "$SLOW_ENTRIES" |
+        awk -F'|' '{printf "%s|%s|%s|%s\n", $2, $4, $6, $7}'
 }
 
 # Die Stufe `fast` darf keinen Codegen ausfuehren. Die Pruefung laeuft vor dem
@@ -302,6 +343,9 @@ case "${1:-}" in
         ;;
     list)
         print_list
+        ;;
+    list-ci)
+        print_ci_mirror
         ;;
     help | -h | --help)
         usage

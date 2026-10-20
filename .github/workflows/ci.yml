@@ -145,20 +145,21 @@ jobs:
           # Stable across the three Rust shards; do not use the job ID here.
           shared-key: lumina-rust-shards
 
-      # LOCAL-GATE-TIERS-81: die fünf schnellen Checks laufen über DENSELBEN
+      # LOCAL-GATE-TIERS-81: die sechs schnellen Checks laufen über DENSELBEN
       # Runner wie lokal (`sh scripts/gates.sh fast`), damit Definition und
       # Ausführung nicht auseinanderlaufen. Der Runner zählt die gestarteten
-      # Checks (Floor: mindestens 5) und führt keinen Codegen aus.
-      # Die fünf Checks laufen gebündelt am Job-Anfang (vorher: „Check
-      # formatting" zuerst, die vier Textgates zuletzt); alle fünf sind
+      # Checks (Floor: mindestens 6) und führt keinen Codegen aus.
+      # Die sechs Checks laufen gebündelt am Job-Anfang (vorher: „Check
+      # formatting" zuerst, die vier Textgates zuletzt); alle sechs sind
       # artefaktfrei (kein Build, kein Adapter, kein Netz).
       # Abgedeckter Kommando-Satz — gegenüber den fünf vorherigen Einzel-
-      # schritten unverändert:
+      # schritten unverändert, plus der Drift-Gate:
       #   cargo fmt --all -- --check
       #   sh scripts/check_file_sizes.sh
       #   sh scripts/check_plan_format.sh
       #   sh scripts/check_env_gate_reasons.sh
       #   sh scripts/check_core_prod_fs_free.sh
+      #   sh scripts/check_ci_tier_drift.sh
       - name: Run fast tier (scripts/gates.sh fast)
         run: sh scripts/gates.sh fast
 
@@ -290,6 +291,24 @@ jobs:
       # excludes that package to avoid running the GUI suite twice.
       - name: Run GUI tests
         run: cargo test -p lumina-gui --all-targets
+
+      # TEST-ORPHAN-97 (GATE-DRIFT-UND-LUECKEN-84): der Schritt oben baut die
+      # dep-info des Test-Targets (`target/debug/deps/lumina_gui-*.d`), die
+      # dieser Gate braucht. Deshalb steht er HIER, unmittelbar nach dem
+      # Test-Schritt desselben Jobs: die dep-info des Test-Builds liegt da
+      # frisch vor. Fehlt sie, endet `check_test_orphans.sh` mit Exit 2
+      # ("cannot conclude"); der Schritt ist blockierend (kein
+      # `continue-on-error`), der Job wird dann rot. Das ist gewollt — ein
+      # stilles "cannot conclude" wuerde die Schranke wirkungslos machen.
+      # Voraussetzung fuer Exit 0 ist ein Default-Feature-Build:
+      # `lumina-gui` hat `default = ["lensfun", "gpu"]`
+      # (crates/lumina-gui/Cargo.toml), damit ist der Sentinel
+      # `src/tests/lensfun_diagnostics.rs` (feature-gegatet) im dep-info
+      # enthalten und der Gate kann conclude. Scope: `lumina-gui` — die
+      # uebrigen Crates mit `src/tests/` bleiben lokal manuell
+      # (scripts/check_test_orphans.sh <crate>), siehe §5.1 der Doku.
+      - name: Check for orphaned test files (TEST-ORPHAN-97)
+        run: sh scripts/check_test_orphans.sh lumina-gui
 
       # GUI-JANKLOG-19 / CI-JANKLOG-47: `src/jank_log.rs` is gated
       # `#[cfg(all(feature = "janklog", debug_assertions))]` (lib.rs) and

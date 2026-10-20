@@ -145,10 +145,13 @@ Sidecars vollständig wiederherstellbar sein.
   benanntes Goldens-Gate (DOWNSCALER-UNIFY-71)
 - [local-gates.md](quality/local-gates.md):
   Lokale Gate-Stufen — `scripts/gates.sh` mit den benannten Stufen `fast`
-  (Sekunden, ohne Codegen, Floor: mindestens 5 gestartete Checks) und `slow`
+  (Sekunden, ohne Codegen, Floor: mindestens 6 gestartete Checks) und `slow`
   (Minuten, CI-Mirror), die wortgleiche Tier-Tabelle aus
-  `sh scripts/gates.sh list` und die Lückenliste zwischen den Stufen (jede
-  Lücke mit Klasse, Grund, Owner und Task-ID) (LOCAL-GATE-TIERS-81)
+  `sh scripts/gates.sh list`, der Drift-Gate, der die Tier-Liste gegen die
+  aus `.github/workflows/ci.yml` generierte Liste diffst
+  (`scripts/gen_ci_tiers.sh` + `scripts/check_ci_tier_drift.sh`), und die
+  Lückenliste zwischen den Stufen (jede Lücke mit Klasse, Grund, Owner und
+  Task-ID) (LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84)
 
 ## Feature-Matrix
 
