@@ -10,6 +10,12 @@ solches Fixture im Inventar) und damit der T21-Serien-Zweig. Der Task
 „geliefert und verifiziert", Rest sind `matrix` als eigener Sub-Slice und das
 Real-RAW-Serien-Gate.
 
+**Anker-Stand:** die verbleibenden Zeilenangaben dieses Statusberichts sind
+**Teil des Befunddatums** vom 2026-10-14 und beziehen sich auf den
+Code-Stand `dc8f701`; sie sind ueber
+`git show dc8f701:<pfad> | sed -n '<zeile>p'` rekonstruierbar. Die
+pfadgebundenen Fundstellen stehen als **Pfad + Symbol- bzw. Testname**.
+
 ## 1. Fähigkeit
 
 - HDR- und Panorama-Merge aus von `lumina-raw` dekodierbaren RAW-Dateien als
@@ -18,8 +24,8 @@ Real-RAW-Serien-Gate.
 - **Eine Implementierung:** beide Frontends laufen über denselben
   Decode-/Exposure-Adapter (`crates/lumina-stages/src/merge.rs`, Commit
   `189b7d9`) und dieselbe Merge-Orchestrierung
-  `lumina_merge::bundle::run_merge` (`crates/lumina-merge/src/bundle.rs:357`) —
-  wie die GUI (`crates/lumina-gui/src/merge_gui.rs:230`). Keine zweite
+  `lumina_merge::bundle::run_merge` (`crates/lumina-merge/src/bundle.rs` → `run_merge`) —
+  wie die GUI (`crates/lumina-gui/src/merge_gui.rs` → `run_merge_sync`). Keine zweite
   Merge-Mathematik, kein zweiter DNG-Writer (SOLL §1, §6 Invariante 1).
 - Exposition: HDR aus expliziten Listen, sonst RAW-EXIF, sonst laut
   `merge unsupported:`; Pano-Exposition ist reine Provenienz (EXIF oder neutrale
@@ -33,7 +39,7 @@ Real-RAW-Serien-Gate.
 ### 2.1 Synthetische Parität T11–T20 (Default-Suite, läuft in jedem Gate)
 
 Fixture: zwei 64×48-Graustufen-PNGs
-(`crates/lumina-cli/tests/merge_parity.rs:34-49`); Prinzip je Test: CLI-Prozess
+(`crates/lumina-cli/tests/merge_parity.rs` → `write_png`); Prinzip je Test: CLI-Prozess
 auf Baum 1 gegen MCP (in-process und über die `tools/call`-Naht) auf dem
 byte-identischen Baum 2.
 
@@ -135,7 +141,7 @@ sichtbar**:
 145-MB-lineares DNG-Encode (`merge_mcp_parity_gate.rs:4-12,51-59`); der
 vollständige CLI≡MCP-Beweis damit ~5 min gegen ein Default-Gate von ~34 s
 bzw. 66 s. Die zwei Ignorierten der Default-Suite sind dieser T21-Gate und
-`real_matrix_against_committed_goldens` (`crates/lumina-cli/tests/matrix_e2e.rs:421`).
+`real_matrix_against_committed_goldens` (`crates/lumina-cli/tests/matrix_e2e.rs` → `real_matrix_against_committed_goldens`).
 Frischheits-Hinweis: nach neuen Testdateien unter `crates/lumina-cli/tests/`
 braucht `scripts/check_test_orphans.sh lumina-cli` einen frischen
 `cargo test`-Lauf (crate-weite Freshness-Liste).
@@ -179,12 +185,12 @@ braucht `scripts/check_test_orphans.sh lumina-cli` einen frischen
    Eigentümerfrage mitgeführt; **implementiert** sind drei eigene Varianten
    `MergeStale`/`MergeUnsupported`/`MergeFailed` (-32011..-32013), `merge
    missing:` mappt auf das bestehende `FileNotFound`
-   (`crates/lumina-mcp/src/error.rs:43-57,79-85`).
+   (`crates/lumina-mcp/src/error.rs` → `McpError`).
 4. **`matrix`-Sub-Slice bleibt eigener Task** (`Agents.todo.md`,
    MCP-PARITY-C; SOLL §12): `lumina matrix` bringt `expected_route`
    (`testdata/matrix/recipe-set.v1.json`) und ein eigenes Gate; kein
    Blindschreiben von `expected_route`. Mitziehen im Lockstep:
-   `MERGE_IMAGE_DECODER_VERSION` (`crates/lumina-stages/src/merge.rs:55`) bei
+   `MERGE_IMAGE_DECODER_VERSION` (`crates/lumina-stages/src/merge.rs` → `MERGE_IMAGE_DECODER_VERSION`) bei
    Version-Bumps.
 5. **Digest-Sensitivität.** Die Quelldateinamen gehen ins digestierte Rezept
    (Pin-Namen `frame-a.cr3`/`frame-b.cr3` dokumentieren das); ein

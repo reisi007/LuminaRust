@@ -736,7 +736,7 @@ RUST_LOG=trace LUMINA_JANK_MS=8.3 \
   Flag existiert das Modul gar nicht. `LUMINA_JANK_MS` Default **8,3 ms**,
   `0` schaltet aus.
 - Aufruf-Syntax: `lumina-gui [directory] [--module library|develop|export] [--fullscreen]`
-  (`crates/lumina-gui/src/main.rs:69`).
+  (`crates/lumina-gui/src/main.rs` → `STARTUP_USAGE`).
 - `RUST_LOG=trace` ist **Pflicht**: ohne Trace-Timings sind Switch/Drag/Warmup
   unsichtbar, und genau die Fälle B3/B4/B6/B7 sind Timings.
 

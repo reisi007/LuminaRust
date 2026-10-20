@@ -2,6 +2,10 @@
 
 **Feature:** F-074 GPU-Bench / `GPU-RENDER-NONDETERMINISM-69`
 
+**Anker-Stand:** die Zeilenangaben dieses Berichts sind **Teil des
+Befunddatums** vom 2026-10-16 und beziehen sich auf den Code-Stand `ece0ae8`;
+sie sind ueber `git show ece0ae8:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
+
 ## Ziel und Geltungsbereich
 
 Dieses Dokument hält die **Grenze** der headless Untersuchung des
@@ -36,7 +40,7 @@ Tasks `GPU-RENDER-NONDETERMINISM-69` nach der Regel
 
 Der Auto-Tone-GPU-Pfad ist **synchron/blocking**:
 `map_async` + `poll(wgpu::PollType::wait_indefinitely)` + `rx.recv()`
-(`crates/lumina-gpu/src/lib.rs:3615-3628`, `gpu_util.rs:96-107`).
+(`crates/lumina-gpu/src/lib.rs:3615-3628`, `crates/lumina-gpu/src/gpu_util.rs` → `readback_texture`).
 
 Der Pass nutzt `LoadOp::Clear(0,0,0,1)` + `StoreOp::Store` +
 Fullscreen-Triangle (`crates/lumina-gpu/src/lib.rs` → `render_with_gpu_inner`).

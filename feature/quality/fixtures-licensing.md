@@ -66,7 +66,7 @@ Median/p95-Vergleich neu aufzeichnen.
 | Datei | Maße | Orientierung | Verwendung |
 | --- | --- | --- | --- |
 | `sample-data/raw/aircraft-landscape.cr3` | 6032×4024 | 1 | `lumina-raw`-Test `aircraft_landscape_fixture_*`; Decode-Bench; **GUI-Drop-Nachweis** `dropped_raw_path_preserves_orientation_metadata_and_identity`; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
-| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `lumina-raw/src/lib.rs:1238` assertionsgesetzt ist **8** — gleicher Wert wie `kittest_fixtures_support/mod.rs:52`); **GUI-Drop-Nachweis**; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
+| `sample-data/raw/aircraft-portrait.cr3` | 4024×6032 | 8 | `lumina-raw`-Test `aircraft_portrait_fixture_*`; Decode-Bench (Korrektur 2026-09-26: Orientation war hier mit **5** verzeichnet; gemessen und in `crates/lumina-raw/src/lib.rs` → `read_metadata_matches_full_decode_on_portrait_fixture` assertionsgesetzt ist **8** — gleicher Wert wie `crates/lumina-gui/tests/kittest_fixtures_support/mod.rs` → `RAW_FIXTURES`); **GUI-Drop-Nachweis**; **Erwartungsquelle der gepinnten Geometrie** (Regel 2) |
 
 Decode-Benchmarks lesen das Verzeichnis über die Env-Variablen
 **`LUMINA_RAW_FIXTURE`**; ohne sie wird sauber übersprungen (kein Panic, kein
@@ -333,9 +333,11 @@ Ermittelte Metadaten (via `exiftool`):
 
 **Korrektur 2026-09-29 (war 5, ist 8):** `exiftool -n -Orientation
 sample-data/raw/aircraft-portrait.cr3` liefert **8**, bestätigt durch
-`lumina-raw/src/lib.rs:1238` (`assert_eq!(metadata.orientation, 8)`) und
-`kittest_fixtures_support/mod.rs:52`. Die Verwechslung ist dokumentiert in
-`lumina-raw/src/lib.rs:137`: *„dcraw flip 5 is EXIF orientation 8, not 5"*. Die
+`crates/lumina-raw/src/lib.rs` → `read_metadata_matches_full_decode_on_portrait_fixture`
+(`assert_eq!(metadata.orientation, 8)`) und
+`crates/lumina-gui/tests/kittest_fixtures_support/mod.rs` → `RAW_FIXTURES`. Die
+Verwechslung ist dokumentiert in `crates/lumina-raw/src/lib.rs` →
+`dcraw_flip_to_exif_orientation`: *„dcraw flip 5 is EXIF orientation 8, not 5"*. Die
 Zeile wurde **an dieser Stelle** berichtigt und nicht fortgeschrieben.
 
 Das ist ein **Release-Blocker** (F-078): urheberrechtlich geschützte Kamera-RAWs

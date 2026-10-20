@@ -50,7 +50,8 @@ Agents.md „AI-Masken").
 die einzige verbleibende laute CPU-Route und bleibt das bis zur
 ONNX-Integration — als bewusste, dokumentierte Ausnahme (kein stiller
 Fallback): Der Heuristik-BFS (`fill_transparent_heuristic`,
-`lumina-core/src/generative.rs:23-107`) ist nicht paritätserhaltend
+`crates/lumina-core/src/generative.rs` → `fill_transparent_heuristic`) ist nicht
+paritätserhaltend
 GPU-portierbar (globaler Hash-Sort + FIFO-Tie-Break; datenparallele
 Approximation weicht um maxAbsDiff 255 / ~9 dB ab, F-043 verlangt ≤1–2 /
 ≥48 dB; unabhängig verifiziert BESTANDEN). User-Bedingungen: (1) der

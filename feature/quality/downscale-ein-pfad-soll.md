@@ -6,7 +6,10 @@ redundanten Wrapper) auf **einen** Pfad in `lumina-core`. Heimat ist
 `DOWNSCALE-EIN-PFAD` (`Agents.todo.md:43`): Qualität vor Geschwindigkeit,
 GPU-fähig gedacht, aber GPU-Implementierung ist **nicht** Teil dieses Tasks.
 
-**Belegbasis (alles unten ist gelesen, nichts spekulativ):**
+**Belegbasis (alles unten ist gelesen, nichts spekulativ; Code-Stand der Lesung:
+2026-10-18, `cb2da59` — die Zeilenangaben dieses Belegblocks und der
+historischen Abschnitte beziehen sich auf diesen Stand und sind ueber
+`git show cb2da59:<pfad> | sed -n '<zeile>p'` rekonstruierbar):**
 `crates/lumina-core/src/lib.rs` (`downscale_bilinear` :181-230,
 `ImageFrame::new` :395-414, `ImageFrame::downscale` :480-538),
 `crates/lumina-gui/src/filmstrip.rs` (`downscale_rgba` :266-291,
@@ -136,9 +139,9 @@ bildet `(… as f64 * scale).round().max(1.0)`. Die Ex-Nearest-Form darf
 `round` monoton und `max(1.0, ·) >= 1.0` ist — der Punkt ist die Form als
 Referenz, nicht ein Wertunterschied.)
 
-### 5.1 Histogramm-Paritaet (`crates/lumina-gui/src/tests/histogram.rs`)
+### 5.1 Histogramm-Paritaet (`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_histogram_matches_thumbnail`)
 
-`crates/lumina-gui/src/tests/histogram.rs:337,447` vergleicht das
+`crates/lumina-gui/src/tests/histogram/preview_thumb_parity.rs` → `fit_preview_histogram_matches_thumbnail` vergleicht das
 Preview-Histogramm (bilinear, `ImageFrame::downscale`) gegen das
 Thumbnail-Histogramm (**Nearest**, `downscale_rgba`) ueber
 `histogram_l1(&preview_hist.bins, &thumb_hist.bins)` mit Toleranz
@@ -159,7 +162,7 @@ gleich (niemals groesser), weil beide Seiten dann dieselbe Arithmetik nutzen.
 
 ### 5.2 Pin-Tests (sliders_filmstrip.rs)
 
-`crates/lumina-gui/src/tests/sliders_filmstrip.rs:198-209` pinnt:
+`crates/lumina-gui/src/tests/sliders_filmstrip.rs` → `filmstrip_downscale_keeps_small_images_and_shrinks_large` pinnt:
 
 - `downscale_rgba(&small, 2, 1, 160)` -> `(2, 1)` und **Byte-Gleichheit**
   (`out == small`, :201-203) — der Early-Return bei `longest <= max_dim`
@@ -332,18 +335,18 @@ verweist auf die Golden-Neuaufnahme als Folge auf der Referenzplattform.
 
 ### 10.1 MaxWidth-Aufrufer (downscale_bilinear)
 
-| Datei:Zeile | Zielsemantik | Byte-Gleich? | Fehlerbehandlung heute |
+| Datei:Symbol | Zielsemantik | Byte-Gleich? | Fehlerbehandlung heute |
 | --- | --- | --- | --- |
-| `lumina-cli/src/main.rs:7393` | MaxWidth | **ja** (Byte-Anker) | `?` -> `CliError` |
-| `lumina-mcp/src/tools/preview.rs:51` | MaxWidth | **ja** (Byte-Anker) | `map_err(map_core_error)` -> `McpError` |
-| `lumina-cull/src/analyze.rs:189` | MaxWidth | **ja** (Byte-Anker) | `?` -> `CullError` |
-| `lumina-stages/src/matrix_run.rs:298` | MaxWidth | **ja** (Golden-Vergleich) | `match` -> Outcome error |
-| `lumina-gui/src/matrix.rs:323` | MaxWidth | **ja** (Golden-Vergleich) | `match` -> report error |
-| `lumina-gui/src/matrix/render.rs:146` | MaxWidth | **ja** (Test, Golden) | `unwrap` |
-| `lumina-gui/src/cull_gui.rs:174` | MaxWidth | **ja** (Byte-Anker) | `.ok()?` -> `None` |
-| `lumina-gui/src/face_gui.rs:372` | MaxWidth | **ja** (Byte-Anker) | `.ok()` -> `None` |
-| `lumina-core/src/tests/image_io.rs:11,15,19,23,38` | MaxWidth | **ja** (Byte-Anker, Test) | `unwrap` |
-| `lumina-mcp/tests/mcp.rs:166,174,178` | MaxWidth | **ja** (Byte-Anker, Test) | `unwrap` |
+| `crates/lumina-cli/src/main.rs` → `cull_status_one` | MaxWidth | **ja** (Byte-Anker) | `?` -> `CliError` |
+| `crates/lumina-mcp/src/tools/preview.rs` → `run` | MaxWidth | **ja** (Byte-Anker) | `map_err(map_core_error)` -> `McpError` |
+| `crates/lumina-cull/src/analyze.rs` → `analyze_one` | MaxWidth | **ja** (Byte-Anker) | `?` -> `CullError` |
+| `crates/lumina-stages/src/matrix_run.rs` → `run` | MaxWidth | **ja** (Golden-Vergleich) | `match` -> Outcome error |
+| `crates/lumina-gui/src/matrix.rs` → `run_matrix` | MaxWidth | **ja** (Golden-Vergleich) | `match` -> report error |
+| `crates/lumina-gui/src/matrix/render.rs` → `matrix_render_is_full_resolution_shared_core_and_keeps_tolerance_gate` | MaxWidth | **ja** (Test, Golden) | `unwrap` |
+| `crates/lumina-gui/src/cull_gui.rs` → `culling_current_identity` | MaxWidth | **ja** (Byte-Anker) | `.ok()?` -> `None` |
+| `crates/lumina-gui/src/face_gui.rs` → `face_crop_frame` | MaxWidth | **ja** (Byte-Anker) | `.ok()` -> `None` |
+| `crates/lumina-core/src/tests/image_io.rs` → `downscale_max_width_never_upsizes_and_is_deterministic` und `downscale_max_width_averages_flat_colour_identically` | MaxWidth | **ja** (Byte-Anker, Test) | `unwrap` |
+| `crates/lumina-mcp/tests/mcp.rs` → `downscale_never_upsizes_and_is_deterministic` | MaxWidth | **ja** (Byte-Anker, Test) | `unwrap` |
 
 **Byte-Verdikt:** Alle MaxWidth-Aufrufer **muessen byte-gleich bleiben**.
 Sie sind der Byte-Anker des Tasks: gleiche Geometrie, gleiche Arithmetik,

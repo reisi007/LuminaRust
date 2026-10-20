@@ -2339,8 +2339,8 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Plane **nicht** geschrieben — die Invariante „Plane hält die aktuelle
   Coverage" gilt dort nur, *weil* sie schon vorher galt. Erreichbar ist das
   Restloch ausschließlich über einen **fehlgeschlagenen ersten
-  Live-Brush-Upload**: `brush_plane.rs:156-159` (`ensure_vram` schlägt fehl,
-  früher Return) oder `:163-167` (`stamp_live_brush_mark` im Fehlerzweig) —
+  Live-Brush-Upload`: `crates/lumina-gui/src/brush_plane.rs` → `gpu_upload_brush_tile`
+  (`ensure_vram` schlägt fehl, früher Return; `stamp_live_brush_mark` im Fehlerzweig) —
   dann steht `drawing == true` bei veralteter Plane, ohne dass der Sync
   löscht. Sonst lädt der erste Dab die **ganze** Plane
   (`brush_plane.rs:172-182`), und `preview_masks.rs:111-115` ruft

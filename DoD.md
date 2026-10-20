@@ -159,7 +159,8 @@ beantwortet sind:
   '#\[allow(dead_code)\]'` lieferte null Treffer, also war er sich seiner
   Sache sicher und widersprach damit dem Implementierungsbericht, der das
   Attribut **korrekt** gemeldet hatte. Das Attribut stand an
-  `tests/kittest_decode_support/mod.rs:161`, **mehrzeilig** formatiert
+  `crates/lumina-gui/tests/kittest_decode_support/mod.rs` → `DecodeSettled`,
+  **mehrzeilig** formatiert
   (`#[allow(` / `dead_code,` / `reason = "…"`) — der Muster passte nicht.
   Der Verifizierer fand es mit `grep -A3 '#\[allow($'`. **Regel:** bevor ein
   Fehlen behauptet wird, (a) das Muster gegen die tatsaechliche Form pruefen

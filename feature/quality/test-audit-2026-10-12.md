@@ -10,6 +10,12 @@ SOLL → Implementierungs-Agent → unabhängige Verifikation (Aufgabenstellung 
 in Arbeit befindlichen Dateien wurden **nicht** berührt; alle
 Mutationsziele der Runde sind restauriert und diff-leer gegen HEAD.
 
+**Anker-Stand:** die verbleibenden Zeilenangaben dieses Berichts sind **Teil des
+Befunddatums** vom 2026-10-12 und beziehen sich auf den Baum `6234f08` (siehe
+„Baum“ oben); sie sind ueber `git show 6234f08:<pfad> | sed -n '<zeile>p'`
+rekonstruierbar. Alle uebrigen Fundstellen stehen als **Pfad + Symbol- bzw.
+Testname**.
+
 ## Gemessene Basis
 
 | Messung | Ergebnis |
@@ -49,7 +55,7 @@ Die von 2026-09-28 ausdrücklich offene semantische Ebene.
 ### B1 — GEMESSEN, Priorität 1
 
 `downscale_never_upsizes_and_is_deterministic`
-(`crates/lumina-mcp/tests/mcp.rs:163`) dupliziert
+(`crates/lumina-mcp/tests/mcp.rs` → `downscale_never_upsizes_and_is_deterministic`) dupliziert
 `downscale_bilinear_never_upsizes_and_is_deterministic`
 (`crates/lumina-core/src/tests/image_io.rs:8`). Beide rufen **dieselbe
 Produktionsfunktion** `lumina_core::downscale_bilinear` (re-exportiert in
@@ -101,11 +107,11 @@ Vertreter pro Codepad kollabieren, nie auf null.
 
 ### B3 — statisch, Priorität 2: fünf `previous_refuses_*`-Tests, ein Pad
 
-- `crates/lumina-cli/tests/mask_local_e2e.rs:363` (Original, P0-Skalare)
-- `crates/lumina-cli/tests/mask_local_detail_previous_e2e.rs:22`
-- `crates/lumina-cli/tests/mask_local_presence_e2e.rs:283`
-- `crates/lumina-cli/tests/mask_local_curve_e2e.rs:338`
-- `crates/lumina-cli/tests/mask_local_color_history_e2e.rs:73`
+- `crates/lumina-cli/tests/mask_local_e2e.rs` → `previous_refuses_recipe_only_local_mask_transfer_on_source_or_target` (Original, P0-Skalare)
+- `crates/lumina-cli/tests/mask_local_detail_previous_e2e.rs` → `previous_refuses_a_detail_only_local_state_on_source_and_target`
+- `crates/lumina-cli/tests/mask_local_presence_e2e.rs` → `previous_refuses_a_presence_only_local_state_on_source_and_target`
+- `crates/lumina-cli/tests/mask_local_curve_e2e.rs` → `previous_refuses_a_curve_only_local_state_on_source_and_target`
+- `crates/lumina-cli/tests/mask_local_color_history_e2e.rs` → `previous_refuses_a_color_only_local_state_on_source_and_target`
 
 Alle fünf asserten, dass `previous` einen rezept-lokalen Transfer abweist
 („refused recipe-only transfer", Ziel-Bytes unberührt); sie unterscheiden sich
@@ -117,14 +123,18 @@ benanntes Gate).
 ### B4 — statisch, Priorität 2
 
 `legacy_versions_migrate_losslessly_and_refuse_a_smuggled_detail_block`
-(`crates/lumina-sidecar/src/tests/local_adjustments_detail.rs:106`) vs.
+(`crates/lumina-sidecar/src/tests/local_adjustments_detail.rs` →
+`legacy_versions_migrate_losslessly_and_refuse_a_smuggled_detail_block`) vs.
 `…_presence_block` (`local_adjustments_presence.rs:92`) — identische
 Migrationsschleife + Refusal, unterschiedlich ist nur der eingeschleuste Block.
 
 ### B5 — statisch, Priorität 3, Nur-Abgrenzung
 
 `brush_zero_width`/`brush_zero_height_resolution_rejects_invalid_sidecar`
-(`crates/lumina-sidecar/src/tests/mask_prompts.rs:133/138`) teilen den
+(`crates/lumina-sidecar/src/tests/mask_prompts.rs` →
+`brush_zero_width_resolution_rejects_invalid_sidecar` und
+`crates/lumina-sidecar/src/tests/mask_prompts.rs` →
+`brush_zero_height_resolution_rejects_invalid_sidecar`) teilen den
 Produktionszweig `crates/lumina-sidecar/src/lib.rs` → `validate_prompt`
 (`resolution.0 == 0 || resolution.1 == 0`) —
 jeder pinned ein Disjunkt; das ist Condition-Coverage, **kein**
@@ -133,10 +143,15 @@ Streichkandidat.
 ### B6/B7 — statisch, Priorität 3
 
 `effects_validation_rejects_invalid_values`
-(`lumina-core/src/tests/vignette_grain.rs:281` via `apply_recipe` vs.
-`lumina-sidecar/src/tests/stage_serde_b.rs:61` via
+(`crates/lumina-core/src/tests/vignette_grain.rs` →
+`effects_validation_rejects_invalid_values` via `apply_recipe` vs.
+`crates/lumina-sidecar/src/tests/stage_serde_b.rs` →
+`effects_validation_rejects_invalid_values` via
 `SidecarDocument::validate`) — gleiche Unwertig-Matrix, zwei Oberflächen;
-`initialize_*` (`lumina-mcp/tests/mcp.rs:182` vs. `meta_mcp.rs:142`) —
+`initialize_*` (`crates/lumina-mcp/tests/mcp.rs` →
+`initialize_reports_capabilities_and_protocol` vs.
+`crates/lumina-mcp/tests/meta_mcp.rs` →
+`initialize_declares_resources_capability_without_prompts`) —
 Überlapp nur protocolVersion+tools, je eindeutige Hälften.
 
 **Abgrenzung zum 2026-09-28-Befund:** `g15_stacks.rs`/`crates/lumina-gui/src/tests/library_sort.rs`
@@ -147,8 +162,10 @@ Streichkandidat.
 
 **Keine Befunde.** Geprüft und leer: Debug-Format-Pins (`format!("{:?}")` in
 Assertions), Zeiger-/Adressidentität, `size_of`-Pins (nur
-`lumina-raw/tests/abi_layout.rs:57` — legitim, das ist der ABI-Vertrag),
-Call-Order-Vergleiche. Error-Text-Pins (z. B. `lumina-stages/src/tests.rs:153`)
+`crates/lumina-raw/tests/abi_layout.rs` →
+`abi_constants_match_rust_struct_layout` — legitim, das ist der ABI-Vertrag),
+Call-Order-Vergleiche. Error-Text-Pins (z. B. `crates/lumina-stages/src/tests.rs` →
+`resolve_copy_selects_the_default_and_rejects_an_unknown_id_loudly`)
 pinnen CLI-sichtbare Meldungen = Vertrag. MCP-Registry-Tests
 (`library_tools.rs:48`) pinnen Listen↔Dispatch-Konsistenz mit dokumentierter
 Begründung.
@@ -161,8 +178,9 @@ positiv — `run_merge` (`crates/lumina-merge/src/bundle.rs` → `run_merge`, Al
 `run_merge_bundle` in `crates/lumina-cli/src/merge.rs` → `run_merge_bundle`,
 Produktionsaufruf ebendort und in `crates/lumina-gui/src/merge_gui.rs` →
 `run_merge_sync`) und `classify_required`
-(`lumina-testskip/src/lib.rs:103`, wird von
-`lumina-onnx/tests/face_real_weights.rs:86` gerufen — testskip ist per Definition
+(`crates/lumina-testskip/src/lib.rs` → `classify_required`, wird von
+`crates/lumina-onnx/tests/face_real_weights.rs` →
+`real_weights_match_the_adapter_contract` gerufen — testskip ist per Definition
 Testinfrastruktur). Der LENSFUN-DB-33-Defekt (Naht ohne Produktionsaufruf)
 existiert im aktuellen Baum nicht.
 
@@ -173,7 +191,7 @@ existiert im aktuellen Baum nicht.
 | **M-B** | `lumina_core::downscale_bilinear`, No-Op-Pfad +1 pro Pixel | core-Test `image_io.rs:8` **rot**; mcp-Test `mcp.rs:163` **grün** → mcp-Exemplar hat kein eigenes Fehlsignal (siehe B1) |
 | **M-A** | `LocalAdjustments::set_value` akzeptiert `detail` | 5 Tests rot (3 sidecar, 2 core) → die fünf **haben** Fehlsignal; ihre Redundanz ist quantifiziert (B2) |
 | **M-C** | `checkerboard` dark↔light | `lumina-cull` 45/45 **grün** — Determinismus-Test und alle Consumer können Polaritätsfehler nicht sehen |
-| **M-C2** | `checkerboard` → einfarbig | rot: `crates/lumina-cull/tests/fixtures.rs:147` `heuristic_precision_and_recall_on_synthetic_fixtures` — die Struktur der Generatoren **ist** verankert |
+| **M-C2** | `checkerboard` → einfarbig | rot: `crates/lumina-cull/tests/fixtures.rs` → `heuristic_precision_and_recall_on_synthetic_fixtures` — die Struktur der Generatoren **ist** verankert |
 
 Zusätzlich benannt (nicht gemessen, `#[ignore]`d, kein Default-Gate):
 **`cpu_gpu_path_parity_matrix`** —
@@ -181,7 +199,8 @@ Zusätzlich benannt (nicht gemessen, `#[ignore]`d, kein Default-Gate):
 `let _ = run_cpu_gpu_path_parity_matrix(&mut harness);` verwirft das Ergebnis;
 der Test würde einen roten Matrix-Run als grün melden. Die Vertrags-Hälfte
 (lauter SKIP) trägt das Geschwister `parity_matrix_skips_loudly_without_adapter`
-(`:302`).
+(`crates/lumina-gui/tests/kittest_parity.rs` →
+`parity_matrix_skips_loudly_without_adapter`).
 
 ## (f) Laufzeit-Ballast — diesmal GEMESSEN (2026-09-28 offen)
 
@@ -206,7 +225,8 @@ der Test würde einen roten Matrix-Run als grün melden. Die Vertrags-Hälfte
 
 **Keine Befunde.** Die Nahtstellen-Kandidaten asserten Verhalten:
 `generative_link_status_delegates_to_artifact_status`
-(`lumina-sidecar/src/tests/generative_bundle.rs:4`) prüft echte
+(`crates/lumina-sidecar/src/tests/generative_bundle.rs` →
+`generative_link_status_delegates_to_artifact_status`) prüft echte
 `ArtifactStatus`-Zustände auf Platte; MCP-„registered in both paths"-Tests
 prüfen Listen↔Dispatch-Verhalten.
 

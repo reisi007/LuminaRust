@@ -5,7 +5,10 @@ zwischen `lumina merge-hdr` / `lumina merge-pano` (CLI) und zwei neuen
 MCP-Tools, über dieselbe Eingabemenge, denselben Merge-Digest und denselben
 DNG-Checksum-Anchor. Matrix bleibt eigener Sub-Slice (Abgrenzung, §12).
 
-**Belegbasis (alles unten ist gelesen, nichts spekulativ):**
+**Belegbasis (alles unten ist gelesen, nichts spekulativ; Code-Stand der Lesung:
+2026-10-13, `9bacea8` — die Zeilenangaben dieses Belegblocks und der
+historischen Abschnitte beziehen sich auf diesen Stand und sind ueber
+`git show 9bacea8:<pfad> | sed -n '<zeile>p'` rekonstruierbar):**
 `crates/lumina-cli/src/merge.rs` (414 Z., vollständig),
 `crates/lumina-cli/src/main.rs` (Merge-Varianten :647-651, Dispatch :1560-1561,
 `CliError::Message` :1465-1468, `main`/`run` :1526-1534, `emit` :5675-5682),
@@ -36,18 +39,18 @@ DNG-Checksum-Anchor. Matrix bleibt eigener Sub-Slice (Abgrenzung, §12).
 - MCP erhält **zwei** path-basierte Tools (ein Aufruf = ein Merge-Job, **kein**
   `image_id`, kein Session-State): `lumina_merge_hdr` und `lumina_merge_pano`.
   Analogie: `lumina_generative`/`lumina_relocate` (MCP-PARITY-B,
-  `crates/lumina-mcp/src/tools/mod.rs:87-111`).
+  `crates/lumina-mcp/src/tools/mod.rs` → `list_tool_definitions`).
 - Beide Tools rufen **dieselbe** Orchestrierung wie CLI + GUI auf:
   `lumina_merge::bundle::run_merge` (CLI-Knoten
-  `crates/lumina-cli/src/merge.rs:92-106`). Keine zweite Merge-Mathematik, kein
+  `crates/lumina-cli/src/merge.rs` → `run_merge`). Keine zweite Merge-Mathematik, kein
   zweiter DNG-Writer.
 - Resultat: byte-identisches DNG + identischer Merge-Digest für dieselbe
   Eingabemenge über CLI, GUI-headless und MCP
-  (`crates/lumina-cli/tests/merge_parity.rs:74-148`).
+  (`crates/lumina-cli/tests/merge_parity.rs` → `cli_and_gui_contract_paths_share_the_same_anchor`).
 
 ## 2. `MergeArgs` → MCP JSON-Schema (SOLL-Vertrag)
 
-Quelle der Felder, Typen und Defaults: `crates/lumina-cli/src/merge.rs:45-80`
+Quelle der Felder, Typen und Defaults: `crates/lumina-cli/src/merge.rs` → `MergeArgs`
 (`pub struct MergeArgs`, clap). Die MCP-Felder sind snake_case; `--json` entfällt
 (§5). Der CLI-Flag `--input` ist `required = true` und ohne `num_args`
 wiederholbar (`crates/lumina-cli/src/merge.rs` → `MergeArgs`) — clap erzwingt damit **nur das Vorhandensein**,
@@ -58,7 +61,7 @@ die Spanne 2..=256 kommt allein aus `validate_source_count`
 | CLI-Flag (`MergeArgs`, `crates/lumina-cli/src/merge.rs` → `MergeArgs`) | MCP-JSON-Feld | Typ | Pflicht | Default (MCP) | Grenzen / Schema-Keywords |
 | --- | --- | --- | --- | --- | --- |
 | `--input` (wiederholbar) :49-50 | `inputs` | string[] | **ja** | — | `minItems: 2`, `maxItems: 256` (**beschreibend, nicht durchgreifend** — Pkt. 1); absolute Pfade, Merge-Reihenfolge; `inputs[0]` = Referenz |
-| `--output` :52-54 | `output` | string \| null | nein | `null`/absent → `<ref-stem>-HDR.dng` / `-Pano.dng` neben `inputs[0]` (`bundle.rs:640-653`) | MUSS auf `.dng` enden (`bundle.rs:608-613`), braucht einen Dateinamen (`:614-622`), darf keiner Quelle gleichen (`:623-636`, Hüll-Verweis `:608-637`) — **Form-Checks sind Merge-Domäne** (Pkt. 3) |
+| `--output` :52-54 | `output` | string \| null | nein | `null`/absent → `<ref-stem>-HDR.dng` / `-Pano.dng` neben `inputs[0]` (`crates/lumina-merge/src/bundle.rs` → `resolve_dng_path`) | MUSS auf `.dng` enden (`crates/lumina-merge/src/bundle.rs` → `resolve_dng_path`), braucht einen Dateinamen (`resolve_dng_path`), darf keiner Quelle gleichen (`resolve_dng_path`, Hüll-Verweis `resolve_dng_path`) — **Form-Checks sind Merge-Domäne** (Pkt. 3) |
 | `--exposure-times` (`MergeArgs::exposure_times`) | `exposure_times` | number[] | nein | `[]` | Arity: leer **oder** genau `len(inputs)` (`crates/lumina-stages/src/merge.rs` → `check_explicit_list_lengths`; Handler, §3 letzte Zeile); Range je Wert endlich, `(0, 86_400]` (`merge_recipe.rs:38`) — **beschreibend**, Durchgriff in `resolve_hdr_exposure` → `merge unsupported:` (`crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure`) |
 | `--isos` (`MergeArgs::isos`) | `isos` | integer[] | nein | `[]` | Arity: leer **oder** genau `len(inputs)`; Range je Wert `1..=10_000_000` (`merge_recipe.rs:40`) — **beschreibend**, Durchgriff `crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure`; **JSON-Integer, kein Float-Cast** |
 | `--f-numbers` (`MergeArgs::f_numbers`) | `f_numbers` | number[] | nein | `[]` | Arity: leer **oder** genau `len(inputs)`; Range je Wert endlich, `(0, 256]` (`merge_recipe.rs:42`) — **beschreibend**, Durchgriff `crates/lumina-stages/src/merge.rs` → `resolve_hdr_exposure` |
@@ -111,13 +114,14 @@ keine `MergeRunError`-Klasse.
    letzte Zeile). Fehlerbild laut, kein stilles Truncate/Repeat.
 3. `output`: ist ein **optionales** Feld (`crates/lumina-cli/src/merge.rs` → `MergeArgs`,
    `Option<PathBuf>`) — fehlt es, ist es `null` oder absent, gilt der
-   Default-Zielname aus `inputs[0]` (`resolve_dng_path`,
-   `bundle.rs:640-653`); das ist **kein** Fehler. Nur ein **vorhandenes,
+   Default-Zielname aus `inputs[0]` (`crates/lumina-merge/src/bundle.rs` →
+   `resolve_dng_path`); das ist **kein** Fehler. Nur ein **vorhandenes,
    nicht-String**-Feld ist ein Typfehler → `InvalidParams`. Die **Form**
-   (`.dng`-Endung, `bundle.rs:608-613`), ein fehlender Dateiname
-   (`:614-622`) und ein Ziel, das auf eine Quelle zeigt (`Ablehnungszweig
-   :631-636`, Prüfschleife :623-630) prüft der Handler **nicht**: das tut
-   `resolve_dng_path` (Hüll-Verweis `bundle.rs:608-637`) und liefert dafür
+   (`.dng`-Endung, `resolve_dng_path`), ein fehlender Dateiname
+   (`resolve_dng_path`) und ein Ziel, das auf eine Quelle zeigt (`Ablehnungszweig
+   `resolve_dng_path`, Prüfschleife `resolve_dng_path`) prüft der Handler **nicht**: das tut
+   `resolve_dng_path` (Hüll-Verweis `crates/lumina-merge/src/bundle.rs` →
+   `resolve_dng_path`) und liefert dafür
    `MergeRunError::Failed` → gemappt `MergeFailed`. Gleiche Doktrin wie der
    Count (Pkt. 1): jede Eingabe, die im CLI `merge failed:` ergibt, darf im
    MCP nicht `InvalidParams` werden (T17). Ein eigener Handler-Check wäre
@@ -162,14 +166,14 @@ keine `MergeRunError`-Klasse.
 - Einstiege: `merge_hdr`/`merge_pano` `crates/lumina-cli/src/merge.rs` → `merge_hdr`/`merge_pano` → gemeinsamer
   `run_merge(mode, args)` `crates/lumina-cli/src/merge.rs` → `run_merge`.
 - MCP-Spiegel: `dispatch_tool`-Arm `merge_hdr::NAME => merge_hdr::run(..)`
-  (`tools/mod.rs:124-154`, Musterarm `regenerate::NAME` :151) +
-  `list_tool_definitions`-Eintrag (`tools/mod.rs:107-111`).
+  (`crates/lumina-mcp/src/tools/mod.rs` → `dispatch_tool`, Musterarm `regenerate::NAME`) +
+  `list_tool_definitions`-Eintrag (`crates/lumina-mcp/src/tools/mod.rs` → `list_tool_definitions`).
 
 **Fehlerpräfixe (kanonisch):** `missing`/`stale`/`unsupported` sind als
-Kanon in `crates/lumina-cli/src/merge.rs:14-19` festgehalten; `failed` steht
+Kanon in `crates/lumina-cli/src/merge.rs` → Modul-Doc festgehalten; `failed` steht
 **nicht** dort, sondern als vierte Variante in
-`crates/lumina-merge/src/bundle.rs:229-241` (`MergeRunError::Failed`, Doc-
-Kommentar :239-240). Der gerenderte Präfix-Text kommt einheitlich aus
+`crates/lumina-merge/src/bundle.rs` → `MergeRunError` (`MergeRunError::Failed`, Doc-
+Kommentar an der Variante `Failed`). Der gerenderte Präfix-Text kommt einheitlich aus
 `bundle.rs:267-271`.
 
 | Klasse | CLI-Präfix (stderr, Exit 1) | MCP-`McpError`-Variante | stabiler `error`-Name (`data.error`) | JSON-RPC-Code |
@@ -190,7 +194,7 @@ Verbindliche Randbedingungen für das Mapping:
   `library_common.rs:48-78`; Fehlertext-Trägerschaft `crates/lumina-mcp/src/error.rs` → `McpError::message`).
 - **Kein `debug!`- oder stiller No-Op-Pfad** (Prinzip §11 „Kein stiller
   No-Op"): `dispatch_tool`'s
-  Fall-through ist `MethodNotFound` (`tools/mod.rs:152`); ein Merge-Fehler ist
+  Fall-through ist `MethodNotFound` (`crates/lumina-mcp/src/tools/mod.rs` → `dispatch_tool`); ein Merge-Fehler ist
   immer `isError: true` mit `structuredContent = error.data()`
   (`crates/lumina-mcp/src/error.rs` → `tool_error_result`).
 - **Quellzahl ist Merge-Domäne, nicht Tool-Validierung:** 0, 1 oder 257
@@ -199,8 +203,8 @@ Verbindliche Randbedingungen für das Mapping:
   **nicht** in der `InvalidParams`-Zeile. Sonst wäre ein und dieselbe Eingabe
   im CLI `merge failed:` und im MCP `InvalidParams` (Verstoß gegen T17).
 - **`output`-Form ist ebenfalls Merge-Domäne:** `.dng`-Endung
-  (`bundle.rs:608-613`), fehlender Dateiname (`:614-622`) und Ziel == Quelle
-  (Prüfschleife :623-630, Ablehnungszweig :631-636) laufen über
+  (`crates/lumina-merge/src/bundle.rs` → `resolve_dng_path`), fehlender Dateiname (`resolve_dng_path`) und Ziel == Quelle
+  (Prüfschleife `resolve_dng_path`, Ablehnungszweig `resolve_dng_path`) laufen über
   `resolve_dng_path` → `MergeRunError::Failed` → `MergeFailed`. Der Handler
   prüft an `output` nur, ob ein vorhandenes Feld ein String ist — ein
   fehlendes/`null`/absentes Feld ist der gültige Default (§2 Pkt. 3).
@@ -214,15 +218,15 @@ Verbindliche Randbedingungen für das Mapping:
 
 ## 4. MCP-Dispatch-/Toolmaking-Muster (aus zwei Referenz-Handlern)
 
-**Der Tool-Vertrag:** `tools/mod.rs:1-6` legt je Submodul drei Exporte fest —
+**Der Tool-Vertrag:** `crates/lumina-mcp/src/tools/mod.rs` → Modul-Doc legt je Submodul drei Exporte fest —
 `NAME` (&str), `schema() -> Value` und `run(server, args) -> Result<Value,
 McpError>`. `DESCRIPTION` (&str) ist im Modul-Doc nicht genannt, aber in jedem
 Handler gesetzt und wird von `tool_def` übernommen (z. B.
 `crates/lumina-mcp/src/tools/generative.rs` → `NAME`/`DESCRIPTION`, `dust_removal.rs:24-29`). Registrierung erfolgt an
-**vier** Stellen: `pub mod` (`tools/mod.rs:8-36`), `list_tool_definitions`
+**vier** Stellen: `pub mod` (`crates/lumina-mcp/src/tools/mod.rs` → `pub mod`-Deklarationen), `list_tool_definitions`
 (:43-113), `dispatch_tool` (:124-154) und — testseitig — `TOOL_NAMES`
-(`tool_names/mod.rs:22-54`) plus `EXPECTED_TOOLS`
-(`lumina-cli/src/tests/mcp_onnx.rs:64-96`, zweiter Pin). `is_known_tool`
+(`crates/lumina-mcp/tests/tool_names/mod.rs` → `TOOL_NAMES`) plus `EXPECTED_TOOLS`
+(`crates/lumina-cli/src/tests/mcp_onnx.rs` → `EXPECTED_TOOLS`, zweiter Pin). `is_known_tool`
 leitet sich aus `list_tool_definitions` ab (:160-164), ein separater Eintrag
 ist nicht nötig.
 
@@ -242,8 +246,9 @@ Aufbau (`crates/lumina-mcp/src/tools/dust_removal.rs`), in genau dieser Reihenfo
    wird auf Typ-Ebene geprüft (§2 Pkt. 3), die **Form**prüfung bleibt bei
    `resolve_dng_path`. **Zeitpunkt korrekt benannt:** `run_merge` dekodiert
    zuerst (`bundle.rs:378-390`), resolved danach die Exposure
-   (`:392-395`), merged (`align_and_merge`, `:398-404`) und ruft
-   `resolve_dng_path` erst danach (`:411`). Der `output`-Formfehler kommt
+   (`crates/lumina-merge/src/bundle.rs` → `run_merge`), merged (`crates/lumina-merge/src/bundle.rs` →
+   `align_and_merge`) und ruft
+   `resolve_dng_path` erst danach (`crates/lumina-merge/src/bundle.rs` → `resolve_dng_path`). Der `output`-Formfehler kommt
    also **nach** Decode und Alignment — und genau dort tritt er in der CLI
    ebenfalls auf, weil die CLI über denselben `run_merge`-Pfad läuft.
    Fehlerklasse **und** Zeitpunkt sind damit CLI-identisch (T17, T10). Ein
@@ -321,7 +326,7 @@ Aufbau (`crates/lumina-mcp/src/tools/generative.rs`):
 ## 5. JSON-Rückgabe-Felder 1:1 (CLI `--json` ≡ MCP `structuredContent`)
 
 Quelle: `emit(args.json, serde_json::json!({...}), &message)` in
-`crates/lumina-cli/src/merge.rs:123-135`. `emit` druckt exakt dieses Objekt
+`crates/lumina-cli/src/merge.rs` → `run_merge`. `emit` druckt exakt dieses Objekt
 (`crates/lumina-cli/src/main.rs` → `emit`); `tool_result_response` legt ein MCP-Payload-Objekt
 unverändert in `structuredContent` (`crates/lumina-mcp/src/error.rs` → `tool_result_response`).
 
@@ -358,7 +363,7 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 2. **Decode-Kontext spiegelt die Quelle:** CLI-Adapter setzt `decoder` auf
    `"libraw"` wenn `raw.is_some()` sonst `"image"`, plus `libraw_decode_version()`
    bzw. `CARGO_PKG_VERSION`, `orientation` aus RAW-Metadaten
-   (`crates/lumina-cli/src/merge.rs:172-180`). MCP-Adapter muss diese Werte aus
+   (`crates/lumina-cli/src/merge.rs` → `run_merge`). MCP-Adapter muss diese Werte aus
    denselben Routen beziehen, sonst driftet der Digest.
 3. **Eingabe-Validierung vor Verarbeitung:** `inputs` ist Pflicht; die
    **Anzahl** prüft allein `validate_source_count` (2..=256,
@@ -384,7 +389,8 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
    `feature/decisions/LRPAR-G13-MERGE-15.md` §Normative Invarianten.
 7. **Originale unverändert; relative Pfade; atomarer Write; kein stiller
    Fallback** (dasselbe SOLL-Dokument §Normative Invarianten, Absolutpfade
-   verboten; E2E `merge_e2e.rs:544-578` für Quell-Sidecars, `:580-605` für
+   verboten; E2E `merge_e2e.rs:544-578` für Quell-Sidecars, `crates/lumina-cli/tests/merge_e2e.rs` →
+   `merge_source_outside_bundle_is_unsupported` für
    Quellen außerhalb des Bundles).
 8. **Rückgabe identisch:** MCP liefert `command/output/sidecar/digest/checksum/
    cached/status` 1:1 wie CLI-JSON (`merge.rs:123-135`, §5).
@@ -408,7 +414,7 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 ## 7. Fixtures / Goldens
 
 - **Hash-Parity-Anker (synthetisch):** zwei 64×48 Graustufen-PNGs im Gradienten
-  `level + x % 16` (`crates/lumina-cli/tests/merge_parity.rs:34-49`) mit
+  `level + x % 16` (`crates/lumina-cli/tests/merge_parity.rs` → `write_png`) mit
   expliziten Exposure/ISO/f-number-Werten; byte-stabiler Digest + DNG-Checksum
   (`merge_parity.rs:74-148`).
 - **MCP-Parity-Test (neu, SOLL):** derselbe Anker aus MCP-Seite aufrufen
@@ -461,8 +467,8 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 | ID | Art | Ort (SOLL) | Prüft | Fixture |
 | --- | --- | --- | --- | --- |
-| T1 | [U] | neue Testdatei `crates/lumina-mcp/tests/merge_tools.rs` (Name wie §10.1) | `TOOL_NAMES` + `list_tool_definitions` + `is_known_tool` enthalten `lumina_merge_hdr` **und** `lumina_merge_pano`, keine Duplikate, Zählguard — Muster `library_tools.rs:47-91` und `tool_names/mod.rs:60-110` | keine |
-| T2 | [U] | `crates/lumina-cli/src/tests/mcp_onnx.rs:26,64-96` | zweiter Pin (`tools.len()`, `EXPECTED_TOOLS`) um beide Namen gewachsen, 26 → **28** | keine |
+| T1 | [U] | neue Testdatei `crates/lumina-mcp/tests/merge_tools.rs` (Name wie §10.1) | `TOOL_NAMES` + `list_tool_definitions` + `is_known_tool` enthalten `lumina_merge_hdr` **und** `lumina_merge_pano`, keine Duplikate, Zählguard — Muster `library_tools.rs:47-91` und `crates/lumina-mcp/tests/tool_names/mod.rs` → `tools_list_reports_exactly_the_documented_tool_names` | keine |
+| T2 | [U] | `crates/lumina-cli/src/tests/mcp_onnx.rs` → `mcp_subcommand_pipeline_answers_handshake_and_lists_all_tools` | zweiter Pin (`tools.len()`, `EXPECTED_TOOLS`) um beide Namen gewachsen, 26 → **28** | keine |
 | T3 | [U] | `crates/lumina-mcp/tests/merge_tools.rs` | `tools/list` liefert **beide** Schemas: `additionalProperties:false`, `required == ["inputs"]`, `enum`/`minimum`-Angaben gem. §2-Tabelle | keine |
 | T4 | [U] | `lumina-mcp` Unit in `merge_common`/`merge_hdr` | Schema-JSON der beiden Tools ist bis auf `description`/`enum` gleich → ein Kern, zwei Namen | keine |
 
@@ -482,15 +488,15 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 | ID | Art | Ort (SOLL) | Prüft | Fixture |
 | --- | --- | --- | --- | --- |
 | T11 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) (Spiegel von `library_parity.rs:41-80` + `merge_parity.rs:74-148`) | gleiche Eingabemenge über CLI-Binary und MCP-Server → **identischer** `digest` **und** `checksum` (String-Gleichheit, `assert_eq!`), `command`/`status` identisch | 2× 64×48 PNG (`merge_parity.rs:34-49`), Exposition explizit |
-| T12 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | DNG-Bytes auf Platte identisch: `blake3(MCP-DNG) == blake3(CLI-DNG)` und `== checksum`-Feld | wie T11, zwei Bäume (Prinzip: CLI-Prozess auf Baum 1, MCP in-process auf byte-identischem Baum 2 — Modul-Doc `crates/lumina-cli/tests/library_parity_common/mod.rs:1-24`) |
-| T13 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | Sidecar-Bytes identisch (`assert_unchanged`-Muster, `library_parity_common/mod.rs:277-284`): `"type": "merge"`, `merge_recipe.mode`, `merge_version 1`, `status ok`, keine Absolutpfade (`merge_e2e.rs:158-199,232-279`) | wie T11 |
+| T12 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | DNG-Bytes auf Platte identisch: `blake3(MCP-DNG) == blake3(CLI-DNG)` und `== checksum`-Feld | wie T11, zwei Bäume (Prinzip: CLI-Prozess auf Baum 1, MCP in-process auf byte-identischem Baum 2 — Modul-Doc `crates/lumina-cli/tests/library_parity_common/mod.rs`) |
+| T13 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | Sidecar-Bytes identisch (`assert_unchanged`-Muster, `crates/lumina-cli/tests/library_parity_common/mod.rs` → `assert_unchanged`): `"type": "merge"`, `merge_recipe.mode`, `merge_version 1`, `status ok`, keine Absolutpfade (`merge_e2e.rs:158-199,232-279`) | wie T11 |
 | T14 | [P] | neu: `crates/lumina-mcp/tests/merge_parity.rs` (geplanter Pfad, **nicht** im Repo) | Pano-Parität: gleiche Eingabemenge, gleicher Digest/Checksum, Canvas wächst um den geschätzten Offset (`merge_e2e.rs:286-321`) | 2 PNG, einer um 4 px verschoben |
 | T15 | [P] | neu | **Cache-Hit**: zweiter identischer MCP-Aufruf → `cached: true`, `status: "ok"`, DNG-/Sidecar-Bytes unverändert (`assert_unchanged`), kein `saved`/`action`-Feld | wie T11 |
-| T16 | [P] | neu | `force`-Kette: Quelle mutieren → MCP meldet `stale` (mapped, `bundle.rs:801+`); mit `force: true` → Erfolg **und** Digest == CLI-Digest nach Force-Merge | wie T11 + mutiertes PNG (`library_parity_common/mod.rs:105-127`) |
-| T17 | [P] | neu | Fehlerklassen-Gleichheit: für dieselbe Eingabe liefern CLI-stderr-Präfix und MCP-`data.error` dieselbe Klasse (Tabelle §3); Fehlertext identisch | HDR ohne EXPLIZIT/EXIF, 8×8 zu klein (`merge_e2e.rs:502-527`), Dimension-Mismatch (`:477-500`) |
-| T18 | [N] | `merge_e2e.rs`-Spiegel | jede Ablehnung hinterlässt **nichts**: `snapshot` vorher/nachher identisch (`library_parity_common/mod.rs:286-295`) | wie T17 |
-| T19 | [U]/[P] | `merge_e2e.rs`-Spiegel | Quell-Sidecars und Quell-Bytes unverändert (`merge_e2e.rs:544-578`); Quelle außerhalb des Bundles → `unsupported` (`:580-605`) | PNGs mit Sidecar |
-| T20 | [P] | neu | Envelope-Ablehnung 1:1: Standard-Sidecar am Ziel → laut (`merge_e2e.rs:727-765`); unbekannter `type` → laut (`:769-799`); MCP-Klasse == CLI-Klasse | wie T11 |
+| T16 | [P] | neu | `force`-Kette: Quelle mutieren → MCP meldet `stale` (mapped, `bundle.rs:801+`); mit `force: true` → Erfolg **und** Digest == CLI-Digest nach Force-Merge | wie T11 + mutiertes PNG (`crates/lumina-cli/tests/library_parity_common/mod.rs` → `mutated_png`) |
+| T17 | [P] | neu | Fehlerklassen-Gleichheit: für dieselbe Eingabe liefern CLI-stderr-Präfix und MCP-`data.error` dieselbe Klasse (Tabelle §3); Fehlertext identisch | HDR ohne EXPLIZIT/EXIF, 8×8 zu klein (`merge_e2e.rs:502-527`), Dimension-Mismatch (`crates/lumina-cli/tests/merge_e2e.rs` → `merge_dimension_mismatch_is_unsupported`) |
+| T18 | [N] | `merge_e2e.rs`-Spiegel | jede Ablehnung hinterlässt **nichts**: `snapshot` vorher/nachher identisch (`crates/lumina-cli/tests/library_parity_common/mod.rs` → `snapshot`) | wie T17 |
+| T19 | [U]/[P] | `merge_e2e.rs`-Spiegel | Quell-Sidecars und Quell-Bytes unverändert (`merge_e2e.rs:544-578`); Quelle außerhalb des Bundles → `unsupported` (`crates/lumina-cli/tests/merge_e2e.rs` → `merge_source_outside_bundle_is_unsupported`) | PNGs mit Sidecar |
+| T20 | [P] | neu | Envelope-Ablehnung 1:1: Standard-Sidecar am Ziel → laut (`merge_e2e.rs:727-765`); unbekannter `type` → laut (`crates/lumina-cli/tests/merge_e2e.rs` → `merge_unknown_envelope_type_is_rejected_loudly`); MCP-Klasse == CLI-Klasse | wie T11 |
 | T21 | [G] | `crates/lumina-cli/tests/merge_parity.rs`-Erweiterung ODER neue Datei, `#[ignore]` | Real-RAW-Gate: echte RAW-Belichtungsreihe (≥3) + Panorama-Reihe → identischer Digest/Checksum über CLI und MCP. **Offen solange keine Fixture existiert** (§7, §13 Punkt 3) | **TODO — neue RAW-Fixture** |
 
 ### Gates, die ausdrücklich **nicht** behauptet werden
@@ -505,8 +511,8 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 - Registry: `tool_names::TOOL_NAMES` + `list_tool_definitions` +
   `is_known_tool` um zwei Namen gewachsen, Zählguard
-  (`crates/lumina-mcp/tests/tool_names/mod.rs:22-54`) + `mcp_onnx.rs` second pin
-  (26 → 28, `:26,64-96`) grün. Kein doppelter Name.
+  (`crates/lumina-mcp/tests/tool_names/mod.rs` → `TOOL_NAMES`) + `mcp_onnx.rs` second pin
+  (26 → 28, `crates/lumina-cli/src/tests/mcp_onnx.rs` → `EXPECTED_TOOLS`) grün. Kein doppelter Name.
 - `tools/list` liefert beide Schemas (`additionalProperties:false`, `inputs`
   required, default-Werte dokumentiert) — MCP-Vertrag aus §2.
 - MCP+CLI Produzieren denselben `digest`+`checksum` auf synthetischem Anker
@@ -521,7 +527,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 
 „Stubs nicht ausreichend": der erste Slice muss auf einem HDR-Fixture eine
 **vollständige, byte-paritäre Antwort** liefern. Konkret, mit dem Anker aus
-`crates/lumina-cli/tests/merge_parity.rs:34-49` (zwei 64×48 PNGs, Stufen 40 und
+`crates/lumina-cli/tests/merge_parity.rs` → `write_png` (zwei 64×48 PNGs, Stufen 40 und
 160, `--exposure-times 0.004,0.016 --isos 100,100 --f-numbers 8,8`):
 
 1. `lumina_merge_hdr` antwortet auf `tools/call` mit `isError: false` und einem
@@ -539,7 +545,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
    (gleicher Baumtyp, T12) und dekodiert über `lumina_raw` auf **64×48** — die
    Fixture-Abmessung des Ankers (`merge_parity.rs:34-49`); dass das DNG
    decodierbar ist und die Geometrie hält, prüft das Re-Import-Muster aus
-   `crates/lumina-cli/tests/merge_e2e.rs:281-283` (`lumina_raw::decode_bytes`
+   `crates/lumina-cli/tests/merge_e2e.rs` → `merge_hdr_produces_dng_bundle_and_reimportable_dng` (`lumina_raw::decode_bytes`
    + `assert_eq!((w, h), (W, H))`) — dort mit `W = 32`/`H = 24`
    (`merge_e2e.rs:20-21`), also der eigenen Fixture-Größe jenes Tests
    anzupassen, nicht 64×48.
@@ -556,7 +562,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
    neutralen Defaults (`merge.rs:406-413`).
 9. Jede Fehleraussage trägt den kanonischen Präfix-Text im `message` und den
    stabilen Namen in `data.error` (§3-Tabelle); `dispatch_tool` kennt beide
-   Namen (kein `MethodNotFound`-Durchreichnen, `tools/mod.rs:152`).
+   Namen (kein `MethodNotFound`-Durchreichnen, `crates/lumina-mcp/src/tools/mod.rs` → `dispatch_tool`).
 10. Kein Tool darf seine Antwort aus einem statischen String zusammenbauen:
     T11–T16 sind genau die Tests, die einen Stub rot machen.
 
@@ -600,8 +606,8 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
 | `crates/lumina-mcp/src/tools/mod.rs` | +2 `pub mod`, +2 `tool_def(...)` in `list_tool_definitions` (:43-113), +2 Arme in `dispatch_tool` (:124-154). Aktuell 164 Z. → bleibt unter 500 |
 | `crates/lumina-mcp/src/error.rs` | optional neue Varianten `MergeStale`/`MergeUnsupported`/`MergeFailed` + `code()`/`name()`/`data()` (:46-156). Aktuell 231 Z. |
 | `crates/lumina-mcp/Cargo.toml` | +`lumina-merge = { path = "../lumina-merge" }` (Fehlt aktuell: :9-29). Prüfen: kein Zyklus (`lumina-merge` hängt nur an core/sidecar/tiff, `Cargo.toml:7-22`) |
-| `crates/lumina-mcp/tests/tool_names/mod.rs` | +2 Namen in `TOOL_NAMES` (:22-54) |
-| `crates/lumina-cli/src/tests/mcp_onnx.rs` | +2 Namen in `EXPECTED_TOOLS` (:64-96), `:26` 26 → 28 |
+| `crates/lumina-mcp/tests/tool_names/mod.rs` | +2 Namen in `TOOL_NAMES` |
+| `crates/lumina-cli/src/tests/mcp_onnx.rs` | +2 Namen in `EXPECTED_TOOLS`, 26 → 28 (`crates/lumina-cli/src/tests/mcp_onnx.rs` → `EXPECTED_TOOLS`) |
 
 **NICHT anfassen:**
 
@@ -617,7 +623,7 @@ Aussage trägt; PNG-Mocks sind erlaubt, wo die Aussage transportseitig ist.
   bleiben byte-identisch (nur Adapter-Aufnahme in Impl-A).
 - `crates/lumina-sidecar/**` — Schema/DNG-Tags unverändert.
 - `crates/lumina-gui/**` — GUI-frei in diesem Slice (`Agents.todo.md:409`);
-  `lumina-gui/src/merge_gui.rs:127-197` ist ein zweiter GUI-Adapter und bleibt
+  `crates/lumina-gui/src/merge_gui.rs` → `run_merge_sync` ist ein zweiter GUI-Adapter und bleibt
   unberührt (seine Vertragstreue ist der parity test
   `merge_parity.rs:53-72`).
 - `crates/lumina-cli/tests/merge_parity.rs` — bestehender CLI↔GUI-Anker
