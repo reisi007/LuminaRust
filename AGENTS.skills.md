@@ -1,6 +1,6 @@
 # Skills-Marker
 
-agents-skills-consumed: 0449b05
+agents-skills-consumed: 842e055
 geprüft am: 2026-10-21
 
 **Lokale Ergänzung:** `<stand>` = der committete Stand dieses Commits (die SHA, die erst
@@ -11,16 +11,16 @@ des Skills-Repos.
 
 | Skill | angewendet? | wo im Projekt | offene Position |
 |---|---|---|---|
-| `build-verify` | ja | `Agents.md` §„Rollen und Delegation" → „Build-Agent" (Zeiger auf den Skill + `.agents/rules/build-verify.md`, ohne Kopie) und §„Verifizierung und Tests" (repo-spezifische Gates); `Verify:`-Footer je Runde in der Historie (**40 von 40** Commits im Fenster der letzten 40 Commits **ab `e744f8b`** tragen einen `Verify:`-Footer — gemessen mit `git rev-list --max-count=40 e744f8b` und `git show -s --format=%B`; **am committeten Stand dieses Commits** im Fenster ab demselben Startpunkt ebenfalls 40/40); die **neue** Pflicht der Range (`0449b05`: jede Zahl, die etwas über den Commit behauptet, nennt ihren Bezugsrahmen — Zustand **und** Umfang; der committete Stand wird über `git archive <sha>` + `tar -x` gemessen, nie über `git checkout`) ist am Projekt **angewendet**: Commit `8162323` weist beide Bäume getrennt aus („Working Tree 29, committeter Stand 24") und misst den committeten Stand über `git archive dff6948` + `tar -x` | |
-| `skills-marker` | ja | diese Datei (`AGENTS.skills.md`); der Skill ist **hidden** (nur per exakter ID ladbar), der Abschnitt „Fortschreiben" unten ist die lokale Kopie des Ablaufs (Schritt 6 trägt den Wortlaut aus `0024d7e`: kein Config-Key liefert Regeltext — es gibt keinen `instructions`-Key) | |
-| `github-ci-filters` | ja | `.github/workflows/ci.yml` — `paths-ignore` für `push` **und** `pull_request` (Commit `c4e2fd8`); **am committeten Stand dieses Commits**: **2** `paths-ignore`-Blöcke (Zeilen 11 und 54) — dieselbe Zählung im **Vorgänger** `e744f8b` (`.github/workflows/ci.yml` ist seitdem unverändert). Der Skill ist seit `817c01e` **hidden** — das Projekt nennt ihn in keiner Datei außer diesem Marker, es gibt also nichts umzuschreiben | |
+| `build-verify` | ja | `Agents.md` §„Rollen und Delegation" → „Build-Agent" (Zeiger auf den Skill + `.agents/rules/build-verify.md`, ohne Kopie) und §„Verifizierung und Tests" (repo-spezifische Gates); `Verify:`-Footer je Runde in der Historie (**40 von 40** Commits im Fenster der letzten 40 Commits **mit Ende `e744f8b`** tragen einen `Verify:`-Footer — gemessen mit `git rev-list --max-count=40 e744f8b` und `git show -s --format=%B`; **gemessen am Vorgänger `e744f8b`, seitdem unverändert** — das Fenster endet in der Vergangenheit, seine Menge ändert sich nicht; **am committeten Stand dieses Commits** tragen im Fenster der letzten 40 Commits **38 von 40** einen `Verify:`-Footer — die **zwei** Commits **`8123160`** und **`ee2c4d4`** tragen keinen); die **neue** Pflicht der Range (`0449b05`: jede Zahl, die etwas über den Commit behauptet, nennt ihren Bezugsrahmen — Zustand **und** Umfang; der committete Stand wird über `git archive <sha>` + `tar -x` gemessen, nie über `git checkout`) ist am Projekt **angewendet**: Commit `8162323` weist beide Bäume getrennt aus („Working Tree 29, committeter Stand 24") und misst den committeten Stand über `git archive dff6948` + `tar -x` | |
+| `skills-marker` | ja | diese Datei (`AGENTS.skills.md`); der Skill ist **hidden** (nur per exakter ID ladbar), der Abschnitt „Fortschreiben" unten ist die lokale Kopie des Ablaufs (Schritt 6 trägt den Wortlaut aus `0024d7e`: kein Config-Key liefert Regeltext — es gibt keinen `instructions`-Key). **Die Kopie ist am Stand `842e055` nachgezogen**: ihre Kurzform führt jetzt **alle fünf** Regeln der Zitierstelle — die **Aufzählungs-Klausel** und die **Cursor-Klausel** kamen in der Range `0449b05..842e055` dazu. **Die Zitierstelle löst am neuen Cursor auf**: `skills-marker/SKILL.md` → „Bezugsrahmen-Regel" steht am Stand `842e055` **1**-mal in `SKILL.md`, **5**-mal in `references/notes.md` und **1**-mal in `templates/AGENTS.skills.md` (**7** Vorkommen im Skill-Verzeichnis) — am alten Cursor `0449b05` **0**-mal (der Anker kam mit `65fbecc`), deshalb musste der Cursor vorrücken | |
+| `github-ci-filters` | ja | `.github/workflows/ci.yml` — `paths-ignore` für `push` **und** `pull_request` (Commit `c4e2fd8`); **gemessen am Vorgänger `8123160`, seitdem unverändert** (`git diff --stat 8123160..<stand> -- .github/workflows/ci.yml` ist leer): **2** `paths-ignore`-Blöcke (Zeilen 11 und 54) — dieselbe Zählung im **Vorgänger** `e744f8b` (`.github/workflows/ci.yml` ist seitdem unverändert). **Schritt 2 der neuen Regel (Form):** die Projektform ist die **Subtraktion** (`paths-ignore`), nicht die Auswahl — die vom neuen Wortlaut vorschriebene Form; die Auswahl-Form `paths` ist nur mit Catch-all im positiven Teil erlaubt, das Projekt braucht sie nicht. **Schritt 4 der neuen Regel (Diff-Beleg mit benannten Endpunkten):** `git diff --stat 2add471..c4e2fd8 -- .github/workflows/` → **1** Datei geändert, **+55** Zeilen, **0** Löschungen; `2add471` ist der Commit, der `.github/workflows/` zuletzt schrieb, `c4e2fd8` der Commit, der den Filter schrieb; der Diff enthält **nur** die beiden `paths-ignore`-Blöcke — keine Job-, Schritt- oder Timeout-Änderung. **Eine Abweichung ist gemessen und dem Eigentümer vorzulegen:** `.github/workflows/ci-libraw-image.yml` trägt einen **`paths:`-Block** (positiver Teil: `docker/Dockerfile`, `.github/workflows/ci-libraw-image.yml` — **kein** Catch-all, **keine** Negation), also die **Auswahl**-Form, die der neue Schritt 2 verbietet; der Workflow filtert **nicht** docs-only, sondern löst gezielt den Image-Publish aus — nach dem **Wortlaut** der Regel verboten, nach ihrer **Begründung** (still verlorene Pipeline-Abdeckung) trifft sie diesen Workflow nicht; das ist eine **Eigentümerentscheidung**, und dieser Lauf legt **keine** Board-Position an. Der Skill ist seit `817c01e` **hidden** — das Projekt nennt ihn in keiner Datei außer diesem Marker, es gibt also nichts umzuschreiben | |
 | `codegraph-project-setup` | ja | `.codegraph/` (Index) + `.githooks/pre-commit` Gate 1 „CodeGraph index sync" (`core.hooksPath=.githooks`) — **kein** CodeGraph-Abschnitt in `Agents.md` (der Anker der Vorversion zeigte ins Leere) | |
-| `docker-test-image` | ja | `docker/Dockerfile` (LibRaw 0.22.2, `ARG LIBRAW_SHA256`-Pin des Quell-Tarballs) + **fünf** `container:`-Jobs in `.github/workflows/ci.yml` (**am committeten Stand dieses Commits**: `grep -c '^    container:'` = 5 — dieselbe Zählung im **Vorgänger** `e744f8b`; `docker/Dockerfile` und `.github/workflows/ci.yml` sind seitdem unverändert) | |
-| `ghcr-visibility` | ja | `.github/workflows/ci.yml` — `ghcr.io/reisi007/luminarust/lumina-ci:latest` in denselben fünf `container:`-Jobs (**am committeten Stand dieses Commits**: **5** `image: ghcr.io`-Zeilen — dieselbe Zählung im **Vorgänger** `e744f8b`; `.github/workflows/ci.yml` ist seitdem unverändert) | |
-| `security-review` | ja | Register: `feature/quality/security-review-register.md` (Form nach Stage 6 — Zwei-Hälften-Form, Registertabelle, Pflege durch den Build-Agent; Enumerationsbasis mit den erreichbaren Oberflächen, vollständig enumeriert in Welle 1 am 2026-10-20 — die Zahl **24** Oberflächen steht im generierten Block **surfaces** in §5 des Registers — **am committeten Stand dieses Commits** dieselbe Zählung wie im **Vorgänger** `e744f8b` (das Register ist seitdem unverändert); **bisher null Befunde**: die Registertabelle trägt nur die Beispielzeile `SEC-EXAMPLE`); die erste Review-Welle ist **am committeten Stand dieses Commits** die offene Task `SEC-REVIEW-WELLE-1-85` (Teil a erledigt, die Teile b/c brauchen Läufe); die **Scope-Frage GUI** ist **entschieden** (Eigentümerentscheid 2026-10-20: GUI-Oberflächen werden **gleichrangig** in jeder Welle mitgeprüft) und im Register entsprechend vermerkt. **Die geänderte Regel der Range** (Severity aus den kanonischen Stufen; `AKZEPTIERT` ist das kanonische `accepted`) trifft die Projektform des Registers: die fixe Kopfzeile hat **keine** Severity-Spalte und **keine** Ticket-Spalte | `Agents.todo.md` → `SKILLS-VOKABULAR-98` |
-| `ui-review` | nein | als Playwright-Flow trifft es nicht zu: native egui-GUI, der visuelle Review läuft über `egui_kittest`-Goldens/PSNR und den Fenster-Review `UI-VISION-REVIEW-70`. Die Vision-Regel (kein Vision-Subagent: das konfigurierte Modell liest die Bilder selbst) stammt aus einer **früheren Range**, **nicht** aus der auditierten: sie steht seit `8bfc321` in `SKILL.md` („there is no vision subagent in the loop", heute Zeile 77) und wurde in `dccdd40` konsolidiert („the configured model reads images", heute Zeile 38); die **letzte** Vision-Änderung **vor** dem Cursor `00dbd22` ist `fa2268f` — sie ändert **eine** Zeile in `references/findings-report.md` (der „vision-agent"-Wortlaut). In der auditierten Range `00dbd22..0449b05` ändert `ui-review` ausschließlich `references/findings-report.md`; **keine** Vision-Zeile (`git diff 00dbd22..0449b05 -- .agents/skills/ui-review/ \| grep -i vision` ist leer). Die Regel trifft die Projekt-Pflicht in `DoD.md` §6 → dort **umgesetzt** (**am committeten Stand dieses Commits** dieselbe Aussage wie im **Vorgänger** `e744f8b`; `DoD.md` ist seitdem unverändert). Die **Findings-Vorlage** der Range (`b0d1b51`: Id, Severity, Status, Owner, Ticket) trifft dieses Projekt **nicht** — das Projekt führt keine UI-Findings-Liste nach dieser Vorlage (die UXG/UXD-Lückeinventur in `feature/platform/lightroom-ux-parity.md` ist eine SOLL-Lücke, kein Review-Report); das **kanonische Vokabular**, auf das die Vorlage zeigt, ist unter `ratchet-gates` erfasst. Der Skill wird im Projekt nur in **diesem Marker** und im **Board** (`Agents.todo.md`, Eintrag `SKILLS-VOKABULAR-98`) genannt, in keiner weiteren Projektdatei — **am committeten Stand dieses Commits**: **6 Zeilen** in **2** Dateien (`git grep -n ui-review <stand> -- '*.md'`; vorkommensweise **11** — `git grep -o ui-review <stand> -- '*.md'`, eine Zeile trägt **5**); am **Vorgänger** `e744f8b` ist die **Dateimenge** dieselbe (**2** Dateien: `AGENTS.skills.md`, `Agents.todo.md`), der **Zeilenzähler** dort ist **5** — eine repo-weite Suche zählt die vom Commit geänderten Dateien mit; die Zusatzzeile kam mit `0cf154d`, seither bleibt der Zähler bei **6** | |
-| `ratchet-gates` | ja | `scripts/gates.sh` (Stufen `fast`/`slow`/`all`/`list`/`list-ci`, Floor `MIN_CHECKS=9`, keine Codegen-Stufe `fast`), `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu `gates.sh list` — byteweise diffleer geprüft; **am committeten Stand dieses Commits** dieselbe Zählung wie im **Vorgänger** `e744f8b` — `scripts/gates.sh`, `local-gates.md` und die Gate-Skripte sind seitdem unverändert; Floor-Regel; Lückenliste), `Agents.md` §„Verifizierung und Tests" (der dortige Floor-Text nannte beim Marker-Run 2026-10-21 **vier** Textgates und **5** Checks; **korrigiert in `0cf154d`** — **am committeten Stand dieses Commits** **acht** Textgates und Floor **9**, Quellen `sh scripts/gates.sh list` und `scripts/gates.sh` `MIN_CHECKS=9`), CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`), Gate-Header der **elf** `scripts/check_*.sh` (Defektklasse, Anlass, Ratchet-Richtung, benannte Grenze; **am committeten Stand dieses Commits** **11** Skripte, jedes mit einem `Defektklasse`-Header — dieselbe Zählung im **Vorgänger** `e744f8b`) | `Agents.todo.md` → `SKILLS-VOKABULAR-98` (kanonisches Vokabular) |
-| `generated-docs` | ja | `scripts/gen_doc_facts.sh` (Generator: regelbasiert, deterministisch, git-frei, POSIX sh; liest die Schwellen 500/3000 aus den Gate-Skripten, fuehrt nie etwas aus einem gelesenen Dokument aus) + `scripts/check_doc_facts_drift.sh` (Drift-Gate: erzeugen -> Block aus der Zieldatei extrahieren -> diff; meldet, schreibt nie) als `fast-8` und `scripts/check_doc_facts_generator.sh` (Hygiene-Gate des Generators: Determinismus + Git-Freiheit) als `fast-9` der Stufe `fast`; generierte Bloecke `file-sizes` + `population` in `feature/quality/file-size-policy.md`, `goldens` in `feature/README.md` + `feature/quality/golden-references.md` + `feature/quality/golden-fixtures.md`, `mcp-tools` in `feature/platform/mcp-server.md` + `feature/quality/security-review-register.md`, `perf-baseline` in `feature/quality/performance-benchmarks.md`, `crates` in `feature/README.md` und `surfaces` in `feature/quality/security-review-register.md`, `golden-classes` in `feature/quality/golden-fixtures.md` und `golden-targets` in `feature/quality/golden-references.md` (Quelle: die committete Datei `scripts/golden_inventory.txt`) — **am committeten Stand dieses Commits** **12** Bloecke in **7** Dateien (dieselbe Zählung im **Vorgänger** `e744f8b`; Generator und Zieldateien sind seitdem unverändert); **Zählregel: das Generator-Manifest** (`sh scripts/gen_doc_facts.sh --manifest`: eine Zeile je Block-Instanz, `block-id\|zieldatei` — **12** Zeilen, **7** verschiedene Zieldateien). Die Markensuche im Baum (`git grep -n '<!-- BEGIN GENERATED:' <stand> -- '*.md'`) liefert **am committeten Stand dieses Commits** **14** Treffer in **9** Dateien: die **12** echten Bloecke plus **zwei** Literal-Erwähnungen der Marker-Syntax (`feature/quality/local-gates.md` §8.1 und diese Zeile) — deshalb ist das Manifest die Zählregel, nicht die Markensuche; CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`) | `Agents.todo.md` → `DOC-ZAHLEN-DRIFT-82` (Welle 1 umgesetzt; **Welle 2 im Repo umgesetzt** (2026-10-20): `mcp-tools`, `perf-baseline`, `crates`, `surfaces` — der Todo-Eintrag `DOC-ZAHLEN-DRIFT-82` ist nachgezogen; **Welle 3 im Repo umgesetzt** (2026-10-20): der R/C-Split der Goldens und die Verteilung auf die Test-Targets werden jetzt aus der committeten Quelldatei `scripts/golden_inventory.txt` **erzeugt** (die Klassifikation selbst bleibt eine menschliche Entscheidung, die Datei ist ihre maschinenlesbare Form); **weiterhin handgepflegt**: Testlaufzahlen (nicht ableitbar, datiert) und das CLI-Coverage-Handinventar „Abgedeckt (29)" in `feature/platform/mcp-server.md` (eine eigene Population, jetzt mit Zählstand 2026-10-15 datiert)) |
+| `docker-test-image` | ja | `docker/Dockerfile` (LibRaw 0.22.2, `ARG LIBRAW_SHA256`-Pin des Quell-Tarballs) + **fünf** `container:`-Jobs in `.github/workflows/ci.yml` (**gemessen am Vorgänger `8123160`, seitdem unverändert** — `git diff --stat 8123160..<stand> -- docker/Dockerfile .github/workflows/ci.yml` ist leer: `grep -c '^    container:'` = 5 — dieselbe Zählung im **Vorgänger** `e744f8b`; `docker/Dockerfile` und `.github/workflows/ci.yml` sind seitdem unverändert) | |
+| `ghcr-visibility` | ja | `.github/workflows/ci.yml` — `ghcr.io/reisi007/luminarust/lumina-ci:latest` in denselben fünf `container:`-Jobs (**gemessen am Vorgänger `8123160`, seitdem unverändert** (`git diff --stat 8123160..<stand> -- .github/workflows/ci.yml` ist leer): **5** `image: ghcr.io`-Zeilen — dieselbe Zählung im **Vorgänger** `e744f8b`; `.github/workflows/ci.yml` ist seitdem unverändert) | |
+| `security-review` | ja | Register: `feature/quality/security-review-register.md` (Form nach Stage 6 — Zwei-Hälften-Form, Registertabelle, Pflege durch den Build-Agent; Enumerationsbasis mit den erreichbaren Oberflächen, vollständig enumeriert in Welle 1 am 2026-10-20 — die Zahl **24** Oberflächen steht im generierten Block **surfaces** in §5 des Registers — **gemessen am Vorgänger `8123160`, seitdem unverändert** (`git diff --stat 8123160..<stand> -- feature/quality/security-review-register.md` ist leer) dieselbe Zählung wie im **Vorgänger** `e744f8b` (das Register ist seitdem unverändert); **bisher null Befunde**: die Registertabelle trägt nur die Beispielzeile `SEC-EXAMPLE`); die erste Review-Welle ist **am committeten Stand dieses Commits** die offene Task `SEC-REVIEW-WELLE-1-85` (Teil a erledigt, die Teile b/c brauchen Läufe); die **Scope-Frage GUI** ist **entschieden** (Eigentümerentscheid 2026-10-20: GUI-Oberflächen werden **gleichrangig** in jeder Welle mitgeprüft) und im Register entsprechend vermerkt. **Die geänderte Regel der Range** (Severity aus den kanonischen Stufen; `AKZEPTIERT` ist das kanonische `accepted`) trifft die Projektform des Registers: die fixe Kopfzeile hat **keine** Severity-Spalte und **keine** Ticket-Spalte | `Agents.todo.md` → `SKILLS-VOKABULAR-98` |
+| `ui-review` | nein | als Playwright-Flow trifft es nicht zu: native egui-GUI, der visuelle Review läuft über `egui_kittest`-Goldens/PSNR und den Fenster-Review `UI-VISION-REVIEW-70`. Die Vision-Regel (kein Vision-Subagent: das konfigurierte Modell liest die Bilder selbst) stammt aus einer **früheren Range**, **nicht** aus der auditierten: sie steht seit `8bfc321` in `ui-review/SKILL.md` → „there is no vision subagent in the loop" und wurde in `dccdd40` konsolidiert → „the configured model reads images" — beide Stellen als **Anker** zitiert (Pfad im Skill: **ID + Datei**; Anker: **wörtliches** Textzitat, **ohne** Zeilennummer, weil die driftet), gemessen am Stand `842e055`: **je 1** Treffer im Skill-Verzeichnis (`git grep -c 'there is no vision subagent in the loop' 842e055 -- .agents/skills/ui-review/` = **1**, `git grep -c 'the configured model reads images' 842e055 -- .agents/skills/ui-review/` = **1**); die **letzte** Vision-Änderung **vor** dem Cursor `00dbd22` ist `fa2268f` — sie ändert **eine** Zeile in `references/findings-report.md` (der „vision-agent"-Wortlaut). In der auditierten Range `00dbd22..0449b05` ändert `ui-review` ausschließlich `references/findings-report.md`; **keine** Vision-Zeile (`git diff 00dbd22..0449b05 -- .agents/skills/ui-review/ \| grep -i vision` ist leer). Die Regel trifft die Projekt-Pflicht in `DoD.md` §6 → dort **umgesetzt** (**gemessen am Vorgänger `8123160`, seitdem unverändert** — `git diff --stat 8123160..<stand> -- DoD.md` ist leer: dieselbe Aussage wie im **Vorgänger** `e744f8b`). Die **Findings-Vorlage** der Range (`b0d1b51`: Id, Severity, Status, Owner, Ticket) trifft dieses Projekt **nicht** — das Projekt führt keine UI-Findings-Liste nach dieser Vorlage (die UXG/UXD-Lückeinventur in `feature/platform/lightroom-ux-parity.md` ist eine SOLL-Lücke, kein Review-Report); das **kanonische Vokabular**, auf das die Vorlage zeigt, ist unter `ratchet-gates` erfasst. Der Skill wird im Projekt nur in **diesem Marker** und im **Board** (`Agents.todo.md`, Eintrag `SKILLS-VOKABULAR-98`) genannt, in keiner weiteren Projektdatei — **am committeten Stand dieses Commits**: **3 Zeilen** in **2** Dateien (`git grep -n ui-review <stand> -- '*.md'`; vorkommensweise **10** — `git grep -o ui-review <stand> -- '*.md'`, eine Zeile trägt **8**); am **Stand `e744f8b`** (dort gemessen — die Datei hat sich seither geändert, das ist die Form „gemessen am Stand", keine „unverändert seit"-Aussage) ist die **Dateimenge** dieselbe (**2** Dateien: `AGENTS.skills.md`, `Agents.todo.md`), der **Zeilenzähler** dort ist **5** — eine repo-weite Suche zählt die vom Commit geänderten Dateien mit; die Zusatzzeile kam mit `0cf154d`, seither bleibt der Zähler bei **6** | |
+| `ratchet-gates` | ja | `scripts/gates.sh` (Stufen `fast`/`slow`/`all`/`list`/`list-ci`, Floor `MIN_CHECKS=9`, keine Codegen-Stufe `fast`), `feature/quality/local-gates.md` (Tier-Tabelle wortgleich zu `gates.sh list` — byteweise diffleer geprüft; **gemessen am Vorgänger `8123160`, seitdem unverändert** — `git diff --stat 8123160..<stand> -- scripts/gates.sh feature/quality/local-gates.md` ist leer; dieselbe Zählung wie im **Vorgänger** `e744f8b` — `scripts/gates.sh`, `local-gates.md` und die Gate-Skripte sind seitdem unverändert; Floor-Regel; Lückenliste), `Agents.md` §„Verifizierung und Tests" (der dortige Floor-Text nannte beim Marker-Run 2026-10-21 **vier** Textgates und **5** Checks; **korrigiert in `0cf154d`** — **gemessen am Vorgänger `8123160`, seitdem unverändert** (`git diff --stat 8123160..<stand> -- Agents.md` ist leer): **acht** Textgates und Floor **9**, Quellen `sh scripts/gates.sh list` und `scripts/gates.sh` `MIN_CHECKS=9`), CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`), Gate-Header der **elf** `scripts/check_*.sh` (Defektklasse, Anlass, Ratchet-Richtung, benannte Grenze; **gemessen am Vorgänger `8123160`, seitdem unverändert** — `git diff --stat 8123160..<stand> -- 'scripts/check_*.sh'` ist leer: **11** Skripte, jedes mit einem `Defektklasse`-Header — dieselbe Zählung im **Vorgänger** `e744f8b`). **Die Range `0449b05..842e055` ändert nur die CLI-Karte** (`ratchet-gates/references/cli.md`, `d5dc52f`: die neue Zeile `ratchet release`, der eigene Exit-Middle `1` der Release-Stufe und der **umgedrehte** Installationsabschnitt „**No tag was pushed yet** … build from source" → „The releases are published") — die **Gate-Substanz** (`SKILL.md`, `references/vocabulary.md`) ist **unberührt**; das Projekt setzt die Mechanik selbst um (POSIX sh, `scripts/gates.sh`), die `ratchet`-Binary ist ein eigenes Repo, ihre Release-Aussage betrifft es nicht — an der Projektanwendung ändert sich **nichts** | `Agents.todo.md` → `SKILLS-VOKABULAR-98` (kanonisches Vokabular) |
+| `generated-docs` | ja | `scripts/gen_doc_facts.sh` (Generator: regelbasiert, deterministisch, git-frei, POSIX sh; liest die Schwellen 500/3000 aus den Gate-Skripten, fuehrt nie etwas aus einem gelesenen Dokument aus) + `scripts/check_doc_facts_drift.sh` (Drift-Gate: erzeugen -> Block aus der Zieldatei extrahieren -> diff; meldet, schreibt nie) als `fast-8` und `scripts/check_doc_facts_generator.sh` (Hygiene-Gate des Generators: Determinismus + Git-Freiheit) als `fast-9` der Stufe `fast`; generierte Bloecke `file-sizes` + `population` in `feature/quality/file-size-policy.md`, `goldens` in `feature/README.md` + `feature/quality/golden-references.md` + `feature/quality/golden-fixtures.md`, `mcp-tools` in `feature/platform/mcp-server.md` + `feature/quality/security-review-register.md`, `perf-baseline` in `feature/quality/performance-benchmarks.md`, `crates` in `feature/README.md` und `surfaces` in `feature/quality/security-review-register.md`, `golden-classes` in `feature/quality/golden-fixtures.md` und `golden-targets` in `feature/quality/golden-references.md` (Quelle: die committete Datei `scripts/golden_inventory.txt`) — **gemessen am Vorgänger `8123160`, seitdem unverändert** (`git diff --stat 8123160..<stand> -- scripts/gen_doc_facts.sh scripts/golden_inventory.txt feature/README.md feature/platform/mcp-server.md feature/quality/file-size-policy.md feature/quality/golden-fixtures.md feature/quality/golden-references.md feature/quality/performance-benchmarks.md feature/quality/security-review-register.md` ist leer): **12** Bloecke in **7** Dateien (dieselbe Zählung im **Vorgänger** `e744f8b`; Generator und Zieldateien sind seitdem unverändert); **Zählregel: das Generator-Manifest** (`sh scripts/gen_doc_facts.sh --manifest`: eine Zeile je Block-Instanz, `block-id\|zieldatei` — **12** Zeilen, **7** verschiedene Zieldateien — gemessen am Vorgänger `8123160`, seitdem unverändert). Die Markensuche im Baum (`git grep -n '<!-- BEGIN GENERATED:' <stand> -- '*.md'`) liefert **am committeten Stand dieses Commits** **14** Treffer in **9** Dateien: die **12** echten Bloecke plus **zwei** Literal-Erwähnungen der Marker-Syntax (`feature/quality/local-gates.md` §8.1 und diese Zeile) — deshalb ist das Manifest die Zählregel, nicht die Markensuche; CI-Schritt „Run fast tier (scripts/gates.sh fast)" im Job „Rust fast checks" (`.github/workflows/ci.yml`) | `Agents.todo.md` → `DOC-ZAHLEN-DRIFT-82` (Welle 1 umgesetzt; **Welle 2 im Repo umgesetzt** (2026-10-20): `mcp-tools`, `perf-baseline`, `crates`, `surfaces` — der Todo-Eintrag `DOC-ZAHLEN-DRIFT-82` ist nachgezogen; **Welle 3 im Repo umgesetzt** (2026-10-20): der R/C-Split der Goldens und die Verteilung auf die Test-Targets werden jetzt aus der committeten Quelldatei `scripts/golden_inventory.txt` **erzeugt** (die Klassifikation selbst bleibt eine menschliche Entscheidung, die Datei ist ihre maschinenlesbare Form); **weiterhin handgepflegt**: Testlaufzahlen (nicht ableitbar, datiert) und das CLI-Coverage-Handinventar „Abgedeckt (29)" in `feature/platform/mcp-server.md` (eine eigene Population, jetzt mit Zählstand 2026-10-15 datiert)) |
 | `agent-config` | nein | | Maschinenkonfiguration (globale `opencode.jsonc`, globale `AGENTS.md`); die projektbezogene Aussage der Änderung — ein Projekt verweist auf die Regeldatei, statt den Flow zu wiederholen — ist im Projekt erfüllt; die versteckten Skills der Range (`70d49e0`, `00dbd22`, `817c01e`) sind für dieses Projekt ohne Wirkung. **Belegter Stand (gelesen am 2026-10-21):** die globale `~/.config/opencode/opencode.jsonc` führt **keinen** `instructions`-Key (der Upstream-Wortlaut `0024d7e` ist damit am Projektstand bestätigt) |
 | `laravel` | nein | | Rust-Workspace, kein PHP |
 | `node-deps` | nein | | keine `package.json`/pn-Pins; Abhängigkeiten laufen über Cargo |
@@ -36,153 +36,143 @@ des Skills-Repos.
 | Konvention: visueller Review mit dem konfigurierten Modell (DoD §6) | ja | `DoD.md` §6 (KI-Validierungs-Loop, Schritt 2), `Agents.todo.md` `F-103-N6-GUI-COVERAGE-27` Punkt 11, `feature/platform/lightroom-ux-parity.md` (Abnahme), `crates/lumina-gui-harness/README.md` — alle vier Stellen nennen **das konfigurierte Modell selbst** (max. 10 Bilder je Durchgang); ein Vision-Subagent existiert nicht | |
 | Konvention: jede Zahl in einer Commit-Aussage nennt ihren Bezugsrahmen | ja | Zustand **und** Umfang: committeter Stand über `git archive <sha>` + `tar -x` in ein temporäres Verzeichnis (nie `git checkout`/`git restore`/`git reset` — Regel 3 von `build-verify`); die Pflicht erreicht das Projekt über den Skill-Zeiger in `Agents.md` §„Build-Agent" und ist seit Commit `8162323` praktisch angewendet (dort: „Working Tree 29, committeter Stand 24") | |
 
-## Offen aus dem Bereich `00dbd22..0449b05`
+## Offen aus dem Bereich `0449b05..842e055`
 
-Geprüft am 2026-10-21 gegen `0449b05` (Range `00dbd22..0449b05`; **7 Commits** —
-`git -C <skills-repo> rev-list --count 00dbd22..0449b05`; **8** Skill-Verzeichnisse
-berührt — `git -C <skills-repo> log --name-only --format= 00dbd22..0449b05 -- .agents/skills`
-sortiert eindeutig: `agent-config`, `build-verify`, `github-ci-filters`,
-`ratchet-gates`, `security-review`, `skills-marker`, `ui-review`, `update-models`).
+Geprüft am **2026-10-21**, **21:41:43 UTC** (Anfangsmessung) und **21:47:00 UTC**
+(Endmessung) gegen `842e055` (Range `0449b05..842e055`; **15 Commits** —
+`git -C <skills-repo> rev-list --count 0449b05..842e055`; **3** Skill-Verzeichnisse
+berührt — `git -C <skills-repo> log --name-only --format= 0449b05..842e055 --
+.agents/skills` sortiert eindeutig: `github-ci-filters`, `ratchet-gates`,
+`skills-marker`). **Der Skills-Repo-Stand wurde am Anfang und am Ende des Laufs
+gemessen:** am Anfang stand er auf `4205142`, während des Laufs ist er auf `842e055`
+weitergegangen. Der eine zusätzliche Commit (`842e055`, einzige geänderte Datei
+`.agents/skills/skills-marker/references/notes.md`) ist in dieser Range **mitgeprüft**
+— er ändert eine Zitatmarke in den Notizen, `SKILL.md` und
+`templates/AGENTS.skills.md` sind bytegleich mit `4205142`.
 
 **Neu**
 
 - **Kein neuer Skill** in dieser Range: `git -C <skills-repo> log --diff-filter=A
-  --name-only 00dbd22..0449b05 -- .agents/skills` listet nur die **zwei** neuen
-  Referenzdateien `ratchet-gates/references/vocabulary.md` und
-  `ratchet-gates/references/cli.md` — beide in einem **bestehenden** Skill.
-  Der Skill `ratchet-gates` (`70d49e0`) stand bereits am Cursor `00dbd22`:
-  die Skill-Stand-Tabelle des Marker-Commits `2334d00` (der den Cursor auf
-  `00dbd22` setzte) führt `ratchet-gates` bereits als Zeile — es war **nichts**
-  zu ergänzen.
+  --name-only --format= 0449b05..842e055 -- .agents/skills` ist **leer**. Die Zahl der
+  Skills ist an beiden Reven **19** (`git ls-tree -r --name-only <rev> .agents/skills |
+  grep -c 'SKILL.md$'`), die Zahl der **versteckten** Skills
+  (`metadata.opencode/autoinvoke: false`) an beiden Reven **17** von **19**
+  (`git grep -l 'autoinvoke: false' <rev> -- '.agents/skills/*/SKILL.md'`) —
+  **unverändert**; sichtbar bleiben `build-verify` und `ui-review`.
 
 **Geändert**
 
-- `build-verify` (`817c01e`, `0024d7e`, `0449b05`) — **trifft zu und ist
-  angewendet.** Drei Änderungen: (a) der Trigger wurde von **848** auf **428**
-  Zeichen gekürzt (`817c01e`) und in `0024d7e` um die zwei Fälle „ein
-  Repo-`AGENTS.md` dupliziert den Flow" und „Meilenstein-Review" wieder ergänzt
-  (**484** Zeichen seit `0024d7e`, unverändert bis `0449b05`) — **Messgröße
-  „delivered text length"**, die `node scripts/skill-budget.mjs` misst (Zeichen
-  des vom Modell gesehenen Textes nach Quotes- und Escape-Auflösung; am
-  Skills-Repo-HEAD `0449b05`: `maxDescriptionChars` **484**,
-  `totalDescriptionChars` **689**, `activeSkills` **2**, **17** hidden); dieselben
-  Skalare als **rohe YAML-Bytes** wären **853** (`00dbd22`) / **432**
-  (`817c01e`) / **488** (`0024d7e` = `0449b05`) — für dieses
-  Projekt ohne Wirkung (`Agents.md` §„Build-Agent" verweist auf den Skill und
-  benennt den repo-spezifischen Teil, es wiederholt den Loop nicht); (b) der
-  Wortlaut „nicht über einen Config-Key geliefert" statt „das
-  `instructions`-Array ist leer" (`0024d7e`) — das Projekt hat keine
-  Agent-Konfiguration, der Punkt ist am Projektstand bestätigt (kein
-  `instructions`-Key in `~/.config/opencode/opencode.jsonc`); (c) die **neue
-  Pflicht** (`0449b05`): jede Zahl in der Commit-Message, die etwas über den
-  Commit oder seine Gates behauptet, nennt **was sie misst** — den Zustand
-  (Arbeitsbaum / committeter Stand) **und** den Umfang (gefilterte Teilmenge,
-  Range, Stufe); eine im dirty Arbeitsbaum gemessene Zahl ist nie eine Aussage
-  über den Commit, beide Zustände werden getrennt berichtet; der committete
-  Stand wird **gemessen, nicht ausgecheckt** (`git archive <sha>` + `tar -x`
-  in ein temporäres Verzeichnis). **Am Projekt angewendet:** die Pflicht
-  erreicht die Sessions über den Skill-Zeiger, und der Commit `8162323` führt
-  sie bereits aus („Working Tree 29, committeter Stand 24", gemessen über
-  `git archive dff6948` + `tar -x`) — der Upstream-Commit `0449b05` nennt
-  denselben Commit als Zielform.
-- `ratchet-gates` (`b0d1b51`, `d7888cd`) — **trifft zu**, die Projektanwendung
-  ist aber **unvollständig** → offene Position `SKILLS-VOKABULAR-98`. Zwei
-  Änderungen: (a) `references/vocabulary.md` legt **ein** Vokabular fest — die
-  fünf Stufen `critical`/`high`/`medium`/`low`/`info`, die fünf Status
-  `open`/`in-progress`/`fixed`/`accepted`/`wontfix`, die Zählregel (nur `open`
-  und `in-progress` zählen; `accepted` und `wontfix` bleiben sichtbar — eine
-  Entscheidung ist keine Löschung), „ein Befund braucht Owner **und** Ticket,
-  außer er ist `fixed`", eine stabile ID, Severity und Status **getrennt**,
-  ein unbekannter Wert ist ein Fehler und nie ein Fallback, und die Prosa
-  bleibt der menschliche Record. Das Projekt hat zwei Findings-Logs mit
-  eigener Form — das Register `feature/quality/security-review-register.md`
-  (fixe Kopfzeile **ohne** Severity- und **ohne** Ticket-Spalte, Statuswerte
-  `offen`/`in Welle`/`geschlossen`/`zurückgenommen`/`akzeptiert`) und die
-  UXG/UXD-Lückeinventur in `feature/platform/lightroom-ux-parity.md` (Status
-  im Lückentext, keine Severity, kein Owner) — beide sind noch nicht
-  angeglichen; (b) `references/cli.md` ist die Karte vom Skill zur
-  `ratchet`-Binary (eigenes Repo, `~/dev/ratchet-cli`) — **trifft nicht zu**:
-  das Repo setzt die Mechanik selbst um (POSIX sh, `scripts/gates.sh` mit
-  eigenen Baselines `scripts/file_size_baseline.txt` (500er, `fast-2`) /
-  `scripts/file_size_ceiling.txt` (3000er, `fast-7`) und dem Drift-Gate
-  `fast-6` (Tier-Liste gegen `ci.yml`)); ein externes Binary zu übernehmen wäre
-  eine eigene Entscheidung, keine Pflicht des Skills. **Beim Anchor-Audit
-  gefundener und geschlossener Befund:** `Agents.md` §„Verifizierung und Tests"
-  nannte die schnelle Stufe falsch („vier Textgates", „mindestens 5 Checks") —
-  die Zahlen sind am 2026-10-21 korrigiert (**acht** Textgates, Floor **9**,
-  Quellen `sh scripts/gates.sh list` und `scripts/gates.sh` `MIN_CHECKS=9`), und
-  die zugehörige Position ist aus dem Plan entfernt (Board-Konvention:
-  geschlossene Positionen werden entfernt, nicht abgehakt).
-- `security-review` (`b0d1b51`, `b9f140b`) — **trifft zu**, die Projektform
-  trägt die neue Regel noch nicht → offene Position `SKILLS-VOKABULAR-98`.
-  Stage 2 nimmt die Severity jetzt **aus den kanonischen Stufen**
-  (`ratchet-gates`, `references/vocabulary.md`), die `reach × impact`-Matrix
-  bleibt die Methode, nicht eine zweite Wortliste; `AKZEPTIERT` ist das
-  kanonische `accepted` (eine Entscheidung, die sichtbar bleibt und nicht
-  zählt); die Reihenfolge der Wellen kennt jetzt `info` (es benennt keinen
-  Defekt); bei einer Wiederholungsrunde meldet der Verifikator `fixed` /
-  `open` — ein wiederaufgetretener Befund ist ein **neuer seit der letzten
-  Runde**, nicht ein neuer Statuswert. Das Register des Projekts hat eine
-  **fixe** Kopfzeile und **null** Befunde; die erste Welle
-  (`SEC-REVIEW-WELLE-1-85`, Teil b) ist noch offen — sie muss in die
-  kanonische Form schreiben, sonst trägt die erste Welle eine fremde Form.
-- `ui-review` (`b0d1b51`, `b9f140b`) — **trifft nicht zu**: die geänderte
-  Findings-Vorlage (Spalten Id, Severity, Status, Owner, Ticket; die Stufen
-  sind kanonisch; `APPROVED` erst, wenn kein `critical`/`high`-Befund
-  **offen** (`open`/`in-progress`) ist; der Status ist ein eigenes Feld, nie
-  ein Wert in der Severity-Zelle) gehört zum Playwright-Screenshot-Review,
-  den dieses Projekt nicht hat (native egui-GUI; der visuelle Review läuft
-  über `egui_kittest`-Goldens/PSNR und den Fenster-Review `UI-VISION-REVIEW-70`).
-  Das Projekt nennt den Skill in **keiner Projektdatei außer diesem Marker
-  und dem Board** (`Agents.todo.md`, Eintrag `SKILLS-VOKABULAR-98`) — **am
-  committeten Stand dieses Commits**: **6 Zeilen** in **2** Dateien
-  (`git grep -n ui-review <stand> -- '*.md'`; vorkommensweise **11** — `git grep -o ui-review <stand> -- '*.md'`, eine Zeile trägt **5**); am **Vorgänger** `e744f8b` ist die **Dateimenge** dieselbe (**2**
-  Dateien: `AGENTS.skills.md`, `Agents.todo.md`), der **Zeilenzähler** dort ist
-  **5** — eine repo-weite Suche zählt die vom Commit geänderten Dateien mit; die
-  Zusatzzeile kam mit `0cf154d`, seither bleibt der Zähler bei **6**. Das
-  **kanonische Vokabular**, auf das die Vorlage zeigt, ist unter `ratchet-gates`
-  erfasst — dort steht auch, was mit der UXG/UXD-Lückeinventur zu geschehen hat.
-- `skills-marker` (`0024d7e`) — **trifft zu und ist angewendet** (diese
-  Datei): der Wortlaut zu den eingebetteten Regeln ist korrigiert („kein
-  Config-Key liefert Regeltext" statt „der `instructions`-Array ist leer"),
-  ebenso der Schritt 6 der Vorlage. Der Abschnitt „Fortschreiben" unten trägt
-  den neuen Wortlaut; die Skill-Stand-Tabelle bleibt unberührt, der Marker
-  akkumuliert nicht.
-- `agent-config` (`817c01e`, `0024d7e`) — **trifft nicht zu**
-  (Maschinenkonfiguration): der Skill selbst ist jetzt **hidden**, die Liste
-  der versteckten Skills wächst von 14 auf **17** (`agent-config`,
-  `update-models`, `github-ci-filters` kommen hinzu; gemessen am Skills-Repo
-  HEAD `0449b05` mit `grep -l 'autoinvoke: false' .agents/skills/*/SKILL.md`
-  = 17 von 19 Skills, sichtbar bleiben `build-verify` und `ui-review`), und
-  die Beschreibung der globalen Konfiguration ist berichtigt (kein
-  `instructions`-Key). Die projektbezogene Aussage der Änderung („ein Projekt
-  verweist auf die Regeldatei, statt den Flow zu wiederholen") ist im Projekt
-  erfüllt.
-- `github-ci-filters` (`817c01e`) — **trifft zu und ist angewendet**: die
-  `paths-ignore`-Filter für `push` **und** `pull_request` stehen in
-  `.github/workflows/ci.yml`. Die einzige Änderung ist `autoinvoke: false` —
-  der Skill ist jetzt **hidden**; das Projekt nennt ihn in keiner Datei außer
-  diesem Marker, es gibt also nichts umzuschreiben.
-- `update-models` (`817c01e`) — **trifft nicht zu** (Maschinenstand): die
-  einzige Änderung ist `autoinvoke: false` (jetzt **hidden**). Die
-  belegten Modell-Angaben dieser Zeile wurden am 2026-10-21 erneut gelesen und
-  unverändert bestätigt (`~/.config/opencode/model-preferences.md`:
-  `namespaceRule: opencode-go-only`; `~/.config/opencode/opencode.jsonc`:
-  Root-Modell und die Rollen `plan`/`general`/`build`/`explore` auf
-  `opencode-go/minimax-m3.1-flash-free`).
+- `skills-marker` (**12** Commits: `e523df9`, `21b29e4`, `7341bb0`, `992a9eb`,
+  `65fbecc`, `f7b8f9c`, `820c140`, `37cefe2`, `c056e75`, `857070a`, `4205142`,
+  `842e055`; **3** Dateien: `SKILL.md` (+64/-58), `references/notes.md` (+436/-1),
+  `templates/AGENTS.skills.md` (+34/-0)) — **trifft zu und ist angewendet** (diese
+  Datei). Die Regel selbst ändert sich in **fünf** Punkten, alle betreffen diesen
+  Marker: (a) die **Zitierform** (`65fbecc`) — die gemeinsame Regel wird über
+  **Pfad im Skill (ID + Datei) + Anker** zitiert, **ohne Zeilennummer**, weil die
+  Zeilennummer driftet; (b) die **Cursor-Klausel** (`65fbecc`) — ein Verweis trägt nur,
+  wenn der **Cursor** den Stand deckt, in dem die Zitierstelle existiert: wer zitiert,
+  rückt den Cursor vor und begeht die Range dazwischen; (c) die **Aufzählungs-Klausel**
+  (`37cefe2`) — eine Aufzählung trägt **zwei** Behauptungen (jedes Element trägt die
+  Eigenschaft **und** die Liste ist die ganze Menge), beide sind zu belegen, eine
+  handgepflegte Aufzählung wird durch ein Kommando ersetzt, das die Menge ableitet;
+  (d) die **Nomen-Regel** (`37cefe2`) — die Formen (b) und (c) unterscheiden sich an der
+  **Zeitform**, nicht am Wort; „Vorgänger" heißt **Vorfahr**: der genannte SHA ist der
+  **Messstand**, nicht zwingend der direkte Vorgänger; (e) die **fünf Regeln** stehen
+  jetzt an der Zitierstelle (`SKILL.md`, `references/notes.md` § „Der Bezugsrahmen"),
+  die Vorlage trägt sie als **Kurzform zur Erinnerung** mit dem Vorrang der
+  Zitierstelle. **Was das an der Anwendung im Projekt ändert:** die Zitierstelle des
+  Markers (`skills-marker/SKILL.md` → „Bezugsrahmen-Regel") löst am alten Cursor
+  `0449b05` **nicht** auf (**0** Treffer in `.agents/skills/skills-marker/`) — der Anker
+  kam mit `65fbecc`. Nach der Cursor-Klausel muss der Cursor deshalb auf einen Stand
+  vorrücken, in dem die Zitierstelle existiert, **und** die Range dazwischen muss
+  begangen werden; dieser Commit tut beides (der Cursor steht jetzt auf `842e055`, die
+  Range `0449b05..842e055` ist dieser Abschnitt). **Belege:** die Zeichenkette
+  `Bezugsrahmen-Regel` steht am Stand `842e055` **7**-mal im Skill-Verzeichnis —
+  `SKILL.md` **1**, `references/notes.md` **5**, `templates/AGENTS.skills.md` **1**
+  (`git grep -c 'Bezugsrahmen-Regel' 842e055 -- .agents/skills/skills-marker/`) — und
+  am Stand `65fbecc` **4**-mal (`SKILL.md` **1**, `references/notes.md` **2**,
+  `templates/AGENTS.skills.md` **1**). Die **Aufzählungs-Klausel** ist am Projekt
+  erfüllt: jede Zählregel im Marker ist ein **Kommando**, keine Handliste
+  (`git grep -c …`, `grep -c '^    container:'`, `sh scripts/gates.sh list`,
+  `sh scripts/gen_doc_facts.sh --manifest`, `git rev-list --max-count=40 <sha>`) —
+  keine handgepflegte Liste steht im Marker. Die lokale Kopie des Ablaufs im Abschnitt
+  „Fortschreiben" ist am Stand `842e055` **nachgezogen**: ihre Kurzform führt jetzt
+  **alle fünf** Regeln (die Aufzählungs- und die Cursor-Klausel kamen in dieser Range
+  dazu). **Ein Nebenbefund, ohne Änderung am Projekt:** die Vorlage nennt in Schritt 4
+  noch „angewendete Zeilen mit `Datei:Zeile` belegen", während `SKILL.md` §3 die
+  **stabile Referenz** mit der Zeile als Lesehilfe vorschreibt — das Projekt folgt
+  `SKILL.md` §3 (das Format wird dort festgelegt, §1), die Vorlage hinkt nach.
+- `ratchet-gates` (`d5dc52f`; **1** Datei: `references/cli.md`, +7/-3) — **trifft zu**,
+  die Projektanwendung **trägt**. Gemessen wurde **beides**: die **Gate-Substanz**
+  (`SKILL.md`, `references/vocabulary.md`) ist in der Range **unberührt**
+  (`git diff --stat 0449b05..842e055 -- .agents/skills/ratchet-gates/SKILL.md
+  .agents/skills/ratchet-gates/references/vocabulary.md` ist **leer**) — die Pflichten,
+  die das Projekt anwendet (Floor `MIN_CHECKS=9`, Tier-Tabelle, kanonisches Vokabular),
+  sind unverändert; die **CLI-Karte** (`references/cli.md`) hat **drei** Änderungen:
+  die neue Zeile `ratchet release` (Version und Changelog sind abgeleitete Fakten,
+  nicht handgeschrieben), der **eigene Exit-Middle** der Release-Stufe (`1`, wenn
+  es nichts zu releasen gibt — das Werkzeug tat, was es soll, das Release existiert
+  nicht) und der **umgedrehte** Installationsabschnitt: „**No tag was pushed yet** …
+  build from source" → „The releases are published: every version tag carries the
+  assets of five platforms and a `checksums.txt`". **Was das an der Anwendung im
+  Projekt ändert: nichts** — das Projekt setzt die Mechanik selbst um (POSIX sh,
+  `scripts/gates.sh` mit eigenen Baselines und dem Drift-Gate `fast-6`); die
+  `ratchet`-Binary ist ein eigenes Repo (`~/dev/ratchet-cli`), ihre Release-Aussage
+  betrifft ein Werkzeug, das dieses Projekt nicht benutzt. Der Verdikt `ja` mit der
+  Board-Position `Agents.todo.md` → `SKILLS-VOKABULAR-98` **trägt**: die offene Position
+  betrifft das **kanonische Vokabular** (`references/vocabulary.md`), und diese Datei
+  ist in der Range unverändert. **Achte auf Selbstbezüge:** der Marker zitiert
+  `ratchet-gates/references/cli.md` als **Pfad** (die Karte der `ratchet`-Binary),
+  **nicht** die geänderte Aussage (die Release-Zeile) — die Messung ist damit
+  **nicht selbstreferenziell**, der Vorgänger-Rahmen ist erlaubt.
+- `github-ci-filters` (`7328fc3`; **2** Dateien: `SKILL.md` +78/-102,
+  `references/notes.md` +111/-21) — **trifft zu und ist angewendet**. Die Regel wurde
+  in **zwei** Schritten korrigiert: **Schritt 2** — **Auswahl** ist verboten,
+  **Subtraktion** erlaubt: eine `paths`-Liste, deren **positiver** Teil den Catch-all
+  `'**'` enthält, zieht nur ab (sie löst dieselben Pfade aus wie das
+  `paths-ignore`-Gegenteil, nie weniger); ein positiver Teil, der **nur bestimmte**
+  Pfade nennt, **wählt aus** und ist verboten (still verlorene Abdeckung, kein
+  Fehler); `paths-ignore` bleibt die bevorzugte Form, und wo der Eigentümer die
+  `paths`-Form entscheidet, ist die Entscheidung am Filter zu dokumentieren.
+  **Schritt 4** — der Workflow-Diff braucht **benannte Endpunkte**:
+  `git diff --stat <sha-before>..<sha-after> -- .github/workflows/`; der
+  Arbeitsbaum-Diff (`git diff -- .github/workflows/`) misst den **uncommitteten**
+  Zustand und ist nach dem Commit leer. **Erst geprüft, ob das Projekt den Skill
+  überhaupt anwendet** (das Projekt filtert seine Workflows per Pfad — gemessen:
+  `git grep -nE '^\s*(paths|paths-ignore):' -- .github/workflows/` → **3** Treffer:
+  **2** `paths-ignore` in `ci.yml` (Zeilen 11 und 54) und **1** `paths:` in
+  `ci-libraw-image.yml` (Zeile 21)). **Form gegen die neue Regel:** die Form von
+  `ci.yml` ist die **Subtraktion** (`paths-ignore`, beide Trigger) — die vom neuen
+  Wortlaut vorschriebene Form; am Projekt ändert sich **nichts**, die Erweiterung
+  (Catch-all-`paths` ist erlaubt) braucht das Projekt nicht. **Der Beleg des Markers
+  trug den neuen Schritt-4-Befehl nicht** (er nannte nur den Commit `c4e2fd8`, kein
+  Diff-Kommando, keinen benannten Endpunkt) → jetzt getragen:
+  `git diff --stat 2add471..c4e2fd8 -- .github/workflows/` → **1** Datei geändert,
+  **+55** Zeilen, **0** Löschungen; `2add471` ist der Commit, der `.github/workflows/`
+  zuletzt schrieb, `c4e2fd8` der Commit, der den Filter schrieb; der Diff enthält
+  **nur** die beiden `paths-ignore`-Blöcke — keine Job-, Schritt- oder
+  Timeout-Änderung, kein `continue-on-error`, kein Required-Check. **Eine Abweichung
+  ist gemessen und dem Eigentümer vorzulegen:** `.github/workflows/ci-libraw-image.yml`
+  trägt einen **`paths:`-Block** (positiver Teil: `docker/Dockerfile`,
+  `.github/workflows/ci-libraw-image.yml` — **kein** Catch-all, **keine** Negation),
+  also die **Auswahl**-Form, die der neue Schritt 2 verbietet. Der Workflow filtert
+  **nicht** docs-only, sondern löst gezielt den Image-Publish aus; nach dem **Wortlaut**
+  der Regel ist die Form verboten, nach ihrer **Begründung** (still verlorene
+  Pipeline-Abdeckung) trifft sie diesen Workflow nicht — das ist eine
+  **Eigentümerentscheidung**, und dieser Lauf legt **keine** Board-Position an.
 
 **Entfernt**
 
 - **Keine** — in dieser Range wurde kein Skill entfernt.
 
-**Ohne Skill-Bezug** (Commits der Range, die keine Datei unter `.agents/`
-berühren — geprüft je Commit mit `git show --name-only --format= <sha>`)
+**Ohne Skill-Bezug** (Commits der Range, die keine Datei unter `.agents/` berühren —
+geprüft je Commit mit `git show --name-only --format= <sha>`)
 
-- `5a0c1b0` (`docs(todo): log the ratchet CLI decision`) — **1** von **7**
-  Commits der Range; die einzige geänderte Datei ist `AGENTS.todo.md` des
-  Skills-Repos (die Entscheidung, dass die `ratchet`-Binary ein eigenes Repo
-  bekommt: `~/dev/ratchet-cli`). Die übrigen **6** Commits (`817c01e`,
-  `0024d7e`, `b0d1b51`, `b9f140b`, `d7888cd`, `0449b05`) berühren jeweils
+- `7910ec6` (`docs(todo): the website's findings are migrated — the re-grade lives
+  there now`) — **1** von **15** Commits der Range; die einzige geänderte Datei ist
+  `AGENTS.todo.md` des Skills-Repos. Die übrigen **14** Commits (`d5dc52f`,
+  `e523df9`, `21b29e4`, `7341bb0`, `992a9eb`, `65fbecc`, `f7b8f9c`, `820c140`,
+  `37cefe2`, `7328fc3`, `c056e75`, `857070a`, `4205142`, `842e055`) berühren jeweils
   `.agents/`.
 
 ## Fortschreiben
@@ -199,16 +189,13 @@ berühren — geprüft je Commit mit `git show --name-only --format= <sha>`)
    - trifft nicht zu (das Projekt hat das nicht) → `angewendet: nein` + kurzer Grund
 4. Offene Positionen nach `Agents.todo.md`; Belege als **stabile Referenz**
    (Abschnitt/Überschrift, Task-ID, Suchstring) — Zeilennummern nur als
-   Lesehilfe, sie driften. `Agents.todo.md` wird währenddessen von anderen
+   Lesehilfe, sie driften.
+   **Lokale Ergänzung:** `Agents.todo.md` wird währenddessen von anderen
    Sessions angefasst: Einträge nur an einem sicheren Ende einfügen und
    **niemals** die fremden Änderungen mit committen.
-5. Erst wenn für **jeden** Skill aus der Range eine Zeile steht:
-   `agents-skills-consumed: $(git -C <skills-repo> rev-parse --short HEAD)`,
-   `geprüft am:` auf heute, Abschnitte ersetzen — und **alle bestehenden Anker
-   re-verifizieren**: Advancing ist kein Updating, der Marker akkumuliert nicht.
-   **Bezugsrahmen — die gemeinsame Regel, zitiert statt kopiert:**
+   Bezugsrahmen — die gemeinsame Regel, **zitiert statt kopiert:**
    `skills-marker/SKILL.md` → „Bezugsrahmen-Regel" (Skill-ID + Datei + Anker,
-   **ohne Zeilennummer** — die driftet, der Anker bleibt); Wortlaut, Belege und
+   **ohne** Zeilennummer — die driftet, der Anker bleibt); Wortlaut, Belege und
    Fälle: `skills-marker/references/notes.md` § „Der Bezugsrahmen". Die Liste
    nennt die **Fälle**, nicht die Fassung — steht eine Form nicht an der
    Zitierstelle, ist sie hier falsch: (a) was der Commit selbst festschreibt
@@ -224,8 +211,17 @@ berühren — geprüft je Commit mit `git show --name-only --format= <sha>`)
    Messzeitpunkt; ein Marker **zitiert** die Regel, statt sie zu kopieren — eine
    eigene Zusatzregel des Projekts ist erlaubt, wenn sie als **lokale Ergänzung**
    gekennzeichnet ist und die gemeinsame Regel nicht ersetzt (hier: die
-   `**Lokale Ergänzung:**`-Zeile oben). Der Cursor `agents-skills-consumed` nennt
+   `**Lokale Ergänzung:**`-Zeile oben); eine **Aufzählung** trägt zwei Behauptungen
+   (jedes Element trägt die Eigenschaft, und die Liste ist die ganze Menge — beides
+   ist zu belegen; eine handgepflegte Aufzählung wird durch ein Kommando ersetzt,
+   das die Menge ableitet); ein **Verweis** trägt nur, wenn der **Cursor** den Stand
+   deckt, in dem die Zitierstelle existiert (wer zitiert, rückt den Cursor vor und
+   begeht die Range dazwischen). Der Cursor `agents-skills-consumed` nennt
    das Skills-Repo — er ist kein Rahmen.
+5. Erst wenn für **jeden** Skill aus der Range eine Zeile steht:
+   `agents-skills-consumed: $(git -C <skills-repo> rev-parse --short HEAD)`,
+   `geprüft am:` auf heute, Abschnitte ersetzen — und **alle bestehenden Anker
+   re-verifizieren**: Advancing ist kein Updating, der Marker akkumuliert nicht.
 6. Falls Regeln oder Skills betroffen waren: die eingebetteten Regeln in der
    globalen `~/.config/opencode/AGENTS.md` gegen ihre Quelle in
    `.agents/rules/*` prüfen und bei geänderter **Pflicht** sinngemäß nachziehen.
