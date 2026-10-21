@@ -14,4 +14,4 @@
 pub mod disk;
 pub mod preview_disk;
 
-pub use disk::{DiskCacheError, DiskFolderCache};
+pub use disk::{DiskCacheError, DiskFolderCache, MAX_SETTINGS_BYTES};

@@ -2055,6 +2055,16 @@ Ordneroption und standardmäßig deaktiviert. Verwaiste Cacheeinträge dürfen
 gelöscht werden, sobald ein Bild über Lumina verschoben oder umbenannt wurde
 beziehungsweise beim Scan nicht mehr gefunden wird.
 
+Die Ordner-Einstellung `.lumina/settings.json` wird in **jedem** Verzeichnis
+der Vererbungskette gelesen — sie kann daher auf einem Shared-Mount fremd
+kontrolliert sein. Der Lesevorgang ist deshalb **begrenzt**: höchstens 64 KiB
+plus ein Kontrollbyte (`MAX_SETTINGS_BYTES` + 1, crates/lumina-cache/src/disk.rs)
+werden gelesen; eine größere Datei wird **laut** abgewiesen (`DiskCacheError::SettingsTooLarge`),
+nie teilweise ausgewertet und nie stillschweigend auf Standardwerte
+zurückgefallen. Eine unbrauchbare Ebene wird **nicht übersprungen** — der
+Fehler propagiert, damit die effektive Konfiguration nicht still auf
+Standardwerte zurückspringt.
+
 > **Implementierungsstatus (F-086, 2026-08-17):** Umgesetzt und unabhängig
 > verifiziert. `lumina-core` besitzt eine native Disk-Schicht
 > (`DiskFolderCache`, crates/lumina-cache/src/disk.rs): atomare Writes,

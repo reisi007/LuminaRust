@@ -10,12 +10,23 @@
 
 use lumina_core::cache::{preview_cache_key, FolderCacheSettings, PreviewKind};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const SETTINGS: &str = "settings.json";
+
+/// Hard upper bound for one `.lumina/settings.json` file (64 KiB).
+///
+/// SEC-4: the settings file is read from **every** ancestor directory of the
+/// image folder, so on a shared mount it can be controlled from outside the
+/// user's reach. The largest payload the app itself ever writes is
+/// `serde_json::to_vec_pretty(FolderCacheSettings)` — three boolean fields,
+/// measured 101 bytes (`save_settings`). 64 KiB is ~650 times that payload
+/// and keeps the parsed JSON tree in the low megabytes even in the worst
+/// case (many tiny keys).
+pub const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
 /// Unterverzeichnis des `.lumina`-Cachewurzelverzeichnisses, das die Preview-
 /// Einträge trägt. Öffentlich, weil die Frontends dasselbe Verzeichnis listen.
@@ -27,6 +38,17 @@ pub enum DiskCacheError {
     Io(#[from] io::Error),
     #[error("invalid cache settings: {0}")]
     Settings(#[from] serde_json::Error),
+    /// SEC-4: a settings file above [`MAX_SETTINGS_BYTES`] is refused. Its
+    /// content is never read into memory and never used; `size` is the number
+    /// of bytes the bounded read pulled before the refusal.
+    #[error(
+        "invalid cache settings: {path} is larger than the {limit}-byte limit ({size} bytes read)"
+    )]
+    SettingsTooLarge {
+        path: PathBuf,
+        limit: u64,
+        size: u64,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +104,16 @@ impl DiskFolderCache {
 
     /// Read the nearest settings chain, from filesystem root to this folder.
     /// A setting file may contain either or both fields; absent fields inherit.
+    ///
+    /// SEC-4: every level is read **bounded** (at most
+    /// [`MAX_SETTINGS_BYTES`]); a file above the limit is refused with
+    /// [`DiskCacheError::SettingsTooLarge`] and its content is never used.
+    /// The refusal **propagates** instead of silently falling back to the
+    /// defaults: an unusable level would otherwise change the effective
+    /// configuration without a trace, and the defaults (`standard_preview`
+    /// on) are not what such a file states. Callers therefore see a loud
+    /// error; the cache degrades to "no preview caching" (fail closed), not
+    /// to "different settings".
     pub fn effective_settings(&self) -> Result<FolderCacheSettings, DiskCacheError> {
         let mut effective = FolderCacheSettings::default();
         let mut folders = Vec::new();
@@ -94,7 +126,8 @@ impl DiskFolderCache {
         for folder in folders {
             let path = folder.join(".lumina").join(SETTINGS);
             if path.exists() {
-                let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+                let value: serde_json::Value =
+                    serde_json::from_slice(&read_settings_bytes(&path)?)?;
                 // Merge only fields present in this file, rather than making
                 // serde defaults accidentally erase an inherited option.
                 if let Some(v) = value.get("standard_preview").and_then(|v| v.as_bool()) {
@@ -268,227 +301,28 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), DiskCacheError> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
-
-    fn folder() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "lumina-cache-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-                .wrapping_add(u128::from(NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)))
-        ))
+/// Read one settings file, bounded by [`MAX_SETTINGS_BYTES`].
+///
+/// SEC-4: the bound is enforced by the **reader**, not by a
+/// `metadata().len()` pre-check — the file may grow between the check and
+/// the read, so only a limited read can bound the memory. At most
+/// `MAX_SETTINGS_BYTES + 1` bytes are pulled from disk; one byte more than
+/// allowed is enough to prove that the file is too large, and that byte is
+/// never kept. A file above the limit is refused with
+/// [`DiskCacheError::SettingsTooLarge`] — its content is not used.
+fn read_settings_bytes(path: &Path) -> Result<Vec<u8>, DiskCacheError> {
+    let file = File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(DiskCacheError::SettingsTooLarge {
+            path: path.to_path_buf(),
+            limit: MAX_SETTINGS_BYTES,
+            size: bytes.len() as u64,
+        });
     }
-    fn setup() -> (PathBuf, DiskFolderCache) {
-        let path = folder();
-        fs::create_dir_all(&path).unwrap();
-        let cache = DiskFolderCache::in_folder(&path).unwrap();
-        (path, cache)
-    }
-
-    #[test]
-    fn settings_roundtrip_and_parent_inheritance() {
-        let (path, cache) = setup();
-        cache
-            .save_settings(&FolderCacheSettings {
-                standard_preview: false,
-                one_to_one_preview: true,
-                ..Default::default()
-            })
-            .unwrap();
-        assert!(cache.effective_settings().unwrap().one_to_one_preview);
-        let child = path.join("child");
-        fs::create_dir(&child).unwrap();
-        let child_cache = DiskFolderCache::in_folder(&child).unwrap();
-        child_cache
-            .save_settings(&FolderCacheSettings {
-                standard_preview: true,
-                one_to_one_preview: false,
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(
-            child_cache.effective_settings().unwrap(),
-            FolderCacheSettings::default()
-        );
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    #[test]
-    fn settings_control_standard_and_one_to_one() {
-        let (path, cache) = setup();
-        assert!(cache
-            .store_preview("a.raw", "main", PreviewKind::Standard, b"s")
-            .unwrap());
-        assert!(!cache
-            .store_preview("a.raw", "main", PreviewKind::OneToOne, b"1")
-            .unwrap());
-        cache
-            .save_settings(&FolderCacheSettings {
-                one_to_one_preview: true,
-                ..Default::default()
-            })
-            .unwrap();
-        assert!(cache
-            .store_preview("a.raw", "main", PreviewKind::OneToOne, b"1")
-            .unwrap());
-        assert_eq!(
-            cache
-                .load_preview("a.raw", "main", PreviewKind::OneToOne)
-                .unwrap(),
-            Some(b"1".to_vec())
-        );
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    #[test]
-    fn partial_child_settings_inherit_the_other_parent_field() {
-        let (path, parent) = setup();
-        parent
-            .save_settings(&FolderCacheSettings {
-                standard_preview: false,
-                one_to_one_preview: true,
-                ..Default::default()
-            })
-            .unwrap();
-        let child_path = path.join("child");
-        let child = DiskFolderCache::in_folder(&child_path).unwrap();
-        fs::write(child.settings_path(), br#"{"standard_preview":true}"#).unwrap();
-
-        assert_eq!(
-            child.effective_settings().unwrap(),
-            FolderCacheSettings {
-                standard_preview: true,
-                one_to_one_preview: true,
-                ..Default::default()
-            }
-        );
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    /// LRPAR-G01-BASIC: `reset_sliders_automatically` defaults to false,
-    /// roundtrips, and inherits field-wise (a partial child file keeps the
-    /// parent value instead of resetting it).
-    #[test]
-    fn reset_sliders_automatically_inherits_field_wise() {
-        let (path, parent) = setup();
-        assert!(
-            !parent
-                .effective_settings()
-                .unwrap()
-                .reset_sliders_automatically
-        );
-        parent
-            .save_settings(&FolderCacheSettings {
-                reset_sliders_automatically: true,
-                ..Default::default()
-            })
-            .unwrap();
-        assert!(
-            parent
-                .effective_settings()
-                .unwrap()
-                .reset_sliders_automatically
-        );
-        let child_path = path.join("child");
-        let child = DiskFolderCache::in_folder(&child_path).unwrap();
-        fs::write(child.settings_path(), br#"{"standard_preview":true}"#).unwrap();
-        let effective = child.effective_settings().unwrap();
-        assert!(effective.reset_sliders_automatically);
-        assert!(effective.standard_preview);
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    #[test]
-    fn identified_preview_rejects_legacy_and_wrong_source_content() {
-        let (path, cache) = setup();
-        cache
-            .store_preview_with_source_hash(
-                "a.raw",
-                "main",
-                PreviewKind::Standard,
-                "blake3:source-a",
-                b"a",
-            )
-            .unwrap();
-        assert!(cache
-            .load_preview_with_source_hash(
-                "a.raw",
-                "main",
-                PreviewKind::Standard,
-                "blake3:source-b",
-            )
-            .unwrap()
-            .is_none());
-        assert_eq!(
-            cache
-                .load_preview_with_source_hash(
-                    "a.raw",
-                    "main",
-                    PreviewKind::Standard,
-                    "blake3:source-a",
-                )
-                .unwrap(),
-            Some(b"a".to_vec())
-        );
-        cache
-            .store_preview("a.raw", "main", PreviewKind::Standard, b"legacy")
-            .unwrap();
-        assert!(cache
-            .load_preview_with_source_hash(
-                "a.raw",
-                "main",
-                PreviewKind::Standard,
-                "blake3:source-a",
-            )
-            .unwrap()
-            .is_none());
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    #[test]
-    fn prune_removes_orphans_and_cache_is_non_authoritative() {
-        let (path, cache) = setup();
-        cache
-            .store_preview("gone.raw", "main", PreviewKind::Standard, b"x")
-            .unwrap();
-        assert_eq!(cache.prune_orphans(&[]).unwrap(), 1);
-        assert!(cache
-            .load_preview("gone.raw", "main", PreviewKind::Standard)
-            .unwrap()
-            .is_none());
-        fs::remove_dir_all(path).unwrap();
-    }
-
-    /// Q4 of LUMINA-CACHE-EXTRACT-70: the public layout must be the one the
-    /// writer actually uses — the associated `entry_paths` names exactly the
-    /// file pair `store_preview` commits, without a handle being required to
-    /// ask for it.
-    #[test]
-    fn entry_paths_name_the_files_the_writer_commits() {
-        let (path, cache) = setup();
-        assert!(cache
-            .store_preview("a.raw", "vc-original", PreviewKind::Standard, b"s")
-            .unwrap());
-        let root = cache.path();
-        let (meta, data) =
-            DiskFolderCache::entry_paths(root, "a.raw", "vc-original", PreviewKind::Standard);
-        assert!(meta.is_file(), "metadata entry exists: {}", meta.display());
-        assert!(data.is_file(), "data entry exists: {}", data.display());
-        assert_eq!(meta.file_stem(), data.file_stem());
-        assert_eq!(
-            data.file_stem().and_then(|stem| stem.to_str()),
-            Some(entry_stem("a.raw", "vc-original", PreviewKind::Standard).as_str())
-        );
-        assert_eq!(meta.extension().and_then(|ext| ext.to_str()), Some("json"));
-        assert_eq!(data.extension().and_then(|ext| ext.to_str()), Some("bin"));
-        fs::remove_dir_all(path).unwrap();
-    }
+    Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests;
