@@ -134,6 +134,123 @@ Hardware-Gate**, kein gruener Pass und kein stiller Ersatz (`DoD.md` §10).
 Betroffen sind `GPU-PARITY-HW-28`, `R5-DUST-23-FOLLOWUP`, `R5-BRUSH-24`,
 `R5-MASKVIS-25` und die kittest-Goldens.
 
+**Verifikations-Rundlauf 2026-09-27 (unabhängig, PASS) — `LUMINA-GPU-TESTS-38`:
+`lumina-gpu`-Tests in CI, zweiteilig.** **Zuordnung:** die Position war eine
+**CI-Lücke** und ist seit der Verifikation **erledigt und verifiziert** — sie
+steht hier als **Nachweis**, nicht als offene Aufgabe (das Board führt
+geschlossene Positionen als Prosa, nie als `- [x]`; `grep -c '^- \[x\]'
+Agents.todo.md` ist 0). Sie stand bis `3d02895` („LUMINA-GPU-TESTS-38:
+erledigt, am CI-Log verifiziert") als offene Position im Board und wurde dort
+**entfernt**, nicht abgehakt; der Nachweis aus dieser Zeit lebt in der
+Git-Historie. Die Implementierung lag bereits vor (`add5d5f`, 2 Commits); offen
+war allein der Nachweis. Gemessen wurde auf einem **GPU-losen Host**, beide
+Teile der Aufgabe.
+
+**(a) Die 56 adapterfreien Unit-Tests laufen in CI.** `ci.yml:239` lautet jetzt
+`cargo test --workspace --all-targets --exclude lumina-gui --exclude
+lumina-sidecar --exclude lumina-bench` — `lumina-gpu` ist **nicht** mehr
+ausgeschlossen. Gemessen: `cargo test -p lumina-gpu` meldet **70 passed / 0
+failed / 28 ignored**; die 70 enthalten die 56 lib-Unit-Tests (`geometry`,
+`validate`, `stages`, `tiling`, `lens_blur`, `lensfun` plus `src/lib.rs`-Blöcke).
+70 ≥ 56 ✓.
+
+**(b) Die 28 `ignored` sind genau die adapterpflichtigen Tests.** Der Briefkasten
+ist direkt gemessen, nicht aus der Testliste abgeleitet: `cargo test -p
+lumina-gpu --features gpu-adapter-tests --no-fail-fast` auf diesem Host **ohne**
+Adapter ergibt `passed=70  FAILED=28  ignored=0` mit **28 Härte-Panics**.
+Dieselben 28, die default `ignored` gemeldet werden, sind es, die im Opt-in hart
+scheitern — die Mengen sind komplementär, nicht nur ähnlich. Damit ist nichts als
+gedeckt gemeldet, was nichts prüft ✓.
+
+**(c) Die `ci.yml`-Begründung ist durch eine gemessene Aussage ersetzt** (Zeilen
+138–154): benennt 70/28, die 56 `src/`-Unit-Tests, die 28 adapterfreien
+Integrationstests, den Opt-in-Befehl und den Umstand, dass ein GPU-loser Runner
+`#[ignore]`d niemals als bestanden zählt ✓.
+
+**(d) Nicht-Vakuumität** — hier ist die Abnahme sprachlich von „ein Test"
+formuliert; was tatsächlich existiert, ist der **Mechanismus** (`gated_test!` in
+`tests/support/mod.rs:39` setzt `#[cfg_attr(not(feature = "gpu-adapter-tests"),
+ignore)]` an **eine** Stelle statt an 28 Tests, `require_adapter` `:60` ersetzt
+das frühe `return` durch ein `assert!`). Die Nicht-Vakuumität ist deshalb
+**gemessen, nicht asserted-by-a-test**: auf einem adapterlosen Host sind es 0
+bestandene statt 28 (default) bzw. 28 Fehlschläge statt 28 stille Pässe
+(Opt-in), Exit-Code 101. Das ist der stärkere Beleg, ersetzt aber keinen
+committeten Meta-Test über das Gate selbst; die Formulierung wird hier nicht
+als wörtlich erfüllt ausgegeben.
+
+**(e) Keine Assertion entfernt oder geschwächt.** Die alten Skip-Zweige stehen
+wörtlich erhalten (`tests/stages.rs:123-126`, `:229-232`, `:266` —
+`eprintln!("{SKIP_MESSAGE}"); return;`), sie sind nur nach dem vorangestellten
+`assert!` statisch unerreichbar, damit die Skip-Meldungen dokumentiert bleiben.
+Kein Test wurde gestrichen; `init_warning.rs` (der „no silent fallback"-Vertrag)
+besteht unverändert.
+
+**Zahlen im Aufgabentext sind überholt und bleiben als Vorher-Stand stehen:**
+der Text nennt 98 Tests / 42 adapterpflichtige, gemessen sind am 2026-09-27
+70 / 28. (31 `gated_test!`-Aufrufe, davon 3 in `lensfun_tca_skip.rs` und
+`parity.rs` hinter dem `lensfun`-Feature, das unter Default-Features nicht
+kompiliert.) Die 42/98 sind der Zustand **vor** der Umsetzung, die 70/28 der
+danach; die Doku `ci.yml:138-152` führte die aktuellen.
+
+**Bleibende Hardware-Grenze (unverändert, durch diese Aufgabe nicht schließbar):**
+der wgpu-**Paint**-Schritt (Shader-Kompilierung, MSAA, Textur-Sampling,
+Treiberfehler) braucht einen echten Adapter und bleibt lokales macOS-Gate.
+`GPU-PARITY-HW-28`, `R5-DUST-23-FOLLOWUP`, `R5-BRUSH-24` und `R5-MASKVIS-25`
+tragen denselben Hardware-Gate unabhängig davon und bleiben offen. Mit dieser
+Messung ist zusätzlich belegt, dass der Default-Lauf auf einem GPU-losen Runner
+**nicht** vakuum grün ist — die 28 fehlen als `ignored` sichtbar, statt als
+bestanden zu zählen.
+
+**Stand der Belege am 2026-10-21 (nachgetragen, HEAD `ee2c4d4`; der Lauf selbst
+wurde heute nicht wiederholt — auf diesem Host fehlt die Rust-Toolchain,
+`cargo fmt` endet mit Exit 127):** die **Behauptungsstruktur der Messung vom
+2026-09-27 gilt unverändert**, die **Zahlen und Zeilenangaben sind teilweise
+überholt.**
+
+- `add5d5f` existiert unverändert (`git log -1 --format='%s %ad'` →
+  „LUMINA-GPU-TESTS-38: 56 echte GPU-Tests in CI, Skip ehrlich", 2026-09-26);
+  8 Dateien, davon **0 Produktcode** unter `crates/lumina-gpu/src/`. Der zweite
+  Commit `6af70dd` („GPU-GATING-FMT-41: gated_test! entfernt, fmt-Abdeckung
+  zurück") hat den Mechanismus aus (d) später verändert — das ist der Grund,
+  warum (d) heute anders aussieht.
+- **`ci.yml:239`** — die zitierte `cargo test`-Zeile steht **heute in Zeile 376**
+  (`cargo test --workspace --all-targets --exclude lumina-gui --exclude
+  lumina-sidecar --exclude lumina-bench`; `lumina-gpu` weiterhin **nicht**
+  ausgeschlossen ✓). Zeile 239 trägt heute einen Kommentar zum
+  CLI-Feature-Build-Gate.
+- **`ci.yml:138-154`** — der Begründungsblock steht heute in **Zeilen 217-231**.
+  Er nennt **weiterhin** 70/28, die **56** `src/`-Unit-Tests und die **28**
+  adapterpflichtigen Tests; **die Zahlen darin sind überholt** (siehe unten),
+  der Mechanismus und das Opt-in-Kommando stehen unverändert.
+- **Zahlen heute** (aus dem CI-Log des grünen Laufs `39670086731` zu `8c9df57`,
+  Job „Rust tests (excluding GUI)" — **kein** lokaler Lauf): `lumina_gpu (lib)`
+  **58 passed / 0 ignored** (statt 56); Summe über alle `lumina-gpu`-Binaries
+  **74 passed / 0 failed / 32 ignored** (statt 70/28). Gegengezählt: `golden`
+  5/2, `init_warning` 1/0, `lensfun_map` 2/1, `lensfun_tca_skip` 0/0,
+  `local_mask_parity` 2/4, `parity` 5/22, `stages` 1/3. **Aussage (b) gilt damit
+  unverändert**: die `ignored` sind genau die adapterpflichtigen Tests — in der
+  Quelle stehen heute **35** `#[cfg_attr(not(feature = "gpu-adapter-tests"),
+  ignore)]`-Attribute, davon **3** hinter `#[cfg(feature = "lensfun")]`
+  (`crates/lumina-gpu/tests/parity.rs:3466`,
+  `crates/lumina-gpu/tests/lensfun_map.rs:208` und die ganze Datei
+  `crates/lumina-gpu/tests/lensfun_tca_skip.rs`) → **32** unter
+  Default-Features. Die 35 statt 31 sind neue Adaptertests aus
+  `GPU-RENDER-MASK-19` (`local_mask_parity.rs`, `parity_generative/`).
+- **(d) ist heute anders formuliert, weil der Mechanismus heute ein anderer
+  ist:** `gated_test!` gibt es **nicht mehr** (entfernt in `6af70dd`); das
+  `ignore`-Attribut steht heute an **35** Stellen einzeln statt an einer;
+  `require_adapter` steht heute in
+  `crates/lumina-gpu/tests/support/mod.rs:44` (damals `:60`). Die **Wirkung** ist
+  dieselbe — `require_adapter` ist ein `assert!` statt eines `return false`, ein
+  adapterloser Runner zählt also keinen stillen Frühaufstieg als bestanden.
+- **(e) gilt inhaltlich, mit verschobenen Zeilen:** die Skip-Zweige in
+  `crates/lumina-gpu/tests/stages.rs` stehen wörtlich erhalten, heute in
+  **`:124-127`**, **`:231-234`** und **`:269`** (damals `:123-126`, `:229-232`,
+  `:266`); der vorangestellte `assert!` steht weiterhin bei `:229`.
+- **Bleibende Hardware-Grenze unverändert** — der wgpu-Paint-Schritt braucht
+  weiterhin einen echten Adapter; die oben genannten Hardware-Gates bleiben
+  offen.
+
 **Die Grenze ist nicht die einzige offene Sache — das wird hier ausdruecklich
 nicht behauptet.** Eine headless Maschine ohne GPU loest keinen Task aus
 Block B und ersetzt keinen manuellen Lauf:
@@ -402,6 +519,79 @@ offen geführt wird, ist ein Dokumentations-, kein Hardwareproblem.
 Welle 0 verwandelt außerdem jede künftige Baseline-Erzeugung aus
 einem ungeprüften `UPDATE_SNAPSHOTS=1` in einen nachvollziehbaren,
 auf eine gepinnte Umgebung beschränkten Schritt.
+
+**Verifikations-Rundlauf 2026-09-27 (unabhängig, PASS) — `HSL-BAND-CLICK-43`:
+die HSL-Bänder `Hue` und `Luminance` werden angeklickt.** **Zuordnung:** dieser
+Abschnitt ist die Sektion der GUI-Test-Arbeit; die Position war eine echte
+Testlücke der Klick-Abdeckung und ist seit der Verifikation **erledigt und
+verifiziert** — sie steht hier als **Nachweis**, nicht als offene Aufgabe (das
+Board führt geschlossene Positionen als Prosa, nie als `- [x]`; `grep -c '^- \[x\]'
+Agents.todo.md` ist 0). Sie stand **nie** im committeten Board (`git log -S
+"HSL-BAND-CLICK-43" -- Agents.todo.md` war leer) — sie war eine uncommittete
+Position im Arbeitsbaum, die beim Pull gestasht wurde. Die Implementierung lag
+bereits als `fccbea8` vor (3 Dateien, **0 Produktcode** — `crates/lumina-gui/src/`
+unberührt; die Abgrenzung ist damit strukturell belegt und nicht nur behauptet),
+offen war allein der Nachweis. Gefahren auf einer GPU-losen Maschine mit frisch
+gebautem Toolchain (LibRaw 0.22.2 gepinnt, `cargo` 1.98.1): Baseline plus alle
+drei in `feature/product/ai-masks.md` dokumentierten Mutationen, jeweils **beide**
+betroffenen Targets, Mutation nach jeder Messung sofort reverted, Working Tree
+am Ende sauber.
+
+| Mutation | Doku (Stand 2026-09-27) | Gemessen (Stand 2026-09-27) | |
+|---|---|---|---|
+| `HSL_FIELDS` 0<->2 (Feldseite) | `hsl_bands:195`, `:255` | `mask_local_hsl_bands.rs:195` (Feld-Pin Hue, *"got 0"*) und `:255` (Zeugen-Pin Luminance) | **rot** |
+| Label-`match` 0<->2, `HSL_FIELDS` unberührt (Beschriftungsseite) | `hsl_bands:129` | `mask_local_hsl_bands.rs:129` (Stack-Assertion, meldet die drei Rail-Rechtecke) | **rot** |
+| `HSL_FIELDS` 0<->1 (Kontrolle) | `color_controls:225` + `hsl_bands:165`, `:255` | `mask_local_color_controls.rs:225`, `mask_local_hsl_bands.rs:165` und `:255` | **rot** |
+| Baseline (unmutiert) | grün | 3 passed / 0 failed | **grün** |
+
+Die Zeilennummern der Doku stimmen **exakt**. Die zweite Zeile ist der
+eigentliche Nachweis: weil `draw_mask_local_color` das Label (`match index`) und
+das Feld (`HSL_FIELDS[index]`) aus **zwei unabhängigen Quellen** ableitet, sind
+Feld- und Beschriftungs-Transposition zwei verschiedene Defektklassen — bei der
+Label-Mutation ist der Schienen-Vektor korrekt und nur die Beschriftung
+vertauscht, was ein ausschließlich auf M1 geprüfter Test durchwinken würde. Beide
+sind unabhängig nachgewiesen.
+
+**Abnahme erfüllt:** je ein Klick-Test auf `Hue` und `Luminance` vorhanden, der
+0<->2-Tausch macht beide rot, keine Änderung an `mask_local_color.rs` oder am
+Rezept. Das Gate dieses Tasks war ausdrücklich GPU-frei, er ist hiermit
+geschlossen. Vollständiges CI-Gate am selben Tag grün: 8/8 Stufen, 2738 passed /
+0 failed / 106 ignored (alle 106 sind die ehrlich als `headless GPU required`
+markierten Tests).
+
+**Bewusst nicht neu gemessen:** die Voller-Suite-Zahl zum Zeitpunkt *vor* der
+Zustellung (im Tasktext 926/926, in `fccbea8` und `feature/product/ai-masks.md:1443`
+dagegen 931/931). Eine Neumessung wäre ein kompletter Suite-Lauf unter Mutation
+und ist für die Abnahme nicht erforderlich; die Doku-Zahl 931/931 bleibt als
+die spätere, konsistente geführt. Der Widerspruch wird hier nur benannt, nicht
+aufgelöst.
+
+**Stand der Belege am 2026-10-21 (nachgetragen, HEAD `ee2c4d4`; die Mutationen
+wurden heute nicht neu gefahren — auf diesem Host fehlt die Rust-Toolchain,
+`cargo fmt` endet mit Exit 127):** die **Quelltext**-Anker stimmen
+**unverändert** — `crates/lumina-gui/tests/mask_local_hsl_bands.rs` ist
+byte-identisch zu `fccbea8` (`git diff fccbea8 HEAD -- <pfad>` ist leer), und
+`:195` (Feld-Pin Hue), `:255` (Zeugen-Pin Luminance), `:129` (Stack-Assertion),
+`:165` (Kontroll-Zeugen) sowie
+`crates/lumina-gui/tests/mask_local_color_controls.rs:225` (Kontrolle Saturation)
+tragen heute dieselben Assertions; `crates/lumina-gui/src/mask_local_color.rs`
+(`HSL_FIELDS`) ist seit `fccbea8` unverändert. **Verschoben sind die
+Zeilennummern der Doku selbst:** die zitierten `feature/product/ai-masks.md:1442-1444`
+halten heute die Zeilen 21/22 („Reset pro Bereich"/„all local color reset") der
+Grading-Tabelle; derselbe Inhalt steht jetzt in
+`feature/product/ai-masks.md:1354-1356` (Test-Mutationstabelle) und
+`:1493-1495` (Klassifikationstabelle), die „931/931"-Notiz von damals
+`ai-masks.md:1443` heute `:1494`. Die Klassifikation selbst ist unverändert:
+Zeile 6 (HSL **Hue**) und Zeile 8 (HSL **Luminance**) stehen in
+`feature/product/ai-masks.md:1425` und `:1427` auf **ja** mit den Testnamen
+`the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band` und
+`the_hsl_luminance_rail_writes_only_the_luminance_field_of_the_selected_band`.
+**Die CI-Zahlen des 2026-09-27-Laufs sind ebenfalls überholt:** die Fast-Stufe
+zählt heute **9** Checks (`fast-1`…`fast-9`, `MIN_CHECKS=9`), nicht 8; der grüne
+CI-Lauf `39670086731` zu `8c9df57` hatte **7 Jobs** alle grün, davon „Rust tests
+(excluding GUI)" **3416 passed / 0 failed / 41 ignored** und „Rust GUI tests"
+**1946 passed / 0 failed / 87 ignored**. Die Mutationen selbst sind heute
+**nicht** neu gemessen — das ist eine offene Messung, keine Behauptung.
 
 ## Phase 3–5: Renderpipeline, RAW, Auto-Tone
 
