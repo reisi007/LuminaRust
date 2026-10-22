@@ -26,8 +26,7 @@ use std::path::{Path, PathBuf};
 pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpError> {
     let target_resolved = resolve_candidate(target).map_err(|error| {
         McpError::Encode(format!(
-            "could not resolve output path `{}`: {error}",
-            target.display()
+            "could not resolve output path `{target:?}`: {error}"
         ))
     })?;
     let protected: Vec<(&str, PathBuf)> = vec![
@@ -44,14 +43,11 @@ pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpEr
         // mirroring the CLI's `reject_protected_output`. A plain
         // canonicalize-the-first-argument comparison would fail on the
         // not-yet-existing sidecar/zdata candidates.
-        let path_resolved = resolve_candidate(&path).map_err(|error| {
-            McpError::Encode(format!("could not resolve `{}`: {error}", path.display()))
-        })?;
+        let path_resolved = resolve_candidate(&path)
+            .map_err(|error| McpError::Encode(format!("could not resolve `{path:?}`: {error}")))?;
         if path_resolved == target_resolved {
             return Err(McpError::Encode(format!(
-                "output `{}` would overwrite the {kind} `{}`; refusing (non-destructive guarantee)",
-                target.display(),
-                path.display()
+                "output `{target:?}` would overwrite the {kind} `{path:?}`; refusing (non-destructive guarantee)"
             )));
         }
         // Hard-link alias: the same underlying file under a different
@@ -62,10 +58,8 @@ pub fn reject_protected_target(source: &Path, target: &Path) -> Result<(), McpEr
         #[cfg(unix)]
         if paths_are_same_file(&path, target).unwrap_or(false) {
             return Err(McpError::Encode(format!(
-                "output `{}` is a hard-link alias of the {kind} `{}`; \
-                 refusing (non-destructive guarantee)",
-                target.display(),
-                path.display()
+                "output `{target:?}` is a hard-link alias of the {kind} `{path:?}`; \
+                 refusing (non-destructive guarantee)"
             )));
         }
     }
@@ -100,5 +94,53 @@ fn resolve_candidate(path: &Path) -> std::io::Result<PathBuf> {
     } else {
         let parent = fs::canonicalize(path.parent().unwrap_or_else(|| Path::new(".")))?;
         Ok(parent.join(path.file_name().unwrap_or_default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::tool_error_result;
+
+    #[test]
+    fn protected_target_error_json_debug_escapes_untrusted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a`b\x1bc.png");
+        fs::write(&source, b"source").unwrap();
+
+        let error = reject_protected_target(&source, &source).unwrap_err();
+        assert_eq!(error.code(), -32008);
+        let response = tool_error_result(serde_json::json!(1), &error);
+        let serialized = serde_json::to_string(&response).unwrap();
+
+        let raw_path = source.to_string_lossy();
+        assert!(
+            !serialized.contains(raw_path.as_ref()),
+            "path must be quoted/escaped"
+        );
+        let message = response["result"]["structuredContent"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(
+            message.contains(&format!("{source:?}")),
+            "Debug path must be quoted"
+        );
+        assert!(
+            !message.contains(&source.display().to_string()),
+            "Display path must not appear unescaped"
+        );
+        assert!(
+            !serialized.as_bytes().contains(&0x1b),
+            "JSON must not contain a raw ESC byte"
+        );
+        assert!(
+            serialized.contains("\\\\u{1b}"),
+            "Debug-escaped ESC must survive JSON serialization: {serialized}"
+        );
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(
+            response["result"]["structuredContent"]["error"],
+            "EncodeError"
+        );
     }
 }

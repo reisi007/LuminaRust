@@ -102,6 +102,11 @@ werden atomar mit dem privaten Modus **0600 auf Unix** angelegt. Beim atomaren
 exakt erhalten; Symlink-/Hardlink-Ersatzsemantik bleibt unverändert. Andere
 Betriebssysteme erhalten keine neu erfundene Moduspolitik.
 
+**Guard-Fehlerpfade (SEC-9):** Pfade aus Tool-Argumenten werden in
+Guard-Fehlermeldungen mit Rust-`Debug`-Formatierung quoted und escaped. Solche
+Ausführungsfehler werden ausschließlich als MCP-`tools/call`-Result
+(`isError: true`) ausgegeben; für sie besteht **kein stderr-Log-Vertrag**.
+
 Ein AI-Agent (z. B. Claude, Codex, lokales LLM mit MCP-Client) soll
 Bilddateien laden, Rezeptparameter ändern, Sidecars speichern und eine
 schnelle Vorschau erzeugen können — alles über standardisierte MCP-Tools,
