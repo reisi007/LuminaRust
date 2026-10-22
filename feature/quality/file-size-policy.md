@@ -80,7 +80,7 @@ eine Zahl im Prosa-Text waere eine zweite Quelle der Wahrheit, die still
 altert (Muster `DOC-ZAHLEN-DRIFT-82`):
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **838** Dateien, davon
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **839** Dateien, davon
 **70** ueber 500 Zeilen und **6** ueber 3000 Zeilen.
 <!-- END GENERATED: population -->
 
@@ -325,7 +325,7 @@ gesenkt werden) oder groesser (Eintrag gerissen, die harte Grenze gilt).
 | `crates/lumina-cli/src/main.rs` | 7261 | 7261 | 7261 |
 | `crates/lumina-sidecar/src/lib.rs` | 4040 | 4040 | 4040 |
 | `crates/lumina-gpu/src/lib.rs` | 4650 | 4650 | 4650 |
-| `crates/lumina-gpu/tests/parity.rs` | 3533 | 3533 | 3533 |
+| `crates/lumina-gpu/tests/parity.rs` | 3386 | 3386 | 3386 |
 | `crates/lumina-gpu/src/stages.rs` | 3102 | 3102 | 3102 |
 <!-- END GENERATED: file-sizes -->
 
