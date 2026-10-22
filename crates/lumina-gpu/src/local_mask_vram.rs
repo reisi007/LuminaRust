@@ -62,6 +62,7 @@ impl GpuContext {
     /// back. The input texture is never used as a render target; each stage
     /// writes a distinct texture and returns the last result for readback or
     /// copy-back into the resident present texture.
+    #[allow(clippy::too_many_arguments)] // Explicit pass inputs keep texture ownership visible.
     pub(crate) fn run_local_mask_layers(
         &self,
         resources: &GpuResources,
@@ -132,7 +133,7 @@ impl GpuContext {
                         &layer.adjustments,
                         &current_view,
                         &adjusted_view,
-                        &sampler,
+                        sampler,
                     )?;
                 }
                 let next = shaders::create_output_texture(

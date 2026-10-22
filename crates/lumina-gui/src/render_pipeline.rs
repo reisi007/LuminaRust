@@ -38,6 +38,7 @@ impl LuminaApp {
         generative: GenerativeArtifacts,
         source_actions: ResolvedSourceActions,
     ) -> Result<(), GuiError> {
+        self.render_mask_layers.clear(); // only this render may prime the GPU
         if !with_masks {
             if let Some(reason) = self.local_adjustment_route_reason() {
                 return Err(GuiError::Io(reason));

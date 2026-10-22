@@ -164,11 +164,7 @@ impl LuminaApp {
     /// could not be bound — never a silent CPU substitution.
     #[cfg(feature = "gpu")]
     pub fn prime_gpu_present(&mut self) -> bool {
-        if let Some(reason) = self.local_adjustment_route_reason() {
-            warn!("gpu parity prime refused: {reason}");
-            self.vram_fresh = false;
-            return false;
-        }
+        self.vram_fresh = false;
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
             return false;
         }
@@ -185,15 +181,21 @@ impl LuminaApp {
             self.vram_fresh = false;
             return false;
         }
+        let layers = match self.gpu_local_mask_layers(width, height) {
+            Ok(layers) => layers,
+            Err(reason) => {
+                warn!("gpu parity prime kept on the CPU reference: {reason}");
+                return false;
+            }
+        };
         let rendered = {
             let Some(source) = self.draft_original.as_ref().or(self.original.as_ref()) else {
                 return false;
             };
             let recipe = self.gpu_present_recipe();
-            self.gpu
-                .as_ref()
-                .expect("availability checked above")
-                .render_to_vram(source, recipe.as_ref())
+            let gpu = self.gpu.as_ref().expect("availability checked above");
+            gpu.render_to_vram(source, recipe.as_ref())
+                .and_then(|()| gpu.apply_gpu_local_masks_to_vram(&layers))
         };
         match rendered {
             Ok(()) => {
