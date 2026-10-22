@@ -13,9 +13,9 @@
 use super::*;
 use lumina_gpu::{Frame, GpuContext};
 use lumina_sidecar::{
-    CoordinateSystem, DecodeFingerprint, Extras, Flag, GeometryFingerprint, LocalAdjustments,
-    MaskDefinition, MaskReference, ModelIdentity, Preprocessing, Resolution, SourceFingerprint,
-    VirtualCopy,
+    CoordinateSystem, CurveChannels, CurvePoint, Curves, DecodeFingerprint, Extras, Flag,
+    GeometryFingerprint, LocalAdjustments, MaskDefinition, MaskReference, ModelIdentity,
+    Preprocessing, Resolution, SourceFingerprint, VirtualCopy,
 };
 
 const SIZE: u32 = 16;
