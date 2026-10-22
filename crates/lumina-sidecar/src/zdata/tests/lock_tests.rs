@@ -44,7 +44,12 @@ fn fresh_zdata_lock_blocks_append_and_save_with_explicit_error() {
     save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
     // A live writer holds a fresh lock.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
     lock_file.lock().unwrap();
 
     let error = append_repair_region(&path, {

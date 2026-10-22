@@ -696,7 +696,12 @@ fn generative_atomic_append_preserves_bundle_and_uses_relative_path() {
     // Appending under a fresh lock fails explicitly and leaves the
     // bundle untouched.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
     lock_file.lock().unwrap();
     let mut blocked = generative_canvas();
     blocked.id = "blocked".into();
@@ -925,7 +930,12 @@ fn denoise_rgb_atomic_append_preserves_bundle_and_honors_lock() {
 
     // A held lock blocks the append explicitly and leaves the bundle.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
     lock_file.lock().unwrap();
     let mut blocked = denoise_rgb();
     blocked.id = "blocked".into();
@@ -1220,7 +1230,12 @@ fn face_embeddings_batch_write_is_atomic_replaceable_and_locked() {
         .has_record(RecordKind::FaceEmbedding, "subject"));
 
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
     lock_file.lock().unwrap();
     let mut blocked = face_embedding();
     blocked.id = "emb-blocked".into();
