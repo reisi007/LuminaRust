@@ -289,18 +289,41 @@ fn t18_every_rejection_leaves_no_artifact_behind() {
             case.label
         );
 
-        assert_eq!(
-            cli_before,
-            snapshot(&cli_dir),
-            "{}: the CLI refusal must leave the tree untouched",
-            case.label
-        );
-        assert_eq!(
-            mcp_before,
-            snapshot(&mcp_dir),
-            "{}: the MCP refusal must leave the tree untouched",
-            case.label
-        );
+        let assert_refusal_snapshot =
+            |dir: &Path, before: &[(String, usize, u64)], transport: &str| {
+                assert!(
+                    before
+                        .iter()
+                        .all(|(name, _, _)| name != ".a-HDR.dng.lumina.json.lock"),
+                    "{}: lock rendezvous token must be new for this fixture",
+                    case.label
+                );
+                let after = snapshot(dir);
+                let mut without_lock: Vec<_> = after
+                    .iter()
+                    .filter(|(name, _, _)| name != ".a-HDR.dng.lumina.json.lock")
+                    .cloned()
+                    .collect();
+                let mut expected = before.to_vec();
+                without_lock.sort();
+                expected.sort();
+                assert_eq!(
+                    expected, without_lock,
+                    "{}: {transport} refusal must not create a DNG, sidecar, or staging artifact",
+                    case.label
+                );
+                let lock_entries: Vec<_> = after
+                    .into_iter()
+                    .filter(|(name, _, _)| name == ".a-HDR.dng.lumina.json.lock")
+                    .collect();
+                assert!(
+                    lock_entries.len() <= 1,
+                    "{}: at most the exact rendezvous lock is allowed",
+                    case.label
+                );
+            };
+        assert_refusal_snapshot(&cli_dir, &cli_before, "CLI");
+        assert_refusal_snapshot(&mcp_dir, &mcp_before, "MCP");
         assert!(
             !cli_cause(&cli_output).is_empty(),
             "{}: a refusal must say why",
