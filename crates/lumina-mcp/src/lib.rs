@@ -11,6 +11,7 @@ pub mod masks;
 pub mod output_guard;
 pub mod session;
 pub mod tools;
+pub mod transport;
 pub mod util;
 
 use error::{error_response, ok_response, tool_error_result, tool_result_response};
@@ -24,6 +25,7 @@ use std::path::PathBuf;
 
 pub use error::McpError;
 pub use session::{ImageState, McpSession};
+pub use transport::{MAX_LINE_BYTES, MAX_REPAIR_REGION_LINE_BYTES};
 
 /// Minimal stderr logger installed once (no-op if another logger is already
 /// registered). All MCP logging goes to stderr so it never corrupts the
@@ -322,33 +324,30 @@ fn tools_list_result() -> Value {
 /// Shared by the `lumina-mcp` binary and the `lumina mcp` CLI subcommand
 /// (F-101-F1) so both entry points run byte-identical transport code.
 pub fn run_stdio() {
-    let mut server = Server::new();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    run_stdio_from(stdin.lock(), stdout.lock(), Server::new());
+}
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(content) => content,
-            Err(_) => break,
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(response) = server.handle_line(trimmed) {
-            let serialized = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
-            if out.write_all(serialized.as_bytes()).is_err() {
-                break;
-            }
-            let _ = out.write_all(b"\n");
-            let _ = out.flush();
-        }
-    }
+/// Runs the very same stdio loop over an arbitrary reader/writer — the
+/// testable seam of [`run_stdio`].
+///
+/// The loop, the dispatch and the output format are byte-identical to
+/// [`run_stdio`]; only the source of the frames and the sink of the answers
+/// differ. That is what makes the transport edge (the line-length limit,
+/// SEC-1) testable without spawning a process.
+pub fn run_stdio_from<R: BufRead, W: Write>(reader: R, writer: W, mut server: Server) {
+    transport::run_loop(reader, writer, &mut server);
+}
 
-    // Shutdown cleanup (REVIEW R2-MCP-05): never let preview files from this
-    // session accumulate in $TMPDIR/lumina-previews/.
-    server.cleanup_previews();
+/// Runs the stdio loop against an EXISTING server — the seam for a caller
+/// that keeps its session across several transports (e.g. a load call in one
+/// transport and a preview call in the next).
+///
+/// Like [`run_stdio_from`], the loop ends with the shutdown cleanup of the
+/// preview files ([`Server::cleanup_previews`]).
+pub fn run_stdio_with<R: BufRead, W: Write>(reader: R, writer: W, server: &mut Server) {
+    transport::run_loop(reader, writer, server);
 }
 
 #[cfg(test)]

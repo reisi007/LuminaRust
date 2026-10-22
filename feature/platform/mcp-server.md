@@ -129,6 +129,107 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
 - **Capabilities:** Der Server deklariert `tools` als einzige Fähigkeit.
   `resources` und `prompts` sind im MVP nicht implementiert.
 
+### Zeilenlängen-Grenze des Transports (SEC-1)
+
+- **Regel:** Ein Frame auf stdin darf höchstens **1 MiB** lang sein
+  (`MAX_LINE_BYTES` in `crates/lumina-mcp/src/transport.rs`). Die Grenze
+  greift an der **Lesekante**: der Leser puffert höchstens die absolute
+  Obergrenze (siehe unten), der Rest der Zeile wird **übersprungen** und
+  **nicht gepuffert**.
+- **Antwort bei Überschreitung:** ein JSON-RPC-Fehler mit `code = -32700`
+  (Parse error) und einer Meldung, die die Grenze nennt (`line too long: the
+  frame exceeds the limit of 1048576 bytes`). Der id ist `null`, weil das
+  Frame gar nicht erst geparst wurde. **Kein Abbruch, kein Panic:** der
+  Server lebt weiter und beantwortet die **nächste** Zeile normal.
+- **Warum `-32700`:** das Frame wird an der Transportkante abgewiesen, BEVOR
+  es geparst wurde — es existiert also kein Request-Objekt und kein id.
+  `-32600` (invalid request) würde behaupten, das Frame sei geparst worden.
+- **Die eine legitime Ausnahme:** `lumina_dust_removal` trägt die
+  vollflächige u16-Reparatur-Ebene (`repair_region.region_values`,
+  `width * height` Werte) in seinen Argumenten. Sie ist die einzige
+  legitime Nutzlast des Crates über 1 MiB; solche Frames erhalten daher eine
+  eigene, aber weiterhin **harte** Grenze von **1,25 MiB**
+  (`MAX_REPAIR_REGION_LINE_BYTES` = 1 310 720 Byte).
+  - **Erkennung:** der Transport sucht den Marker `"repair_region"` (der
+    Schlüssel, der die Ebene einleitet) im **GANZEN** Frame — über jeden
+    Byte des Frames, den der Reader liefert, auch wenn der Marker über zwei
+    Lese-Chunks verteilt ist (das Rollfenster des Scans stammt aus dem
+    **Strom**, nicht aus dem Chunk allein). Die Erkennung ist damit
+    **unabhängig von der Reihenfolge der JSON-Schlüssel**: ein Frame, dessen
+    `repair_region` erst nach 1 MiB anderen Inhalts steht, wird ebenfalls
+    erkannt. Der Schlüssel steht strukturell **vor** seiner Ebene im
+    JSON-Text (ein Schlüssel steht immer vor seinem Wert) — deshalb findet
+    der Ganz-Frame-Scan den Marker immer, bevor die Ebene den Speicher
+    dominiert.
+  - **Der Scan endet an der Frame-Grenze:** er stoppt am Newline, das den
+    Frame abschließt — der Marker des **nächsten** Frames kann den
+    aktuellen Frame also nicht einstufen (sonst würde ein Frame über 1 MiB
+    dispatcht, nur weil der *folgende* Frame den Marker trägt).
+  - **Die Erkennung ist textuell:** gesucht wird die kanonische Schreibweise
+    `"repair_region"`. Die Escape-Form `"\u0072epair_region"` ist gültiges
+    JSON und bezeichnet **denselben** Schlüssel nach der Deserialisierung,
+    wird aber **nicht** erkannt — der Frame wird dann mit der 1-MiB-Grenze
+    abgewiesen (fail-safe: die Abweisung ist die sichere Richtung, keine
+    Sicherheitsauswirkung).
+  - **Warum 1,25 MiB (gemessen, nicht geschätzt):** ein Frame wird vor dem
+    Dispatch in einen `serde_json::Value`-Baum geparst. Zwei **verschiedene**
+    Verhältnisse sind zu unterscheiden:
+    - **RSS-DELTA-Verhältnis** (`Peak-RSS − Basis-RSS` ÷ Textlänge des
+      Frames): **~65×** für die realistische Ebene (überwiegend `"0,"`, also
+      2 Byte je Wert). Gemessen am echten Binary:
+      256 KiB → 26,2 MiB Peak-RSS, 1 MiB → 74,6 MiB, **1,25 MiB → 91,1 MiB
+      (exit 0 unter `RLIMIT_AS 128 MiB`)**, 1,5 MiB → 107,5 MiB (exit −6,
+      SIGABRT), 8 MiB → 518,2 MiB (exit −6, SIGABRT) — bei einer Basis von
+      ~9,4 MiB also 65,2 MiB Delta für einen 1-MiB-Frame. **Messbedingung
+      der letzten beiden Zahlen:** sie stammen aus einem **Probe-Build mit
+      hypothetisch gehobener Kappe** (16 MiB) — das **ausgelieferte** Binary
+      weist diese Frames **an der Kasse** (1 310 720 Byte) **ab**: exit 0,
+      Peak ~9,5 MiB. Die Peak-RSS-Zahlen der letzten beiden Zeilen sind
+      **ohne** Speicherlimit gemessen, ihre Exit-Signaturen **mit**
+      `RLIMIT_AS 128 MiB`; nur die ersten drei Zeilen gelten für das
+      ausgelieferte Binary. 1,25 MiB ist der
+      größte Wert, dessen Worst Case den Reproducer der ursprünglichen
+      Meldung (`RLIMIT_AS 128 MiB`) noch übersteht — dieselbe Speicherklasse
+      wie die 1-MiB-Grenze (74,6 MiB). Ein größerer Wert würde genau die
+      SIGABRT-Signatur wieder öffnen, die diese Grenze schließen soll.
+    - **Baum/Text-Verhältnis** (Heap-Bytes des geparsten `Value`-Baums ÷
+      Bytes des JSON-Texts): **8,00×** für fünf- bis sechsstellige Werte
+      (32 Byte je `Value` ÷ 6 Byte Text ≈ 5,3×, mal dem Wachstum des `Vec`
+      ≈ 8×; gemessen mit einem zählenden Allokator: 8 388 608 Heap-Bytes
+      für 1 048 573 Text-Bytes = 8,00×) und **16,00×** für die realistische
+      Ebene (2 Byte je Wert: 16 777 216 Heap-Bytes für 1 048 577
+      Text-Bytes). Die ursprünglich angenommenen **8×** sind also ein
+      **Baum/Text**-Verhältnis, die **~65×** ein **RSS-Delta**-Verhältnis —
+      die beiden Zahlen sind nicht dasselbe Maß.
+  - **Folge für die Praxis:** die Inline-Ebene ist auf ~655 000 Werte
+    (~0,65 MPixel) begrenzt — genug für eine region-große Reparatur, nicht
+    für eine vollflächige Ebene eines 24-MP-Fotos (dafür wären ~48 MiB JSON
+    und ~3 GiB `Value`-Baum nötig). Eine vollflächige Ebene über MCP
+    braucht eine kompakte Kodierung (base64) oder einen Dateiverweis — das
+    ist eine Änderung des Werkzeug-Vertrags und **nicht** Teil dieser
+    Transport-Fix.
+- **Speicherkosten eines Frames:**
+  - **Puffer:** höchstens **1,25 MiB** für **jede** Zeile (die absolute
+    Obergrenze) — eine 256-MiB-Zeile kostet 1,25 MiB Puffer und sonst
+    nichts. Der Puffer muss so weit reichen, weil der Marker im **ganzen**
+    Frame gesucht werden muss, bevor der Frame klassifiziert werden kann.
+  - **Parse-Baum:** nur bei Frames, die wirklich dispatcht werden. Ohne den
+    Ausnahme-Marker wird ein Frame über 1 MiB **gar nicht geparst** → kein
+    Parse-Baum, keine Verstärkung. Mit dem Marker werden bis zu 1,25 MiB
+    geparst; der Peak-RSS wächst dann um **~65× die Textlänge** (das
+    **RSS-Delta**-Verhältnis, ~91 MiB bei vollen 1,25 MiB). Der
+    `Value`-Baum selbst ist **16,00×** so groß wie der Text (Baum/Text) —
+    die beiden Maße sind zu unterscheiden.
+- **Verhalten sonst unverändert:** Frames innerhalb der Grenze werden wie
+  bisher gelesen, geparst und beantwortet; die Antwortform (eine
+  JSON-Zeile je Antwort auf stdout) bleibt identisch.
+- **Ungültiges UTF-8:** eine Byte-Folge mit ungültigem UTF-8 wird
+  **verlustbehaftet** (U+FFFD) repariert und **dann geparst**: ist das Frame
+  danach gültiges JSON, wird es **ausgeführt**; nur wenn die Ersetzung die
+  JSON-Syntax zerstört, folgt ein Parse-Fehler. Die Sitzung endet in keinem
+  Fall mehr still (das alte `lines()` brach den Loop bei einem Decode-Fehler
+  ab).
+
 ### Server-Start
 
 Der MCP-Server wird über `lumina mcp` (als Subcommand von `lumina-cli`)
