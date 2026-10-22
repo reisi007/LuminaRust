@@ -211,7 +211,13 @@ impl LuminaApp {
         #[cfg(feature = "gpu")]
         {
             if self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
-                if generative_active {
+                if let Some(reason) = self.local_adjustment_route_reason() {
+                    // The VRAM present shader currently has no local-mask
+                    // compositing input. Refuse before rendering so it can
+                    // never replace the mask-aware CPU preview with global-only
+                    // pixels. Keep the CPU reference preview authoritative.
+                    self.note_vram_refusal(&reason);
+                } else if generative_active {
                     // The readback-free VRAM present path is artifact-blind
                     // and can never render a generative recipe (documented
                     // `lumina-gpu` limitation, no VRAM injection point
