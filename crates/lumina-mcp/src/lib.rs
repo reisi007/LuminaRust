@@ -139,7 +139,7 @@ impl Server {
         // Initialize logging first so a failed directory creation warns
         // instead of failing silently (REVIEW R2-MCP-07).
         init_logger();
-        if let Err(error) = fs::create_dir_all(&preview_dir) {
+        if let Err(error) = lumina_cache::create_dir_all_nofollow(&preview_dir) {
             log::warn!(
                 "could not create preview directory `{}`: {error}; \
                  lumina_preview will fail until it exists",

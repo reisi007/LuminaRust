@@ -4767,7 +4767,7 @@ fn batch(args: BatchArgs) -> Result<(), CliError> {
     // front — before the output directory even exists — instead of letting
     // later items silently overwrite earlier ones.
     reject_duplicate_batch_targets(&inputs, &args.format)?;
-    fs::create_dir_all(&args.output).map_err(|e| io_error(&args.output, e))?;
+    lumina_cache::create_dir_all_nofollow(&args.output).map_err(|e| io_error(&args.output, e))?;
     let total = inputs.len();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs)

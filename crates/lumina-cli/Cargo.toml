@@ -9,6 +9,7 @@ clap = { version = "4", features = ["derive"] }
 rayon = "1"
 blake3 = "1"
 lumina-core = { path = "../lumina-core" }
+lumina-cache = { path = "../lumina-cache" }
 lumina-raw = { path = "../lumina-raw" }
 lumina-onnx = { path = "../lumina-onnx" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }

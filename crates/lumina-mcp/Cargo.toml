@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 lumina-core = { path = "../lumina-core" }
+lumina-cache = { path = "../lumina-cache" }
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 lumina-iptc = { path = "../lumina-iptc" }
 # MCP-PARITY-A: the ONE implementation of the four session-based recipe stage
@@ -46,4 +47,3 @@ gpu = ["dep:lumina-gpu"]
 
 [dev-dependencies]
 tempfile = "3"
-

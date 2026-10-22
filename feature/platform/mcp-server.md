@@ -610,8 +610,20 @@ Agent: lumina_save(image_id="a1b2c3d4", output_path="/output/portrait.png", form
    `true`/`yes`) bleibt die Löschung aus. Fehlschläge beim Löschen werden
    als Warnung geloggt und brechen das Herunterfahren nie ab.
 6. **Verzeichnis-Anlage:** Schlägt das Anlegen von `preview_dir` beim Start
-   fehl (z. B. fehlende Rechte), wird das als Warnung geloggt (kein stiller
-   Fehlstart); der spätere `lumina_preview` meldet den Fehler laut.
+    fehl (z. B. fehlende Rechte), wird das als Warnung geloggt (kein stiller
+    Fehlstart); der spätere `lumina_preview` meldet den Fehler laut.
+7. **Sichere Anlage (SEC-WELLE-2C):** Sowohl dieses Verzeichnis als auch
+   Batch-Ausgabeverzeichnisse werden komponentenweise ohne Symlink-Folge und
+   mit exklusiver Anlage erstellt. Neu angelegte Verzeichnisse haben
+    Rechte `0777 & ~umask` (Unix; typischerweise `0755` bei Umask `0022`);
+    bereits existierende gewöhnliche
+   Verzeichnisse bleiben unverändert. Neue Ausgabedateien haben Rechte `0600`
+   auf Unix. Ein Symlink an einem Zielbestandteil führt zu einem lauten Fehler;
+   weder das Linkziel noch Einträge darin werden verändert. Diese Vorgabe gilt
+    für alle unterstützten nativen Plattformen (derzeit macOS und Linux).
+    Andere Plattformen, einschließlich Windows, werden derzeit für diese
+    symlink-sichere Anlage nicht unterstützt; sie werden nicht als sicher
+    behauptet und sind kein aktuelles Release-Ziel.
 
 ## Architektur
 

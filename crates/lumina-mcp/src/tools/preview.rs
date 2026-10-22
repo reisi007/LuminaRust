@@ -6,7 +6,6 @@ use crate::Server;
 use lumina_core::{downscale, DownscaleTarget, ImageFileFormat};
 use lumina_sidecar::write_atomically;
 use serde_json::{json, Value};
-use std::fs;
 
 pub const NAME: &str = "lumina_preview";
 pub const DESCRIPTION: &str = "Render the active recipe and write a fast, downscaled PNG preview \
@@ -55,7 +54,7 @@ pub fn run(server: &mut Server, args: &Value) -> Result<Value, McpError> {
         .encode(ImageFileFormat::Png)
         .map_err(crate::error::map_core_error)?;
 
-    fs::create_dir_all(&server.preview_dir).map_err(|error| {
+    lumina_cache::create_dir_all_nofollow(&server.preview_dir).map_err(|error| {
         McpError::Encode(format!(
             "could not create preview dir `{}`: {error}",
             server.preview_dir.display()

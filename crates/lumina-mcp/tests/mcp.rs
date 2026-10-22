@@ -6,16 +6,20 @@
 //! drives the roundtrip, determinism, persistence and error-path coverage.
 
 use lumina_core::{downscale, DownscaleTarget, ImageFileFormat, ImageFrame};
-use lumina_mcp::tools::edit::validate_adjustments;
-use lumina_mcp::util::{detect_format, recipe_hash};
+use lumina_mcp::util::recipe_hash;
 use lumina_mcp::Server;
 use serde_json::{json, Value};
 
 // The documented tool set and its drift guard live in their own module: the list
 // grew by five names in MCP-PARITY-B and this file is baseline-listed, so the
 // list was extracted rather than appended (see `tool_names/mod.rs`).
+#[cfg(unix)]
+#[path = "mcp/secure_output_dirs.rs"]
+mod secure_output_dirs;
 #[path = "tool_names/mod.rs"]
 mod tool_names;
+#[path = "mcp/validation.rs"]
+mod validation;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,47 +103,6 @@ fn make_png(path: &Path, width: u32, height: u32) {
 // ---------------------------------------------------------------------------
 // Unit-level checks (internal helpers exposed for testing)
 // ---------------------------------------------------------------------------
-
-#[test]
-fn detect_format_accepts_supported_and_rejects_others() {
-    let dir = tempfile::tempdir().unwrap();
-    let png = dir.path().join("a.png");
-    fs::write(&png, b"x").unwrap();
-    assert_eq!(detect_format(&png).unwrap(), "png");
-
-    let raw = dir.path().join("b.arw");
-    fs::write(&raw, b"x").unwrap();
-    assert_eq!(detect_format(&raw).unwrap(), "arw");
-
-    let bad = dir.path().join("c.txt");
-    fs::write(&bad, b"x").unwrap();
-    assert!(matches!(
-        detect_format(&bad),
-        Err(lumina_mcp::McpError::UnsupportedFormat(_))
-    ));
-}
-
-#[test]
-fn validate_adjustments_rejects_out_of_range() {
-    let mut map = BTreeMap::new();
-    map.insert("exposure".to_string(), 100.0);
-    assert!(matches!(
-        validate_adjustments(&map),
-        Err(lumina_mcp::McpError::InvalidAdjustment { .. })
-    ));
-
-    let mut valid = BTreeMap::new();
-    valid.insert("contrast".to_string(), -0.5);
-    valid.insert("wb_temperature".to_string(), 5500.0);
-    assert!(validate_adjustments(&valid).is_ok());
-
-    let mut unknown = BTreeMap::new();
-    unknown.insert("not_a_key".to_string(), 0.0);
-    assert!(matches!(
-        validate_adjustments(&unknown),
-        Err(lumina_mcp::McpError::InvalidAdjustment { .. })
-    ));
-}
 
 #[test]
 fn recipe_hash_is_idempotent() {

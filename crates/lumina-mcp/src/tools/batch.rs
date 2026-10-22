@@ -89,7 +89,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     // `x.png`). Refuse the whole run before anything is created or written.
     reject_duplicate_batch_targets(&inputs, format.default_extension())?;
 
-    std::fs::create_dir_all(&output_dir)
+    lumina_cache::create_dir_all_nofollow(&output_dir)
         .map_err(|error| McpError::Encode(format!("could not create `{output_str}`: {error}")))?;
 
     let mut results: Vec<Value> = Vec::with_capacity(inputs.len());
