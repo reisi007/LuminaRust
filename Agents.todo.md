@@ -34,7 +34,7 @@ Negativrecords, damit sie nicht erneut implementiert werden.
 | `MODELL` | ausschliesslich freie Subagenten, kein deepseek, keine Ausnahme | User-Weisung 2026-09-29; ersetzt deepseek-Sparsamkeit (2026-09-28) und deepseek-Eskalation (2026-09-26); die drei laufenden Auftraege enden noch auf Standardmodell | gilt |
 | `GOLDEN-STALE-SOLL` | `develop_section_rating` friert den abgewarteten Render-Zustand ein (`settle_render`-Helfer, Prädikat `render_key.is_some()`); Golden dafür neu aufgezeichnet | Mechanismus belegt 2026-09-28 (drei Sonden); die Mask-Warnung ist der ehrliche Endzustand zur Fixture; Seed-Alternative verworfen | gilt |
 | `GOLDEN-RHYTHMUS` | kein fester Neuaufnahme-Rhythmus; jedes `record` bleibt einzeln begründet (Modell `GOLDEN-BASELINE-32`) | Eigentümerentscheid 2026-09-28; ein Rhythmus hätte den unbelegten Vorzustand nur neu eingefroren | gilt |
-| `GPU-E2E` | GPU-Themen gelten ohne lokalen Lauf der **relevanten E2E-Tests** als **nicht getestet**; Pflichtkommando `cargo test -p lumina-gpu --features gpu-adapter-tests` plus die betroffenen GUI-GPU-Tests. `--features gpu` allein genügt **nicht**. | User-Weisung 2026-10-02; gemessen: die 28 adapterabhängigen Integrationstests (u. a. `crates/lumina-gpu/tests/parity.rs`) sind ohne `gpu-adapter-tests` `#[ignore]`t, ein `cargo test -p lumina-gpu --features gpu` überspringt sie und liefert einen grünen Lauf ohne Aussage. CI hat keinen GPU-Runner und kompiliert nur | gilt |
+| `GPU-E2E` | GPU-Themen gelten ohne lokalen Lauf der **relevanten E2E-Tests** als **nicht getestet**; Pflichtkommando `cargo test -p lumina-gpu --features gpu-adapter-tests` plus die betroffenen GUI-GPU-Tests. `--features gpu` allein genügt **nicht**. | User-Weisung 2026-10-02; **gemessen am 2026-10-22 (CI-Lauf `39733087689`): die 32 adapterabhängigen Integrationstests** (u. a. `crates/lumina-gpu/tests/parity.rs`) sind ohne `gpu-adapter-tests` `#[ignore]`t, ein `cargo test -p lumina-gpu --features gpu` überspringt sie und liefert einen grünen Lauf ohne Aussage. CI hat keinen GPU-Runner und kompiliert nur | gilt |
 | `AUTO-DOMAIN` | Auto-Tone rechnet auf dem Frame **nach** SourceActions **und nach** Crop; der Zuschnitt beeinflusst die Auto-Werte | Eigentümerentscheid 2026-10-02 (wörtliche Anforderung „nach wegretuschieren UND nach Zuschnitt"); die Domäne war ausdrücklich als Eigentümer-Entscheidung markiert, nicht als Codefrage | entschieden 2026-10-02; Umsetzung in `AUTO-TONE-ANALYSIS-INPUT-8` |
 | `JSON-ROUNDTRIP` | `serde_json` wird mit `float_roundtrip` gebaut; jeder f64-Round-Trip ist exakt | Eigentümerentscheid 2026-10-02: „es soll nichts verloren gehen" (gemessen: 7,45 % der f64-Werte verloren beim Laden 1 ULP). Kostet eine Neubewertung aller Sidecar-Bytes/Digests/Goldens | entschieden 2026-10-02; Umsetzung in `JSON-FLOAT-ROUNDTRIP` |
 | `NAMING-F1 (2)` | Der **Anzeigename** bleibt „Lumina" (`crates/lumina-gui/src/main.rs` -> `main` — der `eframe::run_native`-Fenstertitel; `crates/lumina-gui/src/lib.rs` -> `LuminaApp::ui` — der `ui.heading("Lumina")`-Kopf); der Formatbezeichner `.lumina.*` bleibt ohnehin | Eigentümerentscheid 2026-10-02 (Option „Lumina beibehalten"); keine Migration, null Zeilen | gilt |
@@ -146,13 +146,15 @@ Git-Historie. Die Implementierung lag bereits vor (`add5d5f`, 2 Commits); offen
 war allein der Nachweis. Gemessen wurde auf einem **GPU-losen Host**, beide
 Teile der Aufgabe.
 
-**(a) Die 56 adapterfreien Unit-Tests laufen in CI.** `ci.yml:239` lautet jetzt
+**(a) Die 58 adapterfreien Unit-Tests laufen in CI.** `ci.yml:239` lautet jetzt
 `cargo test --workspace --all-targets --exclude lumina-gui --exclude
 lumina-sidecar --exclude lumina-bench` — `lumina-gpu` ist **nicht** mehr
-ausgeschlossen. Gemessen: `cargo test -p lumina-gpu` meldet **70 passed / 0
-failed / 28 ignored**; die 70 enthalten die 56 lib-Unit-Tests (`geometry`,
-`validate`, `stages`, `tiling`, `lens_blur`, `lensfun` plus `src/lib.rs`-Blöcke).
-70 ≥ 56 ✓.
+ausgeschlossen. **Gemessen am 2026-09-27:** `cargo test -p lumina-gpu` meldete
+**70 passed / 0 failed / 28 ignored**; die 70 enthielten die 56 lib-Unit-Tests
+(`geometry`, `validate`, `stages`, `tiling`, `lens_blur`, `lensfun` plus
+`src/lib.rs`-Blöcke). **Stand 2026-10-22 (CI-Lauf `39733087689`, Job „Rust tests
+(excluding GUI)"):** `cargo test -p lumina-gpu` meldet **74 passed / 0 failed /
+32 ignored**; die 74 enthalten die **58** lib-Unit-Tests. 74 ≥ 58 ✓.
 
 **(b) Die 28 `ignored` sind genau die adapterpflichtigen Tests.** Der Briefkasten
 ist direkt gemessen, nicht aus der Testliste abgeleitet: `cargo test -p
@@ -163,9 +165,9 @@ scheitern — die Mengen sind komplementär, nicht nur ähnlich. Damit ist nicht
 gedeckt gemeldet, was nichts prüft ✓.
 
 **(c) Die `ci.yml`-Begründung ist durch eine gemessene Aussage ersetzt** (Zeilen
-138–154): benennt 70/28, die 56 `src/`-Unit-Tests, die 28 adapterfreien
-Integrationstests, den Opt-in-Befehl und den Umstand, dass ein GPU-loser Runner
-`#[ignore]`d niemals als bestanden zählt ✓.
+138–154): benennt **74/32**, die **58** `src/`-Unit-Tests, die **32**
+adapterpflichtigen Integrationstests, den Opt-in-Befehl und den Umstand, dass ein
+GPU-loser Runner `#[ignore]`d niemals als bestanden zählt ✓.
 
 **(d) Nicht-Vakuumität** — hier ist die Abnahme sprachlich von „ein Test"
 formuliert; was tatsächlich existiert, ist der **Mechanismus** (`gated_test!` in
@@ -190,7 +192,8 @@ der Text nennt 98 Tests / 42 adapterpflichtige, gemessen sind am 2026-09-27
 70 / 28. (31 `gated_test!`-Aufrufe, davon 3 in `lensfun_tca_skip.rs` und
 `parity.rs` hinter dem `lensfun`-Feature, das unter Default-Features nicht
 kompiliert.) Die 42/98 sind der Zustand **vor** der Umsetzung, die 70/28 der
-danach; die Doku `ci.yml:138-152` führte die aktuellen.
+danach; die Doku `ci.yml:138-152` führte die **damaligen**; **seit 2026-10-22
+nennt sie die heutigen (74/32)**.
 
 **Bleibende Hardware-Grenze (unverändert, durch diese Aufgabe nicht schließbar):**
 der wgpu-**Paint**-Schritt (Shader-Kompilierung, MSAA, Textur-Sampling,
@@ -201,8 +204,8 @@ Messung ist zusätzlich belegt, dass der Default-Lauf auf einem GPU-losen Runner
 **nicht** vakuum grün ist — die 28 fehlen als `ignored` sichtbar, statt als
 bestanden zu zählen.
 
-**Stand der Belege am 2026-10-21 (nachgetragen, HEAD `ee2c4d4`; der Lauf selbst
-wurde heute nicht wiederholt — auf diesem Host fehlt die Rust-Toolchain,
+**Stand der Belege am 2026-10-22 (nachgetragen, HEAD `923a0c0`; der Lauf selbst
+wurde **nicht** wiederholt — auf diesem Host fehlt die Rust-Toolchain,
 `cargo fmt` endet mit Exit 127):** die **Behauptungsstruktur der Messung vom
 2026-09-27 gilt unverändert**, die **Zahlen und Zeilenangaben sind teilweise
 überholt.**
@@ -219,21 +222,26 @@ wurde heute nicht wiederholt — auf diesem Host fehlt die Rust-Toolchain,
   ausgeschlossen ✓). Zeile 239 trägt heute einen Kommentar zum
   CLI-Feature-Build-Gate.
 - **`ci.yml:138-154`** — der Begründungsblock steht heute in **Zeilen 217-231**.
-  Er nennt **weiterhin** 70/28, die **56** `src/`-Unit-Tests und die **28**
-  adapterpflichtigen Tests; **die Zahlen darin sind überholt** (siehe unten),
-  der Mechanismus und das Opt-in-Kommando stehen unverändert.
-- **Zahlen heute** (aus dem CI-Log des grünen Laufs `39670086731` zu `8c9df57`,
-  Job „Rust tests (excluding GUI)" — **kein** lokaler Lauf): `lumina_gpu (lib)`
-  **58 passed / 0 ignored** (statt 56); Summe über alle `lumina-gpu`-Binaries
+  Er nannte **70/28**, die **56** `src/`-Unit-Tests und die **28**
+  adapterpflichtigen Tests; **die Zahlen darin waren überholt** — **seit
+  2026-10-22 korrigiert** (siehe unten): der Block nennt heute **74/32**, die
+  **58** `src/`-Unit-Tests und die **32** adapterpflichtigen Tests; der
+  Mechanismus und das Opt-in-Kommando stehen unverändert.
+- **Zahlen heute** (aus dem CI-Log des grünen Laufs `39733087689` zu `923a0c0`,
+  2026-10-22, Job „Rust tests (excluding GUI)" — **kein** lokaler Lauf; **identisch**
+  zur Messung vom 2026-10-21, Lauf `39670086731` zu `8c9df57`): `lumina_gpu (lib)`
+  **58 passed / 0 failed / 0 ignored** (statt 56); Summe über alle `lumina-gpu`-Binaries
   **74 passed / 0 failed / 32 ignored** (statt 70/28). Gegengezählt: `golden`
   5/2, `init_warning` 1/0, `lensfun_map` 2/1, `lensfun_tca_skip` 0/0,
   `local_mask_parity` 2/4, `parity` 5/22, `stages` 1/3. **Aussage (b) gilt damit
   unverändert**: die `ignored` sind genau die adapterpflichtigen Tests — in der
   Quelle stehen heute **35** `#[cfg_attr(not(feature = "gpu-adapter-tests"),
   ignore)]`-Attribute, davon **3** hinter `#[cfg(feature = "lensfun")]`
-  (`crates/lumina-gpu/tests/parity.rs:3466`,
-  `crates/lumina-gpu/tests/lensfun_map.rs:208` und die ganze Datei
-  `crates/lumina-gpu/tests/lensfun_tca_skip.rs`) → **32** unter
+  (der Modul-Deklaration `mod parity_lensfun` in `crates/lumina-gpu/tests/parity.rs`,
+  dem Test `f2_vignetting_only_corrector_matches_cpu_oracle` in
+  `crates/lumina-gpu/tests/lensfun_map.rs` und der ganzen Datei
+  `crates/lumina-gpu/tests/lensfun_tca_skip.rs` — dort
+  `#![cfg(all(feature = "gpu", feature = "lensfun"))]`) → **32** unter
   Default-Features. Die 35 statt 31 sind neue Adaptertests aus
   `GPU-RENDER-MASK-19` (`local_mask_parity.rs`, `parity_generative/`).
 - **(d) ist heute anders formuliert, weil der Mechanismus heute ein anderer

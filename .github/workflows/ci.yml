@@ -216,12 +216,12 @@ jobs:
 
       # Measured split of `lumina-gpu` with default features (same on this dev
       # machine and on the CI runner): `cargo test -p lumina-gpu` reports
-      # 70 passed / 28 ignored.
+      # 74 passed / 32 ignored (CI log of run `39733087689`).
       #   * Runs in CI (the workspace test step below now includes lumina-gpu):
-      #     the 56 `src/` unit tests (geometry/tiling/validate/stages/
+      #     the 58 `src/` unit tests (geometry/tiling/validate/stages/
       #     lens_blur/lensfun pure logic) plus the adapter-free integration
       #     tests (metrics, validators, routing, bind guards).
-      #   * `#[ignore]`d, NOT excluded: the 28 integration tests that exercise a
+      #   * `#[ignore]`d, NOT excluded: the 32 integration tests that exercise a
       #     real wgpu adapter and assert CPU↔GPU parity. Without the opt-in
       #     `gpu-adapter-tests` feature libtest reports them as ignored, so a
       #     GPU-less runner never counts a vacuous early `return` as passed.
