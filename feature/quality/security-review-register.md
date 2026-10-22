@@ -1,7 +1,7 @@
 # Sicherheits-/Risikoregister LuminaRust
 
-**Feature:** Sicherheits-/Risikoregister — die Form, noch ohne Befunde
-**Stand:** 2026-10-20
+**Feature:** Sicherheits-/Risikoregister — die Form und die erste Welle
+**Stand:** 2026-10-22
 **Ort:** `feature/quality/security-review-register.md`
 **Pflege:** Build-Agent (Orchestrator) nach bestandener Verifikation einer
 Welle; der Implementierungs- bzw. Verifizierungs-Agent liefert den Beleg
@@ -10,17 +10,21 @@ Welle; der Implementierungs- bzw. Verifizierungs-Agent liefert den Beleg
 `86d677e..787670a`; Eigentümerentscheid 2026-10-20 — der Flow wird
 übernommen, das Register wird angelegt.
 
-> **Dieses Register enthält bisher keine Befunde.** Es ist die Form, nicht das
-> Ergebnis. Die einzige Datenzeile in §3 ist ein als Beispiel markiertes
-> Formular, kein Fund. Eine spätere Review-Runde füllt die Tabelle; ohne
-> geschlossene Welle bleibt die Tabelle leer.
+> **Dieses Register enthält die Befunde der ersten Welle.** §3 führt vier
+> Zeilen: **zwei geschlossene** Befunde (`SEC-1`, `SEC-4`) und **zwei
+> zurückgenommene** Kandidaten (`SEC-2`, `SEC-3`, Klassenwert
+> `ZURÜCKGENOMMEN`). Jede Zeile nennt ein reproduzierbares Kommando **und**
+> dessen Ausgabe (§4, Regel 1); die beiden geschlossenen Befunde tragen
+> zusätzlich ihren Regressionstest (Regel 2). Die Kandidaten bleiben hier
+> sichtbar, damit die nächste Runde nicht dasselbe Phantom erneut sucht
+> (Regel 4).
 >
 > **§5.1** hält die **Enumeration** der Oberflächen fest (Welle 1,
 > Teil *Finden/Enumerieren*; die Basis wurde am 2026-10-20 um **fünf**
 > Oberflächen erweitert — die Zahl der enumerierten Oberflächen steht im
 > generierten Block **surfaces**): Eingabe- und Ausgabepfade, Vertrauensgrenze
-> und die zu prüfenden Klassen. Sie enthält **keine Bewertung** und **keinen
-> Befund**.
+> und die zu prüfenden Klassen. §5.1 selbst bleibt eine Enumeration — sie
+> enthält **keine Bewertung** und **keinen Befund**; die Befunde stehen in §3.
 
 ---
 
@@ -84,12 +88,14 @@ Security-Review-Ablaufs: Eine Welle gilt im Sinne des Skills erst dann als
 geschlossen, wenn neben dem Regressionstest auch eine Zeile in §3 existiert.
 Fehlt die Zeile, ist die Welle nicht abgeschlossen.
 
-Dieses Dokument macht **keine** Aussage über den Zustand einer Oberfläche und
-enthält **keinen** Fund. Es hält fest:
+Dieses Dokument macht **keine** Aussage über den Zustand einer Oberfläche, die
+**nicht** geprüft wurde. Es hält fest:
 
-- **welche Form** ein späterer Befund hier haben muss (§2–§4), und
+- **welche Form** ein späterer Befund hier haben muss (§2–§4),
 - **welche Oberflächen** dieses Projekt überhaupt hat — die Enumerationsbasis,
-  die eine spätere Review-Runde zu enumerieren hätte (§5).
+  die eine spätere Review-Runde zu enumerieren hätte (§5), und
+- **welche Befunde** die erste Welle gefunden hat (§3) — je mit Beleg,
+  Regressionstest und Wellenstatus.
 
 **Die Enumerierung ist damit erstmals strukturiert festgehalten.** Vor diesem
 Dokument existierte im Repo keine **projektweite, systematische** Liste
@@ -98,10 +104,12 @@ noch beim Marker-Lauf (`AGENTS.skills.md`, Zeile „`security-review` (neu)")
 systematisch zusammengestellt. §5 ist diese Liste — eine Bestandsaufnahme der
 Eingabe-/Ausgabe-Außengrenzen, **keine** Prüfung.
 
-**Die erste Welle ist ein eigener, noch nicht geplanter Task.** Weder der
-Befund-Satz noch die Wellenplanung gehören zu diesem Dokument. Eine
-Security-Review-Runde ist ein beauftragter Durchlauf mit eigenem
-Implementierungs- und Verifizierungs-Agenten.
+**Die erste Welle ist gelaufen** (Security-Review-Welle 1, 2026-10-21/22): sie
+hat zwei Befunde geschlossen und zwei Kandidaten zurückgenommen (§3). Der
+Befund-Satz und die Wellenplanung gehören **nicht** als Vorgabe zu diesem
+Dokument — sie sind sein Ergebnis. Eine Security-Review-Runde ist ein
+beauftragter Durchlauf mit eigenem Implementierungs- und
+Verifizierungs-Agenten.
 
 ---
 
@@ -177,14 +185,21 @@ Spaltenbedeutungen:
 
 | Befund-ID | Defektklasse | betroffene Oberfläche | Wellenstatus | Regressionstest | Owner | Fundstellen-Beleg | Stand |
 |---|---|---|---|---|---|---|---|
-| `SEC-EXAMPLE` | — (Beispielzeile — kein Befund) | — | — | — | — | — | Beispielzeile — kein Befund |
+| `SEC-1` | `BELEGT` | §5 „MCP-Server (Transport)" (§5.1.1) — `crates/lumina-mcp/src/lib.rs` (`run_stdio`), `crates/lumina-mcp/src/transport.rs` (`run_loop`, `read_frame`, `MAX_LINE_BYTES`, `MAX_REPAIR_REGION_LINE_BYTES`), `crates/lumina-mcp/src/error.rs` | `geschlossen` | Welle 1 — **2 Tests**: `crates/lumina-mcp/tests/stdio_limits.rs` → `oversized_stdin_line_is_rejected_with_a_protocol_error` (dieser Befund) · `crates/lumina-cache/src/disk/tests.rs` → `oversized_settings_file_is_rejected_without_reading_it` (SEC-4) | Build-Agent (Orchestrator) | <b>Defekt (Vor-Zustand):</b> `run_stdio` las die stdin-Zeile über `BufRead::lines()` — **ohne** jede Längengrenze.<br><b>Reproduktion (echtes Binary `target/debug/lumina-mcp`, eine 16-MiB-Zeile, `RLIMIT_AS` 32 MiB):</b><br>Lauf (bash, Process-Substitution — der Frame entsteht ohne Datei): `( ulimit -v 32768; exec ./target/debug/lumina-mcp ) < <(python3 -c "print('{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"padding\":\"'+'x'*(16<<20)+'\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}')"); echo "exit=$?"` →<br>`{"error":{"code":-32700,"message":"line too long: the frame exceeds the limit of 1310720 bytes"},"id":null,"jsonrpc":"2.0"}` (Fehler `-32700` — **der Server lebt**)<br>`{"id":2,"jsonrpc":"2.0","result":{}}` (die Folgezeile wird normal beantwortet) · `exit=0` · Peak-RSS **8,9 MiB** (gemessen über `/proc/<pid>/status` → `VmHWM`; mit einer 256-MiB-Zeile **9,0 MiB**)<br><b>Vorher (Binary aus `6945256` — Bau: `git archive 6945256 \| tar -x -C <builddir> && ( cd <builddir> && CARGO_TARGET_DIR=<builddir>/target cargo build -p lumina-mcp --bin lumina-mcp )`; Lauf mit demselben Frame: `( ulimit -v 32768; exec <builddir>/target/debug/lumina-mcp ) < <(python3 -c "…")`):</b> `memory allocation of 16777216 bytes failed` · `Aborted (core dumped)` · `exit=134` (SIGABRT) — **0** Antwortzeilen: der Schreiber bricht mit `BrokenPipeError: [Errno 32] Broken pipe` ab: der Client sieht eine Broken pipe statt einer JSON-RPC-Fehlermeldung. Ohne Speichergrenze: 256-MiB-Zeile → Peak-RSS **776,4 MiB** (gültiges JSON, ~3,0-fache Amplifikation gegenüber der Zeilenlänge) bzw. **519,6 MiB** (ungültiges JSON, ~2,0-fach).<br><b>Behebung:</b> `crates/lumina-mcp/src/transport.rs` — `MAX_LINE_BYTES` = 1 MiB an der Lesekante, harte Kappung **1.310.720** Bytes für die eine benannte Ausnahme (die Reparatur-Ebene), Fehler `-32700`.<br><b>rot→grün:</b> `cargo test -p lumina-mcp --test stdio_limits` → `test a_marker_across_a_chunk_boundary_is_found ... ok` · `test oversized_stdin_line_is_rejected_with_a_protocol_error ... ok` · `test the_marker_behind_more_than_one_mib_is_found ... ok` · `test the_marker_of_the_next_frame_does_not_classify_this_frame ... ok` · `test the_transport_removes_the_preview_files_it_created ... ok` · `test result: ok. 5 passed; 0 failed` | 2026-10-22 |
+| `SEC-2` | `ZURÜCKGENOMMEN` | §5 „MCP-Server (Transport)" (§5.1.1) — die **Allowlist** des Werkzeugnamens gehört zu §5 „MCP-Werkzeug-Oberfläche" (§5.1.2, `is_known_tool`) | `zurückgenommen` | — (zurückgenommen: kein Regressionstest — der Kandidat ist am Falsch-Positiv-Gate gescheitert, §4 Regel 4) | Build-Agent (Orchestrator) | <b>Lesehypothese (bestätigt):</b> der fremde `method`/`name` steht **wörtlich** in `error.message` **und** in `error.data.method`/`error.data.tool`.<br><b>Reproduktion (bash, Heredoc — keine Datei nötig):</b><br>``./target/debug/lumina-mcp <<'EOF'``<br>``{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"$(whoami) `id` </script>","arguments":{}}}``<br>``{"jsonrpc":"2.0","id":2,"method":"$(id)`id`</script>"}``<br>``{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"line1\nline2","arguments":{}}}``<br>``EOF`` →<br>``{"error":{"code":-32602,"data":{"tool":"$(whoami) `id` </script>"},"message":"Unknown tool: $(whoami) `id` </script>"},"id":1,"jsonrpc":"2.0"}``<br>``{"error":{"code":-32601,"data":{"method":"$(id)`id`</script>"},"message":"method not found: $(id)`id`</script>"},"id":2,"jsonrpc":"2.0"}``<br>``{"error":{"code":-32602,"data":{"tool":"line1\nline2"},"message":"Unknown tool: line1\nline2"},"id":3,"jsonrpc":"2.0"}`` — **3** Eingabezeilen → **3** Antwortzeilen (das Zeilen-Framing bleibt erhalten; das eingebettete `\n` bleibt **ein** JSON-Stringwert).<br><b>Widerlegung:</b> der Fremdwert gelangt **ausschließlich** als JSON-**Stringwert** in genau einer JSON-RPC-Antwort; im Crate existiert **keine** Shell-/SQL-/Pfad-/Markup-Senke: `grep -rn "process::Command" crates/lumina-mcp/src/ \|\| echo "(0 Treffer)"` → `(0 Treffer)` · `grep -rni "sql" crates/lumina-mcp/src/ \|\| echo "(0 Treffer)"` → `(0 Treffer)` · `grep -rniE "markdown\|<html" crates/lumina-mcp/src/ \|\| echo "(0 Treffer)"` → `(0 Treffer)`.<br><b>Allowlist-Messung (5 fremde Namen + 1 registrierter; bash, Process-Substitution):</b> `./target/debug/lumina-mcp < <(for n in 'lumina_preview ' 'LUMINA_PREVIEW' '../../etc/passwd' 'lumina_preview/../x' 'lumina-preview' 'lumina_preview'; do printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":{}}}\n' "$n"; done)` →<br>`lumina_preview ` → `-32602` · `LUMINA_PREVIEW` → `-32602` · `../../etc/passwd` → `-32602` · `lumina_preview/../x` → `-32602` · `lumina-preview` → `-32602` — alle fünf werden **vor** dem Dispatch abgewiesen (`is_known_tool`, exakter case-sensitiver Match); der registrierte Name `lumina_preview` erreicht dagegen das Werkzeug (Antwort: `InvalidParams: missing string argument image_id`).<br><b>Ergebnis:</b> **widerlegt** — der Fremdwert kann **nie** ein Pfad oder ein Command werden; der Kandidat wird zurückgenommen und bleibt hier sichtbar. | 2026-10-22 |
+| `SEC-3` | `ZURÜCKGENOMMEN` | §5 „Cache auf Platte" (§5.1.14) — `crates/lumina-cache/src/preview_disk.rs` (`PreviewDiskCache::store`, `PreviewDiskCache::prune_orphans`) | `zurückgenommen` | — (zurückgenommen: kein Regressionstest — der Kandidat ist am Falsch-Positiv-Gate gescheitert, §4 Regel 4) | Build-Agent (Orchestrator) | <b>Lesehypothese (bestätigt):</b> `crates/lumina-cache/src/preview_disk.rs` → `PreviewDiskCache::prune_orphans` löscht **jede** `*.tmp`-Datei **ohne** Alters-, Größen- oder Zustandsprüfung — wörtlich: `if name.ends_with(".tmp") { std::fs::remove_file(item.path())?; removed += 1; continue; }` — eine noch offene Datei wird mitten im Schreibvorgang gelöscht.<br><b>Der atomare Schreibpfad (Datei im Repo):</b> `crates/lumina-cache/src/preview_disk.rs` → `PreviewDiskCache::store`: `std::fs::write(&temporary, webp)?;` und danach `std::fs::rename(&temporary, &path)?;` — der servierte Name (`{key_digest}.preview.webp`) entsteht **ausschließlich** per `rename`, ein unvollständiger Byte-Stand unter ihm ist nie sichtbar; die Temp-Datei heißt `{key_digest}.{pid}.tmp`.<br><b>Erreichbarkeit (Kommando + Ausgabe):</b> `grep -rn "\.prune_orphans(" crates/ --include=*.rs` →<br>`crates/lumina-cache/src/disk/tests.rs:187: assert_eq!(cache.prune_orphans(&[]).unwrap(), 1);`<br>`crates/lumina-cache/src/preview_disk.rs:157: disk.prune_orphans(std::slice::from_ref(&digest)).unwrap();`<br>`crates/lumina-cache/src/preview_disk.rs:165: disk.prune_orphans(&[]).unwrap();`<br>`crates/lumina-gui/src/preview_ctrl.rs:1267: let pruned = disk.prune_orphans(&[]).unwrap();`<br>`crates/lumina-gui/src/preview_ctrl.rs:1298: let removed = disk.prune_orphans(&live).unwrap();`<br>`crates/lumina-core/src/cache.rs:559: cache.prune_orphans(&["live".into()]);`<br>— die einzigen Aufrufer von `PreviewDiskCache::prune_orphans` stehen in `#[cfg(test)]`-Blöcken (`crates/lumina-cache/src/preview_disk.rs` → `mod tests`, `crates/lumina-gui/src/preview_ctrl.rs` → `mod tests`; `crates/lumina-core/src/cache.rs` ist der davon verschiedene In-Memory-Cache): **kein** Produktionsaufrufer — die Race ist im ausgelieferten Produkt **nicht erreichbar**.<br><b>Race-Messung (Schritt für Schritt, ohne Werkzeug im Repo):</b> (1) `PreviewDiskCache::in_folder(<bildordner>)` anlegen — das legt `<bildordner>/.lumina/previews` an; (2) `store("race", &payload)` mit einem Payload von **268.435.456** Bytes in einem eigenen Thread starten; (3) `<bildordner>/.lumina/previews` pollen, bis dort eine Datei mit der Endung `.tmp` liegt, und Alter und Größe dieser Datei notieren; (4) in diesem Moment `prune_orphans(&[])` aufrufen; (5) den Thread-Join auswerten. Gemessene Ausgabe (drei Läufe):<br>`store()` → `Err(No such file or directory (os error 2))` (raw os error **2**) — der `rename` der gelöschten Temp-Datei schlägt fehl<br>`prune_orphans()` → **1** Datei entfernt · die gelöschte `.tmp` war **1.081.344** / **593.920** / **950.272** Bytes von **268.435.456** Bytes (~0,6–1,1 MB), Alter **1** / **0** / **1** ms<br>die ausgelieferte Datei (`.preview.webp`) erschien in **0** von **0** Samples — ein unvollständiger Byte-Stand unter dem servierten Namen war nie sichtbar<br><b>Gegenprobe der Atomizität (Schritte):</b> `store("atomic", &payload)` mit **118** Bytes Payload aufrufen und danach `<bildordner>/.lumina/previews` auflisten → `store()` → `Ok(118 bytes)` · `.tmp`-Dateien übrig: **0** · ausgelieferte Datei `atomic.preview.webp`: **118** Bytes (exakt die geschriebene Länge).<br><b>Ergebnis:</b> **widerlegt** — die Race endet mit `NotFound` (kein Byte-Müll: die Vorschau wird nicht persistiert) und ist im ausgelieferten Produkt nicht erreichbar; der Kandidat wird zurückgenommen und bleibt hier sichtbar. | 2026-10-22 |
+| `SEC-4` | `BELEGT` | §5 „Cache auf Platte" (§5.1.14) — `crates/lumina-cache/src/disk.rs` (`DiskFolderCache::effective_settings`, `read_settings_bytes`); sekundär §5 „.lumina-Cachewurzel im Bildordner" (§5.1.15, `settings_path`) | `geschlossen` | Welle 1 — **2 Tests**: `crates/lumina-cache/src/disk/tests.rs` → `oversized_settings_file_is_rejected_without_reading_it` (dieser Befund) · `crates/lumina-mcp/tests/stdio_limits.rs` → `oversized_stdin_line_is_rejected_with_a_protocol_error` (SEC-1) | Build-Agent (Orchestrator) | <b>Defekt (Vor-Zustand, Datei im Repo-Stand `dae4674^`):</b> `git show dae4674^:crates/lumina-cache/src/disk.rs` → `DiskFolderCache::effective_settings`: `let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;` — **ohne** jede Größengrenze, und zwar in **jedem** Vorfahrverzeichnis (`effective_settings`: `folders.push(folder.to_path_buf())`, `current = folder.parent()`, `folder.join(".lumina").join(SETTINGS)`), also auf einem Shared-Mount fremd kontrollierbar.<br><b>Ist-Zustand (Kommando + Ausgabe):</b> `grep -n "read_settings_bytes\|file.take(\|SettingsTooLarge {\|MAX_SETTINGS_BYTES: u64" crates/lumina-cache/src/disk.rs` →<br>`29:pub const MAX_SETTINGS_BYTES: u64 = 64 * 1024;`<br>`47:    SettingsTooLarge {`<br>`130:                    serde_json::from_slice(&read_settings_bytes(&path)?)?;`<br>`313:fn read_settings_bytes(path: &Path) -> Result<Vec<u8>, DiskCacheError> {`<br>`316:    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;`<br>`318:        return Err(DiskCacheError::SettingsTooLarge {`<br><b>Verhalten nach der Behebung (`MAX_SETTINGS_BYTES` = 64 KiB, begrenzter Leser `take(limit+1)`, `DiskCacheError::SettingsTooLarge`, der Fehler propagiert in der Vererbungskette):</b> `DiskFolderCache::effective_settings` auf derselben 200-MiB-Datei → `Err(invalid cache settings: <bildordner>/.lumina/settings.json is larger than the 65536-byte limit (65537 bytes read))` · Peak-RSS **3,4 MiB** · **0,00 s** — der Leser stoppt **1** Byte über der Grenze, unabhängig von der Dateigröße.<br><b>Regressionstest (Kommando + Ausgabe):</b> `cargo test -p lumina-cache oversized_settings_file_is_rejected_without_reading_it` → `test disk::tests::oversized_settings_file_is_rejected_without_reading_it ... ok` · `test result: ok. 1 passed; 0 failed; 8 filtered out`.<br><b>Mutation (Schritt für Schritt, ohne Werkzeug im Repo):</b> (1) in `crates/lumina-cache/src/disk.rs` → `read_settings_bytes` die begrenzte Lesekante `file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?` durch `fs::read(path)?` ersetzen — das ist die Kante des Vor-Zustands (siehe oben); (2) eine **200-MiB**-`settings.json` (gültiges JSON) unter `<bildordner>/.lumina/settings.json` legen; (3) `DiskFolderCache::effective_settings` auf `<bildordner>` aufrufen und die Peak-RSS über `/proc/<pid>/status` → `VmHWM` ablesen; (4) Schritt 1 zurücknehmen und denselben Aufruf wiederholen. Gemessene Ausgabe (zwei Läufe je Kante):<br>`fs::read` → **209.715.194** Bytes gelesen, Peak-RSS **1.483,3 MiB**, **13,67 s** / **14,32 s**<br>`take(65537)` (die Ist-Kante) → **65.537** Bytes gelesen, Peak-RSS **3,4** / **3,3 MiB**, **0,00 s** / **0,01 s**<br>Amplifikation der unbegrenzten Kante ~**7,4-fach** (50-MiB-Datei → **373,3 MiB** in **3,81 s**; 200-MiB-Datei → **1.483,0 MiB** in **15,14 s**) — bei einem 2-GiB-Speicherlimit genügen damit ~270 MiB Dateigröße für ein OOM.<br><b>Erwartung (nicht von mir ausgeführt):</b> unter der Mutation muss der Regressionstest **rot** werden — er erwartet `Err(DiskCacheError::SettingsTooLarge)`, mit `fs::read` liefert `effective_settings` `Ok(...)`; der rote Lauf wurde **nicht** ausgeführt, weil `crates/lumina-cache/**` in dieser Runde gesperrt war. | 2026-10-22 |
 
-Die Zeile `SEC-EXAMPLE` ist **Formular**, kein Fund: Sie trägt keine
-Defektklasse, keine Oberfläche, keinen Status, keinen Test und keinen Beleg.
-Sie zeigt nur, wie eine ausgefüllte Zeile aussehen soll. Sie wird durch die
-erste echte Zeile ersetzt, sobald eine Review-Runde einen Befund mit Beleg
-liefert; bis dahin bleibt sie als Formbeispiel stehen und wird **nicht** als
-Befund gezählt.
+Die Beispielzeile `SEC-EXAMPLE` ist **entfallen**: sie wurde am 2026-10-22 durch
+die erste echte Zeile (`SEC-1`) ersetzt. Das Register führt jetzt **vier**
+Einträge — **zwei** geschlossene Befunde (`SEC-1`, `SEC-4`) und **zwei** am
+Falsch-Positiv-Gate gescheiterte Kandidaten (`SEC-2`, `SEC-3`, Klassenwert
+`ZURÜCKGENOMMEN`, §4 Regel 4). Regel 3 („eine Welle, ein Test") ist in dieser
+Welle als „**2 Tests**" ablesbar: Welle 1 hat zwei geschlossene Befunde und
+damit zwei Regressionstests — `crates/lumina-mcp/tests/stdio_limits.rs` →
+`oversized_stdin_line_is_rejected_with_a_protocol_error` und
+`crates/lumina-cache/src/disk/tests.rs` →
+`oversized_settings_file_is_rejected_without_reading_it`.
 
 ---
 
@@ -221,9 +236,9 @@ Befund gezählt.
 
 Die Oberflächen, die eine spätere Security-Review-Runde dieses Projekts zu
 enumerieren hätte. **Nur die Oberfläche wird benannt** — Pfad, Art der
-Eingabe/Ausgabe und der Stand der Enumeration. Es wird **nicht** geprüft, ob
-an diesen Stellen etwas fehlerhaft ist; dieses Dokument enthält keine
-Bewertung des Zustands einer Oberfläche.
+Eingabe/Ausgabe und der Stand der Enumeration. Die Enumeration selbst
+bewertet den Zustand einer Oberfläche **nicht** (§6); die **Befunde** der
+ersten Welle stehen in §3.
 
 Alle Pfade dieser Tabelle wurden am 2026-10-20 gegen den Baum geprüft und
 existieren.
@@ -231,9 +246,12 @@ existieren.
 **Enumerationsstand:** Die Oberflächen dieser Tabelle wurden am 2026-10-20
 (**Security-Review-Welle 1**, Teil *Finden/Enumerieren*) **enumeriert** —
 Eingabe- und Ausgabepfade je Oberfläche stehen in **§5.1**. Die Enumeration
-bewertet den Zustand einer Oberfläche **nicht** (§6) und hat **keinen** Befund
-erzeugt; die Spalte „Was hier noch offen ist" nennt weiterhin nur die noch
-ausstehende **Prüfung**.
+bewertet den Zustand einer Oberfläche **nicht** (§6); die Spalte „Was hier
+noch offen ist" nennt weiterhin nur die noch ausstehende **Prüfung**. Die
+**Prüfung** selbst ist inzwischen für zwei Oberflächen gelaufen — §5.1.1
+(„MCP-Server (Transport)") und §5.1.14 („Cache auf Platte") —; ihre
+Ergebnisse stehen in §3 (`SEC-1` … `SEC-4`). Die **Enumeration** dieser
+Oberflächen bleibt unverändert.
 
 <!-- BEGIN GENERATED: surfaces -->
 **24** Oberflaechen enumeriert (Quelle: die §5-Basis-Tabelle in
@@ -310,11 +328,13 @@ aufgeführt, die in der späteren Prüfung zu untersuchen wären. Jede Zeile nen
 **Pfad und Symbol**, keine Zeilennummer (Regel 7).
 
 **Was dieser Abschnitt nicht ist.** Er enthält **keine Bewertung** des Zustands
-einer Oberfläche (§6) und **keinen Befund** — §3 bleibt unverändert bei null
-Befunden. Die genannten Klassen sind **kein Befund**: sie benennen nur, *wo*
-die spätere Welle schauen müsste. Jede Aussage hier ist ein **Codebefund**
-(Existenz von Pfad und Symbol), **kein Laufzeitbefund**: in dieser Welle wurde
-**nichts gebaut, nichts gestartet und nichts gemessen**.
+einer Oberfläche (§6) und **keinen Befund** — die Befunde der ersten Welle
+stehen in **§3**. Die genannten Klassen sind **kein Befund**: sie benennen nur,
+*wo* die spätere Welle schauen müsste. Jede Aussage hier ist ein
+**Codebefund** (Existenz von Pfad und Symbol), **kein Laufzeitbefund**: die
+**Laufzeitbefunde** — gemessen, nicht gelesen, mit Kommando und Ausgabe — stehen
+in §3 (§4, Regel 1). §5.1 selbst bleibt die Enumeration und ist durch die
+Welle **nicht** verändert worden.
 
 **Zählweise (Population).** Die Zahlen sind selbst gezählt, nicht geschätzt.
 
@@ -1078,8 +1098,8 @@ im Block selbst):
 ## 5.2 Offene Beobachtungen aus der Enumeration (keine Befunde)
 
 Die folgenden Punkte sind **Beobachtungen der Enumeration**, ausdrücklich **keine
-Befunde** (§3 bleibt bei null Befunden). Sie betreffen die **Vollständigkeit der
-§5-Basis**, nicht den Zustand einer Oberfläche.
+Befunde** (§3 führt die Befunde der ersten Welle). Sie betreffen die
+**Vollständigkeit der §5-Basis**, nicht den Zustand einer Oberfläche.
 
 **(a) Die Basis-Erweiterung vom 2026-10-20 (Eigentümerentscheid) — abgeschlossen:**
 
@@ -1159,8 +1179,10 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
 
 ## 6. Was dieses Register nicht ist
 
-- **Kein Audit-Ergebnis.** Dieses Dokument hat keine Oberfläche geprüft; es
-  enthält keine Befunde, keine Suchergebnisse und keine Trefferliste.
+- **Kein vollständiges Audit-Ergebnis.** Dieses Dokument enthält die Befunde
+  der ersten Welle (§3) — **nicht** das Ergebnis eines flächendeckenden
+  Audits: geprüft wurden nur die in §3 genannten Oberflächen, alle anderen
+  bleiben offen (Spalte „Was hier noch offen ist" in §5).
 - **Keine Freigabe.** Das Bestehen dieses Registers ist **keine** Aussage über
   den Zustand des Codes, der Oberflächen oder einer Release-Freigabe.
 - **Kein Ersatz für den Review-Ablauf.** Die Hälften „Finden" und „Schließen"
@@ -1171,6 +1193,8 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   **geprüft**, ob an dieser Stelle etwas fehlerhaft ist. „Enumeriert" heißt
   ausdrücklich **nicht** „gefunden" und erst recht nicht „sicher" — die
   Enumeration benennt Eingabe-/Ausgabepfade und Klassen, nicht ein Ergebnis.
+  Für die geprüften Oberflächen gilt das Gegenteil: dort stehen die Ergebnisse
+  in §3 — „geprüft" heißt dort „gemessen und belegt", **nicht** „sicher".
 - **Kein Aufgaben- und kein Bug-Tracker.** Aufgaben, Entscheidungen und
   Folgearbeiten stehen in `Agents.todo.md` (Regel in `Agents.md`, Abschnitt
   „Dokumentations- und Todo-Regeln").
@@ -1203,11 +1227,15 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   `86d677e..787670a`; Eigentümerentscheid 2026-10-20 (Flow wird übernommen,
   Register wird angelegt). Der Skill verlangt in Stage 6 den Registereintrag —
   dieser Ort ist die projektseitige Festlegung darauf.
-- **Stand dieses Dokuments:** 2026-10-20 — Register angelegt, **null Befunde**,
-  Enumerationsbasis (§5) erstmals strukturiert festgehalten. §5.1 ergänzt die
+- **Stand dieses Dokuments:** 2026-10-22 — Register angelegt (2026-10-20),
+  Enumerationsbasis (§5) erstmals strukturiert festgehalten; §5.1 ergänzt die
   **Enumeration** der Oberflächen (Security-Review-Welle 1, Teil
-  *Finden/Enumerieren*) — **ohne Bewertung und ohne Befund**; §3 bleibt bei
-  null Befunden. **Basis-Erweiterung desselben Tages** (Eigentümerentscheid):
+  *Finden/Enumerieren*) — **ohne Bewertung und ohne Befund**.
+  **Security-Review-Welle 1, Teil *Befunde eintragen* und *Befunde schließen*
+  (2026-10-21/22):** §3 führt jetzt **vier** Zeilen — **2** geschlossene
+  Befunde (`SEC-1`, `SEC-4`) und **2** zurückgenommene Kandidaten (`SEC-2`,
+  `SEC-3`); die Enumeration in §5/§5.1 ist unverändert.
+  **Basis-Erweiterung vom 2026-10-20** (Eigentümerentscheid):
   §5 führt jetzt die im generierten Block **surfaces** genannte Zahl an
   Oberflächen (die Basis-Erweiterung hat fünf Zeilen ergänzt) und die GUI ist
   **gleichrangig** im Scope (§5, „Hinweise zur Reichweite dieser Basis").
@@ -1222,9 +1250,10 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
 **Offen und bewusst nicht in diesem Dokument:**
 
 - Die **prüfende Welle** (Teil *Befunde eintragen* und *Befunde schließen*) ist
-  **nicht** Teil von §5.1: §5.1 enumeriert nur. Die Welle braucht Läufe
-  (Build, Tests) und ist ein **eigener Auftrag** mit Implementierungs- und
-  Verifizierungs-Agenten.
+  **nicht** Teil von §5.1: §5.1 enumeriert nur, auch nach der ersten Welle.
+  Die Welle braucht Läufe (Build, Tests) und ist ein **eigener Auftrag** mit
+  Implementierungs- und Verifizierungs-Agenten; Welle 1 ist gelaufen, ihr
+  Ergebnis steht in §3.
 - Die **Ablage im Feature-Index** (`feature/README.md`) macht der Build-Agent.
 - Ob und wo eine **Security-Review-Pflicht** in `Agents.md`/`DoD.md` verankert
   wird, ist eine **eigene** Entscheidung des Eigentümers; dieses Dokument
