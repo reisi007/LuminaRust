@@ -746,6 +746,11 @@ fn merge_standard_sidecar_is_rejected_loudly() {
     value.as_object_mut().unwrap().remove("type");
     fs::write(&sidecar, serde_json::to_string_pretty(&value).unwrap()).unwrap();
 
+    // Without its envelope type this sidecar is not classifiable as a merge
+    // bundle, so even `--force` must not claim and replace it.
+    let dng_before = fs::read(&dng).unwrap();
+    let sidecar_before = fs::read(&sidecar).unwrap();
+
     let rejected = run_merge(&dir, "merge-hdr", &args);
     assert!(!rejected.status.success());
     assert!(
@@ -753,15 +758,37 @@ fn merge_standard_sidecar_is_rejected_loudly() {
         "got: {}",
         stderr(&rejected)
     );
+    assert_eq!(
+        fs::read(&dng).unwrap(),
+        dng_before,
+        "DNG changed after rejection"
+    );
+    assert_eq!(
+        fs::read(&sidecar).unwrap(),
+        sidecar_before,
+        "sidecar changed after rejection"
+    );
 
-    // `--force` is the explicit, non-silent replacement path.
+    // Force may renew only a coherent, classifiable merge bundle.
     let mut forced_args = args.to_vec();
     forced_args.push("--force");
     let forced = run_merge(&dir, "merge-hdr", &forced_args);
-    assert!(forced.status.success(), "stderr: {}", stderr(&forced));
-    let restored: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&sidecar).unwrap()).unwrap();
-    assert_eq!(restored["type"], serde_json::Value::from("merge"));
+    assert!(!forced.status.success());
+    assert!(
+        stderr(&forced).contains("standard sidecar"),
+        "got: {}",
+        stderr(&forced)
+    );
+    assert_eq!(
+        fs::read(&dng).unwrap(),
+        dng_before,
+        "DNG changed after --force rejection"
+    );
+    assert_eq!(
+        fs::read(&sidecar).unwrap(),
+        sidecar_before,
+        "sidecar changed after --force rejection"
+    );
 }
 
 /// MERGE-DNG-1: an unknown envelope `type` is rejected loudly (never treated
