@@ -85,6 +85,11 @@ fn t20_a_foreign_or_unknown_envelope_is_rejected_identically() {
         (case.mutate)(&mut value);
         fs::write(&sidecar, serde_json::to_string_pretty(&value).unwrap()).unwrap();
 
+        // The foreign bundle must stay byte-identical across every rejection on
+        // both frontends: no silent rewrite, no partial publish.
+        let dng_before = fs::read(&dng).unwrap();
+        let sidecar_before = fs::read(&sidecar).unwrap();
+
         // Both transports refuse the same document with the same text.
         let cli_output = call.cli_failure(COMMAND);
         let cli_text = cli_cause(&cli_output);
@@ -93,6 +98,18 @@ fn t20_a_foreign_or_unknown_envelope_is_rejected_identically() {
             "{}: expected `merge stale:` naming `{}`, got `{cli_text}`",
             case.label,
             case.cause
+        );
+        assert_eq!(
+            fs::read(&dng).unwrap(),
+            dng_before,
+            "{}: DNG changed after CLI rejection",
+            case.label
+        );
+        assert_eq!(
+            fs::read(&sidecar).unwrap(),
+            sidecar_before,
+            "{}: sidecar changed after CLI rejection",
+            case.label
         );
         let error = call.mcp(HDR_TOOL).unwrap_err();
         assert_eq!(error.name(), "MergeStale", "{}: {error:?}", case.label);
@@ -104,20 +121,67 @@ fn t20_a_foreign_or_unknown_envelope_is_rejected_identically() {
             "{}: the envelope rejection must be the same text on both frontends",
             case.label
         );
-
-        // `force` is the explicit, non-silent replacement path (so the bundle is
-        // recoverable without hand-editing the sidecar).
-        let forced = call.clone().force().mcp_ok(HDR_TOOL);
         assert_eq!(
-            forced["cached"],
-            json!(false),
-            "{}: force rewrites",
+            fs::read(&dng).unwrap(),
+            dng_before,
+            "{}: DNG changed after MCP rejection",
             case.label
         );
         assert_eq!(
-            sidecar_json(&dng)["type"],
-            json!("merge"),
-            "{}: force restores the merge envelope",
+            fs::read(&sidecar).unwrap(),
+            sidecar_before,
+            "{}: sidecar changed after MCP rejection",
+            case.label
+        );
+
+        // `force` is NOT a recovery path for a foreign envelope: it may renew
+        // only a coherent, classifiable merge bundle. Both frontends must reject
+        // with the same structured error and leave the bundle untouched.
+        let forced_cli = call.clone().force().cli_failure(COMMAND);
+        let forced_cli_text = cli_cause(&forced_cli);
+        assert!(
+            forced_cli_text.starts_with("merge stale:") && forced_cli_text.contains(case.cause),
+            "{}: expected `merge stale:` naming `{}` under --force, got `{forced_cli_text}`",
+            case.label,
+            case.cause
+        );
+        assert_eq!(
+            fs::read(&dng).unwrap(),
+            dng_before,
+            "{}: DNG changed after --force CLI rejection",
+            case.label
+        );
+        assert_eq!(
+            fs::read(&sidecar).unwrap(),
+            sidecar_before,
+            "{}: sidecar changed after --force CLI rejection",
+            case.label
+        );
+        let forced_error = call.clone().force().mcp(HDR_TOOL).unwrap_err();
+        assert_eq!(
+            forced_error.name(),
+            "MergeStale",
+            "{}: {forced_error:?}",
+            case.label
+        );
+        assert_eq!(forced_error.code(), -32011);
+        assert_eq!(forced_error.data()["error"], json!("MergeStale"));
+        assert_eq!(
+            merge_clause(&forced_error.message()),
+            &forced_cli_text,
+            "{}: the --force envelope rejection must be the same text on both frontends",
+            case.label
+        );
+        assert_eq!(
+            fs::read(&dng).unwrap(),
+            dng_before,
+            "{}: DNG changed after --force MCP rejection",
+            case.label
+        );
+        assert_eq!(
+            fs::read(&sidecar).unwrap(),
+            sidecar_before,
+            "{}: sidecar changed after --force MCP rejection",
             case.label
         );
     }
