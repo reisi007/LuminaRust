@@ -43,9 +43,12 @@ use lumina_core::masks::MaskPlane;
 use lumina_sidecar::LocalAdjustments;
 
 #[cfg(feature = "gpu")]
-use crate::local_mask_gpu::{build_local_mask_pipeline, WbUniforms};
+use crate::local_mask_gpu::build_local_mask_pipeline;
 #[cfg(feature = "gpu")]
-use crate::{gpu_util, shaders, GpuResources};
+use crate::shaders;
+#[cfg(feature = "gpu")]
+#[path = "local_mask_vram.rs"]
+mod vram;
 
 /// One caller-evaluated mask layer bound for the GPU local-mask pass.
 ///
@@ -156,13 +159,6 @@ pub fn validate_local_mask_layers(
     Ok(())
 }
 
-/// Whether a layer takes the relative-WB float chain rather than the delta-free
-/// global tone path (`local_wb::apply_mask_local_recipe_with_scale`).
-#[cfg(feature = "gpu")]
-fn has_wb_delta(adjustments: &LocalAdjustments) -> bool {
-    adjustments.temperature_delta_k != 0.0 || adjustments.tint_delta != 0.0
-}
-
 impl GpuContext {
     /// Render `frame` with `recipe` and apply the caller-evaluated local mask
     /// layers **on the GPU**, in persisted order.
@@ -232,177 +228,167 @@ impl GpuContext {
             ))
         }
     }
-}
 
-#[cfg(feature = "gpu")]
-impl GpuContext {
-    /// Run the mask-local chain (recipe → blend per layer) over the global
-    /// result and read the final pixels back.
-    fn run_local_mask_chain(
-        &self,
-        resources: &GpuResources,
-        global: &Frame,
-        layers: &[LocalMaskLayer],
-    ) -> Result<Frame, GpuError> {
-        let (width, height) = (global.width, global.height);
-        let pipeline = build_local_mask_pipeline(&resources.device);
-        let sampler = shaders::create_sampler(&resources.device, "lumina-gpu-localmask-sampler");
+    /// Apply caller-evaluated layers directly to the active, globally rendered
+    /// VRAM output. The resident presentation texture and overlay bind group stay
+    /// stable; no full-frame readback is performed.
+    pub fn apply_gpu_local_masks_to_vram(&self, layers: &[LocalMaskLayer]) -> Result<(), GpuError> {
+        if layers.iter().all(LocalMaskLayer::is_neutral) {
+            return Ok(());
+        }
+        let unsupported = unsupported_local_mask_stages(layers);
+        if !unsupported.is_empty() {
+            return Err(GpuError::RenderFailed(format!(
+                "GPU local-mask VRAM pass refuses GPU-unsupported local stage(s): {}; \
+                 present the full CPU reference instead",
+                unsupported.join("; ")
+            )));
+        }
+        #[cfg(feature = "gpu")]
+        {
+            let Some(resources) = self.resources.as_ref() else {
+                return Err(GpuError::AdapterUnavailable(
+                    "GPU local-mask VRAM pass requires a bound adapter".into(),
+                ));
+            };
+            if resources
+                .device_lost
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(GpuError::AdapterUnavailable("GPU device lost".into()));
+            }
 
-        let mut current = shaders::create_output_texture(
-            &resources.device,
-            width,
-            height,
-            "lumina-gpu-localmask-current",
-        );
-        resources.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &current,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &global.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+            let mut pool = self.vram.lock().unwrap();
+            let Some(vram) = pool.active() else {
+                return Err(GpuError::RenderFailed(
+                    "GPU local-mask VRAM pass requires an active VRAM render".into(),
+                ));
+            };
+            validate_local_mask_layers(vram.width, vram.height, layers)?;
 
-        for layer in layers.iter().filter(|layer| !layer.is_neutral()) {
-            let mask = shaders::create_mask_texture(
+            let width = vram.width;
+            let height = vram.height;
+            let intermediate_scope = resources
+                .device
+                .push_error_scope(wgpu::ErrorFilter::Validation);
+            let pipeline = build_local_mask_pipeline(&resources.device);
+            let sampler =
+                shaders::create_sampler(&resources.device, "lumina-gpu-localmask-sampler");
+            let current = shaders::create_output_texture(
                 &resources.device,
                 width,
                 height,
-                "lumina-gpu-localmask-plane",
+                "lumina-gpu-localmask-vram-current",
             );
-            shaders::write_u16_plane(&resources.queue, &mask, width, height, &layer.plane.values);
-            let adjusted = shaders::create_output_texture(
-                &resources.device,
-                width,
-                height,
-                "lumina-gpu-localmask-adjusted",
-            );
-            let next = {
-                let current_view = current.create_view(&wgpu::TextureViewDescriptor::default());
-                let adjusted_view = adjusted.create_view(&wgpu::TextureViewDescriptor::default());
-                let mask_view = mask.create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder =
-                    resources
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("lumina-gpu-localmask-enc"),
-                        });
-                if has_wb_delta(&layer.adjustments) {
-                    let uniforms = WbUniforms::from_adjustments(&layer.adjustments);
-                    resources.queue.write_buffer(
-                        &pipeline.wb_uniforms,
-                        0,
-                        bytemuck::bytes_of(&uniforms),
-                    );
-                    let bind = resources
-                        .device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("lumina-gpu-localmask-wb-bind"),
-                            layout: &pipeline.wb_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: pipeline.wb_uniforms.as_entire_binding(),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::TextureView(&current_view),
-                                },
-                            ],
-                        });
-                    gpu_util::encode_fullscreen_pass(
-                        &mut encoder,
-                        &pipeline.wb,
-                        &bind,
-                        &adjusted_view,
-                    );
-                } else {
-                    self.encode_local_tone(
-                        resources,
-                        &mut encoder,
-                        &layer.adjustments,
-                        &current_view,
-                        &adjusted_view,
-                        &sampler,
-                    )?;
-                }
-                let next = shaders::create_output_texture(
-                    &resources.device,
+            let mut copy_input =
+                resources
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("lumina-gpu-localmask-vram-input"),
+                    });
+            copy_input.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &vram.output,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &current,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
                     width,
                     height,
-                    "lumina-gpu-localmask-next",
-                );
-                let next_view = next.create_view(&wgpu::TextureViewDescriptor::default());
-                let bind = resources
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("lumina-gpu-localmask-blend-bind"),
-                        layout: &pipeline.blend_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&current_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(&adjusted_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::TextureView(&mask_view),
-                            },
-                        ],
-                    });
-                gpu_util::encode_fullscreen_pass(&mut encoder, &pipeline.blend, &bind, &next_view);
-                resources.queue.submit(Some(encoder.finish()));
-                next
+                    depth_or_array_layers: 1,
+                },
+            );
+            resources.queue.submit(Some(copy_input.finish()));
+
+            // All validation has completed. Intermediate passes only touch
+            // temporary textures; the resident output is updated once the full
+            // chain has encoded successfully.
+            let final_texture = match self.run_local_mask_layers(
+                resources, current, width, height, layers, &pipeline, &sampler,
+            ) {
+                Ok(texture) => texture,
+                Err(error) => {
+                    let _ = resources.device.poll(wgpu::PollType::wait_indefinitely());
+                    let _ = pollster::block_on(intermediate_scope.pop());
+                    return Err(error);
+                }
             };
-            current = next;
+            // GPU validation is asynchronous. Wait for all temporary passes and
+            // inspect the scope before submitting the copy into the stable
+            // presentation texture; on validation failure, only temporaries
+            // have been touched and the caller can keep the CPU reference.
+            let _ = resources.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Some(error) = pollster::block_on(intermediate_scope.pop()) {
+                return Err(GpuError::RenderFailed(format!(
+                    "GPU local-mask VRAM intermediate pass failed: {error}"
+                )));
+            }
+            if resources
+                .device_lost
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(GpuError::AdapterUnavailable("GPU device lost".into()));
+            }
+            let commit_scope = resources
+                .device
+                .push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut copy_output =
+                resources
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("lumina-gpu-localmask-vram-output"),
+                    });
+            copy_output.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &final_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &vram.output,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let commit_commands = copy_output.finish();
+            let _ = resources.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Some(error) = pollster::block_on(commit_scope.pop()) {
+                return Err(GpuError::RenderFailed(format!(
+                    "GPU local-mask VRAM commit validation failed: {error}"
+                )));
+            }
+            resources.queue.submit(Some(commit_commands));
+            let _ = resources.device.poll(wgpu::PollType::wait_indefinitely());
+            if resources
+                .device_lost
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(GpuError::AdapterUnavailable(
+                    "GPU device lost during local-mask VRAM commit".into(),
+                ));
+            }
+            Ok(())
         }
-
-        gpu_util::readback_texture(resources, &current, width, height)
-    }
-
-    /// Apply one delta-free P0 layer through the already parity-tested global
-    /// tone pipeline with the layer's `as_recipe()` — the exact path the CPU
-    /// oracle's `apply_mask_local_recipe` takes for such a layer.
-    fn encode_local_tone(
-        &self,
-        resources: &GpuResources,
-        encoder: &mut wgpu::CommandEncoder,
-        adjustments: &LocalAdjustments,
-        input_view: &wgpu::TextureView,
-        target_view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) -> Result<(), GpuError> {
-        let guard = self.pipeline.lock().unwrap();
-        let Some(tone) = guard.as_ref() else {
-            return Err(GpuError::RenderFailed(
-                "local mask pass: tone pipeline not built".into(),
-            ));
-        };
-        let uniforms = shaders::Uniforms::from_recipe(&adjustments.as_recipe());
-        shaders::write_uniforms(&resources.queue, &tone.uniform_buffer, &uniforms);
-        let bind = shaders::create_color_tone_bind_group(
-            &resources.device,
-            &tone.bind_group_layout,
-            &tone.uniform_buffer,
-            input_view,
-            sampler,
-        );
-        gpu_util::encode_fullscreen_pass(encoder, &tone.pipeline, &bind, target_view);
-        Ok(())
+        #[cfg(not(feature = "gpu"))]
+        {
+            Err(GpuError::AdapterUnavailable(
+                "GPU local-mask VRAM pass requires a bound adapter".into(),
+            ))
+        }
     }
 }
 
@@ -479,5 +465,30 @@ mod tests {
             let bound = unsupported_local_mask_stages(&[layer_with(adjustments)]);
             assert_eq!(bound, vec![plane_free]);
         }
+    }
+
+    #[test]
+    fn vram_pass_refuses_unsupported_local_stage_before_requiring_vram() {
+        let context = GpuContext::new().expect("GPU context falls back without an adapter");
+        let layer = layer_with(LocalAdjustments {
+            vibrance: 0.5,
+            ..LocalAdjustments::default()
+        });
+
+        let error = context
+            .apply_gpu_local_masks_to_vram(&[layer])
+            .expect_err("unsupported P1.2 layers must be refused before any VRAM write");
+        assert!(error.to_string().contains("P1.2 block"));
+        assert!(!error.to_string().contains("active VRAM render"));
+    }
+
+    #[test]
+    fn vram_pass_treats_neutral_layers_as_identity_without_adapter() {
+        let context = GpuContext::new().expect("GPU context falls back without an adapter");
+        let layer = layer_with(LocalAdjustments::default());
+
+        context
+            .apply_gpu_local_masks_to_vram(&[layer])
+            .expect("neutral layers are a no-op and require no active VRAM or adapter");
     }
 }
