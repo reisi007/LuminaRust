@@ -53,6 +53,22 @@ impl PairOutcome {
 /// path leaves a half-written artifact behind).
 pub(crate) fn encode_and_stage(frame: &ImageFrame, target: &Path) -> Result<(), StageError> {
     let bytes = frame.encode(ImageFileFormat::Png)?;
+    write_bytes_atomically(target, &bytes)
+}
+
+/// Publishes `bytes` at `target` atomically: a same-directory temporary file
+/// (`.{name}.tmp-*`), `write_all` + `flush` + `sync_all`, then `persist`
+/// (= `rename(2)`) over the target.
+///
+/// The rename is the security-relevant part: it replaces the **directory
+/// entry** instead of opening the target, so a symlink at `target` is
+/// replaced rather than followed, a hard link is broken instead of rewriting
+/// the other name's bytes, and a concurrent reader never observes a
+/// truncated/partial file. This is the scheme the golden path
+/// ([`encode_and_stage`]) has always used; the full-resolution export and the
+/// diff images go through the same function so no matrix artifact is written
+/// "through" its target path.
+pub(crate) fn write_bytes_atomically(target: &Path, bytes: &[u8]) -> Result<(), StageError> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let filename = target
         .file_name()
@@ -65,7 +81,7 @@ pub(crate) fn encode_and_stage(frame: &ImageFrame, target: &Path) -> Result<(), 
     let temporary_path = temporary.path().to_path_buf();
     use std::io::Write as _;
     temporary
-        .write_all(&bytes)
+        .write_all(bytes)
         .map_err(|error| StageError::io(&temporary_path, error))?;
     temporary
         .flush()
@@ -205,4 +221,88 @@ pub(crate) fn report_json(
         "duration_ms": total_ms,
         "pairs": pairs,
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::write_bytes_atomically;
+    use std::fs;
+    use std::os::unix::fs::{symlink, MetadataExt};
+
+    /// SEC-5 (Sicherheitswelle 2a): the export publish must replace the target
+    /// **directory entry**, never open the target path.
+    ///
+    /// Pre-fix the runner used `std::fs::write(&output, &bytes)`, which
+    /// (a) followed a symlink at `{sample}__{recipe}.png` and rewrote the file
+    /// it pointed at in place (measured: 23 B victim → 49 MB PNG, same inode,
+    /// entry still a symlink), and (b) did the same through a hard link, which
+    /// destroyed the source image behind that second name. The assertions
+    /// below are exactly those two measured outcomes, inverted: the aliased
+    /// file stays byte-identical, the entry becomes a regular file with the
+    /// new bytes, and the hard-linked source keeps its bytes, inode and its
+    /// single remaining name.
+    #[test]
+    fn export_write_replaces_symlink_and_hardlink_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = b"\x89PNG\r\n\x1a\nmatrix export bytes (not a real PNG)";
+        let victim_original = b"user notes: not an image\n";
+        let source_original = b"sample image bytes\n";
+
+        // (1) symlink at the export name -> a foreign file
+        let victim = dir.path().join("victim.txt");
+        fs::write(&victim, victim_original).unwrap();
+        let target = dir.path().join("landscape__g01-identity.png");
+        symlink(&victim, &target).unwrap();
+
+        write_bytes_atomically(&target, payload).unwrap();
+
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            victim_original,
+            "the symlinked victim must stay byte-identical"
+        );
+        let entry = fs::symlink_metadata(&target).unwrap();
+        assert!(
+            entry.file_type().is_file(),
+            "the export entry must be a regular file, got {:?}",
+            entry.file_type()
+        );
+        assert_eq!(fs::read(&target).unwrap(), payload);
+
+        // (2) hard link at the export name -> the source image itself
+        let source = dir.path().join("sample.png");
+        fs::write(&source, source_original).unwrap();
+        let before = fs::metadata(&source).unwrap();
+        let hardlinked = dir.path().join("sample__g01-identity.png");
+        fs::hard_link(&source, &hardlinked).unwrap();
+        assert_eq!(fs::metadata(&hardlinked).unwrap().ino(), before.ino());
+
+        write_bytes_atomically(&hardlinked, payload).unwrap();
+
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            source_original,
+            "the hard-linked source must stay byte-identical"
+        );
+        let source_after = fs::metadata(&source).unwrap();
+        assert_eq!(source_after.ino(), before.ino());
+        assert_eq!(
+            source_after.nlink(),
+            1,
+            "the export must break the hard link, not rewrite the source inode"
+        );
+        let entry = fs::symlink_metadata(&hardlinked).unwrap();
+        assert!(entry.file_type().is_file());
+        assert_ne!(entry.ino(), before.ino(), "a fresh inode is published");
+        assert_eq!(fs::read(&hardlinked).unwrap(), payload);
+
+        // (3) no staged temporary survives either publish
+        let leftovers: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temporaries: {leftovers:?}");
+    }
 }

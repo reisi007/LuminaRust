@@ -16,7 +16,9 @@
 //! the 500-line ratchet.
 
 use super::matrix_port::{MatrixRender, MatrixRoute};
-use super::matrix_report::{self, encode_and_stage, max_abs_diff, write_diff, PairOutcome};
+use super::matrix_report::{
+    self, encode_and_stage, max_abs_diff, write_bytes_atomically, write_diff, PairOutcome,
+};
 use super::matrix_validate::{
     check_expected_route, default_recipe_set_path, load_recipe_set, prepare_recipes,
     resolve_relative, GOLDEN_DIR,
@@ -267,6 +269,12 @@ pub fn run<R: MatrixRender + ?Sized>(
             // Export the full-resolution render through the shared encode path
             // (the matrix SOLL says "exportieren"); the golden comparison uses
             // the deterministic downscaled in-memory frame.
+            //
+            // SEC-5: the export goes through the same atomic publish as the
+            // goldens (`write_bytes_atomically` → tempfile + `rename(2)`), so
+            // `work_dir` is never written *through* the target path: a symlink
+            // or hard link planted on `{sample}__{recipe}.png` is replaced, not
+            // followed, and a concurrent reader never sees a partial PNG.
             let export = ExportOptions {
                 format: ImageFileFormat::Png,
                 quality: 90,
@@ -275,7 +283,7 @@ pub fn run<R: MatrixRender + ?Sized>(
             };
             match render_output.frame.encode_with_options(export) {
                 Ok(bytes) => {
-                    if let Err(error) = std::fs::write(&output, &bytes) {
+                    if let Err(error) = write_bytes_atomically(&output, &bytes) {
                         outcome.status = "error";
                         outcome.message = Some(format!(
                             "could not write export `{}`: {error}",
