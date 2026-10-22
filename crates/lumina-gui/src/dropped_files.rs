@@ -323,7 +323,34 @@ mod tests {
         );
         assert_eq!(std::fs::read(&sidecar_a).unwrap(), sidecar_before);
         assert_eq!(std::fs::read(&source_a).unwrap(), bytes_a);
-        assert_eq!(std::fs::read_dir(dir_a.path()).unwrap().count(), 2);
+        let lock_a = dir_a.path().join(format!(
+            ".{}.lock",
+            sidecar_a
+                .file_name()
+                .expect("sidecar file name")
+                .to_string_lossy()
+        ));
+        let mut actual_entries = std::fs::read_dir(dir_a.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        actual_entries.sort();
+        let mut expected_entries = vec![
+            source_a
+                .file_name()
+                .expect("source file name")
+                .to_os_string(),
+            sidecar_a
+                .file_name()
+                .expect("sidecar file name")
+                .to_os_string(),
+            lock_a.file_name().expect("lock file name").to_os_string(),
+        ];
+        expected_entries.sort();
+        assert_eq!(
+            actual_entries, expected_entries,
+            "only the source, unchanged sidecar, and persistent lock file should remain"
+        );
     }
 
     /// Real-RAW path proof: the committed licensed CR3 fixtures are decoded

@@ -1,9 +1,9 @@
 use super::*;
 
 /// F-019: `validate --migrate` must run through
-/// `lumina_sidecar::migrate_sidecar_file` — the `.bak` backup and the
-/// released write lock are the observable proof (the old CLI path used
-/// `migrate_json` + `write_atomically` and created neither).
+/// `lumina_sidecar::migrate_sidecar_file` — the `.bak` backup and successful
+/// reacquisition of the released write lock are the observable proof (the old
+/// CLI path used `migrate_json` + `write_atomically` and created neither).
 #[test]
 fn cli_migrate_flag_uses_library_path_and_creates_backup() {
     let directory = tempfile::tempdir().unwrap();
@@ -28,11 +28,21 @@ fn cli_migrate_flag_uses_library_path_and_creates_backup() {
     // …and the live sidecar is migrated to the current schema.
     let document = load_sidecar(&path).unwrap();
     assert_eq!(document.schema_version, lumina_sidecar::SCHEMA_VERSION);
-    // The per-sidecar write lock is released after the migration.
+    // The lock's rendezvous file is persistent, but its OS advisory lock must
+    // be released when the migration finishes.
+    let lock_path = path.with_file_name(".input.png.lumina.json.lock");
     assert!(
-        !path.with_file_name(".input.png.lumina.json.lock").exists(),
-        "the write lock must be released after the migration"
+        lock_path.is_file(),
+        "the stable lock rendezvous file must persist after migration"
     );
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("the persistent lock rendezvous file must be openable");
+    lock_file
+        .try_lock()
+        .expect("the write lock must be acquirable after migration");
 }
 
 /// F-019: a fresh (non-stale) per-sidecar lock must make the CLI migration
@@ -48,7 +58,16 @@ fn cli_migrate_flag_is_blocked_by_a_fresh_lock() {
     let original = fs::read(&path).unwrap();
 
     let lock_path = path.with_file_name(".input.png.lumina.json.lock");
-    fs::write(&lock_path, b"").unwrap();
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    held_lock
+        .try_lock()
+        .expect("the test must hold the real OS advisory lock");
 
     let error = validate(IndexArgs {
         input: path.clone(),
