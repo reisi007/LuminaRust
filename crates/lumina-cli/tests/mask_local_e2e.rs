@@ -238,10 +238,17 @@ fn failed_local_save_is_visible_and_the_same_edit_can_be_retried() {
     let before = fs::read(&sidecar).unwrap();
     let sidecar_name = sidecar.file_name().unwrap().to_string_lossy();
     let lock = sidecar.with_file_name(format!(".{sidecar_name}.lock"));
-    fs::write(&lock, b"held by test").unwrap();
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .unwrap();
+    lock_file.try_lock().unwrap();
 
     let failed = set_local(&input, &layer_id, "exposure=1.5");
-    fs::remove_file(&lock).unwrap();
+    drop(lock_file);
 
     assert_eq!(failed.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&failed.stderr);
@@ -254,6 +261,10 @@ fn failed_local_save_is_visible_and_the_same_edit_can_be_retried() {
 
     let retried = set_local(&input, &layer_id, "exposure=1.5");
     assert_success(&retried, "retried local edit");
+    assert!(
+        lock.exists(),
+        "the lock rendezvous file must remain persistent"
+    );
     let document = load_sidecar(&sidecar).unwrap();
     let copy = &document.virtual_copies[0];
     assert_eq!(copy.history.len(), 1);
