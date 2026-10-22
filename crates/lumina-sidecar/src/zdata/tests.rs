@@ -440,11 +440,11 @@ fn concurrent_appends_serialize_instead_of_losing_updates() {
     );
     assert!(final_container.repair_region("repair-a").is_ok());
     assert!(final_container.repair_region("repair-b").is_ok());
-    // No lock file may leak after the operations complete.
-    assert!(!directory
+    // The rendezvous lock file persists so its inode stays stable.
+    assert!(directory
         .path()
         .join(".image.raw.lumina.zdata.lock")
-        .exists());
+        .is_file());
 }
 
 #[test]
@@ -454,7 +454,8 @@ fn fresh_zdata_lock_blocks_append_and_save_with_explicit_error() {
     save_zdata(&path, &ZDataContainer::new(tiles()).unwrap()).unwrap();
     // A live writer holds a fresh lock.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    std::fs::File::create(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    lock_file.lock().unwrap();
 
     let error = append_repair_region(&path, {
         let mut r = repair_region();
@@ -475,7 +476,7 @@ fn fresh_zdata_lock_blocks_append_and_save_with_explicit_error() {
     // The bundle is untouched by both rejected writers.
     let unchanged = load_zdata(&path).unwrap();
     assert_eq!(unchanged.tile_count(), 2);
-    drop(fs::remove_file(&lock_path));
+    drop(lock_file);
     // After release the append works again.
     let mut ok_region = repair_region();
     ok_region.id = "after-release".into();
@@ -752,22 +753,23 @@ fn generative_atomic_append_preserves_bundle_and_uses_relative_path() {
         spot_heal()
     );
 
-    // Atomic write leaves no temp files and no lock behind.
+    // Atomic write leaves no temp files; the rendezvous lock file persists.
     let leftovers: Vec<_> = fs::read_dir(directory.path())
         .unwrap()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+        .filter(|name| name.contains(".tmp-") || (name.ends_with(".lock") && name != ".image.raw.lumina.zdata.lock"))
         .collect();
     assert!(
         leftovers.is_empty(),
-        "no temp/lock files may leak, found {leftovers:?}"
+        "no temp files or unexpected lock files may leak, found {leftovers:?}"
     );
 
     // Appending under a fresh lock fails explicitly and leaves the
     // bundle untouched.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    std::fs::File::create(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    lock_file.lock().unwrap();
     let mut blocked = generative_canvas();
     blocked.id = "blocked".into();
     let error = append_generative_canvas(&path, blocked).unwrap_err();
@@ -776,7 +778,7 @@ fn generative_atomic_append_preserves_bundle_and_uses_relative_path() {
         "generative append must report the held lock, got {error}"
     );
     assert_eq!(load_zdata(&path).unwrap().tile_count(), 4);
-    drop(fs::remove_file(&lock_path));
+    drop(lock_file);
 
     // Missing bundle file surfaces as I/O, never as an empty container.
     let missing = directory.path().join("absent.lumina.zdata");
@@ -995,7 +997,8 @@ fn denoise_rgb_atomic_append_preserves_bundle_and_honors_lock() {
 
     // A held lock blocks the append explicitly and leaves the bundle.
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    std::fs::File::create(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    lock_file.lock().unwrap();
     let mut blocked = denoise_rgb();
     blocked.id = "blocked".into();
     let error = append_denoise_rgb(&path, blocked).unwrap_err();
@@ -1004,7 +1007,7 @@ fn denoise_rgb_atomic_append_preserves_bundle_and_honors_lock() {
         "denoise append must report the held lock, got {error}"
     );
     assert_eq!(load_zdata(&path).unwrap().tile_count(), 3);
-    drop(fs::remove_file(&lock_path));
+    drop(lock_file);
 
     // Explicit replace regenerates the same record without duplication.
     let mut regenerated = denoise_rgb();
@@ -1014,16 +1017,16 @@ fn denoise_rgb_atomic_append_preserves_bundle_and_honors_lock() {
     assert_eq!(replaced.tile_count(), 3, "replace must not duplicate");
     assert_eq!(replaced.denoise_rgb("denoise-1").unwrap(), regenerated);
 
-    // No temp/lock files may leak.
+    // No temp files or unexpected lock files may leak.
     let leftovers: Vec<_> = fs::read_dir(directory.path())
         .unwrap()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+        .filter(|name| name.contains(".tmp-") || (name.ends_with(".lock") && name != ".image.raw.lumina.zdata.lock"))
         .collect();
     assert!(
         leftovers.is_empty(),
-        "no temp/lock files, found {leftovers:?}"
+        "no temp files or unexpected lock files, found {leftovers:?}"
     );
 }
 
@@ -1289,7 +1292,8 @@ fn face_embeddings_batch_write_is_atomic_replaceable_and_locked() {
         .has_record(RecordKind::FaceEmbedding, "subject"));
 
     let lock_path = directory.path().join(".image.raw.lumina.zdata.lock");
-    std::fs::File::create(&lock_path).unwrap();
+    let lock_file = std::fs::OpenOptions::new().create(true).write(true).open(&lock_path).unwrap();
+    lock_file.lock().unwrap();
     let mut blocked = face_embedding();
     blocked.id = "emb-blocked".into();
     let error = save_face_embeddings(&path, vec![blocked]).unwrap_err();
@@ -1297,22 +1301,22 @@ fn face_embeddings_batch_write_is_atomic_replaceable_and_locked() {
         matches!(&error, ZDataError::Io { operation, .. } if operation.contains("lock")),
         "batch write must report the held lock, got {error}"
     );
-    drop(fs::remove_file(&lock_path));
+    drop(lock_file);
 
     // Belt and braces: the clash record did not enter the bundle.
     assert!(!load_zdata(&path)
         .unwrap()
         .has_record(RecordKind::FaceEmbedding, "denoise-1"));
 
-    // No temp/lock files may leak.
+    // No temp files or unexpected lock files may leak.
     let leftovers: Vec<_> = fs::read_dir(directory.path())
         .unwrap()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.contains(".tmp-") || name.ends_with(".lock"))
+        .filter(|name| name.contains(".tmp-") || (name.ends_with(".lock") && name != ".image.raw.lumina.zdata.lock"))
         .collect();
     assert!(
         leftovers.is_empty(),
-        "no temp/lock files, found {leftovers:?}"
+        "no temp files or unexpected lock files, found {leftovers:?}"
     );
 }
