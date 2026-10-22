@@ -1,17 +1,17 @@
 use super::*;
 
-// ----- REVIEW-SIDECAR-LOCK-1: atomic stale-lock reclaim (TOCTOU) -----
+// ----- REVIEW-SIDECAR-LOCK-1: stable OS advisory lock -----
 
 #[test]
-fn stale_lock_reclaim_is_atomic_no_lost_update() {
+fn stale_lockfile_mtime_does_not_block_writer() {
     use std::sync::{Arc, Barrier};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("image.lumina.json");
     let document = SidecarDocument::new(source(), "pipeline-1");
     let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
     let lock_path = directory.path().join(".image.lumina.json.lock");
-    assert!(!lock_path.exists(), "lock must be released after save");
-    // Create a stale lock (mtime 60s ago) that both contenders will see.
+    // An old mtime is not evidence that a live OS lock can be reclaimed.
+    // Without a held OS lock, the persistent rendezvous file is reusable.
     {
         let file = std::fs::File::create(&lock_path).unwrap();
         let old = SystemTime::now() - Duration::from_secs(60);
@@ -45,26 +45,25 @@ fn stale_lock_reclaim_is_atomic_no_lost_update() {
         .count();
     assert_eq!(
         successes, 1,
-        "exactly one contender must win the atomic stale reclaim, got {r1:?} {r2:?}"
+        "exactly one CAS contender must win, got {r1:?} {r2:?}"
     );
     assert_eq!(
         conflicts, 1,
         "the loser must receive an explicit Conflict, not a silent lost update"
     );
-    // No stale reclaim artifact must remain.
+    // No temporary reclaim artifact is created by this lock protocol.
     let reclaim_leftover = std::fs::read_dir(directory.path())
         .unwrap()
         .filter_map(|e| e.ok())
         .any(|e| e.file_name().to_string_lossy().contains("reclaim"));
-    assert!(
-        !reclaim_leftover,
-        "no .reclaim temporary must survive after atomic reclaim"
-    );
+    assert!(!reclaim_leftover, "no .reclaim temporary must be created");
     // Sidecar must be one of the two valid outcomes, not corrupted.
     let loaded = load_sidecar(&path).unwrap();
     assert!(loaded.virtual_copies[0].name == "first" || loaded.virtual_copies[0].name == "second");
-    // Lock must be released after the winner's WriteLock is dropped.
-    assert!(!lock_path.exists(), "lock must be cleaned up after winner");
+    // The rendezvous inode remains, but the OS lock is released with its file
+    // handle and can be acquired again.
+    assert!(lock_path.exists(), "stable rendezvous file remains");
+    drop(acquire_write_lock(&path).unwrap());
     // No absolute path leaked.
     assert!(!loaded.source.relative_name.contains('/'));
 }
@@ -76,24 +75,24 @@ fn fresh_lock_is_not_stolen_and_yields_explicit_conflict() {
     let document = SidecarDocument::new(source(), "pipeline-1");
     let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
     let lock_path = directory.path().join(".image.lumina.json.lock");
-    // Create a fresh lock (mtime = now) – must NOT be reclaimed.
-    std::fs::File::create(&lock_path).unwrap();
+    // Hold the actual OS lock; its age or mtime cannot make it reclaimable.
+    let held_lock = acquire_write_lock(&path).unwrap();
     let mut edited = SidecarDocument::new(source(), "pipeline-1");
     edited.virtual_copies[0].name = "contender".into();
     let result = save_sidecar_if_unchanged(&path, &edited, Some(&revision));
     assert!(
         matches!(result, Err(SidecarError::Conflict(_))),
-        "fresh lock must produce explicit Conflict, got {result:?}"
+        "held OS lock must produce explicit Conflict, got {result:?}"
     );
-    // Fresh lock must survive the failed reclaim attempt (not silently deleted).
+    // The held OS lock and its stable rendezvous file survive failed attempts.
     assert!(
         lock_path.exists(),
-        "fresh lock must not have been deleted by contender"
+        "the lock rendezvous file must not be deleted by a contender"
     );
     // Winner's sidecar is unchanged.
     let loaded = load_sidecar(&path).unwrap();
     assert_eq!(loaded.virtual_copies[0].name, "Original");
-    let _ = std::fs::remove_file(&lock_path);
+    drop(held_lock);
 }
 
 #[test]
@@ -104,13 +103,11 @@ fn concurrent_fresh_lock_only_one_writer_wins() {
     let document = SidecarDocument::new(source(), "pipeline-1");
     let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
     let lock_path = directory.path().join(".image.lumina.json.lock");
-    // Hold a fresh lock in a background thread for ~300ms to simulate a
-    // concurrent writer that has not yet released its lock.
-    let holder_path = lock_path.clone();
+    // Hold the actual OS lock in a background thread for ~300ms.
+    let holder_target = path.clone();
     let holder = std::thread::spawn(move || {
-        std::fs::File::create(&holder_path).unwrap();
+        let _held_lock = acquire_write_lock(&holder_target).unwrap();
         std::thread::sleep(Duration::from_millis(300));
-        let _ = std::fs::remove_file(&holder_path);
     });
     // Give holder a head start so its fresh lock is visible.
     std::thread::sleep(Duration::from_millis(20));
@@ -174,24 +171,7 @@ fn serialized_writes_reject_concurrent_lock_holder() {
     let path = directory.path().join("image.lumina.json");
     let document = SidecarDocument::new(source(), "pipeline-1");
     let revision = save_sidecar_if_unchanged(&path, &document, None).unwrap();
-    let lock_path = directory.path().join(".image.lumina.json.lock");
-    std::fs::File::create(&lock_path).unwrap();
-    // Test-environment guard: STALE_THRESHOLD in acquire_write_lock is 30 s.
-    // If the test stalls > 30 s, its own lockfile would be (correctly) reclaimed
-    // by production logic and the assertion fails spuriously. Keep the lockfile
-    // mtime fresh (~every 50 ms) so the production test of freshness stays
-    // exercised, while an environment stall can no longer steal our lock.
-    // (Test-only; no product change.)
-    let keeper_lock_path = lock_path.clone();
-    let keeper_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let keeper_stop2 = std::sync::Arc::clone(&keeper_stop);
-    let keeper = std::thread::spawn(move || {
-        while !keeper_stop2.load(std::sync::atomic::Ordering::SeqCst) {
-            let _ = std::fs::File::open(&keeper_lock_path)
-                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-    });
+    let held_lock = acquire_write_lock(&path).unwrap();
 
     let mut edited = document.clone();
     edited.virtual_copies[0].name = "plain".into();
@@ -214,9 +194,7 @@ fn serialized_writes_reject_concurrent_lock_holder() {
         load_sidecar(&path).unwrap().virtual_copies[0].name,
         "Original"
     );
-    keeper_stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    let _ = keeper.join();
-    std::fs::remove_file(&lock_path).unwrap();
+    drop(held_lock);
     // After the lock is released both writers work again.
     save_sidecar(&path, &edited).unwrap();
     assert_eq!(load_sidecar(&path).unwrap().virtual_copies[0].name, "plain");

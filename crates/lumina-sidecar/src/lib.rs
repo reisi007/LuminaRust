@@ -744,8 +744,8 @@ pub fn paths_resolve_equal(input: &Path, output: &Path) -> std::io::Result<bool>
 mod sidecar_io;
 pub(crate) use sidecar_io::acquire_write_lock;
 pub use sidecar_io::{
-    document_revision, load_sidecar, recover_sidecar, save_sidecar, save_sidecar_if_unchanged,
-    write_atomically, RecoveryReport, SidecarDocument,
+    acquire_sidecar_write_lock, document_revision, load_sidecar, recover_sidecar, save_sidecar,
+    save_sidecar_if_unchanged, write_atomically, RecoveryReport, SidecarDocument, SidecarWriteLock,
 };
 
 // SPLICE-SIDECAR-LIB-90 (Slice 8): the artifact status block moved out of

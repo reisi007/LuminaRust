@@ -106,14 +106,33 @@ pub struct RecoveryReport {
 /// serialize against each other. `pub(crate)` because `zdata` reuses it for the
 /// `.zdata.lock`.
 pub(crate) struct WriteLock {
-    path: PathBuf,
+    // Keep the file handle (and therefore its OS advisory lock) alive for the
+    // full critical section. The rendezvous file is intentionally persistent:
+    // unlinking it while another process has opened it can split contenders
+    // across two inodes. The OS releases the advisory lock when the process
+    // exits, so the persistent file does not preserve stale lock ownership.
+    _file: fs::File,
 }
 
-impl Drop for WriteLock {
-    fn drop(&mut self) {
-        // A failed cleanup is deliberately ignored: the next writer can report
-        // the lock as stale, and the actual sidecar remains untouched.
-        let _ = fs::remove_file(&self.path);
+/// Cooperative lock for a sidecar and any related files published with it.
+///
+/// Hold this across the complete read/check/publish transaction, and use
+/// [`SidecarWriteLock::save`] instead of [`save_sidecar`] while it is held.
+/// This serializes Lumina writers that use the sidecar lock protocol; it does
+/// not prevent processes that mutate files without honoring the lock, and it
+/// depends on the filesystem honoring OS advisory locks. The OS releases the
+/// advisory lock on process exit; its stable rendezvous file is intentionally
+/// retained to prevent contenders locking different inodes.
+#[must_use = "dropping the lock before publication reopens the check/write race"]
+pub struct SidecarWriteLock {
+    path: PathBuf,
+    _lock: WriteLock,
+}
+
+impl SidecarWriteLock {
+    /// Atomically save the sidecar protected by this lock.
+    pub fn save(&self, document: &SidecarDocument) -> Result<(), SidecarError> {
+        save_sidecar_locked(&self.path, document)
     }
 }
 
@@ -175,8 +194,18 @@ pub fn load_sidecar(path: &Path) -> Result<SidecarDocument, SidecarError> {
 /// or `migrate_sidecar_file`; direct filesystem writes bypass conflict
 /// detection entirely and are not supported.
 pub fn save_sidecar(path: &Path, document: &SidecarDocument) -> Result<(), SidecarError> {
-    let _lock = acquire_write_lock(path)?;
-    save_sidecar_locked(path, document)
+    acquire_sidecar_write_lock(path)?.save(document)
+}
+
+/// Acquires the same cooperative lock used by [`save_sidecar`]. Multi-file
+/// transactions can hold it across ownership checks and artifact publication,
+/// then call [`SidecarWriteLock::save`] to persist without reacquiring the
+/// non-reentrant lock.
+pub fn acquire_sidecar_write_lock(path: &Path) -> Result<SidecarWriteLock, SidecarError> {
+    Ok(SidecarWriteLock {
+        path: path.to_path_buf(),
+        _lock: acquire_write_lock(path)?,
+    })
 }
 
 /// The actual atomic replace. Caller must hold the sidecar's write lock; the
@@ -327,6 +356,12 @@ pub fn recover_sidecar(path: &Path) -> Result<RecoveryReport, SidecarError> {
     })
 }
 
+/// Acquires the per-target OS advisory lock on a stable rendezvous file.
+///
+/// Never unlink the rendezvous file: a process that has opened an unlinked
+/// inode can otherwise acquire it while another process locks a replacement.
+/// The kernel releases the lock on normal close and process termination, so
+/// crash recovery does not depend on timestamps or a stale-file reclaimer.
 pub(crate) fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let filename = path.file_name().map(|name| name.to_string_lossy());
@@ -334,92 +369,24 @@ pub(crate) fn acquire_write_lock(path: &Path) -> Result<WriteLock, SidecarError>
         ".{}.lock",
         filename.as_deref().unwrap_or("sidecar")
     ));
-    const STALE_THRESHOLD: Duration = Duration::from_secs(30);
-    for iteration in 0..100 {
-        match fs::OpenOptions::new()
+    for _ in 0..100 {
+        let file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(false)
             .open(&lock_path)
-        {
-            Ok(_) => return Ok(WriteLock { path: lock_path }),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Crash recovery for a lock cannot identify a process portably;
-                // only reclaim locks that are clearly abandoned. The stale
-                // decision and the reclaim must be atomic: two processes must
-                // not both decide "stale" and have the second delete the fresh
-                // lock the first just created (TOCTOU lost update). We achieve
-                // atomicity via an atomic rename: the stale lock is moved aside
-                // to a unique reclaim path. Only the winner of the rename owns
-                // the old lock file and can decide whether it was genuinely
-                // stale; a fresh lock is restored instead of silently deleted,
-                // producing an explicit Conflict for the contender.
-                let stale = fs::metadata(&lock_path)
-                    .and_then(|meta| meta.modified())
-                    .ok()
-                    .and_then(|time| SystemTime::now().duration_since(time).ok())
-                    .is_some_and(|age| age > STALE_THRESHOLD);
-                if !stale {
-                    thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                // Generate a unique reclaim destination in the same directory so
-                // the rename stays on the same filesystem and remains atomic.
-                let reclaim_path = parent.join(format!(
-                    ".{}.lock.reclaim-{}-{}-{}",
-                    filename.as_deref().unwrap_or("sidecar"),
-                    std::process::id(),
-                    iteration,
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos()
-                ));
-                match fs::rename(&lock_path, &reclaim_path) {
-                    Ok(()) => {
-                        // We now own the old lock file at `reclaim_path`.
-                        // Verify it was genuinely stale at the instant of the
-                        // atomic rename (its mtime is preserved across rename).
-                        let reclaimed_stale = fs::metadata(&reclaim_path)
-                            .and_then(|meta| meta.modified())
-                            .ok()
-                            .and_then(|time| SystemTime::now().duration_since(time).ok())
-                            .is_some_and(|age| age > STALE_THRESHOLD);
-                        if reclaimed_stale {
-                            // Genuinely abandoned -> discard and retry creation.
-                            let _ = fs::remove_file(&reclaim_path);
-                            continue;
-                        } else {
-                            // We raced and stole a fresh lock. Restore it
-                            // instead of silently deleting it; the contender
-                            // must see an explicit Conflict, not a lost update.
-                            match fs::rename(&reclaim_path, &lock_path) {
-                                Ok(()) => {
-                                    thread::sleep(Duration::from_millis(10));
-                                    continue;
-                                }
-                                Err(_) => {
-                                    // Another writer already created a new lock
-                                    // while we held the stolen fresh file.
-                                    // Discard the stolen copy and contend.
-                                    let _ = fs::remove_file(&reclaim_path);
-                                    thread::sleep(Duration::from_millis(10));
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        // Lock vanished between the stale check and the rename
-                        // (another reclaimer won). Retry creation immediately.
-                        continue;
-                    }
-                    Err(_) => {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    }
-                }
+            .map_err(|error| io_error("opening sidecar lock", &lock_path, error))?;
+        match file.try_lock() {
+            Ok(()) => return Ok(WriteLock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                // Retry briefly, then report an explicit conflict rather than
+                // waiting indefinitely behind a long-running writer.
+                thread::sleep(Duration::from_millis(10));
             }
-            Err(error) => return Err(io_error("creating sidecar lock", &lock_path, error)),
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(io_error("locking sidecar", &lock_path, error));
+            }
         }
     }
     Err(SidecarError::Conflict(format!(

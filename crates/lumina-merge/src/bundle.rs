@@ -36,12 +36,11 @@
 //! prefixes and the non-destructive envelope gate are identical on both paths.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use log::info;
 use lumina_sidecar::{
-    load_sidecar, now_rfc3339_utc, save_sidecar, sidecar_path_for, ArtifactReference,
+    acquire_sidecar_write_lock, load_sidecar, now_rfc3339_utc, sidecar_path_for, ArtifactReference,
     DecodeFingerprint, GeometryFingerprint, HdrDeghost, MergeAlignment, MergeAlignmentMethod,
     MergeDecodeContext, MergeExposure, MergeMode, MergeOutput, MergeProjection, MergeRecipe,
     MergeSource, MergeStatus, MergeTransform, PanoGainCompensation, SidecarDocument,
@@ -55,6 +54,9 @@ use crate::{
     encode_linear_dng, merge_dng_filename, validate_dng_file_name, DngError, DngExif, LinearImage,
     MergeError,
 };
+
+mod publication;
+mod security;
 
 /// Document-level envelope discriminator of a merge-DNG sidecar
 /// (MERGE-DNG-1): `"type": "merge"`. It lives on the sidecar document, not in
@@ -235,8 +237,14 @@ pub struct MergeRunOptions {
     /// reference frame's radiance when no frame survives. HDR only: any other
     /// value on `merge-pano` is a loud `Failed`.
     pub deghost: HdrDeghostMode,
-    /// Re-merge even when an existing bundle is stale or dangling. Without it
-    /// staleness is a loud error, never a silent overwrite.
+    /// Re-merge an existing internally coherent merge bundle even when stale
+    /// or already current. Without it staleness is a loud error, never a silent
+    /// overwrite. The `"type": "merge"` value only classifies the envelope;
+    /// SEC-6 also requires coherent recipe, artifact, source-identity and DNG
+    /// integrity anchors. Those consistency checks do not prove who wrote the
+    /// content or establish cryptographic ownership. The recorded historical
+    /// LibRaw version is required to be non-empty but cannot be independently
+    /// authenticated from the bundle.
     pub force: bool,
     /// Decoder version recorded in the merge-DNG source identity. The merge
     /// DNG is always re-imported via LibRaw, so the frontend supplies
@@ -462,17 +470,32 @@ where
         .map_err(|error| MergeRunError::Failed(error.to_string()))?;
     let digest = recipe.digest();
 
-    if let Some(outcome) = check_existing_bundle(BundleGate {
-        command,
-        mode,
-        force: options.force,
-        sidecar_path: &sidecar_path,
-        dng_path: &dng_path,
-        digest: &digest,
-        residual_px: pass.residual_px,
-        residual_warning: pass.residual_warning,
-    })? {
-        return Ok(outcome);
+    // A normal cache/stale hit exits before DNG encoding. A miss releases the
+    // lock while expensive work runs, then performs a locked re-check below so
+    // concurrent Lumina writers still serialize ownership validation and
+    // publication. Forced merges always revalidate in that final critical
+    // section. Direct filesystem mutations that ignore this protocol remain
+    // outside the transaction guarantee.
+    if !options.force {
+        let sidecar_lock = acquire_sidecar_write_lock(&sidecar_path).map_err(|error| {
+            MergeRunError::Failed(format!(
+                "cannot lock merge target sidecar `{}`: {error}",
+                sidecar_path.display()
+            ))
+        })?;
+        if let Some(outcome) = security::check_existing_bundle(BundleGate {
+            command,
+            mode,
+            force: options.force,
+            sidecar_path: &sidecar_path,
+            dng_path: &dng_path,
+            digest: &digest,
+            residual_px: pass.residual_px,
+            residual_warning: pass.residual_warning,
+        })? {
+            return Ok(outcome);
+        }
+        drop(sidecar_lock);
     }
 
     let exif = sources[0].exif.to_dng_exif();
@@ -485,8 +508,6 @@ where
         pass.merged.height()
     );
 
-    // Stage the DNG, commit the sidecar, then publish the DNG — like
-    // `process_selected`, a failed sidecar save leaves nothing behind.
     let document = build_merge_document(
         &dng_file_name,
         &dng_bytes,
@@ -494,7 +515,28 @@ where
         &recipe,
         &options.dng_decode_version,
     )?;
-    stage_and_publish(&dng_path, &dng_bytes, &sidecar_path, &document)?;
+    // DNG encoding and same-directory staging happen without the sidecar lock.
+    // The final bundle re-check, sidecar save and staged-DNG rename are
+    // serialized as one cooperative transaction. If another writer published
+    // while encoding/staging ran, the staged tempfile is dropped on the cache
+    // hit rather than left behind.
+    let staged_dng = publication::stage_dng(&dng_path, &dng_bytes)?;
+    if let Some(outcome) = publish_staged_dng_or_return_cached(
+        BundleGate {
+            command,
+            mode,
+            force: options.force,
+            sidecar_path: &sidecar_path,
+            dng_path: &dng_path,
+            digest: &digest,
+            residual_px: pass.residual_px,
+            residual_warning: pass.residual_warning,
+        },
+        staged_dng,
+        &document,
+    )? {
+        return Ok(outcome);
+    }
     let checksum = merge_checksum(&dng_bytes);
     info!("{command}: wrote `{}` ({checksum})", dng_path.display());
     info!("{command}: wrote `{}`", sidecar_path.display());
@@ -509,6 +551,27 @@ where
         residual_px: pass.residual_px,
         residual_warning: pass.residual_warning,
     })
+}
+
+/// Re-check under the publication lock, dropping staged bytes if another
+/// cooperative writer already produced the current bundle.
+fn publish_staged_dng_or_return_cached(
+    gate: BundleGate<'_>,
+    staged_dng: tempfile::NamedTempFile,
+    document: &SidecarDocument,
+) -> Result<Option<MergeRunOutcome>, MergeRunError> {
+    let dng_path = gate.dng_path;
+    let sidecar_lock = acquire_sidecar_write_lock(gate.sidecar_path).map_err(|error| {
+        MergeRunError::Failed(format!(
+            "cannot lock merge target sidecar `{}`: {error}",
+            gate.sidecar_path.display()
+        ))
+    })?;
+    if let Some(outcome) = security::check_existing_bundle(gate)? {
+        return Ok(Some(outcome));
+    }
+    publication::publish_staged_dng(dng_path, staged_dng, &sidecar_lock, document)?;
+    Ok(None)
 }
 
 /// Source-count validation (both frontends share the same loud contract).
@@ -780,111 +843,6 @@ struct BundleGate<'a> {
     residual_warning: bool,
 }
 
-/// Stale/missing gate over an existing bundle (SOLL §Persistenz: a merge is
-/// valid while source hashes, decode contexts and the DNG checksum match).
-///
-/// Returns `Ok(None)` when the merge may proceed, or `Ok(Some(outcome))` with
-/// the early exit for the already-current bundle.
-fn check_existing_bundle(gate: BundleGate<'_>) -> Result<Option<MergeRunOutcome>, MergeRunError> {
-    let BundleGate {
-        command,
-        mode,
-        force,
-        sidecar_path,
-        dng_path,
-        digest,
-        residual_px,
-        residual_warning,
-    } = gate;
-    if !sidecar_path.exists() {
-        if dng_path.exists() && !force {
-            return Err(MergeRunError::Missing(format!(
-                "merge DNG `{}` exists without its sidecar `{}` \
-                 (regenerate the bundle explicitly with force)",
-                dng_path.display(),
-                sidecar_path.display()
-            )));
-        }
-        return Ok(None);
-    }
-    if force {
-        info!("{command}: force regenerates the existing bundle");
-        return Ok(None);
-    }
-    let document = load_sidecar(sidecar_path).map_err(|error| {
-        MergeRunError::Missing(format!(
-            "existing merge sidecar `{}` is unreadable ({error}); \
-             regenerate the bundle explicitly with force",
-            sidecar_path.display()
-        ))
-    })?;
-    match classify_merge_document(&document) {
-        MergeDocumentKind::Merge => {}
-        MergeDocumentKind::Standard => {
-            return Err(MergeRunError::Stale(format!(
-                "existing sidecar `{}` is a standard sidecar \
-                 (no `\"type\": \"{}\"` envelope); refusing to overwrite it — \
-                 regenerate the bundle explicitly with force",
-                sidecar_path.display(),
-                MERGE_ENVELOPE_TYPE
-            )));
-        }
-        MergeDocumentKind::Unknown(kind) => {
-            return Err(MergeRunError::Stale(format!(
-                "existing sidecar `{}` has unknown document type `{kind}` \
-                 (expected `\"type\": \"{}\"`); refusing to overwrite it — \
-                 regenerate the bundle explicitly with force",
-                sidecar_path.display(),
-                MERGE_ENVELOPE_TYPE
-            )));
-        }
-    }
-    let stored_recipe = stored_merge_recipe(&document)
-        .map_err(|reason| stale_bundle_error(sidecar_path, &reason))?;
-    if stored_recipe.digest() != digest {
-        return Err(MergeRunError::Stale(format!(
-            "sources, decode context or alignment changed since `{}` \
-             was written (digest mismatch); re-merge explicitly with force",
-            sidecar_path.display()
-        )));
-    }
-    let stored_artifact = stored_merge_artifact(&document)
-        .map_err(|reason| stale_bundle_error(sidecar_path, &reason))?;
-    let dng_bytes = fs::read(dng_path).map_err(|_| {
-        MergeRunError::Missing(format!(
-            "merge DNG `{}` is gone (its sidecar `{}` remains); \
-             regenerate the bundle explicitly with force",
-            dng_path.display(),
-            sidecar_path.display()
-        ))
-    })?;
-    if merge_checksum(&dng_bytes) != stored_artifact.checksum {
-        return Err(MergeRunError::Stale(format!(
-            "merge DNG `{}` changed on disk (checksum mismatch); \
-             re-merge explicitly with force",
-            dng_path.display()
-        )));
-    }
-    info!("{command}: bundle already current (digest match, nothing rewritten)");
-    Ok(Some(MergeRunOutcome {
-        mode,
-        dng_path: dng_path.to_path_buf(),
-        sidecar_path: sidecar_path.to_path_buf(),
-        digest: digest.to_string(),
-        checksum: stored_artifact.checksum.clone(),
-        cached: true,
-        residual_px,
-        residual_warning,
-    }))
-}
-
-fn stale_bundle_error(sidecar_path: &Path, reason: &str) -> MergeRunError {
-    MergeRunError::Stale(format!(
-        "existing sidecar `{}` {reason}; regenerate the bundle explicitly with force",
-        sidecar_path.display()
-    ))
-}
-
 /// Merge-DNG sidecar document: source identity of the new DNG plus the
 /// `"type": "merge"` envelope, the recipe and the DNG artifact reference as
 /// document-level extras (additive — no schema change).
@@ -952,63 +910,12 @@ fn build_merge_document(
     Ok(document)
 }
 
-/// Atomic publication in the CLI order: stage the DNG (same-directory temp +
-/// fsync), commit the sidecar, then rename the DNG into place. A failed
-/// sidecar save leaves nothing behind; incomplete files never count as valid.
-fn stage_and_publish(
-    dng_path: &Path,
-    dng_bytes: &[u8],
-    sidecar_path: &Path,
-    document: &SidecarDocument,
-) -> Result<(), MergeRunError> {
-    let parent = dng_path.parent().unwrap_or_else(|| Path::new("."));
-    let filename = dng_path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| "artifact".into());
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{filename}.tmp-"))
-        .tempfile_in(parent)
-        .map_err(|error| {
-            MergeRunError::Failed(format!("cannot stage `{}`: {error}", dng_path.display()))
-        })?;
-    let temporary_path = temporary.path().to_path_buf();
-    temporary.write_all(dng_bytes).map_err(|error| {
-        MergeRunError::Failed(format!(
-            "cannot stage `{}`: {error}",
-            temporary_path.display()
-        ))
-    })?;
-    temporary.flush().map_err(|error| {
-        MergeRunError::Failed(format!(
-            "cannot stage `{}`: {error}",
-            temporary_path.display()
-        ))
-    })?;
-    temporary.as_file().sync_all().map_err(|error| {
-        MergeRunError::Failed(format!(
-            "cannot stage `{}`: {error}",
-            temporary_path.display()
-        ))
-    })?;
-    if let Err(error) = save_sidecar(sidecar_path, document) {
-        return Err(MergeRunError::Failed(format!(
-            "sidecar write failed: {error}"
-        )));
-    }
-    temporary.persist(dng_path).map_err(|error| {
-        MergeRunError::Failed(format!(
-            "cannot publish `{}`: {}",
-            dng_path.display(),
-            error.error
-        ))
-    })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumina_sidecar::save_sidecar;
+    #[path = "sec6_regression.rs"]
+    mod sec6_regression;
 
     fn explicit_exposures(count: usize) -> Vec<MergeExposure> {
         (0..count)
@@ -1029,6 +936,13 @@ mod tests {
             deghost: HdrDeghostMode::Off,
             force: false,
             dng_decode_version: "test".into(),
+        }
+    }
+
+    fn options_with_output(output: &Path) -> MergeRunOptions {
+        MergeRunOptions {
+            output: Some(output.to_path_buf()),
+            ..options()
         }
     }
 
