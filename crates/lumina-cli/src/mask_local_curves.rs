@@ -114,7 +114,7 @@ pub(crate) fn parse_local_set_spec(spec: &str) -> Result<LocalSetSpec, CliError>
         }
         // Reuse the global curve-channel and point-list parsers so both
         // surfaces accept exactly the same input.
-        let points = super::parse_curve_points(&format!("{channel}:{value}"))?.1;
+        let points = super::color_cli::parse_curve_points(&format!("{channel}:{value}"))?.1;
         return Ok(LocalSetSpec::Curve {
             channel: channel.into(),
             points,
@@ -151,7 +151,7 @@ pub(crate) fn parse_local_reset_spec(key: &str) -> Result<LocalResetSpec, CliErr
         None => Ok(LocalResetSpec::Scalar(key.into())),
         Some("") => Ok(LocalResetSpec::All),
         Some(channel) => {
-            super::check_curve_channel(channel)?;
+            super::color_cli::check_curve_channel(channel)?;
             Ok(LocalResetSpec::Channel(channel.into()))
         }
     }
