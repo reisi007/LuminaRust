@@ -1,4 +1,9 @@
 use super::*;
+// SPLICE-SIDECAR-LIB-90 (Slice 9): the sidecar I/O block moved out of the
+// crate root into `sidecar_io`, so the root no longer imports `SystemTime`.
+// The lock tests backdate a lock file with it, so the test module imports it
+// itself.
+use std::time::SystemTime;
 
 mod support;
 pub(crate) use support::*;
