@@ -348,6 +348,36 @@ Der Schema-Folge-Task (`lumina-sidecar`, Modul `merge_recipe`) legt fest:
   unvollständige Dateien gelten nie als gültig. Index-DB (falls vorhanden)
   spiegelt nur und ist aus Sidecars rekonstruierbar.
 
+### SEC-6: Merge-Ownership und `force`
+
+`"type": "merge"` ist nur ein Formatmarker, kein Besitzbeweis. Vor einem
+`force` müssen Merge-Rezept (Schema und semantische Validierung),
+Artefaktverweis und Sidecar-Quellidentität zueinander und zum konkreten
+Zieldateinamen passen. Solange das DNG vorhanden ist, müssen außerdem seine
+Byte-Länge und BLAKE3-Prüfsumme mit diesen Ankern übereinstimmen. Ein
+transplantiertes Sidecar oder ein beschädigtes/ausgetauschtes vorhandenes DNG
+wird auch mit `force` abgelehnt und nicht automatisch repariert.
+
+Eine geänderte Quelle macht ein ansonsten kohärentes Bundle `stale`; `force`
+darf dieses intakte Bundle erneuern. Ein **fehlendes** DNG ist der eng begrenzte
+Reparaturfall: `force` darf es neu erzeugen, wenn das Sidecar-Rezept und der
+Artefaktverweis weiterhin valide, intern konsistent und auf genau diesen
+Zieldateinamen gebunden sind. Da kein DNG vorhanden ist, gibt es dabei keine
+vorhandenen DNG-Bytes zu überschreiben. Ein fehlendes oder inkohärentes
+Sidecar wird nicht auf diese Weise repariert.
+
+Die nicht-erzwungene Cache-/Stale-Prüfung läuft unter dem Sidecar-Schreiblock;
+ihre Dauer kann bei einem vorhandenen DNG von dessen Integritätsprüfung abhängen.
+Bei einem Merge-Miss werden DNG-Encoding und Temp-Datei-Staging ohne Lock
+ausgeführt; unmittelbar vor der Publikation prüft `run_merge` das Bundle unter
+dem Lock erneut und hält denselben Lock
+(`lumina_sidecar::acquire_sidecar_write_lock`) bis Sidecar-Schreibung und
+DNG-Rename abgeschlossen sind. CLI, MCP und GUI benutzen diesen gemeinsamen
+`lumina-merge::bundle::run_merge`-Pfad. Das ist ein kooperativer Lock-Vertrag
+für Lumina-Schreiber, die dieselbe Sidecar-Lock-API verwenden. Ein externer
+Prozess oder ein anderer Writer, der den Lock absichtlich umgeht und Dateien
+direkt im Dateisystem verändert, ist damit **nicht** ausgeschlossen.
+
 ## Capability-Matrix-Einordnung
 
 (vgl. `feature/platform/capability-matrix.md`; WASM/Browser entfallen —
@@ -363,7 +393,8 @@ nur native CLI/Desktop.)
 
 Kein stiller Fallback zwischen CLI und GUI: Beide durchlaufen dieselbe
 Merge-Schrittfolge (Decode-Adapter → Exposure-Policy → Alignment/Merge →
-Rezept → Digest → Bundle-Gate → Encode → Stage → Sidecar → Publish) — seit
+Rezept → Digest → Cache-/Stale-Gate → Encode → Stage → Ownership-Recheck →
+Sidecar → Publish) — seit
 MERGE-IMPL-15 (2026-09-17, F6) in **einem** gemeinsamen Pfad
 `lumina_merge::bundle::run_merge`; fehlende Capability (z. B. DNG-Writer nicht
 verfügbar) ist auf beiden Pfaden derselbe harte Fehler. Die Fehlertexte nutzen
