@@ -69,30 +69,7 @@ pub(crate) fn encode_and_stage(frame: &ImageFrame, target: &Path) -> Result<(), 
 /// diff images go through the same function so no matrix artifact is written
 /// "through" its target path.
 pub(crate) fn write_bytes_atomically(target: &Path, bytes: &[u8]) -> Result<(), StageError> {
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let filename = target
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| "artifact".into());
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{filename}.tmp-"))
-        .tempfile_in(parent)
-        .map_err(|error| StageError::io(parent, error))?;
-    let temporary_path = temporary.path().to_path_buf();
-    use std::io::Write as _;
-    temporary
-        .write_all(bytes)
-        .map_err(|error| StageError::io(&temporary_path, error))?;
-    temporary
-        .flush()
-        .map_err(|error| StageError::io(&temporary_path, error))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| StageError::io(&temporary_path, error))?;
-    temporary
-        .persist(target)
-        .map_err(|error| StageError::io(target, error.error))?;
+    lumina_sidecar::write_atomically(target, bytes)?;
     Ok(())
 }
 

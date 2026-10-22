@@ -222,6 +222,23 @@ fn save_sidecar_locked(path: &Path, document: &SidecarDocument) -> Result<(), Si
         .map_err(|error| io_error("creating temporary file", parent, error))?;
     let temporary_path = temporary.path().to_path_buf();
     let result = (|| {
+        // tempfile creates private files (0600 on Unix). Preserve the mode
+        // only when replacing an existing regular file; aliases still get
+        // replaced by persist/rename, never followed.
+        #[cfg(unix)]
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            if metadata.file_type().is_file() {
+                use std::os::unix::fs::PermissionsExt as _;
+                temporary
+                    .as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(
+                        metadata.permissions().mode() & 0o7777,
+                    ))
+                    .map_err(|error| {
+                        io_error("setting temporary file mode", &temporary_path, error)
+                    })?;
+            }
+        }
         temporary
             .write_all(json.as_bytes())
             .map_err(|error| io_error("writing temporary file", &temporary_path, error))?;
@@ -259,6 +276,20 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SidecarError> {
         .map_err(|error| io_error("creating temporary file", parent, error))?;
     let temporary_path = temporary.path().to_path_buf();
     let result = (|| {
+        #[cfg(unix)]
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            if metadata.file_type().is_file() {
+                use std::os::unix::fs::PermissionsExt as _;
+                temporary
+                    .as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(
+                        metadata.permissions().mode() & 0o7777,
+                    ))
+                    .map_err(|error| {
+                        io_error("setting temporary file mode", &temporary_path, error)
+                    })?;
+            }
+        }
         temporary
             .write_all(bytes)
             .map_err(|error| io_error("writing temporary file", &temporary_path, error))?;
@@ -275,6 +306,24 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SidecarError> {
         Ok(())
     })();
     result
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn atomic_export_preserves_regular_target_mode_at_path_and_name() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("named-export.png");
+    for mode in [0o644, 0o600] {
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+        let before = std::fs::symlink_metadata(&target).unwrap();
+        write_atomically(&target, b"new").unwrap();
+        let after = std::fs::symlink_metadata(&target).unwrap();
+        assert_eq!(after.permissions().mode() & 0o7777, mode);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_ne!(after.ino(), before.ino());
+    }
 }
 
 pub fn save_sidecar_if_unchanged(

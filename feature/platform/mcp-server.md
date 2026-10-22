@@ -96,6 +96,12 @@ eine Textableitung aus dem Code, keine Laufzeitmessung.
 
 ## Ziel
 
+**Export-Dateirechte (SEC-8):** Neue Exportdateien (Save, Preview und Batch)
+werden atomar mit dem privaten Modus **0600 auf Unix** angelegt. Beim atomaren
+Überschreiben einer vorhandenen regulären Zieldatei bleibt deren Unix-Modus
+exakt erhalten; Symlink-/Hardlink-Ersatzsemantik bleibt unverändert. Andere
+Betriebssysteme erhalten keine neu erfundene Moduspolitik.
+
 Ein AI-Agent (z. B. Claude, Codex, lokales LLM mit MCP-Client) soll
 Bilddateien laden, Rezeptparameter ändern, Sidecars speichern und eine
 schnelle Vorschau erzeugen können — alles über standardisierte MCP-Tools,

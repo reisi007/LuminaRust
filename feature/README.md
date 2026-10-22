@@ -14,6 +14,7 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
 - [Feature-Matrix](#feature-matrix)
 - [Festgelegte Entscheidungen](#festgelegte-entscheidungen)
 - [Arbeitsweise](#arbeitsweise)
+- [Export-Dateimodus-Policy](#export-dateimodus-policy)
 
 ## Status
 
@@ -28,6 +29,15 @@ Feature-Dokumentation: Erst hier orientieren, danach das relevante Dokument
   `lumina-mcp`, `lumina-gui`, `lumina-iptc` sowie die Test-Infra
   `lumina-testskip`, `lumina-gui-harness` und `lumina-bench`); Stand und offene
   Arbeit siehe `Agents.todo.md` (Stand 2026-10-16)
+
+## Export-Dateimodus-Policy
+
+Normative Schreibpolicy und SEC-8-Nachweis: [Security-Review-Register, SEC-8](quality/security-review-register.md#3-befunde).
+Atomare Exporte erhalten bei Ersetzen den Modus einer vorhandenen regulären
+Zieldatei (Unix: Bits `0o7777`); Symlink-Ziele werden nicht verfolgt. Für neu
+angelegte Dateien gilt der private Modus der Tempdatei (Unix typischerweise
+`0600`). CLI, GUI, MCP und Matrix verwenden dieselbe `lumina_sidecar::write_atomically`
+API; der Modus einer bestehenden Datei wird nicht pauschal auf `0644` erweitert.
 
 <!-- BEGIN GENERATED: crates -->
 **17** Crates im Workspace (Quelle: die `members` in `Cargo.toml`; Zahlregel:

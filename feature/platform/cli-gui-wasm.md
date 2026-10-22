@@ -52,6 +52,13 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 
 ## CLI
 
+**Export-Dateirechte (SEC-8):** Neue Exportdateien werden atomar mit dem
+privaten Modus **0600 auf Unix** angelegt. Beim atomaren Überschreiben einer
+vorhandenen regulären Zieldatei bleibt deren Unix-Modus exakt erhalten (z. B.
+0644 bleibt 0644; 0600 wird nicht erhöht). Symlink- und Hardlink-Ziele werden
+weiterhin durch Ersetzen des Verzeichniseintrags behandelt. Außerhalb Unix
+wird keine zusätzliche Moduspolitik festgelegt.
+
 Der erste vertikale Raster-MVP stellt zusätzlich die direkt ausführbaren
 Befehle `process` und `inspect` bereit. `process` verarbeitet aktuell PNG,
 JPEG und WebP, liest optional ein `Preset`, lässt `--exposure`, `--contrast`,
