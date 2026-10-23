@@ -2144,9 +2144,24 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   der Ein-Call-Einstieg `render_with_gpu_local_masks` ist genau
   `render_with_gpu` plus diesem zweiten Schritt (eine Maskenkette, kein zweiter
   Codepfad). Die Auswertung liefert der Kern über
-  `lumina_core::render::mask_evaluation::evaluate_local_mask_layers` — dieselbe
-  `evaluate_mask_stage`-Auswertung wie der CPU-Render, kein zweiter
-  Auswertungspfad.
+   `lumina_core::render::mask_evaluation::evaluate_local_mask_layers` — dieselbe
+   `evaluate_mask_stage`-Auswertung wie der CPU-Render, kein zweiter
+   Auswertungspfad.
+   **VRAM-API (`GPU-RENDER-MASK-19-VRAM-API`, headless verifiziert 2026-10-23):**
+   `GpuContext::apply_gpu_local_masks_to_vram` arbeitet direkt auf dem aktiven
+   globalen VRAM-Ergebnis; der stabile Present-Output wird erst nach
+   Validierung, kompletter temporärer Layerkette und erfolgreicher
+   GPU-Fehlerprüfung aktualisiert. Kein Full-Frame-Readback. Fehler müssen vor
+   dem Commit des finalen Outputs laut scheitern; der Aufrufer behält dann die
+   CPU-Referenz. Adapterlose Tests belegen Validierungs- und Fehlerpfade sowie
+   neutrale Identität, nicht Shader-Lauf oder Pixelparität. GUI-Wiring und
+    Adapter-E2E bleiben getrennte TODO-Gates.
+    Die VRAM-Einstiegsmethode ruft ein gemeinsames Request-Preflight vor dem
+    neutralen Identitätspfad auf: Rezept- und Plane-Argumente sowie nicht
+    unterstützte Stufen werden damit auch bei neutralem Layer laut geprüft;
+    die Prüfung gegen die tatsächlichen aktiven VRAM-Abmessungen bleibt im
+    Adapterpfad erhalten. Adapterlose Tests fahren die Live-Methode für
+    fehlerhafte Argumente und prüfen den dimensionsbezogenen Preflight-Seam.
   **CLI-Verdrahtung (Slice B2, 2026-10-15):** die CLI rendert lokale Masken jetzt
   auf der GPU. `crates/lumina-cli/src/local_mask_gpu.rs` (gpu-only, Muster
   `lensfun_gpu`) ersetzt den pauschalen CPU-Grund `masks (active copy has layers)`

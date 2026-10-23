@@ -357,6 +357,19 @@ Auswertungspfad. Details, Messung und die laut benannte
 P1.2-/GUI-Grenze stehen im SOLL-Abschnitt unten und in
 `feature/architecture/pipeline.md` §GPU.
 
+**VRAM-Einstieg (headless Slice, `GPU-RENDER-MASK-19-VRAM-API`):**
+`GpuContext::apply_gpu_local_masks_to_vram` verarbeitet caller-evaluierte,
+frame-ausgerichtete Layer auf dem bereits aktiven globalen VRAM-Render und
+schreibt das vollständige Ergebnis erst nach erfolgreicher Validierung und
+Zwischenpass-Prüfung in die residente Präsentationstextur zurück. Der Einstieg
+führt keinen Full-Frame-Readback aus. Neutrale Layer sind Identität; ungültige
+Abmessungen, nicht unterstützte Stufen, fehlender VRAM-Render und GPU-Fehler
+müssen laut zum CPU-Referenzpfad zurückführen. Adapterlose Tests sichern nur
+Validierungs-/Fehler-vor-Write-Verträge und neutrale Identität; sie belegen
+weder Shader-Ausführung noch Pixelparität. Der headless API-Slice ist am
+2026-10-23 unabhängig verifiziert; verbleibendes GUI-Wiring und Adapter-E2E
+sind eigene TODOs und bleiben offen.
+
 ## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
 **Task-Eintrag 2026-09-25 (Dokument zuerst; GPU-Pass 2026-10-15):** Die erste
