@@ -80,8 +80,8 @@ eine Zahl im Prosa-Text waere eine zweite Quelle der Wahrheit, die still
 altert (Muster `DOC-ZAHLEN-DRIFT-82`):
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **875** Dateien, davon
-**71** ueber 500 Zeilen und **3** ueber 3000 Zeilen.
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **876** Dateien, davon
+**72** ueber 500 Zeilen und **3** ueber 3000 Zeilen.
 <!-- END GENERATED: population -->
 
 Es gibt bewusst **keine Ausnahmen fuer Verzeichnisse**: eine Datei, die nicht
@@ -323,7 +323,7 @@ gesenkt werden) oder groesser (Eintrag gerissen, die harte Grenze gilt).
 | --- | --- | --- | --- |
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
 | `crates/lumina-cli/src/main.rs` | 6704 | 6704 | 6704 |
-| `crates/lumina-gpu/src/lib.rs` | 4238 | 4238 | 4238 |
+| `crates/lumina-gpu/src/lib.rs` | 3710 | 3710 | 3710 |
 <!-- END GENERATED: file-sizes -->
 
 - `crates/lumina-gui/src/lib.rs` wird bereits ueber `GUI-LIB-SPLIT-65`
