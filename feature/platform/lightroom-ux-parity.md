@@ -18,6 +18,17 @@ read-only, 2026-09-12), `.goal/Goal.md` G-01…G-16,
 
 ## Gap-Inventory Klon (UXG)
 
+**Einordnung (SKILLS-VOKABULAR-98, 2026-10-23):** Die UXG- und UXD-Tabellen
+sind ein **normatives SOLL-Lückeninventar**, kein Finding-/Befunds-Log. Sie
+halten Produktabweichungen vom beschlossenen Zielbild und gegebenenfalls den
+noch offenen SOLL-Entscheid fest; „geschlossen“ beschreibt die Umsetzung der
+jeweiligen Lücke, nicht den Status eines Sicherheits- oder Qualitätsbefunds.
+Deshalb erhalten diese Tabellen weder Severity noch Befunds-Owner/Ticket und
+werden nicht nach der Befund-Zählregel gezählt. Ein daraus entstehender
+konkreter Befund gehört mit stabiler ID in das dafür zuständige Register; die
+kanonische Status-/Severity-/Owner-/Ticket-Abbildung steht ausschließlich in
+`feature/quality/security-review-register.md`.
+
 **Anker-Form (Stand 2026-10-20):** Die Spalte „Fundstelle" nennt den
 vollständigen repo-relativen **Pfad + Symbolnamen** — keine Zeilennummern.
 Zeilennummern driften mit jedem Refactor-Slice; die Alt-Anker dieser Tabelle
