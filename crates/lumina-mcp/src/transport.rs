@@ -32,15 +32,15 @@
 //!
 //! # The repair-region exception — one kind of frame, one marker
 //!
-//! `lumina_dust_removal` carries a full-frame `u16` repair plane in its
-//! arguments (`repair_region.region_values`, `width * height` values; the
-//! region MUST have the source frame's dimensions). That plane is the only
-//! legitimate payload of the crate above 1 MiB, so exactly this one kind of
-//! frame may exceed the 1 MiB limit — up to
-//! [`MAX_REPAIR_REGION_LINE_BYTES`] (1.25 MiB, a HARD cap).
+//! `lumina_dust_removal` identifies a full-frame `u16` repair plane by
+//! `repair_region.region_path`; the file bytes are read separately and are
+//! **not part of the MCP frame**. The marker-based exception is retained for
+//! repair-tool request frames for transport compatibility, but the plane itself
+//! does not justify or consume a larger frame. Such frames remain hard-capped at
+//! [`MAX_REPAIR_REGION_LINE_BYTES`] (1.25 MiB).
 //!
 //! The exception is recognised by the marker `"repair_region"` — the key
-//! that introduces the plane. The marker is searched **textually** in the
+//! identifying the repair-region tool input. The marker is searched **textually** in the
 //! **WHOLE** frame, not only in its first 1 MiB: the scan runs over every
 //! byte of the frame the reader delivers (a marker split across two read
 //! chunks is found too — the tail window of the scan is taken from the
@@ -105,10 +105,9 @@ pub const MAX_LINE_BYTES: usize = 1 << 20;
 
 /// Hard cap for the ONE legitimate oversized frame: 1.25 MiB.
 ///
-/// `lumina_dust_removal` carries a full-frame `u16` repair plane
-/// (`region_values`, `width * height` values) in its arguments. That plane
-/// is the only legitimate payload of the crate above 1 MiB, so exactly this
-/// one kind of frame may exceed the 1 MiB limit — up to
+/// `lumina_dust_removal` carries the `region_path` file reference in its
+/// arguments; the file payload is separate from the frame. The existing marker
+/// exception allows this tool's request frame to exceed 1 MiB — up to
 /// [`MAX_REPAIR_REGION_LINE_BYTES`], a HARD cap.
 ///
 /// # Why 1.25 MiB (measured, not guessed)

@@ -155,11 +155,9 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
 - **Warum `-32700`:** das Frame wird an der Transportkante abgewiesen, BEVOR
   es geparst wurde — es existiert also kein Request-Objekt und kein id.
   `-32600` (invalid request) würde behaupten, das Frame sei geparst worden.
-- **Die eine legitime Ausnahme:** `lumina_dust_removal` trägt die
-  vollflächige u16-Reparatur-Ebene (`repair_region.region_values`,
-  `width * height` Werte) in seinen Argumenten. Sie ist die einzige
-  legitime Nutzlast des Crates über 1 MiB; solche Frames erhalten daher eine
-  eigene, aber weiterhin **harte** Grenze von **1,25 MiB**
+- **Marker-Ausnahme (Transportkompatibilität):** Frames, die den
+  `repair_region`-Marker enthalten, erhalten weiterhin die **harte** Grenze von
+  **1,25 MiB**
   (`MAX_REPAIR_REGION_LINE_BYTES` = 1 310 720 Byte).
   - **Erkennung:** der Transport sucht den Marker `"repair_region"` (der
     Schlüssel, der die Ebene einleitet) im **GANZEN** Frame — über jeden
@@ -168,10 +166,10 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
     **Strom**, nicht aus dem Chunk allein). Die Erkennung ist damit
     **unabhängig von der Reihenfolge der JSON-Schlüssel**: ein Frame, dessen
     `repair_region` erst nach 1 MiB anderen Inhalts steht, wird ebenfalls
-    erkannt. Der Schlüssel steht strukturell **vor** seiner Ebene im
-    JSON-Text (ein Schlüssel steht immer vor seinem Wert) — deshalb findet
-    der Ganz-Frame-Scan den Marker immer, bevor die Ebene den Speicher
-    dominiert.
+    erkannt. Die Reparatur-Ebene selbst wird über `region_path` aus einer
+    Datei gelesen und ist **nicht** Bestandteil des Frames; `region_path` ist
+    nur ein gewöhnlicher Pfad-String. Der Marker klassifiziert weiterhin das
+    Tool-Frame, nicht die Größe des externen Datei-Payloads.
   - **Der Scan endet an der Frame-Grenze:** er stoppt am Newline, das den
     Frame abschließt — der Marker des **nächsten** Frames kann den
     aktuellen Frame also nicht einstufen (sonst würde ein Frame über 1 MiB
@@ -182,7 +180,9 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
     wird aber **nicht** erkannt — der Frame wird dann mit der 1-MiB-Grenze
     abgewiesen (fail-safe: die Abweisung ist die sichere Richtung, keine
     Sicherheitsauswirkung).
-  - **Warum 1,25 MiB (gemessen, nicht geschätzt):** ein Frame wird vor dem
+  - **Historische Messgrundlage der unveränderten Kappe:** die Messungen
+    entstanden mit der früheren Inline-Ebene; sie erklären die konservative
+    Obergrenze, nicht die aktuelle Dateipayload. Ein Frame wird vor dem
     Dispatch in einen `serde_json::Value`-Baum geparst. Zwei **verschiedene**
     Verhältnisse sind zu unterscheiden:
     - **RSS-DELTA-Verhältnis** (`Peak-RSS − Basis-RSS` ÷ Textlänge des
@@ -212,13 +212,14 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
       Text-Bytes). Die ursprünglich angenommenen **8×** sind also ein
       **Baum/Text**-Verhältnis, die **~65×** ein **RSS-Delta**-Verhältnis —
       die beiden Zahlen sind nicht dasselbe Maß.
-  - **Folge für die Praxis:** die Inline-Ebene ist auf ~655 000 Werte
-    (~0,65 MPixel) begrenzt — genug für eine region-große Reparatur, nicht
-    für eine vollflächige Ebene eines 24-MP-Fotos (dafür wären ~48 MiB JSON
-    und ~3 GiB `Value`-Baum nötig). Eine vollflächige Ebene über MCP
-    braucht eine kompakte Kodierung (base64) oder einen Dateiverweis — das
-    ist eine Änderung des Werkzeug-Vertrags und **nicht** Teil dieser
-    Transport-Fix.
+  - **Aktuelles API:** Reparatur-Ebenen werden nicht inline übertragen.
+    `repair_region.region_path` benennt eine headerlose Binärdatei mit
+    row-major little-endian-u16-Werten; `width` und `height` bleiben
+    maßgeblich. Exakt `width * height * 2` Bytes sind erforderlich. Die
+    Dateireferenz vermeidet JSON-Amplifikation, ändert aber nicht die
+    bestehenden `RepairRegionArtifact::validate()`-/zdata-Payload-Limits;
+    daher wird nicht behauptet, dass jede 24-MP-Ebene als Artefakt akzeptiert
+    wird. Details: `feature/decisions/MCP-TRANSPORT-REPARATUR-EBENE-99.md`.
 - **Speicherkosten eines Frames:**
   - **Puffer:** höchstens **1,25 MiB** für **jede** Zeile (die absolute
     Obergrenze) — eine 256-MiB-Zeile kostet 1,25 MiB Puffer und sonst
@@ -226,8 +227,9 @@ lassen, um zu entscheiden, welche weiteren Bearbeitungsschritte nötig sind.
     Frame gesucht werden muss, bevor der Frame klassifiziert werden kann.
   - **Parse-Baum:** nur bei Frames, die wirklich dispatcht werden. Ohne den
     Ausnahme-Marker wird ein Frame über 1 MiB **gar nicht geparst** → kein
-    Parse-Baum, keine Verstärkung. Mit dem Marker werden bis zu 1,25 MiB
-    geparst; der Peak-RSS wächst dann um **~65× die Textlänge** (das
+    Parse-Baum, keine Verstärkung. Ein markiertes Tool-Frame kann weiterhin
+    bis zu 1,25 MiB groß sein (unabhängig von der externen Regiondatei); wird
+    es dispatcht, wächst der Peak-RSS um **~65× die Textlänge** (das
     **RSS-Delta**-Verhältnis, ~91 MiB bei vollen 1,25 MiB). Der
     `Value`-Baum selbst ist **16,00×** so groß wie der Text (Baum/Text) —
     die beiden Maße sind zu unterscheiden.
@@ -1102,8 +1104,16 @@ trägt sie als Source-Action in das Rezept einer virtuellen Kopie ein.
 Das Original bleibt unverändert.
 
 - **Input:** `{ input, repair_region: { id, kind?,
-  region_width, region_height, region_values (u16),
-  replacement_path }, virtual_copy?, render_out? }`
+  region_width, region_height, region_path, replacement_path },
+  virtual_copy?, render_out? }`
+  `region_path` ist eine headerlose Binärdatei mit row-major
+  little-endian-u16-Werten und muss exakt `region_width * region_height * 2`
+  Bytes enthalten. Dimensions- und Größenlimits werden vor dem Einlesen
+  geprüft; truncation und trailing bytes werden abgelehnt. Beispiel:
+  `{"input":"photo.png","repair_region":{"id":"dust-1","region_width":2,"region_height":2,"region_path":"mask.u16le","replacement_path":"patch.png"}}`.
+  Der Dateiverweis entfernt die JSON-Amplifikation, hebt aber nicht die
+  bestehenden `RepairRegionArtifact::validate()`-/zdata-Payload-Limits auf;
+  nicht jede 24-MP-Ebene muss als Artefakt akzeptiert werden.
   (`kind` Default `dust-removal`, alternativ `ai-replacement`;
   Pixel `>= 32768` der Region werden durch das Replacement ersetzt).
 - **Ordnungsregel (REVIEW-CLI-N2, identisch zum CLI):** Sidecar laden,

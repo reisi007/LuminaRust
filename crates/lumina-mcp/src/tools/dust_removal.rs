@@ -19,6 +19,7 @@ use lumina_sidecar::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const NAME: &str = "lumina_dust_removal";
@@ -28,11 +29,11 @@ source action in a virtual copy's recipe. Non-destructive: the original is never
 Region pixels >= 32768 are replaced by the replacement image at source resolution. Optional \
 render_out verifies the effect headlessly.";
 
-/// Repair-region definition consumed by this tool (same schema as the CLI's
-/// `RepairRegionInput`). `region_values` are little-endian `u16`
-/// (0..=u16::MAX); pixels `>= 32768` are replaced by the corresponding
-/// `replacement_path` RGBA8 pixel. Region and replacement MUST share the
-/// source frame's dimensions.
+/// MCP repair-region definition. Its file-backed input representation differs
+/// from the CLI's JSON-array form, while semantic validation is aligned:
+/// `region_path` contains little-endian `u16` values; pixels `>= 32768` are
+/// replaced by the corresponding `replacement_path` RGBA8 pixel. Region and
+/// replacement MUST share the source frame's dimensions.
 #[derive(Debug, Deserialize)]
 struct RepairRegionInput {
     id: String,
@@ -40,7 +41,7 @@ struct RepairRegionInput {
     kind: Option<String>,
     region_width: u32,
     region_height: u32,
-    region_values: Vec<u16>,
+    region_path: PathBuf,
     replacement_path: PathBuf,
 }
 
@@ -76,14 +77,10 @@ pub fn schema() -> Value {
                     },
                     "region_width": { "type": "integer", "minimum": 1, "description": "Region width; must equal the source frame width." },
                     "region_height": { "type": "integer", "minimum": 1, "description": "Region height; must equal the source frame height." },
-                    "region_values": {
-                        "type": "array",
-                        "items": { "type": "integer", "minimum": 0, "maximum": 65535 },
-                        "description": "Row-major u16 mask values (width*height); values >= 32768 mark replaced pixels."
-                    },
+                    "region_path": { "type": "string", "description": "Headerless binary file containing exactly width*height row-major little-endian u16 values (2 bytes per pixel); values >= 32768 mark replaced pixels." },
                     "replacement_path": { "type": "string", "description": "Path to an RGBA8-replaceable image matching the region dimensions." }
                 },
-                "required": ["id", "region_width", "region_height", "region_values", "replacement_path"]
+                "required": ["id", "region_width", "region_height", "region_path", "replacement_path"]
             },
             "virtual_copy": {
                 "type": "string",
@@ -125,6 +122,58 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
     .map_err(|error| McpError::InvalidParams(format!("invalid repair_region: {error}")))?;
     let kind = definition.kind()?;
 
+    // Validate bounds before allocating or reading the caller-controlled file.
+    // The persisted artifact accepts at most MAX_UNCOMPRESSED / 6 pixels;
+    // retain that existing domain limit rather than treating file transport as
+    // an increase to artifact capacity.
+    let count = u64::from(definition.region_width)
+        .checked_mul(u64::from(definition.region_height))
+        .ok_or_else(|| McpError::InvalidParams("repair region dimensions overflow".into()))?;
+    let byte_len = count
+        .checked_mul(2)
+        .filter(|_| definition.region_width > 0 && definition.region_height > 0)
+        .ok_or_else(|| McpError::InvalidParams("invalid repair region dimensions".into()))?;
+    if definition.region_width > 16_384
+        || definition.region_height > 16_384
+        || count > (128 * 1024 * 1024_u64) / 6
+    {
+        return Err(McpError::InvalidParams(
+            "invalid repair region: repair region exceeds payload size limit".into(),
+        ));
+    }
+    let metadata = std::fs::metadata(&definition.region_path).map_err(|error| {
+        McpError::FileNotFound(format!("{:?}: {error}", definition.region_path))
+    })?;
+    if metadata.len() != byte_len {
+        return Err(McpError::InvalidParams(format!(
+            "repair region file must contain exactly {byte_len} bytes, got {}",
+            metadata.len()
+        )));
+    }
+    let capacity = usize::try_from(byte_len)
+        .map_err(|_| McpError::InvalidParams("repair region file is too large".into()))?;
+    let file = std::fs::File::open(&definition.region_path).map_err(|error| {
+        McpError::FileNotFound(format!("{:?}: {error}", definition.region_path))
+    })?;
+    let mut raw_region = Vec::with_capacity(capacity);
+    file.take(byte_len + 1)
+        .read_to_end(&mut raw_region)
+        .map_err(|error| {
+            McpError::InvalidParams(format!("could not read repair region: {error}"))
+        })?;
+    if raw_region.len() != capacity {
+        return Err(McpError::InvalidParams(format!(
+            "repair region file must contain exactly {byte_len} bytes, got {}",
+            raw_region.len()
+        )));
+    }
+    let region_values: Vec<u16> = raw_region
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|bytes| u16::from_le_bytes(*bytes))
+        .collect();
+
     // Replacement must decode and match the declared region dimensions.
     let replacement_bytes = std::fs::read(&definition.replacement_path).map_err(|error| {
         McpError::FileNotFound(format!("{:?}: {error}", definition.replacement_path))
@@ -147,7 +196,7 @@ pub fn run(_server: &mut Server, args: &Value) -> Result<Value, McpError> {
         id: definition.id.clone(),
         width: definition.region_width,
         height: definition.region_height,
-        region: definition.region_values.clone(),
+        region: region_values,
         replacement: replacement_frame.pixels().to_vec(),
     };
     region

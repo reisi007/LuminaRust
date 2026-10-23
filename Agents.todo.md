@@ -960,7 +960,6 @@ auf diesem Host liegt kein offenes Fenster.
 
 
 
-- [ ] **[PRIO: mittel] MCP-TRANSPORT-REPARATUR-EBENE-99 (Folge aus `SEC-REVIEW-WELLE-1-85`; 2026-10-22)** Die Reparatur-Ebene (`repair_region` ✓) wird im MCP-Transport als **JSON-Array** uebergeben ✓ ✓ — das gemessene Verhaeltnis zwischen JSON-Text und `serde_json::Value`-Baum ist **~65×** ✓ (nicht 8× ✓ ✓ — die Ebene besteht ueberwiegend aus `"0,"` ✓ = 2 Byte je Wert ✓ ✓), der Transport kappt bei **1 310 720 Byte** ✓ (1,25 MiB ✓ ✓) ⇒ eine **vollstaendige** Ebene eines 24-MP-Fotos (~48 MiB JSON ✓ ✓, ~3 GiB Baum ✓) passt **nicht** mehr durch ✓ ✓ und der Aufruf scheitert **laut** (`-32700` ✓ ✓) statt zu stuerzen ✓ ✓. **Folgearbeit:** die Ebene **kompakt kodieren** (base64 ✓ ✓) oder **per Dateiverweis** uebergeben ✓ ✓ — der Werkzeug-Vertrag von `lumina_dust_removal` muss das tragen ✓ ✓. **Abgrenzung:** die SEC-1-Behebung ✓ (die Transportgrenze ✓ ✓, die **1,25 MiB** sind der Wert, dessen Worst Case ~91 MiB Peak noch unter dem 128-MiB-Reproducer bleibt ✓ ✓) ist **nicht** Teil dieser Aufgabe ✓ ✓ — sie ist abgeschlossen ✓ ✓.
 
 ## Befunde aus der Zahlen-Inventur zu `DOC-ZAHLEN-DRIFT-82` (2026-10-20)
 

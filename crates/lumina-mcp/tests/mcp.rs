@@ -844,6 +844,8 @@ fn save_rejects_output_hardlinked_onto_the_zdata_bundle() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("photo.png");
     let replacement = dir.path().join("replacement.png");
+    let region_path = dir.path().join("region.u16le");
+    fs::write(&region_path, [255; 8]).unwrap();
     // 2×2 sources/replacement keep the region validation trivial.
     let mut pixels = vec![0u8; 4 * 4];
     for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -880,7 +882,7 @@ fn save_rejects_output_hardlinked_onto_the_zdata_bundle() {
                 "id": "spot-1",
                 "region_width": 2,
                 "region_height": 2,
-                "region_values": [65535, 65535, 65535, 65535],
+                "region_path": region_path.to_string_lossy(),
                 "replacement_path": replacement.to_string_lossy(),
             },
         }),
