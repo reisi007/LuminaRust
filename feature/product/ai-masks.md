@@ -344,7 +344,7 @@ Jede Stufe ist bei ihrem Identitätswert ein No-op; die Modulation verändert di
 persistierte Maske nicht. 9 Unit-Tests sichern Invert/Feather/Blur/Density und
 die Reihenfolge ab.
 
-**Implementierungsstatus GPU-Pixelpass (`GPU-RENDER-MASK-19`, 2026-10-15):** Die
+**Implementierungsstatus GPU-Pixelpass (`GPU-RENDER-MASK-19`, 2026-10-15; GUI headless verdrahtet und unabhängig verifiziert 2026-10-23):** Die
 lokal ausgewertete Maske moduliert auf der GPU die Pixel über
 `crates/lumina-gpu/src/local_mask_pass.rs` (+ `crates/lumina-gpu/src/local_mask_gpu.rs`): pro
 nicht-neutralem Layer wird das lokale Rezept GPU-gerendert und über die exakte
@@ -364,11 +364,14 @@ schreibt das vollständige Ergebnis erst nach erfolgreicher Validierung und
 Zwischenpass-Prüfung in die residente Präsentationstextur zurück. Der Einstieg
 führt keinen Full-Frame-Readback aus. Neutrale Layer sind Identität; ungültige
 Abmessungen, nicht unterstützte Stufen, fehlender VRAM-Render und GPU-Fehler
-müssen laut zum CPU-Referenzpfad zurückführen. Adapterlose Tests sichern nur
+ müssen laut zum CPU-Referenzpfad zurückführen. Adapterlose Tests sichern nur
 Validierungs-/Fehler-vor-Write-Verträge und neutrale Identität; sie belegen
-weder Shader-Ausführung noch Pixelparität. Der headless API-Slice ist am
-2026-10-23 unabhängig verifiziert; verbleibendes GUI-Wiring und Adapter-E2E
-sind eigene TODOs und bleiben offen.
+ weder Shader-Ausführung noch Pixelparität. Der headless API-Slice ist am
+ 2026-10-23 unabhängig verifiziert. Die GUI-Live-Verdrahtung rendert zuerst den
+ mask-aware CPU-Preview und verwendet dessen aktuelle Layer für VRAM-Komposition;
+ Layer-Pairing-/P1.2-/Renderfehler halten `vram_fresh` falsch und bewahren die
+ CPU-Referenz. Headless Routingtests belegen diese Semantik, nicht GPU-Pixel.
+ Der separate Adapter-E2E-Test bleibt offen.
 
 ## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
@@ -392,7 +395,11 @@ lauter CPU-Routing-Grund (`--require-gpu` scheitert laut). Der Masken-Grund
 tritt **nur** bei einer aktiven Kopie mit maskierten Ebenen auf; ein
 **maskenfreies** Rezept bleibt unverändert auf der GPU-Route. Die Parent-Gates für
 echte Hardware/GPU-Parität (`GPU-PARITY-HW-28`, `R5-BRUSH-24`, `R5-MASKVIS-25`)
-und die **GUI**-Verdrahtung des Present-Pfads bleiben offen.
+ und die **Adapter-E2E-Pixelparität des GUI-Present-Pfads** bleiben offen. Die
+ headless GUI-Verdrahtung rendert zunächst die mask-aware CPU-Referenz, paart
+ danach deren aktuelle Ebenen und markiert VRAM nur nach erfolgreicher globaler
+ und lokaler Komposition frisch. Nicht nachweislich vollbildige Draft-/ROI-
+ Geometrie wird sichtbar auf CPU gehalten.
 
 - **Nutzerentscheidungen:** Lokale Layer werden sequenziell auf dem global
   angepassten Ergebnis angewendet. Globales WB bleibt absolute-only und wird

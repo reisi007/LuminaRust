@@ -3,11 +3,9 @@
 //!
 //! `render_draft` renders the cached downscaled draft source at viewport
 //! resolution while a slider is dragged; `render_draft_tick` is the coalesced
-//! per-tick hot path (VRAM tone stage first, then the CPU draft render) and
-//! records the R2-GUIMOD-04a timings. [`DragTickTimings`] and the read-only
-//! `last_drag_tick` accessor move together with them. No behaviour changes:
-//! the renders, flags and error paths are byte-identical to the inlined
-//! sequence this extraction replaces.
+//! per-tick hot path (CPU reference render first, then optional VRAM present)
+//! and records the R2-GUIMOD-04a timings. [`DragTickTimings`] and the read-only
+//! `last_drag_tick` accessor move together with them.
 //!
 //! `render_draft` stays `pub` (external integration tests call it);
 //! `render_draft_tick` is `pub(crate)` only because the app root and the
@@ -182,14 +180,13 @@ impl LuminaApp {
         self.render_draft_tick(viewport);
     }
 
-    /// One coalesced pointer-drag tick (PERF-GUI-3/4 hot path): VRAM tone
-    /// stage first (readback-free present), then the CPU draft render.
+    /// One coalesced pointer-drag tick (PERF-GUI-3/4 hot path): render the CPU
+    /// reference first, then compose its current evaluated mask planes in VRAM.
     ///
     /// R2-GUIMOD-04a: the tick is instrumented — GPU wall time, CPU draft
     /// wall time and the analysis pass inside the draft are recorded in
-    /// [`Self::last_drag_tick`] and logged via `trace!`. Measurement only:
-    /// the renders, flags and error paths are identical to the inlined
-    /// sequence this method replaces.
+    /// [`Self::last_drag_tick`] and logged via `trace!`; timing values do not
+    /// influence routing or freshness decisions.
     pub(crate) fn render_draft_tick(&mut self, viewport: [u32; 2]) {
         // GUI-JANKLOG-19: a render tick outside an action scope is its own
         // outermost jank scope (`kind=render`); inside an action it nests and
@@ -203,6 +200,18 @@ impl LuminaApp {
                 .map(|(key, _)| key.as_str());
             jank_log::JankScope::enter(jank_log::JankKind::Render, None, route, badge, key)
         };
+        // The previous tick's output must never survive a failed or refused
+        // render as a fresh present. The CPU preview remains authoritative until
+        // both the global VRAM render and (when needed) mask composition succeed.
+        self.vram_fresh = false;
+        let cpu_t0 = std::time::Instant::now();
+        let result = self.render_draft(viewport, None);
+        let cpu_render_succeeded = result.is_ok();
+        let cpu_draft_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
+        match result {
+            Ok(()) => self.clear_draft_error_dedup(),
+            Err(e) => self.show_draft_error(e),
+        }
         let gpu_t0 = std::time::Instant::now();
         // GEN-ONNX-1 Welle 2b (F6): evaluated before the GPU borrow so the
         // proactive skip below can write the present-refusal fields.
@@ -211,12 +220,21 @@ impl LuminaApp {
         #[cfg(feature = "gpu")]
         {
             if self.gpu.as_ref().is_some_and(|gpu| gpu.is_available()) {
-                if let Some(reason) = self.local_adjustment_route_reason() {
-                    // The VRAM present shader currently has no local-mask
-                    // compositing input. Refuse before rendering so it can
-                    // never replace the mask-aware CPU preview with global-only
-                    // pixels. Keep the CPU reference preview authoritative.
-                    self.note_vram_refusal(&reason);
+                if !cpu_render_succeeded {
+                    use super::gpu_routing::local_adjustments::LiveVramPresent;
+                    let route = Self::run_live_gpu_present(
+                        &mut self.vram_fresh,
+                        false,
+                        None,
+                        &[],
+                        || -> Result<(), lumina_gpu::GpuError> {
+                            unreachable!("failed CPU render must prevent GPU work")
+                        },
+                        |_| unreachable!("failed CPU render must prevent mask composition"),
+                    );
+                    if let LiveVramPresent::Refused(reason) = route {
+                        self.note_vram_refusal(&reason);
+                    }
                 } else if generative_active {
                     // The readback-free VRAM present path is artifact-blind
                     // and can never render a generative recipe (documented
@@ -239,90 +257,115 @@ impl LuminaApp {
                     // 1× warn + `trace!`/tick, badge set, no wasted GPU time.
                     let reason = self.gpu_unsupported_stage_reasons().join("; ");
                     self.note_vram_refusal(&reason);
-                } else if let Some((width, height)) = self
-                    .draft_original
-                    .as_ref()
-                    .or(self.original.as_ref())
-                    .map(|source| (source.width(), source.height()))
-                {
-                    // GPU-LENSFUN-PARITY-1: bind the corrector's precomputed
-                    // warp/gain map before the VRAM render. An active corrector
-                    // whose map cannot be built/bound is kept on the exact CPU
-                    // present route (loud) — the recipe-only VRAM path would
-                    // otherwise apply the manual model and diverge silently.
-                    if let Some(reason) = self.bind_lensfun_map(width, height) {
-                        self.note_vram_refusal(reason);
+                } else {
+                    let full_frame_masks = self.has_visible_local_adjustments();
+                    let source_size = if full_frame_masks {
+                        self.original.as_ref().or(self.draft_original.as_ref())
                     } else {
-                        // R2-GUIMOD-03: borrow instead of clone. The fallback
-                        // branch (`draft_original` absent on the first tick
-                        // after a full render) used to memcpy the entire
-                        // full-resolution original (~180 MB worst case) into
-                        // a temporary that was dropped immediately after the
-                        // call — `render_to_vram` only needs `&ImageFrame`.
-                        let rendered = {
-                            // R3-ROUTING-1: while the crop tool is armed the
-                            // preview is the geometry-free full frame; render
-                            // exactly that recipe on the GPU instead of letting
-                            // the committed crop's dimension change refuse every
-                            // tick.
-                            let recipe = self.gpu_present_recipe();
-                            self.draft_original
-                                .as_ref()
-                                .or(self.original.as_ref())
-                                .map(|src| {
-                                    self.gpu
-                                        .as_ref()
-                                        .expect("availability checked above")
-                                        .render_to_vram(src, recipe.as_ref())
-                                })
-                        };
-                        match rendered {
-                            Some(Ok(())) => {
-                                // GUI-WGPU-PRESENT-1: the VRAM output now
-                                // matches the current recipe/source — the
-                                // present path may use it this frame.
-                                self.vram_fresh = true;
-                                // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
-                                // render clears any earlier present refusal.
-                                self.vram_render_refusal = None;
-                                // R4-WARN-1: a reason that reappears after the
-                                // GPU path worked again is a new occurrence.
-                                self.clear_present_refusal_warn();
+                        self.draft_original.as_ref().or(self.original.as_ref())
+                    }
+                    .map(|source| (source.width(), source.height()));
+                    if let Some((width, height)) = source_size {
+                        let geometry_refusal = self.local_mask_vram_geometry_refusal(width, height);
+                        let layers = if let Some(reason) = geometry_refusal {
+                            self.note_vram_refusal(&reason);
+                            None
+                        } else {
+                            match self.gpu_local_mask_layers(width, height) {
+                                Ok(layers) => Some(layers),
+                                Err(reason) => {
+                                    self.note_vram_refusal(&reason);
+                                    None
+                                }
                             }
-                            Some(Err(err)) => {
-                                // R3-ROUTING-1: a classified post-gate refusal
-                                // (dimension-changing geometry, generative,
-                                // Lensfun map) warns once per state change and
-                                // traces per tick; an unclassified failure stays
-                                // loud every tick.
-                                match Self::classify_vram_refusal(&err) {
-                                    Some(reason) => {
-                                        self.note_vram_refusal(&reason);
-                                    }
-                                    None => {
-                                        warn!("gpu render_to_vram failed: {err}");
-                                        self.vram_fresh = false;
+                        };
+                        if let Some(layers) = layers {
+                            // GPU-LENSFUN-PARITY-1: bind the corrector's precomputed
+                            // warp/gain map before the VRAM render. An active corrector
+                            // whose map cannot be built/bound is kept on the exact CPU
+                            // present route (loud) — the recipe-only VRAM path would
+                            // otherwise apply the manual model and diverge silently.
+                            if let Some(reason) = self.bind_lensfun_map(width, height) {
+                                self.note_vram_refusal(reason);
+                            } else {
+                                // R2-GUIMOD-03: borrow instead of clone. The fallback
+                                // branch (`draft_original` absent on the first tick
+                                // after a full render) used to memcpy the entire
+                                // full-resolution original (~180 MB worst case) into
+                                // a temporary that was dropped immediately after the
+                                // call — `render_to_vram` only needs `&ImageFrame`.
+                                let route = {
+                                    // R3-ROUTING-1: while the crop tool is armed the
+                                    // preview is the geometry-free full frame; render
+                                    // exactly that recipe on the GPU instead of letting
+                                    // the committed crop's dimension change refuse every
+                                    // tick.
+                                    // Own the recipe before mutably borrowing freshness
+                                    // for the route seam (crop mode may synthesize it).
+                                    let recipe = self.gpu_present_recipe().into_owned();
+                                    // Local mask planes are evaluated against the full
+                                    // CPU render; do not pair them with a downscaled
+                                    // draft source. `render_draft` upgrades local edits
+                                    // to `render_full`, which restores `original`.
+                                    let src = (if full_frame_masks {
+                                        self.original.as_ref().or(self.draft_original.as_ref())
+                                    } else {
+                                        self.draft_original.as_ref().or(self.original.as_ref())
+                                    })
+                                    .expect("source dimensions were available above");
+                                    let gpu =
+                                        self.gpu.as_ref().expect("availability checked above");
+                                    Self::run_live_gpu_present(
+                                        &mut self.vram_fresh,
+                                        cpu_render_succeeded,
+                                        None,
+                                        &layers,
+                                        || gpu.render_to_vram(src, &recipe),
+                                        |layers| gpu.apply_gpu_local_masks_to_vram(layers),
+                                    )
+                                };
+                                match route {
+                                    super::gpu_routing::local_adjustments::LiveVramPresent::Presented => {
+                                        // GUI-WGPU-PRESENT-1: the VRAM output now
+                                        // matches the current recipe/source — the
+                                        // present path may use it this frame.
+                                        // GUI-LENSFUN-GATE-3 (F1): a successful VRAM
+                                        // render clears any earlier present refusal.
                                         self.vram_render_refusal = None;
+                                        // R4-WARN-1: a reason that reappears after the
+                                        // GPU path worked again is a new occurrence.
+                                        self.clear_present_refusal_warn();
+                                    }
+                                    super::gpu_routing::local_adjustments::LiveVramPresent::Failed(err) => {
+                                        // R3-ROUTING-1: a classified post-gate refusal
+                                        // (dimension-changing geometry, generative,
+                                        // Lensfun map) warns once per state change and
+                                        // traces per tick; an unclassified failure stays
+                                        // loud every tick.
+                                        match Self::classify_vram_refusal(&err) {
+                                            Some(reason) => {
+                                                self.note_vram_refusal(&reason);
+                                            }
+                                            None => {
+                                                warn!("gpu live present failed: {err}");
+                                                self.vram_fresh = false;
+                                                self.vram_render_refusal = None;
+                                            }
+                                        }
+                                    }
+                                    super::gpu_routing::local_adjustments::LiveVramPresent::Refused(reason) => {
+                                        self.note_vram_refusal(&reason);
                                     }
                                 }
                             }
-                            None => {}
                         }
+                    } else {
+                        self.note_vram_refusal("GPU present refused: source frame is unavailable");
                     }
                 }
             }
         }
         let gpu_ms = gpu_t0.elapsed().as_secs_f64() * 1000.0;
-        let cpu_t0 = std::time::Instant::now();
-        let result = self.render_draft(viewport, None);
-        let cpu_draft_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
-        // Crash-Fix Runde 2 (F5): a persistent draft failure must not re-emit
-        // `error!` and re-arm the dialog on every drag tick; a success clears
-        // the dedup memo so a later recurrence stays loud.
-        match result {
-            Ok(()) => self.clear_draft_error_dedup(),
-            Err(e) => self.show_draft_error(e),
-        }
         let analyse_ms = self.last_analysis_ms;
         self.last_drag_tick = Some(DragTickTimings {
             cpu_draft_ms,

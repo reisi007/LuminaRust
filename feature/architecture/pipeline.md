@@ -2154,15 +2154,16 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
    GPU-Fehlerprüfung aktualisiert. Kein Full-Frame-Readback. Fehler müssen vor
    dem Commit des finalen Outputs laut scheitern; der Aufrufer behält dann die
    CPU-Referenz. Adapterlose Tests belegen Validierungs- und Fehlerpfade sowie
-   neutrale Identität, nicht Shader-Lauf oder Pixelparität. GUI-Wiring und
-    Adapter-E2E bleiben getrennte TODO-Gates.
+    neutrale Identität, nicht Shader-Lauf oder Pixelparität. GUI-Wiring ist
+    headless verdrahtet und unabhängig verifiziert (Details unten); Adapter-E2E
+    bleibt ein separates TODO-Gate.
     Die VRAM-Einstiegsmethode ruft ein gemeinsames Request-Preflight vor dem
     neutralen Identitätspfad auf: Rezept- und Plane-Argumente sowie nicht
     unterstützte Stufen werden damit auch bei neutralem Layer laut geprüft;
     die Prüfung gegen die tatsächlichen aktiven VRAM-Abmessungen bleibt im
     Adapterpfad erhalten. Adapterlose Tests fahren die Live-Methode für
     fehlerhafte Argumente und prüfen den dimensionsbezogenen Preflight-Seam.
-  **CLI-Verdrahtung (Slice B2, 2026-10-15):** die CLI rendert lokale Masken jetzt
+   **CLI-Verdrahtung (Slice B2, 2026-10-15):** die CLI rendert lokale Masken jetzt
   auf der GPU. `crates/lumina-cli/src/local_mask_gpu.rs` (gpu-only, Muster
   `lensfun_gpu`) ersetzt den pauschalen CPU-Grund `masks (active copy has layers)`
   durch das echte P1.2-Prädikat (`unsupported_local_mask_adjustments`): nur eine
@@ -2185,10 +2186,20 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   geloggt und der exakte CPU-Pfad gefahren, sodass `--require-gpu` laut
   scheitert statt einen un-modulierten Frame zu akzeptieren. **P1.2 bleibt laut
   verweigert** (CPU-Grund); `--require-gpu` ist für P0-/relative-WB-Masken jetzt
-  GPU-fähig. **GUI bleibt weiterhin offen (eigener Slice):**
-  `local_adjustment_route_reason` routet jeden sichtbaren lokalen Maskenzustand
-  auf die CPU, der Present-Pfad bindet die ausgewerteten Layer also noch nicht an
-  den neuen GPU-Eintritt.
+   GPU-fähig. **GUI-Verdrahtung (`GPU-RENDER-MASK-19-GUI-WIRING`):** der
+    interaktive Present-Tick rendert zuerst den mask-aware CPU-Preview, paart
+    dessen aktuelle `render_mask_layers` danach id-basiert mit den
+    Persistenzrezepten und führt den VRAM-Maskenpass nur bei nichtleeren Layern
+    aus. Lokale VRAM-Komposition ist zusätzlich nur zulässig, wenn der aktuelle
+    CPU-Preview ein vollständiger, uncapped Frame ohne ROI ist und exakt den
+    Abmessungen der vollständigen VRAM-Quelle entspricht. Draft-/gekappte und
+    ROI-Previews werden sichtbar verweigert; die CPU-Vorschau bleibt autoritativ,
+    und `vram_fresh` bleibt falsch. P1.2 und fehlerhafte oder nicht aktuelle
+    Ebenen verweigern ebenfalls laut; ein fehlgeschlagener CPU-Render oder
+    VRAM-Maskenpass kann `vram_fresh` nicht setzen. Headless
+   GUI-Tests prüfen diese Routing- und Frische-Semantik; **keine** Adapter-
+   Pixelparität ist damit behauptet. Der Adapter-E2E-Test bleibt als separates
+   TODO offen.
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →

@@ -1,8 +1,80 @@
-//! Local-mask CPU-route refusal for the GPU present path.
+//! Local-mask pairing and unsupported-stage refusal for GPU present.
 
 use super::super::LuminaApp;
 
+#[cfg(feature = "gpu")]
+pub(crate) enum LiveVramPresent<E> {
+    Presented,
+    Refused(String),
+    Failed(E),
+}
+
 impl LuminaApp {
+    /// Production route seam: no GPU closure runs unless the successful CPU
+    /// render and all caller preflights agree; freshness is committed only after
+    /// global render and local composition both complete.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn run_live_gpu_present<E>(
+        vram_fresh: &mut bool,
+        cpu_render_succeeded: bool,
+        refusal: Option<String>,
+        layers: &[lumina_gpu::local_mask_pass::LocalMaskLayer],
+        render_global: impl FnOnce() -> Result<(), E>,
+        compose: impl FnOnce(&[lumina_gpu::local_mask_pass::LocalMaskLayer]) -> Result<(), E>,
+    ) -> LiveVramPresent<E> {
+        *vram_fresh = false;
+        if !cpu_render_succeeded {
+            return LiveVramPresent::Refused("current CPU reference render failed".into());
+        }
+        if let Some(reason) = refusal {
+            return LiveVramPresent::Refused(reason);
+        }
+        if let Err(error) = render_global() {
+            return LiveVramPresent::Failed(error);
+        }
+        if !layers.is_empty() {
+            if let Err(error) = compose(layers) {
+                return LiveVramPresent::Failed(error);
+            }
+        }
+        *vram_fresh = true;
+        LiveVramPresent::Presented
+    }
+
+    /// Local-mask VRAM composition is valid only when the current CPU preview,
+    /// evaluated planes and full source describe the same uncapped full frame.
+    /// Draft-size and ROI previews are refused rather than paired with full-frame
+    /// planes; the CPU preview remains authoritative until a matching contract exists.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn local_mask_vram_geometry_refusal(
+        &self,
+        source_width: u32,
+        source_height: u32,
+    ) -> Option<String> {
+        if !self.has_visible_local_adjustments() {
+            return None;
+        }
+        let Some(preview) = self.preview.as_ref() else {
+            return Some(
+                "local-mask VRAM present refused: current CPU preview is unavailable".into(),
+            );
+        };
+        if self.preview_is_draft
+            || self.preview_roi.is_some()
+            || preview.width() != source_width
+            || preview.height() != source_height
+        {
+            return Some(format!(
+                "local-mask VRAM present refused: CPU preview geometry {}x{} (draft={}, ROI={:?}) does not match full source {source_width}x{source_height}; keeping CPU preview",
+                preview.width(),
+                preview.height(),
+                self.preview_is_draft,
+                self.preview_roi
+            ));
+        }
+        None
+    }
+
     /// Pair current evaluated planes with persisted recipes before VRAM composition.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_local_mask_layers(
@@ -52,6 +124,19 @@ impl LuminaApp {
             if result.plane.width != width || result.plane.height != height {
                 return Err(format!("local mask layer `{}` plane {}x{} does not align with source VRAM {width}x{height}", layer.id, result.plane.width, result.plane.height));
             }
+            let expected_values =
+                (width as usize)
+                    .checked_mul(height as usize)
+                    .ok_or_else(|| {
+                        format!("local mask layer `{}` plane dimensions overflow", layer.id)
+                    })?;
+            if result.plane.values.len() != expected_values {
+                return Err(format!(
+                    "local mask layer `{}` has malformed plane data: {} values for {width}x{height}, expected {expected_values}",
+                    layer.id,
+                    result.plane.values.len()
+                ));
+            }
             layers.push(LocalMaskLayer {
                 layer_id: result.layer_id.clone(),
                 plane: result.plane.clone(),
@@ -70,18 +155,14 @@ impl LuminaApp {
         Ok(layers)
     }
 
-    /// Add the CPU-compositor limitation to the visible GPU routing reasons.
+    /// GPU routing reasons for stages that the present renderer cannot execute.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_unsupported_reasons(&self) -> Vec<String> {
         let recipe = self.gpu_present_recipe();
-        let mut reasons = lumina_gpu::unsupported_gpu_stages_with_context(
+        lumina_gpu::unsupported_gpu_stages_with_context(
             recipe.as_ref(),
             false,
             self.camera_white_balance.as_ref(),
-        );
-        if let Some(reason) = self.local_adjustment_route_reason() {
-            reasons.push(reason);
-        }
-        reasons
+        )
     }
 }

@@ -476,7 +476,7 @@ fn vram_render_refusal_invalidated_on_recipe_and_source_change() {
 }
 
 #[test]
-fn diagnostic_gpu_routes_refuse_local_mask_pixels_before_gpu_work() {
+fn diagnostic_gpu_readback_refuses_local_pixels_without_marking_them_unsupported_globally() {
     let mut app = new_app();
     app.load_bytes(png(), "diagnostic-local-mask.png").unwrap();
     app.create_mask("Diagnostic").unwrap();
@@ -491,7 +491,7 @@ fn diagnostic_gpu_routes_refuse_local_mask_pixels_before_gpu_work() {
     app.vram_fresh = true;
     assert!(!app.prime_gpu_present());
     assert!(!app.vram_fresh);
-    assert!(app
+    assert!(!app
         .gpu_unsupported_reasons()
         .iter()
         .any(|reason| reason.contains("local mask adjustments")));

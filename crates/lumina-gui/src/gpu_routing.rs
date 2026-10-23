@@ -15,7 +15,7 @@
 
 use super::*;
 use log::warn;
-mod local_adjustments;
+pub(crate) mod local_adjustments;
 
 impl LuminaApp {
     /// GPU-LENSFUN-PARITY-1 (GUI-Wiring): refresh the auto-corrector for exactly
