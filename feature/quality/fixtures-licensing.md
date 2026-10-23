@@ -382,7 +382,25 @@ liegt beim Build-Agenten/Eigentümer.
 | **SAM 2.1** (`sam2.1_hiera_*`) | erstes interaktives Box/Pinsel-Modell (F-082) | **Apache-2.0** für Code **und** Gewichte (facebookresearch/sam2 `LICENSE`, HF-Model-Cards, Meta-Announcement „code and weights … permissive Apache 2.0" — verifiziert 2026-08-20, R6) | Adapter integriert (Commit `452d8a4`); Gewichte *pending integration* (`model_hash = "pending-integration"`) |
 | **YuNet** (`face_detection_yunet_2023mar.onnx`, OpenCV Zoo) | Gesichts-Detektion (LRPAR-G12-FACE-20 / FACE-20-S6) | **MIT** © 2020 Shiqi Yu — Modellverzeichnis `LICENSE` + README „all files in this directory", verifiziert **2026-09-20** an der Quelle (`opencv/opencv_zoo` `main` @ `47534e27…`, Blob `4cdf89a4…`) | **Gewichts-Grant verifiziert**; Pin `sha256:8f2383e4…552fa4` (232 589 Byte), Manifest `model_hash`, keine Gewichte committet |
 | **SFace** (`face_recognition_sface_2021dec.onnx`, MobileFaceNet, OpenCV Zoo) | Gesichts-Embedding (LRPAR-G12-FACE-20 / FACE-20-S6) | **Apache-2.0** © 2021 Shenzhen Institute of AI and Robotics for Society — Modellverzeichnis `LICENSE` + README „all files in this directory", verifiziert **2026-09-20** an der Quelle (`opencv/opencv_zoo` Blob `d6456956…`) | **Gewichts-Grant verifiziert**; Pin `sha256:0ba9fbfa…c34e79` (38 696 353 Byte), Manifest `model_hash`, keine Gewichte committet |
+| **Qualcomm NAFNet-DeNoise** (`NAFNet-SIDD-width64`, Qualcomm AI Hub v0.65.0) | RGB-Denoise (Kandidat LRPAR-G14-DENOISE-WEIGHTS) | Qualcomm AI Hub Modellseite und HF-Card deklarieren **MIT**; Qualcomm-Lizenzdatei verweist für das trainierte Modell auf `megvii-research/NAFNet` `LICENSE`. SIDD-Projektseite erklärt Datensatz und zugehörige Code-Repositories für MIT. | **Bedingter Kandidat, nicht abschließend freigegeben**: kein separat expliziter Grant mit Hash des konkreten Qualcomm-ONNX-Artefakts gefunden; Upstream-Klärungsanfrage #194 (2026-10-22) zur Lizenz vortrainierter NAFNet-Gewichte ist offen und betrifft width32, nicht exakt Qualcomms width64. Das Qualcomm-Artefakt wurde nicht heruntergeladen/gehasht. |
 | **ONNX Runtime** (`ort` 2.0.0-rc.13) | Inferenz-Runtime | **MIT** (ORT `MIT OR Apache-2.0`, `ort-sys` `MIT OR Apache-2.0`) | **optional**, Feature `onnx-rt`, nicht im Default-Build |
+
+**NAFNet-DeNoise-Kandidatenprüfung (2026-10-23; keine Freigabe):** Qualcomm
+führt auf der [AI-Hub-Modellseite](https://aihub.qualcomm.com/models/nafnet_denoise)
+„Model: MIT" auf; die [Qualcomm-Model-Card](https://huggingface.co/qualcomm/NAFNet-DeNoise)
+nennt `NAFNet-SIDD-width64`, 256×256 und ca. 464 MB. Die
+[Asset-Liste](https://huggingface.co/qualcomm/NAFNet-DeNoise/blob/main/release_assets.json)
+verweist auf Qualcomm-gehostete ONNX-ZIP-Dateien. Die im HF-Repository liegende
+`LICENSE` ist jedoch nur ein Verweis auf die NAFNet-Lizenz und kein eigenständiger
+Gewichtsgrant mit Artefakt-Hash. Der Upstream hält eine
+[offene Lizenzklärungsanfrage #194](https://github.com/megvii-research/NAFNet/issues/194)
+vom 2026-10-22 zu kommerzieller Nutzung/Weitergabe von width32-Gewichten; sie
+enthält noch keine Rechteinhaber-Antwort und betrifft nicht Qualcomms width64.
+Die [SIDD-Projektseite](https://www.eecs.yorku.ca/~kamel/sidd/) sagt, Datensatz
+und zugehörige Repositories seien MIT-lizenziert; dies ersetzt keine Prüfung des
+konkreten Modellartefakts. Bis schriftlicher Gewichtsgrant bzw. eindeutige
+Artefaktlizenz, Herkunftsdokumentation und SHA-256-Pin vorliegen, bleibt das
+F-078-Gate offen. Keine Gewichte werden gebündelt oder zur Laufzeit bezogen.
 
 **Face-Modelle — S6 abgeschlossen (FACE-20-S6, 2026-09-20):** YuNet und SFace
 sind an der tatsächlichen Gewichtsquelle verifiziert. Maßgeblich ist, dass die

@@ -38,10 +38,24 @@ Stand: **keine Modellfestlegung, keine Gewichte, kein Download** — dieser Absc
 
 **Ergebnis der Kandidatenprüfung (Recherche, kein Download, keine Gewichte):**
 
+**Nachtrag 2026-10-23:** Qualcomm AI Hub führt für `NAFNet-DeNoise`
+(`NAFNet-SIDD-width64`) ausdrücklich „Model: MIT" und bietet ONNX-Assets an.
+Das ist eine deutlich bessere öffentliche Lizenzindikation als bei den zuvor
+geprüften Community-Checkpoints. Es bestätigt aber nicht abschließend die
+Weitergaberechte des konkreten Qualcomm-ONNX-ZIP samt Bytes/Hash: die dortige
+Lizenzdatei verweist auf die Upstream-Lizenz, und eine aktuelle Upstream-Anfrage
+zu einem anderen Checkpoint (width32) wartet auf Rechteinhaber-Antwort. Daher
+führen wir Qualcomm NAFNet als bedingten Kandidaten weiter, nicht als
+freigegebenes Modell. Ein expliziter Nutzer-Download ändert diese Rechteprüfung
+nicht; er kann später nur die Verteilung durch Lumina vermeiden. Ein solcher
+Downloadweg wäre separat zu spezifizieren und müsste Quelle, Lizenzhinweis,
+Zustimmung, feste SHA-256-Prüfung und Abbruch bei Abweichung vorsehen. Tests
+bleiben netzwerkfrei und verwenden keine spontanen Downloads.
+
 | Kandidatenfamilie | Code-Lizenz (Quelle) | Gewichts-Lizenz | F-078-Gate |
 | --- | --- | --- | --- |
 | **DnCNN**-artig (KAIR/DnCNN, Zhang et al.) | MIT (cszn/DnCNN, cszn/KAIR) | Gewichte werden über `main_download_pretrained_models.py` von Drittservern geladen; **keine** explizite Gewichts-Lizenzgewährung im Repo | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
-| **NAFNet**-artig (megvii-research/NAFNet, ECCV 2022) | MIT (Repo `LICENSE`), BasicSR-Anteile Apache-2.0 | Pretrained-Modelle nur über Google-Drive/Baidu-Links, **keine** separate Gewichts-Lizenzdatei | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
+| **NAFNet**-artig (megvii-research/NAFNet, ECCV 2022; Qualcomm AI Hub `NAFNet-SIDD-width64`) | MIT (Upstream-Code; Qualcomm AI Hub deklariert das Modell ebenfalls MIT), BasicSR-Anteile Apache-2.0 | Qualcomm veröffentlicht ein ONNX-Asset und verweist für die Lizenz des trainierten Modells auf Upstream-MIT; kein separater, hashgebundener Gewichtsgrant gefunden. Upstream-Lizenzanfrage #194 vom 2026-10-22 zu width32 ist offen (nicht derselbe Checkpoint). SIDD-Projektseite nennt MIT für Datensatz und zugehörige Repositories. | **bedingter Kandidat, nicht freigegeben** (konkreter Artefaktgrant/Hash und Rechtekette nicht abschließend bestätigt) |
 | **Restormer/SCUNet**-artig (swz30/Restormer, cszn/SCUNet) | MIT (Repo `LICENSE.md`) | Gewichte als GitHub-Release-Artefakte, **keine** explizite Gewichts-Lizenzgewährung | **nicht freigegeben** (Gewichts-Provenienz fehlt) |
 
 **Entscheid:** Kein Kandidat erfüllt das F-078-Gate vollständig, weil die
