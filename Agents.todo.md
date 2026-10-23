@@ -461,10 +461,10 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | fortlaufend | TEST-AUDIT-36 | alle G | Test-Redundanz-Audit (1×/Woche) |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
-| 1.5 | MCP-MASK-APPLY | offen — bei der Task | Masken anwenden (MCP) |
-| 1.5 | MCP-MASKPOLICY | offen — bei der Task | MaskPolicy-MCP |
+| 1.5 | MCP-MASK-APPLY | verifiziert geschlossen (2026-10-23; `crates/lumina-mcp/tests/mask_policy.rs`, 2/2) | Masken anwenden (MCP) |
+| 1.5 | MCP-MASKPOLICY | verifiziert geschlossen (2026-10-23; `crates/lumina-mcp/tests/mask_policy.rs`, 2/2) | MaskPolicy-MCP |
 | 1.5 | MCP-PARITY-A | verifiziert geschlossen (2a88d3b) | MCP-Stage-Editoren |
-| 1.5 | MCP-PARITY-B | offen — bei der Task | MCP-Bibliothek+Stufe |
+| 1.5 | MCP-PARITY-B | verifiziert geschlossen (2026-10-23; Library-/Stage-Paritätstests, 35/35) | MCP-Bibliothek+Stufe |
 | 2.0 | MCP-PARITY-C | offen — bei der Task | MCP-Merge-Pipelines |
 | nie | — | G-12 | Karten-Modul/GPS (Nicht-Ziel) |
 | nie | — | G-15 | Veröffentlichungsdienste (Nicht-Ziel) |
