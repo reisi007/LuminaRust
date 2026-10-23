@@ -460,6 +460,7 @@ sind aus einem gemessenen Widerspruch entstanden, nicht aus einer Absicht:
 | fortlaufend | CI-WATCH-1 | alle G | CI-Beobachtung |
 | fortlaufend | TEST-AUDIT-36 | alle G | Test-Redundanz-Audit (1×/Woche) |
 | 2.0 | LRPAR-G14-DENOISE-IMPL-20 | G-14 | KI-Denoise-Impl |
+| 2.0 | MODEL-MGMT-1 | offen — bei der Task | generische Modellartefakt-Installation |
 | 2.5 | LRPAR-G09-CULL-IMPL-25 | G-09 | KI-Culling-Impl |
 | 1.5 | MCP-MASK-APPLY | verifiziert geschlossen (2026-10-23; `crates/lumina-mcp/tests/mask_policy.rs`, 2/2) | Masken anwenden (MCP) |
 | 1.5 | MCP-MASKPOLICY | verifiziert geschlossen (2026-10-23; `crates/lumina-mcp/tests/mask_policy.rs`, 2/2) | MaskPolicy-MCP |
@@ -709,6 +710,10 @@ Historisch: F-069…F-071 Doku-first 2026-09-02, Commits 287fe75/e60a9ad)_
 **Phase 10b: Generatives Entfernen + Erweitern (Post-MVP)**
 
 _(keine offenen Tasks — GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, Commit 46f6baf: Doku-first GenerativeEdit Felder sha256 Prompt/Seed inference_resolution canvas>100% region/mask ref artifact .lumina.zdata kind=generative_canvas atomar, Pipeline Decode→SourceActions→GenerativeEdit→Lens→Perspective→Crop, Identität/Veraltung analog AI-Masken, kein stiller Fallback, Capability lokal vs Cloud getrennt, Lizenz F-078; kein Code)_
+
+### PRIO: mittel
+
+- [ ] **MODEL-MGMT-1 (Release: 2.0; G-14-Infrastruktur)** Generische Backend-Installation eines einzelnen Modellpakets hinter optionalem `model-download`: explizite, an den exakten Lizenztext gebundene Zustimmung; Provenienz/Lizenz/`sha256:`-Pin und Größenlimit; HTTPS ohne Redirects, bounded streaming, vollständiges atomisches Paketverzeichnis, kein Überschreiben. Nur Offline-Tests mit injiziertem Transport. Kein Katalogeintrag oder GUI-/CLI-Surface bis konkretes Artefakt samt Rechten, Herkunft und Hash freigegeben ist; NAFNet bleibt ausgeschlossen. `cargo test -p lumina-onnx` und `cargo test -p lumina-onnx --features model-download`, `sh scripts/check_feature_matrix.sh`, `sh scripts/check_plan_format.sh`, `sh scripts/check_file_sizes.sh`.
 
 
 ## Block B – „Offene Rückfragen“

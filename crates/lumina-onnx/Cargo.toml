@@ -16,6 +16,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP 
 # "`model_hash` = Artefakt-SHA256"). Computed locally from committed/local
 # artifacts only — no downloads.
 sha2 = "0.11"
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["blocking", "rustls-tls"] }
+libc = { version = "0.2", optional = true }
 
 # Real ONNX Runtime backend. OPTIONAL and gated behind the non-default
 # `onnx-rt` feature so the default build/test stays green with no network
@@ -31,6 +33,8 @@ default = []
 # Enables the real ONNX Runtime (`ort`) backend. Requires network at build time
 # to fetch prebuilt ONNX Runtime binaries and a real `.onnx` artifact at runtime.
 onnx-rt = ["dep:ort"]
+# Explicit HTTPS model installation only; default builds remain network-free.
+model-download = ["dep:reqwest", "dep:libc"]
 
 [dev-dependencies]
 # The Core↔Sidecar checksum contract test (LRPAR-G14-DENOISE-IMPL-20, B4) needs

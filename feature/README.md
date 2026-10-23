@@ -88,6 +88,8 @@ Sidecars vollständig wiederherstellbar sein.
   Identität, Rezepttrennung, Standardkopie-Regeln (F-014) und geteilte Artefakte
 - [`product/ai-masks.md`](product/ai-masks.md): persistierte AI-Masken,
   Modellidentität, Status und lokale Anpassungen
+- [`product/model-management.md`](product/model-management.md): generische,
+  explizit zustimmungspflichtige Modellinstallation (MODEL-MGMT-1, Release 2.0)
 - [`product/export.md`](product/export.md): sRGB-, PNG-, JPEG- und WebP-Export,
   Bit-Tiefe, Qualität, Profile, Metadaten und Dithering (F-037)
 - [`product/generative-expand.md`](product/generative-expand.md): optionaler

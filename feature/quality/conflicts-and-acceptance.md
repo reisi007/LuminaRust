@@ -20,6 +20,7 @@
 | Sidecar beschädigt | JSON-/Prüfsummenfehler | Original offen lassen, Backup/Recovery anbieten |
 | Maskenartefakt fehlt | relativen Pfad und Prüfsumme prüfen | Status `missing`, Neuberechnung optional |
 | Modell-Hash abweichend | Maskenidentität prüfen | Alte Matte als `stale` anzeigen |
+| Modellpaket nicht ausdrücklich freigegeben | Paketdeskriptor, Nutzerzustimmung, Lizenztext, Provenienz und SHA-256-Pin prüfen (MODEL-MGMT-1) | Kein Download ohne ausdrückliche Zustimmung pro Modell; keine automatischen/Hintergrund-Downloads. Explizit vom Nutzer gestartete Pakete sind nur nach den MODEL-MGMT-1-Gates zulässig. Tests bleiben netzwerkfrei und laden weder Pakete noch Gewichte. |
 | Aktive Maske fehlt/veraltet | Maskenstatus vor Export prüfen | Warnen, Aktualisierung anbieten, Export trotzdem erlauben |
 | Sidecar und DB widersprechen | Revision/Hash vergleichen | Sidecar gewinnt, Index aktualisieren |
 | Zwei Prozesse schreiben | Revision/Lock/Atomic Write | Konflikt melden, kein stilles Last-Write-Wins |

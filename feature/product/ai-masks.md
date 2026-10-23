@@ -66,7 +66,11 @@ Abweichung markiert sie als `stale` (keine stille Neuberechnung).
   Tensor-Name) invalidiert persistierte Masken. Tests dürfen keine
   Gewichte aus dem Netz laden — nur lokale, hash-gepinnte Fixtures unter
   `crates/lumina-onnx/tests/fixtures/` (deterministisch, dokumentiert,
-  kein spontaner Download, sonst `#[ignore]`/Env-Gate).
+  keine spontanen Downloads in Tests, sonst `#[ignore]`/Env-Gate). Unsolicited,
+  automatic/background model downloads are a non-goal; this prohibits only
+  downloads without explicit per-model user opt-in. The gated backend installer
+  boundary and its consent/provenance requirements are specified in
+  [`model-management.md`](model-management.md) (MODEL-MGMT-1).
 
 ## Artefakte
 

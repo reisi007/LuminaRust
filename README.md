@@ -50,6 +50,8 @@ Zieldefinition.
   virtuelle Kopien und unabhängige Rezepte
 - [`feature/product/ai-masks.md`](feature/product/ai-masks.md): persistierte
   AI-Masken und Gültigkeitsstatus
+- [`feature/product/model-management.md`](feature/product/model-management.md):
+  generische Modellinstallation und Freigabegrenze
 - [`feature/platform/cli-gui-wasm.md`](feature/platform/cli-gui-wasm.md):
   Plattformgrenzen, CLI, native GUI und optionaler Index
 - [`feature/quality/conflicts-and-acceptance.md`](feature/quality/conflicts-and-acceptance.md):

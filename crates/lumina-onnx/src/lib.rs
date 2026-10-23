@@ -67,6 +67,8 @@ pub mod generative;
 pub mod hash;
 pub mod inpaint;
 pub mod manifest;
+#[cfg(feature = "model-download")]
+pub mod model_download;
 pub mod outpaint;
 pub mod preprocess;
 pub mod resolve;
