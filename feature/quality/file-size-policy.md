@@ -324,7 +324,7 @@ gesenkt werden) oder groesser (Eintrag gerissen, die harte Grenze gilt).
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
 | `crates/lumina-cli/src/main.rs` | 7246 | 7246 | 7246 |
 | `crates/lumina-gpu/src/lib.rs` | 4238 | 4238 | 4238 |
-| `crates/lumina-gpu/tests/parity.rs` | 3386 | 3386 | 3386 |
+| `crates/lumina-gpu/tests/parity.rs` | 3133 | 3133 | 3133 |
 | `crates/lumina-gpu/src/stages.rs` | 3102 | 3102 | 3102 |
 <!-- END GENERATED: file-sizes -->
 
