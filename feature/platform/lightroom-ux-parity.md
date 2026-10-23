@@ -120,9 +120,9 @@ Die 5 ignorierten Tests sind
 `tests::gpu_audit::gpu_action_routing_audit_metal` und
 `tests::gpu_audit::gpu_audit_lensfun_corrector_presents_gpu_without_badge` —
 keiner gehört zu einer der Zeilen dieser Tabelle; die Einstufung jeder Zeile
-ist damit durch einen gelaufenen, grünen Test gedeckt — die **Restbefunde** der
-„teilweise geschlossen"-Zeilen haben dagegen (noch) keinen Test (Abschnitt
-unten).
+ist damit durch einen gelaufenen, grünen Test gedeckt. Die acht Wächter für die
+**Restbefunde** und UXD-05 stehen in der Tabelle unten; sie pinnen den jeweils
+beobachteten Zustand und ersetzen keine offene Produktentscheidung.
 
 Je Zeile trägt **ein** Test die Aussage (der Test, der bei Rückkehr des
 Befunds rot wird). „Kommando" ist das Nachprüf-Kommando (ein Modul-Filter auf
@@ -146,6 +146,14 @@ Filters.
 | UXD-02 | `tests::brush_interaction::brush_cursor_paints_at_live_radius_and_is_gated_by_a_competing_picker` | `cargo test -p lumina-gui --lib tests::brush_interaction` | ok — 7/7 in `tests::brush_interaction` |
 | UXD-05 | `tests::spot_followup_ui::followup_panel_shows_detail_only_when_selected` | `cargo test -p lumina-gui --lib tests::spot_followup_ui` | ok — 4/4 in `tests::spot_followup_ui` |
 | UXD-08 | `tests::spot_followup_ui::followup_pin_click_selects_instead_of_dabbing` | `cargo test -p lumina-gui --lib tests::spot_followup_ui` | ok — 4/4 in `tests::spot_followup_ui` |
+| UXG-02 Restbefund | `tests::support::ux_gaps::uxg_develop_rating_row_paints_in_the_right_panel` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-03 Restbefund | `tests::support::ux_gaps::uxg_import_opens_a_dialog_instead_of_only_switching_the_module` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-08 Restbefund | `tests::support::ux_gaps::uxg_compare_and_survey_paint_the_full_render` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-09 Restbefund | `tests::support::ux_gaps::uxg_filmstrip_has_a_filter_and_sort_bar` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-09 Counter | `tests::support::ux_gaps::uxg_filmstrip_counter_paints_n_of_n` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-12 Restbefund | `tests::support::ux_gaps::uxg_presets_expose_an_amount_control` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXG-14 Restbefund | `tests::support::ux_gaps::uxg_canvas_paints_size_and_feather_steppers` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
+| UXD-05 | `tests::support::ux_gaps::uxd_spot_options_panel_paints_only_when_the_heal_tool_is_active` | `cargo test -p lumina-gui --lib -- --test-threads=1` | ok — 962 passed, 5 ignored; 8 UX-Gap-Wächter enthalten |
 
 Weitere Module derselben Zeilen sind im selben Lauf ebenfalls grün:
 UXG-03 `tests::timing_instrumentation` 13/13 · UXG-04
@@ -166,14 +174,15 @@ also **weder hier noch in der CI**. Die Golden-Ebene ist damit eine
 `GOLDEN-REPIN-R-85` (Referenzmaschine). Der Lauf-Beleg der Zeilen oben ist
 der `--lib`-Lauf.
 
-### Vorgeschlagene Tests für die Restbefunde ohne Test (noch nicht vorhanden)
+### Restbefund-Wächter (UX-GAP-RESTBEFUNDE-TESTS-101)
 
-Die Restbefunde der „teilweise geschlossen"-Zeilen sind Abwesenheits- bzw.
-Positionsaussagen; für sie existiert **noch kein** Test. Die folgenden Namen
-sind **Vorschläge** (Konvention: `uxg_`-/`uxd_`-Präfix + aussageorientiert),
-keine vorhandenen Tests — sie sind hier **nicht** als erledigt dargestellt.
+Die acht Restbefunde der „teilweise geschlossen"-Zeilen werden durch
+headless-GUI-Wächter in `crates/lumina-gui/src/tests/ux_gaps.rs` beobachtet.
+Sie pinnen den heutigen Zustand; sie treffen keine Produktentscheidung. Die
+UXD-05-Prüfung sichert ausdrücklich beide Seiten des geschlossenen Verhaltens
+(Options-Panel aus bei inaktivem Heal-Tool, an bei aktivem Tool).
 
-| Zeile | Restbefund (ohne vorhandenen Test) | vorgeschlagener Testname |
+| Zeile | gepinnter aktueller Zustand | Testname |
 | --- | --- | --- |
 | UXG-02 | die Rating-Zeile liegt weiter rechts (`crates/lumina-gui/src/develop_ops.rs` → `LuminaApp::draw_rating_section`) | `uxg_develop_rating_row_paints_in_the_right_panel` |
 | UXG-03 | es gibt keinen Import-Dialog (nur Modulwechsel) | `uxg_import_opens_a_dialog_instead_of_only_switching_the_module` |
@@ -222,11 +231,10 @@ G-09-Scope-Anhebung (Catalog/Import/Loupe-Render), F-100-Reihenfolge
 (Calibration, Color-Split, Optics vor Effects), History-Schema (Labels),
 Pin-Semantik (Auswahl/Delete/`/`), Panel-Dynamik-Zielbild, Softproof-Anchor.
 
-### Offene Fragen aus den „teilweise geschlossen"-Zeilen (Stand 2026-10-21)
+### Offene Fragen aus den „teilweise geschlossen"-Zeilen (Stand 2026-10-23)
 
-Je Zeile: der benannte Restbefund, der belegte Test (gelaufen, grün) und — wo
-der Restbefund noch keinen Test hat — der **vorgeschlagene** neue Testname
-(Abschnitt „Testbeleg je Zeile (Lauf 2026-10-21)"). Die Produktentscheidung
+Je Zeile: der benannte Restbefund und der belegte Test (gelaufen, grün;
+Abschnitt „Testbeleg je Zeile (Lauf 2026-10-21)"). Die Produktentscheidung
 liegt beim Owner; die SOLL-Entscheide UX-LOOK-18 (2026-09-19) bleiben
 verbindlich und werden hier nicht geändert.
 
@@ -237,7 +245,7 @@ verbindlich und werden hier nicht geändert.
   ordnet die linke Rail, nennt die Rating-Zeile aber nicht →
   **Entscheidung offen.**
   **Beleg:** `tests::layout::develop_left_rail_paints_navigator_presets_snapshots_history`
-  (gelaufen, grün). **Restbefund ohne Test:** vorgeschlagen
+  (gelaufen, grün). **Restbefund-Wächter:**
   `uxg_develop_rating_row_paints_in_the_right_panel`.
 
 - **UXG-03 — Import-Dialog nachziehen?** Der Import schaltet heute nur das
@@ -248,7 +256,7 @@ verbindlich und werden hier nicht geändert.
   **Beleg:** `tests::g16_shortcuts::w3_shortcut_mappings_are_exact` (gelaufen,
   grün) — der Import-Pfad ist bis zur Aktion belegt (`I` →
   `ImportExportAction::Import`), der Dialog nicht.
-  **Restbefund ohne Test:** vorgeschlagen
+  **Restbefund-Wächter:**
   `uxg_import_opens_a_dialog_instead_of_only_switching_the_module`.
 
 - **UXG-06 — Calibration-Panel nachziehen?** Die rechte Rail folgt der
@@ -269,7 +277,7 @@ verbindlich und werden hier nicht geändert.
   **Entscheidung offen (G-09-Scope).**
   **Beleg:** `tests::library_views::r5_loupe::loupe_paints_the_developed_render_not_the_thumbnail`
   (gelaufen, grün) — die Loupe ja, Compare/Survey nein.
-  **Restbefund ohne Test:** vorgeschlagen
+  **Restbefund-Wächter:**
   `uxg_compare_and_survey_paint_the_full_render`.
 
 - **UXG-09 — Filter-/Sort-Leiste in den Filmstreifen?** Badges sind vorhanden
@@ -282,7 +290,7 @@ verbindlich und werden hier nicht geändert.
   Zählers).
   **Beleg:** `tests::badges::entry_badge_text_covers_rating_flag_label`
   (gelaufen, grün) — der Badge-Datenpfad ist gepinnt, die Leiste nicht.
-  **Restbefunde ohne Test:** vorgeschlagen
+  **Restbefund-Wächter:**
   `uxg_filmstrip_has_a_filter_and_sort_bar` und
   `uxg_filmstrip_counter_paints_n_of_n`.
 
@@ -294,7 +302,7 @@ verbindlich und werden hier nicht geändert.
   Gruppen-Baum ohne absolute Pfade", sagt zum Amount nichts →
   **Entscheidung offen (Amount-Semantik).**
   **Beleg:** `tests::history_presets_look::preset_tree_groups_and_applies`
-  (gelaufen, grün). **Restbefund ohne Test:** vorgeschlagen
+  (gelaufen, grün). **Restbefund-Wächter:**
   `uxg_presets_expose_an_amount_control`.
 
 - **UXG-14 — Stepper auf dem Canvas?** Size/Feather lassen sich heute nur im
@@ -303,7 +311,7 @@ verbindlich und werden hier nicht geändert.
   **Beleg:** `tests::layout::develop_section_previous_and_reset_buttons_change_recipe`
   (gelaufen, grün) — die Panel-Affordanz (Reset) ist ein echter Button; den
   Canvas-Cursor setzt heute `crates/lumina-gui/src/develop_geometry/crop_overlay.rs`
-  → `paint_crop_mode_chrome`. **Restbefund ohne Test:** vorgeschlagen
+  → `paint_crop_mode_chrome`. **Restbefund-Wächter:**
   `uxg_canvas_paints_size_and_feather_steppers`.
 
 ## SOLL-Entscheide UX-LOOK-18 (User-Entscheide 2026-09-19, verbindlich)

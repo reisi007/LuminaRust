@@ -6,6 +6,9 @@
 
 use super::*;
 
+#[path = "ux_gaps.rs"]
+mod ux_gaps;
+
 // ---------------------------------------------------------------------------
 // Shared log capture (LENSFUN-CALLER-37).
 //
