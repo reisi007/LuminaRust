@@ -59,7 +59,6 @@
 665 crates/lumina-merge/src/dng.rs
 611 crates/lumina-onnx/tests/face.rs
 625 crates/lumina-core/src/upright.rs
-637 crates/lumina-cli/src/color_cli.rs  # 2026-10-22 SPLICE-CLI-MAIN-89 (Slice 4): neu, der reine Move des G-02-Farb-Kommando-Blocks aus crates/lumina-cli/src/main.rs (HEAD 4212-4821, 610 Z.). Der Block ist byteweise identisch; nur drei Symbole tragen `pub(crate)` (`color`, `check_curve_channel`, `parse_curve_points`), weil Aufrufer ausserhalb des Blocks existieren (main.rs bzw. mask_local_curves.rs). Der Einstiegswert ist der gemessene Ist-Wert (637 Z.).
 611 crates/lumina-sidecar/src/culling.rs
 599 crates/lumina-core/src/lens_blur.rs
 584 crates/lumina-gpu/src/lens_blur.rs
