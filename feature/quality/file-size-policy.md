@@ -80,8 +80,8 @@ eine Zahl im Prosa-Text waere eine zweite Quelle der Wahrheit, die still
 altert (Muster `DOC-ZAHLEN-DRIFT-82`):
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **872** Dateien, davon
-**69** ueber 500 Zeilen und **3** ueber 3000 Zeilen.
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **873** Dateien, davon
+**70** ueber 500 Zeilen und **3** ueber 3000 Zeilen.
 <!-- END GENERATED: population -->
 
 Es gibt bewusst **keine Ausnahmen fuer Verzeichnisse**: eine Datei, die nicht
