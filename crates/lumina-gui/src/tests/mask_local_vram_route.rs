@@ -51,6 +51,30 @@ fn live_present_freshness_requires_global_and_mask_success() {
     let layers = app.gpu_local_mask_layers(width, height).unwrap();
     assert_eq!(layers.len(), 1);
 
+    let events = std::cell::RefCell::new(Vec::new());
+    let mut fresh = false;
+    let route = crate::LuminaApp::run_live_gpu_present(
+        &mut fresh,
+        true,
+        None,
+        &layers,
+        || {
+            events.borrow_mut().push("global");
+            Ok::<_, &'static str>(())
+        },
+        |current| {
+            assert_eq!(current, layers, "route seam preserves the supplied layers");
+            events.borrow_mut().push("compose");
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        route,
+        crate::gpu_routing::local_adjustments::LiveVramPresent::Presented
+    ));
+    assert_eq!(*events.borrow(), ["global", "compose"]);
+    assert!(fresh, "global + mask success publishes freshness");
+
     let mut fresh = true;
     let route = crate::LuminaApp::run_live_gpu_present(
         &mut fresh,
@@ -65,6 +89,29 @@ fn live_present_freshness_requires_global_and_mask_success() {
         crate::gpu_routing::local_adjustments::LiveVramPresent::Failed("mask composition failed")
     ));
     assert!(!fresh, "failed local composition must not mark VRAM fresh");
+
+    let compose_called = std::cell::Cell::new(false);
+    let mut fresh = true;
+    let route = crate::LuminaApp::run_live_gpu_present(
+        &mut fresh,
+        true,
+        None,
+        &layers,
+        || Err::<(), _>("global render failed"),
+        |_| {
+            compose_called.set(true);
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        route,
+        crate::gpu_routing::local_adjustments::LiveVramPresent::Failed("global render failed")
+    ));
+    assert!(
+        !compose_called.get(),
+        "composition cannot run after global failure"
+    );
+    assert!(!fresh, "failed global render must not mark VRAM fresh");
 
     let global_called = std::cell::Cell::new(false);
     let mut fresh = false;
@@ -88,6 +135,47 @@ fn live_present_freshness_requires_global_and_mask_success() {
     ));
     assert!(global_called.get());
     assert!(fresh, "global + mask success publishes freshness");
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn no_local_adjustments_present_global_without_composition() {
+    let (_directory, mut app, _source) = super::local_app();
+    app.render().unwrap();
+    let (width, height) = app
+        .original
+        .as_ref()
+        .map(|source| (source.width(), source.height()))
+        .unwrap();
+    assert!(
+        app.gpu_local_mask_layers(width, height).unwrap().is_empty(),
+        "neutral persisted local state pairs to no GPU layers"
+    );
+
+    let mut fresh = false;
+    let global_called = std::cell::Cell::new(false);
+    let compose_called = std::cell::Cell::new(false);
+    let route = crate::LuminaApp::run_live_gpu_present(
+        &mut fresh,
+        true,
+        None,
+        &[],
+        || {
+            global_called.set(true);
+            Ok::<_, &'static str>(())
+        },
+        |_| {
+            compose_called.set(true);
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        route,
+        crate::gpu_routing::local_adjustments::LiveVramPresent::Presented
+    ));
+    assert!(global_called.get());
+    assert!(!compose_called.get());
+    assert!(fresh);
 }
 
 #[cfg(feature = "gpu")]
