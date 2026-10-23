@@ -129,12 +129,15 @@ pub fn mutated_png() -> Vec<u8> {
 /// A `--repair-region` definition file (F-042-N1) whose region matches the
 /// 32x32 fixture frame, so `dust-removal` can persist a `.lumina.zdata` bundle.
 pub fn repair_region_file(input: &Path, dir: &Path) -> PathBuf {
+    let region_path = dir.join("region.u16le");
+    let raw_region = vec![0u8; 32 * 32 * 2];
+    fs::write(&region_path, raw_region).unwrap();
     let definition = serde_json::json!({
         "id": "region-1",
         "kind": "dustremoval",
         "region_width": 32,
         "region_height": 32,
-        "region_values": vec![0u16; 32 * 32],
+        "region_path": region_path,
         "replacement_path": input.to_str().unwrap(),
     });
     let path = dir.join("region.json");

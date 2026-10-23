@@ -21,6 +21,8 @@ fn cli() -> Command {
 }
 
 fn write_repair_definition(directory: &Path, replacement_path: &Path) -> std::path::PathBuf {
+    let region_path = directory.join("repair.u16le");
+    fs::write(&region_path, 65535u16.to_le_bytes()).unwrap();
     let definition = directory.join("repair.json");
     fs::write(
         &definition,
@@ -29,7 +31,7 @@ fn write_repair_definition(directory: &Path, replacement_path: &Path) -> std::pa
             "kind": "dustremoval",
             "region_width": 1,
             "region_height": 1,
-            "region_values": [65535],
+            "region_path": region_path,
             "replacement_path": replacement_path,
         }))
         .unwrap(),

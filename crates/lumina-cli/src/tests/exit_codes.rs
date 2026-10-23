@@ -95,6 +95,8 @@ fn dust_removal_leaves_no_orphan_bundle_when_the_copy_is_unknown() {
         replacement_frame.encode(ImageFileFormat::Png).unwrap(),
     )
     .unwrap();
+    let region_path = directory.path().join("region.u16le");
+    fs::write(&region_path, [0u8; 8]).unwrap();
     let definition = directory.path().join("region.json");
     fs::write(
         &definition,
@@ -102,7 +104,7 @@ fn dust_removal_leaves_no_orphan_bundle_when_the_copy_is_unknown() {
             "id": "r1",
             "region_width": 2,
             "region_height": 2,
-            "region_values": [0, 0, 0, 0],
+            "region_path": region_path,
             "replacement_path": replacement,
         })
         .to_string(),

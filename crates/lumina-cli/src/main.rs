@@ -62,7 +62,7 @@ use lumina_sidecar::{
     MaskDefinition, MaskLayer, MaskOperation, MaskPrompt, MaskReference, MaskStatus,
     MetaPresetEntry, MetaPresetFile, MetadataHistoryEntry, ModelIdentity, Preprocessing,
     PromptTransform, RecordSpec, RedEyeCorrection, RedEyeRegion, Resolution, SidecarDocument,
-    SourceActionArtifactRef, SourceActionKind, SourceActionSpec, SourceFingerprint, SourceIdentity,
+    SourceActionArtifactRef, SourceActionSpec, SourceFingerprint, SourceIdentity,
     DENOISE_AI_VERSION, MAX_KEYWORDS_PER_DOCUMENT, MAX_KEYWORD_CHARS, MAX_METADATA_HISTORY_ENTRIES,
     METADATA_FIELD_IDS, RED_EYE_MAX_REGIONS, SOURCE_ACTION_VERSION,
 };
@@ -90,6 +90,7 @@ use thiserror::Error;
 // LRPAR-G09-CULL-IMPL-25: live-source persistence guard extracted from the
 // oversized CLI entrypoint (file-size ratchet; orchestration remains in main).
 mod cull_cli;
+mod repair_region_input;
 
 // LENSFUN-CALLER-37: the lens corrector construction and the process-lifetime
 // diagnostics sink, extracted from main.rs for the same reason.
@@ -1324,25 +1325,6 @@ struct ColorArgs {
     /// Set saturation (`-1..=1`).
     #[arg(long, value_name = "-1..=1")]
     set_saturation: Option<f64>,
-}
-
-/// Repair-region definition consumed by the `dust-removal` command.  The
-/// `region_values` are little-endian `u16` (0..=u16::MAX); pixels `>= 32768`
-/// are replaced by the corresponding `replacement_path` RGBA8 pixel.  Region
-/// and replacement MUST share the source frame's dimensions.
-#[derive(Debug, Deserialize)]
-struct RepairRegionInput {
-    id: String,
-    #[serde(default = "default_source_action_kind")]
-    kind: SourceActionKind,
-    region_width: u32,
-    region_height: u32,
-    region_values: Vec<u16>,
-    replacement_path: PathBuf,
-}
-
-fn default_source_action_kind() -> SourceActionKind {
-    SourceActionKind::DustRemoval
 }
 
 /// CLI-facing `--mask-policy` selection (REVIEW-CLI-EXPORTMASK-1). `warn` is
@@ -4573,12 +4555,15 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Load and validate the repair-region definition.  Region and replacement
     // must have identical dimensions; the region must also match the decoded
     // source frame, because the MVP applies source actions at source resolution.
-    let definition: RepairRegionInput = {
-        let json = fs::read_to_string(&args.repair_region)
-            .map_err(|error| io_error(&args.repair_region, error))?;
-        serde_json::from_str(&json)
-            .map_err(|error| CliError::Message(format!("invalid repair-region JSON: {error}")))?
-    };
+    let definition = repair_region_input::RepairRegionInput::load(&args.repair_region)
+        .map_err(|error| CliError::Message(format!("invalid repair-region input: {error}")))?;
+    let kind = definition.source_action_kind().map_err(CliError::Message)?;
+    let region_values = repair_region_input::read_region_values(
+        &definition.region_path,
+        definition.region_width,
+        definition.region_height,
+    )
+    .map_err(CliError::Message)?;
     let replacement_bytes = fs::read(&definition.replacement_path)
         .map_err(|error| io_error(&definition.replacement_path, error))?;
     let replacement_frame = ImageFrame::decode(&replacement_bytes).map_err(|error| {
@@ -4599,7 +4584,7 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
         id: definition.id.clone(),
         width: definition.region_width,
         height: definition.region_height,
-        region: definition.region_values.clone(),
+        region: region_values,
         replacement: replacement_frame.pixels().to_vec(),
     };
     region
@@ -4657,7 +4642,7 @@ fn dust_removal(args: DustRemovalArgs) -> Result<(), CliError> {
     // Record the action spec in the validated virtual copy's recipe.
     let spec = SourceActionSpec {
         version: SOURCE_ACTION_VERSION,
-        kind: definition.kind,
+        kind,
         artifact: SourceActionArtifactRef {
             id: definition.id.clone(),
             relative_path: relative_path.clone(),

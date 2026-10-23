@@ -52,6 +52,24 @@ Die langfristige Struktur sieht `lumina-sidecar` als verpflichtendes Modul und
 
 ## CLI
 
+**Repair-Region-Eingabe (MCP-Transport-Parität, Eigentümerentscheid
+2026-10-23):** `lumina dust-removal --input <bild> --repair-region
+<definition.json>` nutzt dasselbe Datei-Referenzschema wie MCP. Das JSON enthält
+`id`, optional `kind`, `region_width`, `region_height`, `region_path` und
+`replacement_path`; `region_path` ist eine headerlose, row-major
+Little-Endian-u16-Datei mit exakt `region_width * region_height * 2` Bytes.
+`region_values`-Arrays und unbekannte Definition-Felder werden abgelehnt. Die
+Dimensionen und Größen werden vor begrenztem Lesen validiert; Source-,
+Replacement- und Artefaktlimits sowie Persistenz und Renderverhalten bleiben
+unverändert. Beispiel:
+
+```json
+{"id":"repair-1","kind":"dust-removal","region_width":2,"region_height":2,"region_path":"region.u16le","replacement_path":"replacement.png"}
+```
+
+Normative Detailentscheidung und Grenzen:
+[`decisions/MCP-TRANSPORT-REPARATUR-EBENE-99.md`](../decisions/MCP-TRANSPORT-REPARATUR-EBENE-99.md).
+
 **Export-Dateirechte (SEC-8):** Neue Exportdateien werden atomar mit dem
 privaten Modus **0600 auf Unix** angelegt. Beim atomaren Überschreiben einer
 vorhandenen regulären Zieldatei bleibt deren Unix-Modus exakt erhalten (z. B.

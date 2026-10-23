@@ -103,7 +103,9 @@ Sidecars vollständig wiederherstellbar sein.
 
 - [`platform/cli-gui-wasm.md`](platform/cli-gui-wasm.md): CLI, Desktop-GUI,
   verbindliche Lightroom-UI-Konventionen (F-100) und
-  optionale zentrale Indizierung (WASM-Anteile ENTFERNT 2026-09-04)
+  optionale zentrale Indizierung (WASM-Anteile ENTFERNT 2026-09-04); CLI-
+  Reparatur-Ebenen-Vertrag siehe
+  [`MCP-TRANSPORT-REPARATUR-EBENE-99`](decisions/MCP-TRANSPORT-REPARATUR-EBENE-99.md)
 - [`platform/mcp-server.md`](platform/mcp-server.md): MCP AI-Agent-
   Schnittstelle für programmatischen Bildzugriff, Rezept-Bearbeitung und
   Schnellvorschau (F-101)

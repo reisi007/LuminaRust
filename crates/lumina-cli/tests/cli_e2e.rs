@@ -169,9 +169,8 @@ fn sidecar_only_develop_reopens_and_creates_virtual_copy() {
     );
 }
 
-/// Writes a repair-region definition JSON plus its RGBA8 replacement PNG into
-/// `directory` and returns the two paths.  `region_values` are `u16` (0..=u16::MAX);
-/// pixels `>= 32768` are replaced by the matching replacement pixel.
+/// Writes a raw LE-u16 repair plane, its definition JSON, and replacement PNG.
+/// Pixels `>= 32768` are replaced by the matching replacement pixel.
 fn write_repair_region(
     directory: &tempfile::TempDir,
     id: &str,
@@ -187,14 +186,15 @@ fn write_repair_region(
         replacement.encode(ImageFileFormat::Png).unwrap(),
     )
     .unwrap();
-    let region_csv = region_values
+    let region_path = directory.path().join(format!("{id}.u16le"));
+    let region_bytes = region_values
         .iter()
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    fs::write(&region_path, region_bytes).unwrap();
     let definition = format!(
-        "{{\"id\":\"{id}\",\"kind\":\"{kind}\",\"region_width\":{width},\"region_height\":{height},\"region_values\":[{region_csv}],\"replacement_path\":\"{}\"}}",
-        replacement_path.to_str().unwrap()
+        "{{\"id\":\"{id}\",\"kind\":\"{kind}\",\"region_width\":{width},\"region_height\":{height},\"region_path\":\"{}\",\"replacement_path\":\"{}\"}}",
+        region_path.to_str().unwrap(), replacement_path.to_str().unwrap()
     );
     let definition_path = directory.path().join(format!("{id}.json"));
     fs::write(&definition_path, definition).unwrap();
@@ -240,7 +240,7 @@ fn dust_removal_persists_action_and_renders_only_inside_region() {
 
     // Top-left 2x2 marked for replacement (>= 32768); rest kept.
     let region_values = [
-        65535u16, 65535, 0, 0, 65535, 65535, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        65535u16, 0x8001, 0, 0, 0x8001, 65535, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     // Replacement: red(200,0,0) in the replaced corners, black elsewhere.
     let replacement = ImageFrame::new(
