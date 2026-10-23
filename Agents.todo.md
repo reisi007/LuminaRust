@@ -711,7 +711,6 @@ _(keine offenen Tasks — GEN-EXPAND-1 BESTANDEN verifiziert 2026-09-02, Commit 
 
 ### PRIO: mittel
 
-- [ ] **MODEL-MGMT-1 (Release: 2.0; G-14-Infrastruktur)** Generische Backend-Installation eines einzelnen Modellpakets hinter optionalem `model-download`: explizite, an den exakten Lizenztext gebundene Zustimmung; Provenienz/Lizenz/`sha256:`-Pin und Größenlimit; HTTPS ohne Redirects, bounded streaming, vollständiges atomisches Paketverzeichnis, kein Überschreiben. Nur Offline-Tests mit injiziertem Transport. Kein Katalogeintrag oder GUI-/CLI-Surface bis konkretes Artefakt samt Rechten, Herkunft und Hash freigegeben ist; NAFNet bleibt ausgeschlossen. `cargo test -p lumina-onnx` und `cargo test -p lumina-onnx --features model-download`, `sh scripts/check_feature_matrix.sh`, `sh scripts/check_plan_format.sh`, `sh scripts/check_file_sizes.sh`.
 
 
 ## Block B – „Offene Rückfragen“

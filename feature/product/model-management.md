@@ -45,3 +45,12 @@ Installation.
 Dieser Slice stellt nur Backend-API und Offline-Tests bereit. UI/CLI/Katalog
 werden separat integriert, nachdem ein konkretes Artefakt samt Lizenz, Herkunft
 und Hash freigegeben ist.
+
+## Implementierungsstatus
+
+Der generische Installer und seine Offline-Tests sind in `4a9ae2b`
+implementiert; die Erfüllung von `MODEL-MGMT-1` wurde unabhängig am
+2026-10-23 bestätigt. Damit ist nur die Backend-Infrastruktur abgeschlossen:
+Es gibt weiterhin keinen Modellkatalog, keine GUI-/CLI-Integration und keinen
+NAFNet-Download oder Gewichts-Pin. Die konkreten Rechte und Hash-Freigaben
+bleiben Voraussetzung für jedes einzelne Modell.
