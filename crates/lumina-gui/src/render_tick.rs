@@ -203,9 +203,13 @@ impl LuminaApp {
         // The previous tick's output must never survive a failed or refused
         // render as a fresh present. The CPU preview remains authoritative until
         // both the global VRAM render and (when needed) mask composition succeed.
-        self.vram_fresh = false;
+        #[cfg(feature = "gpu")]
+        {
+            self.vram_fresh = false;
+        }
         let cpu_t0 = std::time::Instant::now();
         let result = self.render_draft(viewport, None);
+        #[cfg(feature = "gpu")]
         let cpu_render_succeeded = result.is_ok();
         let cpu_draft_ms = cpu_t0.elapsed().as_secs_f64() * 1000.0;
         match result {
