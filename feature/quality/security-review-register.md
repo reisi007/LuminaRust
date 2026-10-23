@@ -1,7 +1,7 @@
 # Sicherheits-/Risikoregister LuminaRust
 
 **Feature:** Sicherheits-/Risikoregister — die Form und die erste Welle
-**Stand:** 2026-10-22
+**Stand:** 2026-10-23
 **Ort:** `feature/quality/security-review-register.md`
 **Pflege:** Build-Agent (Orchestrator) nach bestandener Verifikation einer
 Welle; der Implementierungs- bzw. Verifizierungs-Agent liefert den Beleg
@@ -413,29 +413,38 @@ im Block selbst):
 
 ### 5.1.1 MCP-Server (Transport)
 
-- **Eingabepfade** — `crates/lumina-mcp/src/lib.rs`: `run_stdio` liest
-  zeilenweise von stdin (`BufRead::lines`); `handle_line` parst die Zeile mit
-  `serde_json::from_str::<Value>`; `handle_message` deserialisiert sie zu
-  `Request` und liest daraus `method`, `params`, `params.uri`,
-  `params.name`, `params.arguments` sowie `id`.
-- **Ausgabepfade** — `crates/lumina-mcp/src/lib.rs`: `run_stdio` schreibt je
-  Antwort **eine JSON-Zeile auf stdout** (`out.write_all`); die Antwortobjekte
-  baut `crates/lumina-mcp/src/error.rs` (`ok_response`, `error_response`,
-  `tool_result_response`, `tool_error_result`); `StderrLogger::log` schreibt
-  **Logzeilen auf stderr**; `Server::cleanup_previews` löscht die
-  Preview-Dateien der Sitzung.
+- **Eingabepfade** — `crates/lumina-mcp/src/lib.rs`: `run_stdio` sperrt
+  stdin/stdout und delegiert über `run_stdio_from` an `transport::run_loop`;
+  `crates/lumina-mcp/src/transport.rs` liest Frames begrenzt mit `read_frame`.
+  Gewöhnliche Frames über `MAX_LINE_BYTES` (**1 MiB**) werden vor dem JSON-Parse
+  abgewiesen. Ein Frame mit `"repair_region"` darf bis
+  `MAX_REPAIR_REGION_LINE_BYTES` (**1 310 720 Byte**, 1,25 MiB) reichen; der
+  Werkzeug-Payload wird danach weiterhin als JSON deserialisiert. Die vollständige
+  Eingabekette ist `run_loop` → `Server::handle_line` (`serde_json`-Parse) →
+  `Server::handle_message` (`Request`-Deserialisierung und Dispatch).
+- **Ausgabepfade** — `crates/lumina-mcp/src/transport.rs`: `write_response`
+  serialisiert jede Antwort als **eine JSON-Zeile auf stdout** und schreibt sie
+  mit `write_all`; die Antwortobjekte baut `crates/lumina-mcp/src/error.rs`
+  (`ok_response`, `error_response`, `tool_result_response`, `tool_error_result`).
+  `StderrLogger::log` schreibt **Logzeilen auf stderr**;
+  `Server::cleanup_previews` löscht die Preview-Dateien der Sitzung.
 - **Vertrauensgrenze** — MCP-Client → Serverprozess: **stdin ist nicht
   vertrauenswürdig** (JSON-Frames fremder Herkunft). **stdout ist der
   exklusive Transportkanal**, stderr der Logkanal — die Trennung der beiden
   Kanäle ist selbst schutzrelevant (eine Logzeile auf stdout korrumpiert den
   JSON-RPC-Stream).
 - **Zu prüfende Klassen** — Deserialisierung/Schema (JSON-RPC-Frame,
-  `Request`-Form); Grenzwerte/Größen (unbegrenzte Zeilen- und
-  Parametgröße auf stdin); Dispatch (unbekannte Methode, unbekanntes
+  `Request`-Form); Grenzwerte/Größen (Frame-Limits und Parametgröße auf stdin;
+  zusätzlich die ausstehende Amplifikation des JSON-`repair_region`-Payloads,
+  siehe `MCP-TRANSPORT-REPARATUR-EBENE-99`); Dispatch (unbekannte Methode, unbekanntes
   Werkzeug); Kanaltrennung (stdout/stderr); Fehlertext-Ausgabe (untrusted
   `method`/`name` im Fehlertext).
-- **Beleg** — `grep -n "fn run_stdio\|fn handle_line\|fn handle_message\|fn cleanup_previews" crates/lumina-mcp/src/lib.rs`;
-  `grep -n "pub fn ok_response\|pub fn error_response\|pub fn tool_result_response\|pub fn tool_error_result" crates/lumina-mcp/src/error.rs`.
+- **Beleg** — `crates/lumina-mcp/src/lib.rs` (`run_stdio`, `run_stdio_from`,
+  `Server::handle_line`, `Server::handle_message`);
+  `crates/lumina-mcp/src/transport.rs` (`run_loop`, `read_frame`,
+  `MAX_LINE_BYTES`, `MAX_REPAIR_REGION_LINE_BYTES`, `write_response`);
+  `crates/lumina-mcp/src/error.rs` (`ok_response`, `error_response`,
+  `tool_result_response`, `tool_error_result`).
 
 ### 5.1.2 MCP-Werkzeug-Oberfläche
 
@@ -1251,7 +1260,10 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   **Security-Review-Welle 1, Teil *Befunde eintragen* und *Befunde schließen*
   (2026-10-21/22):** §3 führt jetzt **vier** Zeilen — **2** geschlossene
   Befunde (`SEC-1`, `SEC-4`) und **2** zurückgenommene Kandidaten (`SEC-2`,
-  `SEC-3`); die Enumeration in §5/§5.1 ist unverändert.
+  `SEC-3`). **Pflegekorrektur vom 2026-10-23:** §5.1.1 beschreibt den
+  MCP-Transportpfad wieder am aktuellen Code (`run_stdio` → `run_stdio_from` →
+  `transport::run_loop`) und hält die Framegrenzen fest; die übrigen
+  Enumerationsabschnitte wurden in dieser Runde nicht neu geprüft.
   **Basis-Erweiterung vom 2026-10-20** (Eigentümerentscheid):
   §5 führt jetzt die im generierten Block **surfaces** genannte Zahl an
   Oberflächen (die Basis-Erweiterung hat fünf Zeilen ergänzt) und die GUI ist
