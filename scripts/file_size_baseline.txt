@@ -19,8 +19,7 @@
 1919 crates/lumina-core/src/mask_loader.rs
 702 crates/lumina-lensfun/src/lib.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1531 -> 702, inline #[cfg(test)] mod tests nach src/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # 2026-09-25: LENSFUN-DB-33 (1789 -> 1531, DB-Aufloesung nach db_path.rs/db_layers.rs/db_timestamp.rs/db_error.rs/system_load.rs extrahiert, corrector_rows.rs abgespalten; F1-Remediierung ergaenzt den User-DB-Merge und die echte timestamp.txt-Semantik, F3 entfernt den mutierenden env-Override-Test)
 926 crates/lumina-core/src/generative.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: 1665 -> 926, inline-Testmodul nach generative/tests.rs und crop_rect_on_canvas nach generative/crop_rect.rs verschoben; Ratchet-1000-Ausnahme geloescht.
-1572 crates/lumina-raw/src/lib.rs  # 2026-10-17 Q5: +1 Zeile durch pixels() statt pixels.  # 2026-09-29 FIXTURE-ENV-1 (15 entfernt/14 hinzu, Netto −1; Verifikation: Datei 1571).
-1564 crates/lumina-core/src/tone.rs
+551 crates/lumina-core/src/tone.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: 1564 -> 551, Testmodul nach tone/tests.rs (534) und tone/tests_reference.rs (474) geteilt; Ratchet-1000-Ausnahme geloescht.
 806 crates/lumina-gpu/src/geometry.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1050 -> 806, inline #[cfg(test)] mod tests nach src/geometry/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
 516 crates/lumina-gpu/src/lensfun.rs  # neu 2026-09-18: GPU-LENSFUN-PARITY-1 Resample-Pass (kein Split ohne Kohaesion)
 512 crates/lumina-gpu/src/geometry_shaders.rs  # neu 2026-09-18: aus geometry.rs extrahierte WGSL/Uniform-Bloecke
@@ -33,7 +32,7 @@
 1154 crates/lumina-mcp/tests/mcp.rs  # 2026-10-20 nachgezogen: 1174 -> 1154 (Extraktion; der Eintrag stand 20 Zeilen ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur).
 898 crates/lumina-gui/src/face_gui.rs  # 2026-10-20 nachgezogen: 899 -> 898 (Kuerzung; der Eintrag stand 1 Zeile ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur). # 1095 -> 899 am 2026-09-17: People-Panel nach people_panel.rs extrahiert, create_face_mask instrumentiert (GUI-INSTRDBG-17c-Rest)
 522 crates/lumina-core/src/denoise.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1031 -> 522, inline #[cfg(test)] mod tests nach src/denoise/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # R5-WARN-2: DenoiseStageInput nach src/denoise/stage_input.rs extrahiert (1084 -> 1031; quiet-Feld additiv)
-1060 crates/lumina-onnx/src/face/backend.rs  # 2026-10-17 Q5: +1 Zeile durch aligned.pixels() statt aligned.pixels.
+749 crates/lumina-onnx/src/face/backend.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: 1060 -> 749, inline Testmodul nach backend/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # 2026-10-17 Q5: +1 Zeile durch aligned.pixels() statt aligned.pixels.
 673 crates/lumina-sidecar/src/face.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1035 -> 673, inline #[cfg(test)] mod tests nach src/face/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht.
 970 crates/lumina-gpu/src/shaders.rs
 888 crates/lumina-gui/src/denoise_gui.rs  # 2026-10-20 nachgezogen: 947 -> 888 (Extraktion; der Eintrag stand 59 Zeilen ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur).
@@ -82,3 +81,5 @@
 819 crates/lumina-lensfun/src/tests.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move des inline-Testmoduls.
 775 crates/lumina-gui/src/preview_ctrl/tests.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move des inline-Testmoduls.
 656 crates/lumina-core/src/generative/tests.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move des inline-Testmoduls.
+816 crates/lumina-raw/src/native.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move (Testmodul bzw. native-Modul).
+534 crates/lumina-core/src/tone/tests.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move (Testmodul bzw. native-Modul).
