@@ -80,14 +80,15 @@ sh scripts/gates.sh fast
 ```
 
 - **Budget:** Sekunden — **unter fünfzehn Sekunden** auf diesem Host (gemessen 2026-10-20: **11 s** für die neun Checks; die Angabe war „unter zehn Sekunden“, bis die Welle 2 den neunten Check und das Hygiene-Gate `fast-9` hinzufügte ✓).
-- **Bedarf:** keine Infrastruktur — kein Server, keine Datenbank, kein
-  Netz, kein Build-Artefakt, kein Adapter. Nur `cargo fmt` (rustfmt, **kein**
-  Compile) und acht POSIX-Shell-Gates.
+- **Bedarf:** kein Server, keine Datenbank, kein Netz und kein Adapter.
+  `ratchet` v0.5.0 muss lokal installiert sein (CI installiert die gepinnte
+  Version vor `gates.sh fast`); zusätzlich laufen `cargo fmt` (rustfmt,
+  **kein** Compile) und acht POSIX-Shell-Gates.
 - **Deckt ab:** Formatierung des gesamten Workspace; die vier Textschranken
   (Dateigrößen-Ratchet, Plan-Format, Env-Gate-Begründungen,
   Produktions-Dateisystemfreiheit von `lumina-core`) und den **Drift-Gate**
   (§7), der die Tier-Liste gegen die aus `ci.yml` generierte Liste prüft; neu
-  dazu die **Zeilen-Obergrenze 3000** (`fast-7`,
+  dazu die **Zeilen-Obergrenze 1000** (`fast-7`,
   `scripts/check_file_ceiling.sh`) — die harte Grenze je Datei plus
   Ratchet-Richtung, deren SOLL-Zielsemantik in
   [`file-size-policy.md`](file-size-policy.md) steht — der **Drift-Gate
@@ -219,7 +220,7 @@ erzwingt einen Mindeststand:
 - Der Floor ist selbst eine Schranke mit nur einer Richtung: er kann sinken,
   aber nicht ohne Kommentar steigen. Wer die Stufe erweitert, hebt `MIN_CHECKS`
   im selben Commit an. (Erhöht von 5 auf 6, als `fast-6` — der Drift-Gate —
-  hinzukam, und von 6 auf 7, als `fast-7` — die Zeilen-Obergrenze 3000 —
+  hinzukam, und von 6 auf 7, als `fast-7` — die Zeilen-Obergrenze 1000 —
   hinzukam, und von 7 auf 8, als `fast-8` — der Drift-Gate der Prosa-Zahlen —
   hinzukam, und von 8 auf 9, als `fast-9` — das Hygiene-Gate des Generators —
   hinzukam; ein Floor, der unter der Zahl der Checks liegt, würde das
@@ -496,8 +497,8 @@ Commit.
 
 | Block | Zieldatei | Quelle der Zahlen |
 | --- | --- | --- |
-| `file-sizes` | `feature/quality/file-size-policy.md` | `scripts/file_size_ceiling.txt` (Eintrag), `wc -l` (Ist-Stand), `scripts/file_size_baseline.txt` (500er-Eintrag) |
-| `population` | `feature/quality/file-size-policy.md` | das Dateisystem (`crates/`, `agent-harness/`), Schwellen aus den beiden Gate-Skripten |
+| `file-sizes` | `feature/quality/file-size-policy.md` | Ratchet-Konfiguration und Baseline (`ratchet.config.json`, `ratchet.baseline.json`) sowie `wc -l` (aktueller Ist-Stand); `scripts/file_size_baseline.txt` bleibt die separate 500er-Baseline |
+| `population` | `feature/quality/file-size-policy.md` | das aktuelle Dateisystem (`crates/`, `agent-harness/`), ausgewertet nach dem Geltungsbereich in `ratchet.config.json`; die 1000-Zeilen-Schwelle ist der Ratchet-Vertrag, die 500er-Baseline bleibt separat |
 | `goldens` | `feature/README.md`, `feature/quality/golden-references.md`, `feature/quality/golden-fixtures.md` | `scripts/golden_ref.lock`, Feld `goldens.count` (committete Baseline; **kein** `git` nötig — der CI-Container hat keins; **kein** `ls`: im Verzeichnis liegen gitignorierte `*.new.png`-Artefakte). Die Kette zum Repo hält `scripts/golden_ref_test.sh` (Docs-Job **ohne** Container): es re-derived die Goldens aus dem Git-Index und prüft das Lockfile dagegen |
 | `golden-classes` | `feature/quality/golden-fixtures.md` | `scripts/golden_inventory.txt` (eine Zeile je Golden: Dateiname, Klasse `R`/`C`, Test-Target) — der **R/C-Split**, gezählt, nicht abgeschrieben. Die Klassifikation selbst ist eine menschliche Entscheidung (GOLDEN-FIXT-31); die Datei ist ihre maschinenlesbare Form |
 | `golden-targets` | `feature/quality/golden-references.md` | dieselbe Datei `scripts/golden_inventory.txt` — die **Verteilung auf die Test-Targets**, je Ziel gezählt. Der Generator prüft die Datei laut: Kopfzeile, Feldzahl, keine Doppelnennung, Sortierung (LC_ALL=C), Existenz jeder genannten Datei und Übereinstimmung mit `goldens.count`; **zusätzlich** gleicht er die Klassen der Inventartabelle in `feature/quality/golden-fixtures.md` §4 gegen die Quelldatei ab — die Tabelle bleibt Prosa, ist aber keine zweite, stille Quelle |
@@ -607,8 +608,10 @@ Datei fliesst nie in eine Kommandozeile.
   PATH-Sandbox **ohne** `git*` muss byteweise dieselbe Ausgabe liefern. Ein
   Block, der `git` braucht, ist im CI-Container nicht erzeugbar — am
   2026-10-20 war das der Grund, warum der Job „Rust fast checks“ rot wurde.
-- Die **Richtungs-Pruefung (D)** des 3000er-Gates (`scripts/check_file_ceiling.sh`) laeuft
-  **nur**, wo `git` verfuegbar ist: im CI-Container fehlt das Binary, der Gate schreibt dann
-  den HINWEIS „(D) hat NICHT gelaufen“ (stderr **und** Schlusszeile) statt still gruen zu
-  sein. Lokal laeuft die Pruefung; eine **committete** Anhebung eines Baseline-Werts faellt
-  ueber den Review des Baseline-Diffs auf, nicht ueber den Gate.
+- Das 1000er-Gate (`scripts/check_file_ceiling.sh`) prüft mit Ratchet die
+  Arbeitsbaum-Messungen gegen den globalen Fallback und die exakten
+  Ausnahmewerte. `scripts/check_ratchet_exceptions.py` erzwingt zusätzlich,
+  dass jede aktuell über 1000 Zeilen große Datei genau eine Dateiausnahme hat
+  und jede Ausnahme entfernt wird, sobald die Datei höchstens 1000 Zeilen hat.
+  Die CI installiert dafür die gepinnte Ratchet-Version vor den schnellen
+  Checks; eine Baseline-Anhebung ist durch Ratchets Monotonieprüfung blockiert.

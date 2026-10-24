@@ -1,0 +1,180 @@
+{
+  "name": "LuminaRust",
+  "tiers": {
+    "fast": {
+      "floor": 10
+    }
+  },
+  "rules": {
+    "rust-file-line-ceiling": {
+      "class": "oversized Rust source file",
+      "incident": "RATCHET-CLI-1K-MIGRATION-99: existing Rust files above the 1000-line target are individually excepted",
+      "unit": "lines (maximum per file)",
+      "direction": "ceiling",
+      "tier": "fast",
+      "aggregate": "max",
+      "description": "Unexcepted Rust files are capped at 1000 physical lines",
+      "count": {
+        "file_metrics": {
+          "files": [
+            "crates/**/*.rs",
+            "agent-harness/**/*.rs"
+          ],
+          "metric": "line_count"
+        }
+      },
+      "scopes": [
+        {
+          "id": "crates-lumina-cli-src-main-rs",
+          "description": "Existing exception: crates/lumina-cli/src/main.rs",
+          "file": "crates/lumina-cli/src/main.rs"
+        },
+        {
+          "id": "crates-lumina-cli-src-meta_cli-rs",
+          "description": "Existing exception: crates/lumina-cli/src/meta_cli.rs",
+          "file": "crates/lumina-cli/src/meta_cli.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-denoise-rs",
+          "description": "Existing exception: crates/lumina-core/src/denoise.rs",
+          "file": "crates/lumina-core/src/denoise.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-generative-rs",
+          "description": "Existing exception: crates/lumina-core/src/generative.rs",
+          "file": "crates/lumina-core/src/generative.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-lib-rs",
+          "description": "Existing exception: crates/lumina-core/src/lib.rs",
+          "file": "crates/lumina-core/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-mask_loader-rs",
+          "description": "Existing exception: crates/lumina-core/src/mask_loader.rs",
+          "file": "crates/lumina-core/src/mask_loader.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-masks-rs",
+          "description": "Existing exception: crates/lumina-core/src/masks.rs",
+          "file": "crates/lumina-core/src/masks.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-pipeline-rs",
+          "description": "Existing exception: crates/lumina-core/src/pipeline.rs",
+          "file": "crates/lumina-core/src/pipeline.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-render-rs",
+          "description": "Existing exception: crates/lumina-core/src/render.rs",
+          "file": "crates/lumina-core/src/render.rs"
+        },
+        {
+          "id": "crates-lumina-core-src-tone-rs",
+          "description": "Existing exception: crates/lumina-core/src/tone.rs",
+          "file": "crates/lumina-core/src/tone.rs"
+        },
+        {
+          "id": "crates-lumina-gpu-src-geometry-rs",
+          "description": "Existing exception: crates/lumina-gpu/src/geometry.rs",
+          "file": "crates/lumina-gpu/src/geometry.rs"
+        },
+        {
+          "id": "crates-lumina-gpu-src-lib-rs",
+          "description": "Existing exception: crates/lumina-gpu/src/lib.rs",
+          "file": "crates/lumina-gpu/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-gpu-tests-parity-rs",
+          "description": "Existing exception: crates/lumina-gpu/tests/parity.rs",
+          "file": "crates/lumina-gpu/tests/parity.rs"
+        },
+        {
+          "id": "crates-lumina-gui-src-i18n-rs",
+          "description": "Existing exception: crates/lumina-gui/src/i18n.rs",
+          "file": "crates/lumina-gui/src/i18n.rs"
+        },
+        {
+          "id": "crates-lumina-gui-src-lib-rs",
+          "description": "Existing exception: crates/lumina-gui/src/lib.rs",
+          "file": "crates/lumina-gui/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-gui-src-preview_ctrl-rs",
+          "description": "Existing exception: crates/lumina-gui/src/preview_ctrl.rs",
+          "file": "crates/lumina-gui/src/preview_ctrl.rs"
+        },
+        {
+          "id": "crates-lumina-gui-tests-kittest_snapshots-rs",
+          "description": "Existing exception: crates/lumina-gui/tests/kittest_snapshots.rs",
+          "file": "crates/lumina-gui/tests/kittest_snapshots.rs"
+        },
+        {
+          "id": "crates-lumina-lensfun-src-lib-rs",
+          "description": "Existing exception: crates/lumina-lensfun/src/lib.rs",
+          "file": "crates/lumina-lensfun/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-mcp-tests-mcp-rs",
+          "description": "Existing exception: crates/lumina-mcp/tests/mcp.rs",
+          "file": "crates/lumina-mcp/tests/mcp.rs"
+        },
+        {
+          "id": "crates-lumina-merge-src-bundle-rs",
+          "description": "Existing exception: crates/lumina-merge/src/bundle.rs",
+          "file": "crates/lumina-merge/src/bundle.rs"
+        },
+        {
+          "id": "crates-lumina-onnx-src-denoise-rs",
+          "description": "Existing exception: crates/lumina-onnx/src/denoise.rs",
+          "file": "crates/lumina-onnx/src/denoise.rs"
+        },
+        {
+          "id": "crates-lumina-onnx-src-face-rs",
+          "description": "Existing exception: crates/lumina-onnx/src/face.rs",
+          "file": "crates/lumina-onnx/src/face.rs"
+        },
+        {
+          "id": "crates-lumina-onnx-src-face-backend-rs",
+          "description": "Existing exception: crates/lumina-onnx/src/face/backend.rs",
+          "file": "crates/lumina-onnx/src/face/backend.rs"
+        },
+        {
+          "id": "crates-lumina-onnx-src-manifest-rs",
+          "description": "Existing exception: crates/lumina-onnx/src/manifest.rs",
+          "file": "crates/lumina-onnx/src/manifest.rs"
+        },
+        {
+          "id": "crates-lumina-raw-src-lib-rs",
+          "description": "Existing exception: crates/lumina-raw/src/lib.rs",
+          "file": "crates/lumina-raw/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-sidecar-src-face-rs",
+          "description": "Existing exception: crates/lumina-sidecar/src/face.rs",
+          "file": "crates/lumina-sidecar/src/face.rs"
+        },
+        {
+          "id": "crates-lumina-sidecar-src-lib-rs",
+          "description": "Existing exception: crates/lumina-sidecar/src/lib.rs",
+          "file": "crates/lumina-sidecar/src/lib.rs"
+        },
+        {
+          "id": "crates-lumina-sidecar-src-value_types-rs",
+          "description": "Existing exception: crates/lumina-sidecar/src/value_types.rs",
+          "file": "crates/lumina-sidecar/src/value_types.rs"
+        },
+        {
+          "id": "crates-lumina-sidecar-src-zdata-rs",
+          "description": "Existing exception: crates/lumina-sidecar/src/zdata.rs",
+          "file": "crates/lumina-sidecar/src/zdata.rs"
+        },
+        {
+          "id": "crates-lumina-sidecar-src-zdata-tests-rs",
+          "description": "Existing exception: crates/lumina-sidecar/src/zdata/tests.rs",
+          "file": "crates/lumina-sidecar/src/zdata/tests.rs"
+        }
+      ]
+    }
+  }
+}

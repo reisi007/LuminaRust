@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "rules": {
+    "rust-file-line-ceiling": {
+      "value": 1000,
+      "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling",
+      "scopes": {
+        "crates-lumina-cli-src-main-rs": {
+          "value": 4568
+        },
+        "crates-lumina-cli-src-meta_cli-rs": {
+          "value": 1405
+        },
+        "crates-lumina-core-src-denoise-rs": {
+          "value": 1031
+        },
+        "crates-lumina-core-src-generative-rs": {
+          "value": 1665
+        },
+        "crates-lumina-core-src-lib-rs": {
+          "value": 2830
+        },
+        "crates-lumina-core-src-mask_loader-rs": {
+          "value": 1919
+        },
+        "crates-lumina-core-src-masks-rs": {
+          "value": 1186
+        },
+        "crates-lumina-core-src-pipeline-rs": {
+          "value": 1331
+        },
+        "crates-lumina-core-src-render-rs": {
+          "value": 2536
+        },
+        "crates-lumina-core-src-tone-rs": {
+          "value": 1564
+        },
+        "crates-lumina-gpu-src-geometry-rs": {
+          "value": 1050
+        },
+        "crates-lumina-gpu-src-lib-rs": {
+          "value": 3710
+        },
+        "crates-lumina-gpu-tests-parity-rs": {
+          "value": 2681
+        },
+        "crates-lumina-gui-src-i18n-rs": {
+          "value": 1491
+        },
+        "crates-lumina-gui-src-lib-rs": {
+          "value": 10517
+        },
+        "crates-lumina-gui-src-preview_ctrl-rs": {
+          "value": 1399
+        },
+        "crates-lumina-gui-tests-kittest_snapshots-rs": {
+          "value": 2885
+        },
+        "crates-lumina-lensfun-src-lib-rs": {
+          "value": 1531
+        },
+        "crates-lumina-mcp-tests-mcp-rs": {
+          "value": 1119
+        },
+        "crates-lumina-merge-src-bundle-rs": {
+          "value": 1264
+        },
+        "crates-lumina-onnx-src-denoise-rs": {
+          "value": 1288
+        },
+        "crates-lumina-onnx-src-face-backend-rs": {
+          "value": 1060
+        },
+        "crates-lumina-onnx-src-face-rs": {
+          "value": 1059
+        },
+        "crates-lumina-onnx-src-manifest-rs": {
+          "value": 1160
+        },
+        "crates-lumina-raw-src-lib-rs": {
+          "value": 1572
+        },
+        "crates-lumina-sidecar-src-face-rs": {
+          "value": 1035
+        },
+        "crates-lumina-sidecar-src-lib-rs": {
+          "value": 1322
+        },
+        "crates-lumina-sidecar-src-value_types-rs": {
+          "value": 1863
+        },
+        "crates-lumina-sidecar-src-zdata-rs": {
+          "value": 1835
+        },
+        "crates-lumina-sidecar-src-zdata-tests-rs": {
+          "value": 1265
+        }
+      }
+    }
+  }
+}

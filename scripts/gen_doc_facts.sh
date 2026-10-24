@@ -39,18 +39,17 @@
 # Datei-, Zeilen- oder Mengenangabe. Er enthaelt nur
 #   * das MANIFEST (Block-Id -> Zieldatei) — eine Zuordnung, keine Tatsache,
 #   * die Pfade der Quellen,
-#   * die beiden Schwellen, die er aus den GATE-Skripten liest (500 aus
-#     `scripts/check_file_sizes.sh`, 3000 aus `scripts/check_file_ceiling.sh`),
+#   * die 500er-Schwelle aus `scripts/check_file_sizes.sh` und die 1000er-
+#     Grenze aus dem globalen Ratchet-Baseline-Wert,
 #     damit die Werte nicht an zwei Stellen stehen,
 #   * die **Regelnamen** der Bloecke (z. B. die Referenz-Stage `render_frame`
 #     und der Batch-Pfad `batch/render_export_png` in `perf-baseline`), also die
 #     Form der Regel — nicht deren Zahlen.
 # Die Zeilenauswahl (welche Dateien/IDs in einen Block gehoeren) ist
 # regelbasiert:
-#   * `file-sizes`  — jede Zeile der Ausnahmeliste `scripts/file_size_ceiling.txt`,
-#                     deren erstes Feld eine Zahl ist (die Kommentarzeilen der
-#                     Liste fallen damit automatisch weg).
-#   * `population`  — der Population des Gates `scripts/check_file_ceiling.sh`
+#   * `file-sizes`  — exact-file exception scopes in `ratchet.config.json`,
+#                     with independent values in `ratchet.baseline.json`.
+#   * `population`  — die Population des Ratchet-Gates
 #                     (alle `.rs` unter `crates/` und `agent-harness/`, ohne
 #                     `target/`), gzaehlt und gemessen.
 #   * `goldens`     — dem committeten Lockfile `scripts/golden_ref.lock`
@@ -132,10 +131,10 @@ export LC_ALL=C
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Quellen
-CEILING_LIST="$ROOT/scripts/file_size_ceiling.txt"
+RATCHET_CONFIG="$ROOT/ratchet.config.json"
+RATCHET_BASELINE="$ROOT/ratchet.baseline.json"
 SIZE_BASELINE="$ROOT/scripts/file_size_baseline.txt"
 SIZE_GATE="$ROOT/scripts/check_file_sizes.sh"
-CEILING_GATE="$ROOT/scripts/check_file_ceiling.sh"
 GOLDEN_DIR_REL="crates/lumina-gui/tests/snapshots"
 GOLDEN_LOCK="${LUMINA_GOLDENS_LOCK:-$ROOT/scripts/golden_ref.lock}"
 GOLDEN_INVENTORY="${LUMINA_GOLDEN_INVENTORY:-$ROOT/scripts/golden_inventory.txt}"
@@ -228,41 +227,49 @@ count_matches() {
 }
 
 # ---------------------------------------------------------------- file-sizes
-# Quelle: `scripts/file_size_ceiling.txt` (die Ausnahmeliste) fuer die
-# Auswahl und den Eintrag, `wc -l` fuer den aktuellen Stand, und
+# Quelle: exact-file scopes in `ratchet.config.json` and their independent
+# values in `ratchet.baseline.json`, `wc -l` fuer den aktuellen Stand, and
 # `scripts/file_size_baseline.txt` (die 500er-Liste) fuer den Vergleichs-
 # wert. Die Differenz zwischen den Spalten ist der Drift-Fall: die Datei
 # ist kleiner als der Eintrag (Eintrag zu hoch) oder groesser (Eintrag
 # gerissen).
 gen_file_sizes() {
-    [ -f "$CEILING_LIST" ] || die "Ausnahmeliste nicht lesbar: $CEILING_LIST"
+    [ -f "$RATCHET_CONFIG" ] || die "Ratchet config nicht lesbar: $RATCHET_CONFIG"
+    [ -f "$RATCHET_BASELINE" ] || die "Ratchet baseline nicht lesbar: $RATCHET_BASELINE"
     [ -f "$SIZE_BASELINE" ] || die "500er-Baseline nicht lesbar: $SIZE_BASELINE"
-
-    printf '| Datei | Ist-Stand (Zeilen) | Eintrag `scripts/file_size_ceiling.txt` | Eintrag `scripts/file_size_baseline.txt` |\n'
-    printf '| --- | --- | --- | --- |\n'
-
-    # Regelbasierte Auswahl: jede Zeile der Ausnahmeliste, deren erstes
-    # Feld eine Zahl ist (die Kommentarzeilen fallen damit weg).
-    awk -v tab="$TAB" '$1 ~ /^[0-9]+$/ && NF >= 2 { print $2 tab $1 }' "$CEILING_LIST" > "$WORK/entries"
-    [ -s "$WORK/entries" ] || die "die Ausnahmeliste enthaelt keinen verwertbaren Eintrag"
-
-    while IFS="$TAB" read -r path value; do
-        [ -n "$path" ] || continue
-        [ -f "$ROOT/$path" ] || die "Datei aus der Ausnahmeliste existiert nicht: $path"
-        now=$(wc -l < "$ROOT/$path" | tr -d ' ')
-        base=$(awk -v p="$path" '$1 ~ /^[0-9]+$/ && $2 == p { print $1; exit }' "$SIZE_BASELINE")
-        [ -n "$base" ] || base='-'
-        printf '| `%s` | %s | %s | %s |\n' "$path" "$now" "$value" "$base"
-    done < "$WORK/entries"
+    python3 - "$ROOT" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+rule_id = "rust-file-line-ceiling"
+rule = json.loads((root / "ratchet.config.json").read_text())["rules"][rule_id]
+baseline = json.loads((root / "ratchet.baseline.json").read_text())["rules"][rule_id]
+print('| Datei | Ist-Stand (Zeilen) | Ausnahme-Baseline | Eintrag `scripts/file_size_baseline.txt` |')
+print('| --- | --- | --- | --- |')
+for scope in sorted(rule.get("scopes", []), key=lambda item: item["file"]):
+    path = scope["file"]
+    source = root / path
+    if not source.is_file():
+        raise SystemExit(f"gen_doc_facts: exception file missing: {path}")
+    actual = sum(1 for _ in source.open(encoding="utf-8"))
+    value = baseline.get("scopes", {}).get(scope["id"], {}).get("value")
+    if value is None:
+        raise SystemExit(f"gen_doc_facts: Ratchet baseline missing scope: {scope['id']}")
+    old = '-'
+    for row in (root / "scripts/file_size_baseline.txt").read_text().splitlines():
+        fields = row.split()
+        if len(fields) >= 2 and fields[0].isdigit() and fields[1] == path:
+            old = fields[0]
+            break
+    print(f'| `{path}` | {actual} | {value} | {old} |')
+PY
 }
 
 # ---------------------------------------------------------------- population
-# Quelle: das Dateisystem — dieselbe Population, die `scripts/check_file_ceiling.sh`
-# enumeriert (alle `.rs` unter `crates/` und `agent-harness/`, ohne `target/`).
-# Die Schwellen (500 und 3000) werden aus den beiden GATE-Skripten gelesen.
+# Quelle: das Dateisystem — alle `.rs` unter `crates/` und `agent-harness/`,
+# ohne `target/`. 500 kommt aus dem 500er-Gate, 1000 aus dem Ratchet-Fallback.
 gen_population() {
     threshold=$(read_const "$SIZE_GATE" THRESHOLD)
-    ceiling=$(read_const "$CEILING_GATE" CEILING)
+    ceiling=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rules"]["rust-file-line-ceiling"]["value"])' "$RATCHET_BASELINE")
 
     : > "$WORK/pop.raw"
     for dir in crates agent-harness; do

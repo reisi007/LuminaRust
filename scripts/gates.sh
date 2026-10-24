@@ -16,8 +16,8 @@
 #           5) sh scripts/check_core_prod_fs_free.sh
 #           6) sh scripts/check_ci_tier_drift.sh  (Drift-Gate: die Tier-Liste
 #              gegen die generierte Liste aus `ci.yml`; nur Textvergleich)
-#           7) sh scripts/check_file_ceiling.sh (Zeilen-Obergrenze 3000:
-#              harte Grenze + Ratchet-Richtung; nur Textvergleich)
+#           7) sh scripts/check_file_ceiling.sh (Ratchet v0.5.0 1000-Zeilen-
+#              Obergrenze plus exakte Exception-Validierung)
 #           8) sh scripts/check_doc_facts_drift.sh (Drift-Gate: die Zahlen-
 #              Bloecke in der Prosa gegen den Generator; nur Textvergleich)
 #           9) sh scripts/check_doc_facts_generator.sh (Hygiene-Gate des
@@ -54,12 +54,12 @@
 # Pruefskript zaehlt als FEHLSCHLAG, nicht als Ueberspringen.
 # MIN_CHECKS wurde von 5 auf 6 gehoeben, weil die Stufe `fast` um
 # `fast-6` (Drift-Gate) gewachsen ist, und von 6 auf 7, weil sie um
-# `fast-7` (Zeilen-Obergrenze 3000) gewachsen ist, und von 7 auf 8, weil sie
+# `fast-7` (Zeilen-Obergrenze 1000) gewachsen ist, und von 7 auf 8, weil sie
 # um `fast-8` (Drift-Gate der Prosa-Zahlen) gewachsen ist, und von 8 auf 9,
 # weil sie um `fast-9` (Hygiene-Gate des Generators) gewachsen ist — die
 # Untergrenze muss die Zahl der Checks abbilden, sonst bleibt das Entfernen
 # eines Checks still (2026-10-20, GATE-DRIFT-UND-LUECKEN-84 /
-# FILE-SIZE-CEILING-3K-83 / DOC-ZAHLEN-DRIFT-82).
+# RATCHET-CLI-1K-MIGRATION-99 / DOC-ZAHLEN-DRIFT-82).
 #
 # Das Skript schreibt NICHTS ins Repo, legt keine Dateien an, braucht keine
 # Sonderrechte und laeuft ohne Netz.
@@ -111,9 +111,9 @@ fi
 # mehr nur hier, sondern wird aus `ci.yml` gelesen; Feld 7 ist der (mit
 # `list-ci`) maschinell verglichene Wert.
 #
-# `fast-7` (Zeilen-Obergrenze 3000, FILE-SIZE-CEILING-3K-83) ist der ZWEITE
+# `fast-7` (Zeilen-Obergrenze 1000, RATCHET-CLI-1K-MIGRATION-99) ist der ZWEITE
 # Ratchet ueber Dateigroessen: `fast-2` verbietet Wachstum ueber 500 Zeilen,
-# `fast-7` setzt eine harte Obergrenze 3000 mit Ratchet-Richtung (die Werte
+# `fast-7` setzt eine harte Obergrenze 1000 mit Ratchet-Richtung (die Werte
 # duerfen nur sinken). Zwei Klassen, zwei Gates, beide in dieser Stufe — die
 # SOLL-Zielsemantik steht in `feature/quality/file-size-policy.md`.
 #
@@ -160,7 +160,8 @@ fast-9|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_doc_facts_generator.
 # `id` traegt ein `b`, damit die 22 bisherigen `slow`-Ids **unveraendert**
 # bleiben — eine Umnummerierung waere eine stille Aenderung an der
 # committeten Tier-Liste.
-SLOW_ENTRIES='slow-1|1|Repo-Wurzel|.|Build-Artefakt|cargo check --workspace --all-targets|Rust fast checks
+SLOW_ENTRIES='slow-23|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/install_ratchet.sh|Rust fast checks
+slow-1|1|Repo-Wurzel|.|Build-Artefakt|cargo check --workspace --all-targets|Rust fast checks
 slow-2|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings|Rust fast checks
 slow-3|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy -p lumina-core --features lensfun -- -D warnings|Rust fast checks
 slow-4|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings|Rust fast checks
