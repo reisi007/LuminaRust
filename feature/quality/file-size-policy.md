@@ -20,7 +20,7 @@ so one file's larger exception cannot mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **879** Dateien, davon
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **880** Dateien, davon
 **74** ueber 500 Zeilen und **30** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 
@@ -57,7 +57,7 @@ reviewed as an explicit exception.
 | `crates/lumina-core/src/render.rs` | 2536 | 2536 | 2536 |
 | `crates/lumina-core/src/tone.rs` | 1564 | 1564 | 1564 |
 | `crates/lumina-gpu/src/geometry.rs` | 1050 | 1050 | 1050 |
-| `crates/lumina-gpu/src/lib.rs` | 3374 | 3374 | 3374 |
+| `crates/lumina-gpu/src/lib.rs` | 3019 | 3019 | 3019 |
 | `crates/lumina-gpu/tests/parity.rs` | 2681 | 2681 | 2681 |
 | `crates/lumina-gui/src/i18n.rs` | 1491 | 1491 | 1491 |
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
