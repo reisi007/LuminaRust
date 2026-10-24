@@ -70,11 +70,6 @@
           "file": "crates/lumina-mcp/tests/mcp.rs"
         },
         {
-          "id": "crates-lumina-sidecar-src-lib-rs",
-          "description": "Existing exception: crates/lumina-sidecar/src/lib.rs",
-          "file": "crates/lumina-sidecar/src/lib.rs"
-        },
-        {
           "id": "crates-lumina-sidecar-src-value_types-rs",
           "description": "Existing exception: crates/lumina-sidecar/src/value_types.rs",
           "file": "crates/lumina-sidecar/src/value_types.rs"
