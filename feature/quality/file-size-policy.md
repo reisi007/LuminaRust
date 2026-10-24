@@ -20,8 +20,8 @@ so one file's larger exception cannot mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **892** Dateien, davon
-**78** ueber 500 Zeilen und **23** ueber 1000 Zeilen.
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **896** Dateien, davon
+**80** ueber 500 Zeilen und **19** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 
 ## 3. Permanent ceiling and exceptions
@@ -50,16 +50,12 @@ reviewed as an explicit exception.
 | `crates/lumina-core/src/generative.rs` | 1665 | 1665 | 1665 |
 | `crates/lumina-core/src/lib.rs` | 2830 | 2830 | 2830 |
 | `crates/lumina-core/src/mask_loader.rs` | 1919 | 1919 | 1919 |
-| `crates/lumina-core/src/masks.rs` | 1186 | 1186 | 1186 |
-| `crates/lumina-core/src/pipeline.rs` | 1331 | 1331 | 1331 |
 | `crates/lumina-core/src/render.rs` | 2536 | 2536 | 2536 |
 | `crates/lumina-core/src/tone.rs` | 1564 | 1564 | 1564 |
 | `crates/lumina-gpu/src/lib.rs` | 3018 | 3018 | 3018 |
 | `crates/lumina-gui/src/i18n.rs` | 1491 | 1491 | 1491 |
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
-| `crates/lumina-gui/src/preview_ctrl.rs` | 1399 | 1399 | 1399 |
 | `crates/lumina-gui/tests/kittest_snapshots.rs` | 2885 | 2885 | 2885 |
-| `crates/lumina-lensfun/src/lib.rs` | 1531 | 1531 | 1531 |
 | `crates/lumina-mcp/tests/mcp.rs` | 1119 | 1119 | 1154 |
 | `crates/lumina-merge/src/bundle.rs` | 1264 | 1264 | 1264 |
 | `crates/lumina-onnx/src/denoise.rs` | 1288 | 1288 | 1288 |

@@ -45,16 +45,6 @@
           "file": "crates/lumina-core/src/mask_loader.rs"
         },
         {
-          "id": "crates-lumina-core-src-masks-rs",
-          "description": "Existing exception: crates/lumina-core/src/masks.rs",
-          "file": "crates/lumina-core/src/masks.rs"
-        },
-        {
-          "id": "crates-lumina-core-src-pipeline-rs",
-          "description": "Existing exception: crates/lumina-core/src/pipeline.rs",
-          "file": "crates/lumina-core/src/pipeline.rs"
-        },
-        {
           "id": "crates-lumina-core-src-render-rs",
           "description": "Existing exception: crates/lumina-core/src/render.rs",
           "file": "crates/lumina-core/src/render.rs"
@@ -80,19 +70,9 @@
           "file": "crates/lumina-gui/src/lib.rs"
         },
         {
-          "id": "crates-lumina-gui-src-preview_ctrl-rs",
-          "description": "Existing exception: crates/lumina-gui/src/preview_ctrl.rs",
-          "file": "crates/lumina-gui/src/preview_ctrl.rs"
-        },
-        {
           "id": "crates-lumina-gui-tests-kittest_snapshots-rs",
           "description": "Existing exception: crates/lumina-gui/tests/kittest_snapshots.rs",
           "file": "crates/lumina-gui/tests/kittest_snapshots.rs"
-        },
-        {
-          "id": "crates-lumina-lensfun-src-lib-rs",
-          "description": "Existing exception: crates/lumina-lensfun/src/lib.rs",
-          "file": "crates/lumina-lensfun/src/lib.rs"
         },
         {
           "id": "crates-lumina-mcp-tests-mcp-rs",
