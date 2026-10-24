@@ -251,6 +251,24 @@ erzwingt einen Mindeststand:
   hinzukam; ein Floor, der unter der Zahl der Checks liegt, würde das
   Entfernen eines Checks still werden lassen.)
 
+
+
+### 4.1 Ratchet-Floor der Regel `rust-file-line-ceiling`
+
+Unabhaengig von `MIN_CHECKS` hat die Ratchet-Konfiguration einen eigenen
+`tiers.fast.floor` (`ratchet.config.json`). Er zaehlt die **gestarteten
+Checks der Regel** (ein Aggregat-Check plus je Ausnahme-Datei ein Check) und
+verhinderte bisher, dass eine geschrumpfte Ausnahmeliste still weniger
+Pruefungen ausfuehrt. Mit dem Umbau `FILE-SIZE-1000-ALL-EXCEPTIONS-100` sinkt
+diese Zahl planmaessig bis auf **1** (nur noch der Aggregat-Check, sobald die
+Ausnahmeliste leer ist); der Floor steht deshalb seit 2026-10-24 auf 1.
+Die Eigenschaft, die der Floor schuetzen sollte, ist damit nicht aufgegeben:
+`scripts/check_ratchet_exceptions.py` laeuft unmittelbar davor und erzwingt
+binar, dass **jede** Datei ueber 1 000 Zeilen einen exakten Ausnahme-Eintrag
+hat, dass kein Eintrag veraltet ist und dass Konfiguration und Baseline
+dieselben Scopes tragen — eine fehlende oder ueberzaehlige Pruefung ist dort
+ein Fehler, kein stiller Pass.
+
 Der Floor ist die einzige Zahl, die der Runner selbst erzwingt; alle
 anderen Werte in diesem Dokument sind gemessen oder zitiert.
 

@@ -2,7 +2,7 @@
   "name": "LuminaRust",
   "tiers": {
     "fast": {
-      "floor": 10
+      "floor": 1
     }
   },
   "rules": {
