@@ -237,37 +237,7 @@ jobs:
       # This `--features gpu` check additionally compile-checks the GPU code so
       # it cannot silently bit-rot; onnx-rt has no runner-hardware reason.
       - name: Check GPU feature compiles
-        run: cargo check -p lumina-gpu --features gpu
-
-      # CLI-FEATURE-BUILD-GATE (CLI-GPU-BUILD-1, Release 1.0): each feature
-      # DECLARED in crates/lumina-cli/Cargo.toml must compile ON ITS OWN. The
-      # GPU check above only covers `lumina-gpu`; it never compiled the CLI's
-      # own `gpu` feature, which is exactly how the 2026-10-02 break stayed
-      # invisible: a stray `#[cfg(feature = "lensfun")]` stacked onto
-      # `#[cfg(feature = "gpu")] use lumina_gpu::{…}` and `--features gpu`
-      # alone died with 6 errors while `--features gpu,lensfun` was green.
-      # Feature list is read from the manifest, so a newly declared feature is
-      # covered automatically. Mutation-proven (re-adding the orphan attribute
-      # turns this step red on `gpu` and leaves `lensfun` green).
-      - name: Check every CLI feature compiles on its own
-        run: sh scripts/check_cli_features.sh
-
-      # FEATURE-MATRIX-GATE-79: the CI compiles only a SUBSET of the declared
-      # feature combinations of the workspace. Measured defect: the test module
-      # crates/lumina-mcp/src/util.rs is `#[cfg(all(test, feature = "gpu"))]`
-      # and no CI job built `lumina-mcp --features gpu` — four field accesses
-      # there survived the Q5 encapsulation unnoticed and only became visible
-      # through a targeted `cargo check -p lumina-mcp --all-targets --features
-      # gpu` (exit 101). This gate compiles, per workspace crate, every feature
-      # set DECLARED in its Cargo.toml (union `--all-features` + the individual
-      # feature axis), reading the feature lists from the manifests so a newly
-      # declared feature is covered automatically. It is compile-only (no
-      # adapter, no runtime test) and uses `cargo check` (no link), so the
-      # onnx-rt host LINK gate (glibc 2.36 < 2.38) cannot turn this step red.
-      # Mutation-proven: an injected `routed.pixels` in the gpu-gated test
-      # module turns this step red with file:line.
-      - name: Check every workspace crate's declared feature sets compile
-        run: sh scripts/check_feature_matrix.sh
+        run: sh scripts/gates.sh headless compile
 
       - name: Check benchmark harness (all features)
         run: cargo check -p lumina-bench --all-features
@@ -303,41 +273,7 @@ jobs:
       # This is the sole owner of lumina-gui tests; rust-test-rest explicitly
       # excludes that package to avoid running the GUI suite twice.
       - name: Run GUI tests
-        run: cargo test -p lumina-gui --all-targets
-
-      # TEST-ORPHAN-97 (GATE-DRIFT-UND-LUECKEN-84): der Schritt oben baut die
-      # dep-info des Test-Targets (`target/debug/deps/lumina_gui-*.d`), die
-      # dieser Gate braucht. Deshalb steht er HIER, unmittelbar nach dem
-      # Test-Schritt desselben Jobs: die dep-info des Test-Builds liegt da
-      # frisch vor. Fehlt sie, endet `check_test_orphans.sh` mit Exit 2
-      # ("cannot conclude"); der Schritt ist blockierend (kein
-      # `continue-on-error`), der Job wird dann rot. Das ist gewollt — ein
-      # stilles "cannot conclude" wuerde die Schranke wirkungslos machen.
-      # Voraussetzung fuer Exit 0 ist ein Default-Feature-Build:
-      # `lumina-gui` hat `default = ["lensfun", "gpu"]`
-      # (crates/lumina-gui/Cargo.toml), damit ist der Sentinel
-      # `src/tests/lensfun_diagnostics.rs` (feature-gegatet) im dep-info
-      # enthalten und der Gate kann conclude. Scope: `lumina-gui` — die
-      # uebrigen Crates mit `src/tests/` bleiben lokal manuell
-      # (scripts/check_test_orphans.sh <crate>), siehe §5.1 der Doku.
-      - name: Check for orphaned test files (TEST-ORPHAN-97)
-        run: sh scripts/check_test_orphans.sh lumina-gui
-
-      # GUI-JANKLOG-19 / CI-JANKLOG-47: `src/jank_log.rs` is gated
-      # `#[cfg(all(feature = "janklog", debug_assertions))]` (lib.rs) and
-      # `janklog` is opt-in, not in `default` — so the step above never even
-      # compiles that file and a change to it could break with CI green.
-      # Measured: `cargo test -p lumina-gui --lib` = 905 passed,
-      # `--lib --features janklog` = 912, i.e. exactly the 7 `jank_log::tests`.
-      # Additive: the default-feature run above stays 905. `janklog = []` adds
-      # no dependency, so only lumina-gui's own lib target is recompiled on the
-      # warm target dir, and `--lib` (not `--all-targets`) keeps the kittest
-      # goldens/benches out of a second run. `cargo test` builds with
-      # `debug_assertions` (the gate's second half) and the 7 tests use the
-      # same headless `LuminaApp` API as the default suite, so no GPU adapter
-      # and no extra fixture is required.
-      - name: Run janklog feature tests
-        run: cargo test -p lumina-gui --lib --features janklog
+        run: sh scripts/gates.sh headless gui
 
   rust-test-rest:
     name: Rust tests (excluding GUI)
@@ -378,52 +314,7 @@ jobs:
       # the harness, and the dedicated bench job owns its optional,
       # non-blocking execution.
       - name: Run non-GUI workspace tests
-        run: cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench
-
-      # vendor/libraw-sys is intentionally NOT a workspace member, so the
-      # `cargo test --workspace` above never enters it. These ABI-layout
-      # asserts (build-time C _Static_assert + Rust const-asserts + runtime
-      # crosscheck) are the regression net for REVIEW-RAW-ABI-1 and must run
-      # in CI. The CI container ships LibRaw 0.22.2 (OCI label
-      # lumina.libraw_version), satisfying the build.rs version gate.
-      - name: Run vendored libraw-sys ABI tests
-        run: cargo test -p libraw-sys
-
-      - name: Run native zdata tests
-        run: cargo test -p lumina-sidecar --features zdata
-
-      - name: Run Lensfun feature tests
-        # liblensfun is now installed in the CI container (see docker/Dockerfile,
-        # ci-libraw-image.yml). This step covers the `lumina-lensfun` FFI
-        # (`native` feature) plus the `lumina-core` `lensfun` pipeline
-        # integration (byte-identical fallback + real distortion/vignette
-        # correction against the system Lensfun database) AND the `lumina-cli`
-        # `lensfun` wiring, whose `tests::lensfun` module (10 tests, including
-        # the LENSFUN-CALLER-PRODSEAM-40 production-seam test) is behind
-        # `#[cfg(feature = "lensfun")]` and therefore never compiled — let alone
-        # run — by the default-feature workspace test above. Per F-098-N3 / M2 we
-        # do NOT build the whole workspace with mixed features; the three crates
-        # are selected explicitly with their synchronized features.
-        run: cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun
-
-      # onnx-rt remains a required test gate; its Clippy/check counterpart is
-      # in rust-fast, while this shard owns the feature-specific test run.
-      - name: Run onnx-rt tests
-        run: cargo test -p lumina-onnx --features onnx-rt
-
-      # CI-CLI-GPU-TESTBUILD-68: the CLI's own GPU test targets. The routing
-      # cells (P0/P1.2/invisible/neutral predicate, neutral no-op of the pass,
-      # mask-free composite no-op, WB routing) are pure recipe state and run
-      # WITHOUT a GPU adapter — they carry real CI assertions. The adapter-
-      # dependent cells (byte-identical parity, GPU route, unavailable-mask
-      # refusal, lensfun GPU route) print an explicit SKIP verdict and return
-      # when no adapter is present, so a GPU-less runner never counts a silent
-      # pass. The testbuild itself (compile) is gated in rust-fast via
-      # scripts/check_cli_features.sh --features gpu --all-targets.
-      # `--bin lumina-cli` (not `--lib`): the crate is a binary; the gpu-gated
-      # unit tests live in `src/tests/` and compile into the bin target.
-      - name: Run CLI GPU tests (adapter-free cells)
-        run: cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun
+        run: sh scripts/gates.sh headless rest
 
   # HARNESS-GATES-73: `agent-harness/` is a SECOND Cargo workspace — its
   # Cargo.toml starts with its own [workspace] table and it has its own

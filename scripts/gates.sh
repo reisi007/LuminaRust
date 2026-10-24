@@ -2,9 +2,9 @@
 # Lokale Gate-Stufen fuer LuminaRust (LOCAL-GATE-TIERS-81; Skill
 # `ratchet-gates`, agents-skills `70d49e0`).
 #
-# Zweck: ZWEI BENANNTE, DOKUMENTIERTE und LOKAL LAEUFBARE Gate-Stufen. Der
-# Skill nennt eine Stufe, die niemand benennen, laufen oder reproduzieren
-# kann, keine Stufe; beide Stufen stehen deshalb hier, und ihre Definition
+# Zweck: BENANNTE, DOKUMENTIERTE und LOKAL LAEUFBARE Gate-Stufen. Der Skill
+# nennt eine Stufe, die niemand benennen, laufen oder reproduzieren kann,
+# keine Stufe; die Tiers stehen deshalb hier, und ihre Definition
 # ist die EINZIGE Quelle der Wahrheit fuer die Doku
 # (`feature/quality/local-gates.md`).
 #
@@ -154,46 +154,52 @@ fast-9|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_doc_facts_generator.
 # Angabe ist `agent-harness` (zweites Cargo-Workspace).
 # `slow-21` und `slow-22` sind im CI `continue-on-error: true` und deshalb
 # hier nicht blockierend.
-# `slow-10b` ist der Orphan-Test-Gate (TEST-ORPHAN-97): er haengt an
-# `slow-10`, weil nur der Test-Build die dep-info erzeugt, die das Skript
-# braucht (Vorbedingung, siehe `feature/quality/local-gates.md` §5.1). Die
-# `id` traegt ein `b`, damit die 22 bisherigen `slow`-Ids **unveraendert**
-# bleiben — eine Umnummerierung waere eine stille Aenderung an der
-# committeten Tier-Liste.
+# Die headless GUI-Gruppe fuehrt den Orphan-Test-Gate (TEST-ORPHAN-97)
+# unmittelbar nach dem Test-Build aus, weil nur dieser Build die dep-info
+# erzeugt, die das Skript braucht (siehe `feature/quality/local-gates.md` §5.1).
 SLOW_ENTRIES='slow-23|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/install_ratchet.sh|Rust fast checks
 slow-1|1|Repo-Wurzel|.|Build-Artefakt|cargo check --workspace --all-targets|Rust fast checks
 slow-2|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings|Rust fast checks
 slow-3|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy -p lumina-core --features lensfun -- -D warnings|Rust fast checks
 slow-4|1|Repo-Wurzel|.|Build-Artefakt|cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings|Rust fast checks
 slow-5|1|Repo-Wurzel|.|Build-Artefakt|cargo check -p lumina-onnx --features onnx-rt|Rust fast checks
-slow-6|1|Repo-Wurzel|.|Build-Artefakt|cargo check -p lumina-gpu --features gpu|Rust fast checks
-slow-7|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_cli_features.sh|Rust fast checks
-slow-8|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_feature_matrix.sh|Rust fast checks
+slow-headless-compile|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/gates.sh headless compile|Rust fast checks
 slow-9|1|Repo-Wurzel|.|Build-Artefakt|cargo check -p lumina-bench --all-features|Rust fast checks
-slow-10|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --all-targets|Rust GUI tests
-slow-10b|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_test_orphans.sh lumina-gui|Rust GUI tests
-slow-11|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --lib --features janklog|Rust GUI tests
-slow-12|1|Repo-Wurzel|.|Build-Artefakt|cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench|Rust tests (excluding GUI)
-slow-13|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p libraw-sys|Rust tests (excluding GUI)
-slow-14|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-sidecar --features zdata|Rust tests (excluding GUI)
-slow-15|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun|Rust tests (excluding GUI)
-slow-16|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-onnx --features onnx-rt|Rust tests (excluding GUI)
-slow-17|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun|Rust tests (excluding GUI)
+slow-headless-gui|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/gates.sh headless gui|Rust GUI tests
+slow-headless-rest|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/gates.sh headless rest|Rust tests (excluding GUI)
 slow-18|1|agent-harness|agent-harness|keine Infrastruktur|cargo fmt --check|Rust agent-harness
 slow-19|1|agent-harness|agent-harness|Build-Artefakt|cargo clippy --all-targets -- -D warnings|Rust agent-harness
 slow-20|1|agent-harness|agent-harness|Build-Artefakt|cargo test|Rust agent-harness
 slow-21|0|Repo-Wurzel|.|Build-Artefakt|cargo bench -p lumina-bench -- --sample-size 50 --warm-up-time 2|Benchmarks (optional)
 slow-22|0|Repo-Wurzel|.|Build-Artefakt|node scripts/perf/compare.mjs --mode warn --report-dir perf/results|Benchmarks (optional)'
 
+# Headless coverage: compile GPU features and run adapter-free test shards.
+HEADLESS_COMPILE='headless-compile-1|1|Repo-Wurzel|.|Build-Artefakt|cargo check -p lumina-gpu --features gpu|
+headless-compile-2|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_cli_features.sh|
+headless-compile-3|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_feature_matrix.sh'
+HEADLESS_GUI='headless-gui-1|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --all-targets|
+headless-gui-2|1|Repo-Wurzel|.|Build-Artefakt|sh scripts/check_test_orphans.sh lumina-gui|
+headless-gui-3|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-gui --lib --features janklog'
+HEADLESS_REST='headless-rest-1|1|Repo-Wurzel|.|Build-Artefakt|cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench|
+headless-rest-2|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p libraw-sys|
+headless-rest-3|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-sidecar --features zdata|
+headless-rest-4|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun|
+headless-rest-5|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-onnx --features onnx-rt|
+headless-rest-6|1|Repo-Wurzel|.|Build-Artefakt|cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun'
+GPU_ENTRIES='gpu-1|1|Repo-Wurzel|.|GPU-Adapter|cargo test -p lumina-gpu --features gpu-adapter-tests|'
+
 usage() {
     cat <<'EOF'
-Usage: sh scripts/gates.sh <fast|slow|all|list|list-ci|help>
+Usage: sh scripts/gates.sh <fast|slow|all|headless [gui|rest|all]|gpu|full|list|list-ci|help>
 
   fast   Schnelle Stufe (Sekunden, kein Codegen): cargo fmt + 8 Textgates.
          Floor: mindestens 9 gestartete Checks, sonst FAIL (Exit 1).
   slow   Langsame Stufe (Minuten): CI-Mirror der Rust-Jobs aus
          .github/workflows/ci.yml, Fail fast.
   all    fast, danach slow.
+  headless [gui|rest|all]  adapterfreie Tests und GPU-Feature-Compilechecks.
+  gpu    echte Adaptertests (setzt GPU-Adapter voraus; fehlender Adapter ist rot).
+  full   headless, danach GPU-Hardwaretests.
   list   Tier-Tabelle (eine Quelle der Wahrheit fuer die Doku) auf stdout.
   list-ci  Ableitbare CI-Sicht (blocking|wd-pfad|kommando|job) auf stdout —
          das Vergleichsformat des Drift-Gates (scripts/check_ci_tier_drift.sh).
@@ -215,6 +221,10 @@ print_list() {
     printf '%s\n' "$SLOW_ENTRIES" |
         awk -F'|' -v tier=slow -v budget=Minuten \
             '{printf "| %s | %s | `%s` | %s | %s | %s |\n", $1, tier, $6, $3, budget, $5}'
+    for tier_entries in "$HEADLESS_COMPILE" "$HEADLESS_GUI" "$HEADLESS_REST" "$GPU_ENTRIES"; do
+        printf '%s\n' "$tier_entries" |
+            awk -F'|' '{tier = ($1 ~ /^gpu-/ ? "gpu" : "headless"); printf "| %s | %s | `%s` | %s | Minuten | %s |\n", $1, tier, $6, $3, $5}'
+    done
 }
 
 # Die ABLEITBARE Sicht der CI-Spiegelung — genau die Felder, die der
@@ -376,6 +386,25 @@ case "${1:-}" in
         ;;
     slow)
         run_tier slow "$SLOW_ENTRIES" 0 || exit 1
+        ;;
+    headless)
+        group=${2:-all}
+        case "$group" in
+            compile) run_tier headless-compile "$HEADLESS_COMPILE" 3 ;;
+            gui) run_tier headless-gui "$HEADLESS_GUI" 3 ;;
+            rest) run_tier headless-rest "$HEADLESS_REST" 6 ;;
+            all) run_tier headless-compile "$HEADLESS_COMPILE" 3 && run_tier headless-gui "$HEADLESS_GUI" 3 && run_tier headless-rest "$HEADLESS_REST" 6 ;;
+            *) echo "FEHLER: unbekannte headless-Gruppe: $group" >&2; exit 2 ;;
+        esac || exit 1
+        ;;
+    gpu)
+        run_tier gpu "$GPU_ENTRIES" 1 || exit 1
+        ;;
+    full)
+        run_tier headless-compile "$HEADLESS_COMPILE" 3 || exit 1
+        run_tier headless-gui "$HEADLESS_GUI" 3 || exit 1
+        run_tier headless-rest "$HEADLESS_REST" 6 || exit 1
+        run_tier gpu "$GPU_ENTRIES" 1 || exit 1
         ;;
     all)
         assert_no_codegen || exit 1

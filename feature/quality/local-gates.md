@@ -1,10 +1,11 @@
-# Lokale Gate-Stufen (fast / slow)
+# Lokale Gate-Stufen (fast / slow / headless / gpu / full)
 
 **Feature-IDs:** LOCAL-GATE-TIERS-81, GATE-DRIFT-UND-LUECKEN-84,
 DOC-ZAHLEN-DRIFT-82
 **Status:** umgesetzt (Runner `scripts/gates.sh`, Tier-Tabelle in §3, Floor in
-§4, Lückenliste in §5); die CI fährt die schnelle Stufe über denselben
-Runner (§6) und prüft die Spiegelung der Tier-Liste gegen `ci.yml` (§7) sowie
+§4, Lückenliste in §5); die CI fährt die schnelle Stufe und die parallel
+aufgeteilten headless-Gruppen über denselben Runner (§6) und prüft die
+Spiegelung der Tier-Liste gegen `ci.yml` (§7) sowie
 die Zahlen der Prosa gegen ihren Generator (§8) und den Generator selbst
 gegen Determinismus und Git-Freiheit (§8.5).
 **Herkunft:** Skill `ratchet-gates` (agents-skills `70d49e0`), Range
@@ -18,10 +19,11 @@ macOS-Gate), `feature/quality/performance-benchmarks.md` (Bench-Budgets).
 ## Inhaltsverzeichnis
 
 - [1. Zweck](#1-zweck)
-- [2. Die zwei Stufen](#2-die-zwei-stufen)
+- [2. Die Stufen](#2-die-stufen)
   - [2.1 `fast` — Sekunden, ohne Codegen](#21-fast--sekunden-ohne-codegen)
   - [2.2 `slow` — Minuten, CI-Mirror](#22-slow--minuten-ci-mirror)
   - [2.3 `list`, `list-ci` und `all`](#23-list-list-ci-und-all)
+  - [2.4 `headless`, `gpu` und `full`](#24-headless-gpu-und-full)
 - [3. Tier-Tabelle](#3-tier-tabelle)
 - [4. Floor-Regel der schnellen Stufe](#4-floor-regel-der-schnellen-stufe)
 - [5. Lückenliste](#5-lückenliste)
@@ -41,6 +43,7 @@ macOS-Gate), `feature/quality/performance-benchmarks.md` (Bench-Budgets).
   - [8.4 Grenzen](#84-grenzen)
   - [8.5 Der Hygiene-Gate des Generators (`fast-9`)](#85-der-hygiene-gate-des-generators-fast-9)
 - [9. Bekannte Grenzen](#9-bekannte-grenzen)
+- [10. Headless- und Hardware-Stufen](#10-headless-und-hardware-stufen)
 
 ---
 
@@ -56,8 +59,8 @@ Antwort im Repo.
 
 Dieses Dokument und der Runner `scripts/gates.sh` liefern diese Antwort:
 
-1. **zwei benannte Stufen** — `fast` (Sekunden) und `slow` (Minuten), beide
-   lokal startbar, beide mit fester Kommando-Menge;
+1. **benannte Stufen** — `fast`, `slow`, `headless`, `gpu` und `full`, mit
+   festen Kommando-Mengen und klar getrennter Hardwareabhängigkeit;
 2. **ein Floor für die schnelle Stufe** — sie meldet nur „grün", wenn
    tatsächlich mindestens neun Checks gelaufen sind (§4);
 3. **eine Lückenliste** — jede Defektklasse, die keine Stufe abdeckt, steht
@@ -71,7 +74,7 @@ Die Tier-Tabelle in §3 ist **wortgleich** mit der Ausgabe von
 `sh scripts/gates.sh list`. Der Runner ist die Quelle der Wahrheit; diese
 Tabelle ist eine Kopie, kein zweiter Bestand.
 
-## 2. Die zwei Stufen
+## 2. Die Stufen
 
 ### 2.1 `fast` — Sekunden, ohne Codegen
 
@@ -127,8 +130,8 @@ sh scripts/gates.sh slow
 - **Fail fast:** der erste Fehlschlag bricht die Stufe ab (das dauert
   Minuten). Ausnahme: `slow-21` und `slow-22` sind wie im CI
   `continue-on-error` (nicht blockierend) und werden als solcher gemeldet.
-- **Reihenfolge-Abhängigkeit:** `slow-10b` (der Orphan-Test-Gate) liest die
-  dep-info, die `slow-10` erzeugt — er steht deshalb **unmittelbar danach**
+- **Reihenfolge-Abhängigkeit:** `headless-gui-2` (der Orphan-Test-Gate) liest die
+  dep-info, die `headless-gui-1` erzeugt — er steht deshalb **unmittelbar danach**
   in der Liste. Ohne den vorherigen Test-Build endet er mit Exit 2
   („cannot conclude"), also mit einem Ergebnis ohne Aussage.
 - **Gleichheit mit der Merge-Schranke:** die Kommandos sind eins zu eins
@@ -158,6 +161,24 @@ aus `ci.yml` zieht — sie sind die Vergleichsgrundlage des Drift-Gates (§7).
 `all` bricht ab, wenn `fast` rot ist — nach einem roten
 `fast` ist die Aussage „slow ist grün" wertlos.
 
+### 2.4 `headless`, `gpu` und `full`
+
+```sh
+sh scripts/gates.sh headless compile
+sh scripts/gates.sh headless gui
+sh scripts/gates.sh headless rest
+sh scripts/gates.sh headless all
+sh scripts/gates.sh gpu
+sh scripts/gates.sh full
+```
+
+`headless` enthält die GPU-Feature-Kompilierung und alle adapterfreien Test-
+Shards. Die drei benannten Gruppen entsprechen den parallel laufenden
+Rust-CI-Jobs; `headless all` führt sie lokal nacheinander aus. `gpu` aktiviert
+die adapterabhängigen `lumina-gpu` Integrationstests und muss auf einem Rechner
+mit unterstütztem wgpu-Adapter laufen. `full` ist genau `headless all` gefolgt
+von `gpu`; die GPU-Stufe ist absichtlich nicht Teil der CI.
+
 ## 3. Tier-Tabelle
 
 Wortgleich mit `sh scripts/gates.sh list`:
@@ -173,33 +194,37 @@ Wortgleich mit `sh scripts/gates.sh list`:
 | fast-7 | fast | `sh scripts/check_file_ceiling.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-8 | fast | `sh scripts/check_doc_facts_drift.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-9 | fast | `sh scripts/check_doc_facts_generator.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
+| slow-23 | slow | `sh scripts/install_ratchet.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-1 | slow | `cargo check --workspace --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-2 | slow | `cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-3 | slow | `cargo clippy -p lumina-core --features lensfun -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-4 | slow | `cargo clippy -p lumina-onnx --features onnx-rt -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-5 | slow | `cargo check -p lumina-onnx --features onnx-rt` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-6 | slow | `cargo check -p lumina-gpu --features gpu` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-7 | slow | `sh scripts/check_cli_features.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-8 | slow | `sh scripts/check_feature_matrix.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
+| slow-headless-compile | slow | `sh scripts/gates.sh headless compile` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-9 | slow | `cargo check -p lumina-bench --all-features` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-10 | slow | `cargo test -p lumina-gui --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-10b | slow | `sh scripts/check_test_orphans.sh lumina-gui` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-11 | slow | `cargo test -p lumina-gui --lib --features janklog` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-12 | slow | `cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-13 | slow | `cargo test -p libraw-sys` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-14 | slow | `cargo test -p lumina-sidecar --features zdata` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-15 | slow | `cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-16 | slow | `cargo test -p lumina-onnx --features onnx-rt` | Repo-Wurzel | Minuten | Build-Artefakt |
-| slow-17 | slow | `cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun` | Repo-Wurzel | Minuten | Build-Artefakt |
+| slow-headless-gui | slow | `sh scripts/gates.sh headless gui` | Repo-Wurzel | Minuten | Build-Artefakt |
+| slow-headless-rest | slow | `sh scripts/gates.sh headless rest` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-18 | slow | `cargo fmt --check` | agent-harness | Minuten | keine Infrastruktur |
 | slow-19 | slow | `cargo clippy --all-targets -- -D warnings` | agent-harness | Minuten | Build-Artefakt |
 | slow-20 | slow | `cargo test` | agent-harness | Minuten | Build-Artefakt |
 | slow-21 | slow | `cargo bench -p lumina-bench -- --sample-size 50 --warm-up-time 2` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-22 | slow | `node scripts/perf/compare.mjs --mode warn --report-dir perf/results` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-compile-1 | headless | `cargo check -p lumina-gpu --features gpu` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-compile-2 | headless | `sh scripts/check_cli_features.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-compile-3 | headless | `sh scripts/check_feature_matrix.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-gui-1 | headless | `cargo test -p lumina-gui --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-gui-2 | headless | `sh scripts/check_test_orphans.sh lumina-gui` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-gui-3 | headless | `cargo test -p lumina-gui --lib --features janklog` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-1 | headless | `cargo test --workspace --all-targets --exclude lumina-gui --exclude lumina-sidecar --exclude lumina-bench` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-2 | headless | `cargo test -p libraw-sys` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-3 | headless | `cargo test -p lumina-sidecar --features zdata` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-4 | headless | `cargo test -p lumina-lensfun --features native -p lumina-core --features lensfun -p lumina-cli --features lensfun` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-5 | headless | `cargo test -p lumina-onnx --features onnx-rt` | Repo-Wurzel | Minuten | Build-Artefakt |
+| headless-rest-6 | headless | `cargo test -p lumina-cli --bin lumina-cli --features gpu,lensfun` | Repo-Wurzel | Minuten | Build-Artefakt |
+| gpu-1 | gpu | `cargo test -p lumina-gpu --features gpu-adapter-tests` | Repo-Wurzel | Minuten | GPU-Adapter |
 
-**Kein Eintrag braucht einen Adapter.** Der Wert „Adapter" kommt in dieser
-Tabelle nicht vor, weil die CI keinen GPU-Runner hat — die Adapter-Pfade
-sind die Lücke in §5.2, nicht ein Eintrag hier.
+Nur `gpu-1` braucht einen Adapter; es ist ausdrücklich kein CI-Eintrag. Alle
+`headless`-Zeilen sind ohne Hardwareadapter ausführbar.
 
 ## 4. Floor-Regel der schnellen Stufe
 
@@ -246,13 +271,13 @@ die Stufe `slow` existiert:
 | --- | --- | --- |
 | Compile-Bruch nach einer Änderung | Workspace-Kompilierbarkeit | `slow-1` |
 | Lint-Bruch (`-D warnings`) | Clippy, inkl. Feature-Varianten | `slow-2` bis `slow-4` |
-| Feature-Kombination, die nicht baut | onnx-rt-, GPU- und CLI-Feature-Gates | `slow-5` bis `slow-8` |
-| Feature-Isolation (Feature baut nur mit anderem) | CLI- und Feature-Matrix-Gate | `slow-7`, `slow-8` |
-| Laufzeit-Regression im Workspace | Test-Shards | `slow-10` bis `slow-17` |
+| Feature-Kombination, die nicht baut | onnx-rt-, GPU- und CLI-Feature-Gates | `slow-5`, `headless-compile` |
+| Feature-Isolation (Feature baut nur mit anderem) | CLI- und Feature-Matrix-Gate | `headless-compile` |
+| Laufzeit-Regression im Workspace | Test-Shards | `headless-gui`, `headless-rest` |
 | Bit-Rot in der zweiten Workspace `agent-harness/` | fmt/clippy/test dort | `slow-18` bis `slow-20` |
-| **Testdatei, die kein Compilation-Target liest** (toter Test) | dep-info des Test-Builds: jede `*.rs` unter `crates/lumina-gui/src/tests/` muss im dep-info mindestens einer Test-Kompilationseinheit stehen | `slow-10b` (CI: Schritt „Check for orphaned test files (TEST-ORPHAN-97)" im Job „Rust GUI tests") |
+| **Testdatei, die kein Compilation-Target liest** (toter Test) | dep-info des Test-Builds: jede `*.rs` unter `crates/lumina-gui/src/tests/` muss im dep-info mindestens einer Test-Kompilationseinheit stehen | `headless-gui-2` (CI: Headless-GUI-Gruppe im Job „Rust GUI tests") |
 
-**Vorbedingung für `slow-10b`:** der Gate liest die dep-info einer
+**Vorbedingung für `headless-gui-2`:** der Gate liest die dep-info einer
 Kompilationseinheit, die das **Test-Target** (also mit `cfg(test)`)
 kompiliert hat. Nicht der *Befehl* ist die tragende Vorbedingung — auch
 `cargo check --all-targets` erzeugt Test-Target-dep-info —, sondern die vier
@@ -276,7 +301,7 @@ endet es mit **Exit 2** („cannot conclude"):
    Build enthält ihn (`default = ["lensfun", "gpu"]`,
    `crates/lumina-gui/Cargo.toml:74`).
 
-Deshalb steht `slow-10b` unmittelbar nach `slow-10`
+Deshalb steht `headless-gui-2` unmittelbar nach `headless-gui-1`
 (`cargo test -p lumina-gui --all-targets`, CI-Job „Rust GUI tests"): dort
 liegt die dep-info eines **frischen** Test-Builds vor, der alle vier
 Bedingungen erfüllt. **Scope:** `lumina-gui`. Die fünf weiteren Crates mit
@@ -295,15 +320,15 @@ Eine **geschlossene** Klasse bleibt als Zeile stehen und ist als solche
 markiert (mit dem Beleg, der sie schließt). Sie wird nicht stillschweigend
 entfernt: eine Lücke, die verschwindet, ohne dass jemand ihren Abschluss
 benennt, ist eine Lücke, die wiederkehrt. Eine Klasse, die **erzwungen**
-wird, wandert nach §5.1 — die Klasse „Testdatei, die kein Compilation-Target
-liest" ist seit `GATE-DRIFT-UND-LUECKEN-84` erzwungen (`slow-10b`, plus CI-
+ wird, wandert nach §5.1 — die Klasse „Testdatei, die kein Compilation-Target
+liest" ist seit `GATE-DRIFT-UND-LUECKEN-84` erzwungen (`headless-gui-2`, plus CI-
 Schritt „Check for orphaned test files (TEST-ORPHAN-97)" im Job „Rust GUI
 tests") und steht deshalb in §5.1.
 
 | Defektklasse | Grund (warum nicht gedeckt) | Owner | Task-ID |
 | --- | --- | --- | --- |
-| **GPU-/wgpu-Adapter-Pfade (Metal/Vulkan)**: CPU↔GPU-Byte-Parität, VRAM-Pixel, Adapter-Fehlerkanäle, kittest-Goldens gegen echten Adapter | Braucht einen **echten wgpu-Adapter**. Weder `fast` noch `slow` haben einen: die CI-Runner haben keinen GPU-Zugriff, der lokale Host ist headless. `slow-6` kompiliert den GPU-Pfad nur (`cargo check -p lumina-gpu --features gpu`); die 28 adapter-abhängigen Tests bleiben `#[ignore]`d. Ein GPU-Thema gilt ohne lokalen Lauf der relevanten E2E-Tests als **nicht getestet**, nicht als grün. | Eigentümer (Hardware-Schritt) | `GPU-PARITY-HW-28`, `GPU-RENDER-NONDETERMINISM-69-HW`, `UI-VISION-REVIEW-70` |
-| **onnx-rt-**Link**-Gate** (glibc 2.36 < 2.38) | Ein **Host-Gate**: `cargo test -p lumina-onnx --features onnx-rt` linkt die ONNX-Runtime-Prebuilt-Binaries und braucht glibc ≥ 2.38; dieser Host hat glibc 2.36 (Debian 12), der Testlauf scheitert am Link. `cargo check` linkt nicht, deshalb treffen die Compile-Gates (`slow-4`, `slow-5`, `slow-8`) diesen Gate nicht — er wird nur beim Testlauf (`slow-16`) sichtbar. | Build-Agent (Container-/Host-Pflege) | `LOCAL-GATE-TIERS-81` (Host-Gate, im CI-Container grün) |
+| **GPU-/wgpu-Adapter-Pfade (Metal/Vulkan)**: CPU↔GPU-Byte-Parität, VRAM-Pixel, Adapter-Fehlerkanäle, kittest-Goldens gegen echten Adapter | Braucht einen **echten wgpu-Adapter**. `fast` und die CI-Headless-Gruppen benötigen keinen Adapter. `headless-compile-1` kompiliert den GPU-Pfad (`cargo check -p lumina-gpu --features gpu`); `gpu-1` aktiviert die adapterabhängigen Tests, die ohne Opt-in ignoriert bleiben. Ein GPU-Thema gilt ohne Lauf der relevanten Tests auf passender Hardware als **nicht getestet**, nicht als grün. | Eigentümer (Hardware-Schritt) | `GPU-PARITY-HW-28`, `GPU-RENDER-NONDETERMINISM-69-HW`, `UI-VISION-REVIEW-70` |
+| **onnx-rt-**Link**-Gate** (glibc 2.36 < 2.38) | Ein **Host-Gate**: `cargo test -p lumina-onnx --features onnx-rt` linkt die ONNX-Runtime-Prebuilt-Binaries und braucht glibc ≥ 2.38; dieser Host hat glibc 2.36 (Debian 12), der Testlauf scheitert am Link. `cargo check` linkt nicht, deshalb treffen die Compile-Gates (`slow-4`, `slow-5`, `headless-compile-3`) diesen Gate nicht — er wird nur beim Testlauf (`headless-rest-5`) sichtbar. | Build-Agent (Container-/Host-Pflege) | `LOCAL-GATE-TIERS-81` (Host-Gate, im CI-Container grün) |
 | **macOS-Re-Pin der sechs R-Goldens** (`library_compare`, `library_loupe`, `library_rated_badges`, `library_subfolder_badges`, `library_survey`, `library_stack_membership`) | Die Goldens sind ein **lokales macOS/Metal-Gate** auf der gepinnten Referenzplattform (`scripts/golden_ref.lock`); in der CI werden sie nie verifiziert (kein GPU-Runner). Nach dem Downscale-Umbau müssen die sechs Library-Render-Invarianten auf dem gepinnten Host neu aufgenommen werden — das geht nur auf der Referenzmaschine. | Eigentümer (Referenzmaschine) | `GOLDEN-REPIN-R-85` (Ticket; Kontext: Feature-ID `DOWNSCALER-UNIFY-71` (Golden-Folge), `GOLDEN-REF-30` (Referenzplattform)) |
 | **Manuelle GUI-Läufe** (Sichtprüfung, DnD, Persistenz im echten Fenster) | Braucht einen **Menschen** an einem Fenster mit genau einer App-Instanz, `RUST_LOG=trace` und Log-Redirect (Verfahren R5-LOG-1). Der headless Weg (`egui_kittest`-Goldens, PSNR/Histogram) ersetzt den manuellen Lauf nicht; die Kopfliste in `Agents.md` nennt die Fälle. | Eigentümer (menschlicher Lauf) | `F-103-N6`, `F-103-N6-GUI-COVERAGE-27` |
 | **Performance-Regression gegen das committete Baseline-/Budget-Store** | **GESCHLOSSEN durch begründete Entscheidung (GATE-DRIFT-UND-LUECKEN-84): in der CI bewusst NICHT erzwogen.** Beleg 1 — `feature/quality/performance-benchmarks.md:421-422`: „Das harte Gate läuft **bewusst nicht in CI** (CI-Runner-Rauschen-Regel); CI nutzt nur report/warn." Beleg 2 — `.github/workflows/ci.yml:498-502` (Job „Benchmarks (optional)"): „CI uses compare.mjs --mode warn ONLY (never the hard gate), so noisy runners can never fail a merge. Budgets carry gate:true for a controlled local gate on the capture machine, but CI deliberately does not enforce it (CI-Runner-Rauschen-Regel). Bench steps are continue-on-error so the job never breaks the main merge checks." **Warum nicht in der CI:** die Budgets werden auf geteilten, fremden Runnern gemessen; ein dort erzwungenes Budget wäre eine Schein-Schranke — rote Builds ohne echten Defekt, getarnt als Regression. **Wo stattdessen erzwungen wird:** lokal und hart — `scripts/perf/bench-preview-cache.sh --mode gate` („hard gate (local only)", Skriptkopf `scripts/perf/bench-preview-cache.sh:13`) ruft `scripts/perf/compare.mjs` im Modus `gate` auf (Aufruf mit `--baseline`, `--budgets`, `--criterion-dir` und `--report-dir`: `scripts/perf/bench-preview-cache.sh:25-30`) und liefert bei Verletzung **Exit 1**. **Was die CI tut:** nur messen — `scripts/perf/compare.mjs --mode warn` gibt immer Exit 0 (Modus `warn` bricht nie ab), die beiden Bench-Schritte sind `continue-on-error: true`, und die Stufe `slow` führt `slow-21`/`slow-22` **nicht blockierend** mit (Fehlschlag wird gemeldet, die Stufe wird nicht rot). **Bleibende, benannte Lücke:** der erzwungene Modus ist an **keine** Stufe gebunden — er bleibt ein manueller lokaler Gate; die Klasse ist in der CI also weiterhin *gemessen, aber nicht erzwungen*. | Build-Agent | `GATE-DRIFT-UND-LUECKEN-84` (geschlossen: begründete Entscheidung, CI-Runner-Rauschen-Regel; Kontext: `F-074` = Feature-ID der Methodik, `feature/quality/performance-benchmarks.md`) |
@@ -353,7 +378,7 @@ erzeugt, die der Gate liest (Vorbedingung in §5.1) — er steht deshalb
 **blockierend** (kein `continue-on-error`): läuft er mit **Exit 2** („cannot
 conclude"), wird der Job rot — und das ist **gewollt**, denn ein stilles
 „cannot conclude" würde die Schranke wirkungslos machen; die rote CI ist hier
-das Signal, dass die dep-info fehlt oder veraltet ist. Er ist als `slow-10b`
+das Signal, dass die dep-info fehlt oder veraltet ist. Er ist als `headless-gui-2`
 in der Tier-Liste gespiegelt und wird vom Drift-Gate (§7) mitgeprüft.
 
 Die Herkunft jedes `slow`-Eintrags — **Job-Name** und `working-directory` —
@@ -394,7 +419,7 @@ plausibel".
 | `job` | `name:` am Job | Job-Name (der Job-Key, falls der Job keinen Namen trägt) |
 
 **Annotiert (handgepflegt, vom Generator **nicht** erfunden):** die `id`
-(`slow-1`, `slow-10b`, …), die **Anzeige** des Arbeitsverzeichnisses
+(`slow-1`, `headless-gui-2`, …), die **Anzeige** des Arbeitsverzeichnisses
 („Repo-Wurzel") und der **Bedarf** („Build-Artefakt" / „keine
 Infrastruktur"). Eine Ableitung, die eine Annotation raten müsste, wäre eine
 zweite, schlechtere Wahrheit — deshalb bleiben sie in `scripts/gates.sh`.
@@ -572,6 +597,27 @@ Datei fliesst nie in eine Kommandozeile.
 
 ## 9. Bekannte Grenzen
 
+## 10. Headless- und Hardware-Stufen
+
+`fast`, `slow` und das historische `all` bleiben kompatibel. Zusätzlich
+definiert `scripts/gates.sh` `headless compile|gui|rest|all`, `gpu` und `full`.
+`headless compile` enthält GPU-Feature-, CLI-Feature- und Workspace-Feature-
+Kompilierung; es benötigt keinen Adapter. `headless gui` und `headless rest`
+führen die bestehenden adapterfreien CI-Test-Shards aus. `headless all` fasst
+Compilechecks und beide Test-Shards zusammen. CI bleibt auf ihren parallelen
+Jobs und verwendet ausschließlich diese adapterfreien Prüfungen.
+
+`gpu` führt ausschließlich `cargo test -p lumina-gpu --features
+gpu-adapter-tests` aus. Dieses Opt-in aktiviert die ignorierten,
+adapterpflichtigen Integrationstests; `require_adapter` macht fehlende Hardware
+zu einem Fehler statt einem vacuous pass. `full` ist exakt `headless all` plus
+`gpu`, nicht das CI-Gate. Es erfordert einen verfügbaren wgpu-Adapter (Metal
+oder Vulkan). Ohne diesen lokalen Lauf bleibt die Hardware-Abdeckung
+ungeprüft.
+
+Aufrufbeispiele: `sh scripts/gates.sh headless compile`, `... headless gui`,
+`... headless rest`, `... headless all`, `... gpu`, `... full`.
+
 - Der Runner prüft **nicht**, ob `slow` dem CI-Zustand entspricht: die
   Übereinstimmung ist statisch belegt (Kommando-Herkunft aus `ci.yml`), nicht
   durch einen Lauf. Der **Drift-Gate** (§7) schließt die Lücke der
@@ -590,9 +636,10 @@ Datei fliesst nie in eine Kommandozeile.
 - Die Budgets in der Tier-Tabelle („Sekunden", „Minuten") sind Größenordnungen
   der Stufen, keine Messwerte aus einer Zeitmessung; der Runner misst die
   Sekunden je Check selbst und zeigt sie in der Zusammenfassung.
-- Der Runner kennt nur zwei Stufen. Checks, die weder in `fast` noch in
-  `slow` passen (etwa weil sie einen Adapter brauchen), gehören in §5.2 —
-  nicht in eine dritte, unsichtbare Stufe.
+- `fast` und `slow` bleiben die artefaktfreie Kurzstufe und der CI-Mirror.
+  Die expliziten Laufzeitstufen `headless`, `gpu` und `full` sind separat
+  dokumentiert in §10: CI nutzt die headless Gruppen, während `full` zusätzlich
+  die nur auf passender Hardware ausführbaren Adaptertests startet.
 - Der **Drift-Gate der Prosa-Zahlen** (§8) braucht **kein** `git`: die Zahl der committeten
   Goldens liest er aus dem committeten `scripts/golden_ref.lock` (`goldens.count`). Das ist
   noetig, weil der CI-Container `ghcr.io/reisi007/luminarust/lumina-ci:latest` **kein
