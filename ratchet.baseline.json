@@ -8,9 +8,6 @@
         "crates-lumina-cli-src-main-rs": {
           "value": 4572
         },
-        "crates-lumina-core-src-denoise-rs": {
-          "value": 1031
-        },
         "crates-lumina-core-src-generative-rs": {
           "value": 1665
         },
@@ -31,9 +28,6 @@
         },
         "crates-lumina-core-src-tone-rs": {
           "value": 1564
-        },
-        "crates-lumina-gpu-src-geometry-rs": {
-          "value": 1050
         },
         "crates-lumina-gpu-src-lib-rs": {
           "value": 3018
@@ -65,17 +59,11 @@
         "crates-lumina-onnx-src-face-backend-rs": {
           "value": 1060
         },
-        "crates-lumina-onnx-src-face-rs": {
-          "value": 1059
-        },
         "crates-lumina-onnx-src-manifest-rs": {
           "value": 1160
         },
         "crates-lumina-raw-src-lib-rs": {
           "value": 1572
-        },
-        "crates-lumina-sidecar-src-face-rs": {
-          "value": 1035
         },
         "crates-lumina-sidecar-src-lib-rs": {
           "value": 1322

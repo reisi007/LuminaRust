@@ -20,8 +20,8 @@ so one file's larger exception cannot mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **888** Dateien, davon
-**77** ueber 500 Zeilen und **27** ueber 1000 Zeilen.
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **892** Dateien, davon
+**78** ueber 500 Zeilen und **23** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 
 ## 3. Permanent ceiling and exceptions
@@ -47,7 +47,6 @@ reviewed as an explicit exception.
 | Datei | Ist-Stand (Zeilen) | Ausnahme-Baseline | Eintrag `scripts/file_size_baseline.txt` |
 | --- | --- | --- | --- |
 | `crates/lumina-cli/src/main.rs` | 4572 | 4572 | 4572 |
-| `crates/lumina-core/src/denoise.rs` | 1031 | 1031 | 1031 |
 | `crates/lumina-core/src/generative.rs` | 1665 | 1665 | 1665 |
 | `crates/lumina-core/src/lib.rs` | 2830 | 2830 | 2830 |
 | `crates/lumina-core/src/mask_loader.rs` | 1919 | 1919 | 1919 |
@@ -55,7 +54,6 @@ reviewed as an explicit exception.
 | `crates/lumina-core/src/pipeline.rs` | 1331 | 1331 | 1331 |
 | `crates/lumina-core/src/render.rs` | 2536 | 2536 | 2536 |
 | `crates/lumina-core/src/tone.rs` | 1564 | 1564 | 1564 |
-| `crates/lumina-gpu/src/geometry.rs` | 1050 | 1050 | 1050 |
 | `crates/lumina-gpu/src/lib.rs` | 3018 | 3018 | 3018 |
 | `crates/lumina-gui/src/i18n.rs` | 1491 | 1491 | 1491 |
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
@@ -65,11 +63,9 @@ reviewed as an explicit exception.
 | `crates/lumina-mcp/tests/mcp.rs` | 1119 | 1119 | 1154 |
 | `crates/lumina-merge/src/bundle.rs` | 1264 | 1264 | 1264 |
 | `crates/lumina-onnx/src/denoise.rs` | 1288 | 1288 | 1288 |
-| `crates/lumina-onnx/src/face.rs` | 1059 | 1059 | 1059 |
 | `crates/lumina-onnx/src/face/backend.rs` | 1060 | 1060 | 1060 |
 | `crates/lumina-onnx/src/manifest.rs` | 1160 | 1160 | 1160 |
 | `crates/lumina-raw/src/lib.rs` | 1572 | 1572 | 1572 |
-| `crates/lumina-sidecar/src/face.rs` | 1035 | 1035 | 1035 |
 | `crates/lumina-sidecar/src/lib.rs` | 1322 | 1322 | 1322 |
 | `crates/lumina-sidecar/src/value_types.rs` | 1863 | 1863 | 1863 |
 | `crates/lumina-sidecar/src/zdata/tests.rs` | 1265 | 1265 | 1265 |

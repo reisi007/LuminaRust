@@ -21,7 +21,7 @@
 1665 crates/lumina-core/src/generative.rs
 1572 crates/lumina-raw/src/lib.rs  # 2026-10-17 Q5: +1 Zeile durch pixels() statt pixels.  # 2026-09-29 FIXTURE-ENV-1 (15 entfernt/14 hinzu, Netto −1; Verifikation: Datei 1571).
 1564 crates/lumina-core/src/tone.rs
-1050 crates/lumina-gpu/src/geometry.rs  # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
+806 crates/lumina-gpu/src/geometry.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1050 -> 806, inline #[cfg(test)] mod tests nach src/geometry/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # 1502 -> 1050 am 2026-09-18: WGSL/Param-Bloecke nach geometry_shaders.rs extrahiert
 516 crates/lumina-gpu/src/lensfun.rs  # neu 2026-09-18: GPU-LENSFUN-PARITY-1 Resample-Pass (kein Split ohne Kohaesion)
 512 crates/lumina-gpu/src/geometry_shaders.rs  # neu 2026-09-18: aus geometry.rs extrahierte WGSL/Uniform-Bloecke
 1399 crates/lumina-gui/src/preview_ctrl.rs  # BEWUSSTE Anhebung 1398 -> 1399 am 2026-10-17 (LUMINA-CACHE-EXTRACT-70 Teil 2): +1 Zeile, reine Import-Pfadanderung — `PreviewDiskCache` zieht aus `lumina_core::preview_cache` nach `lumina_cache::preview_disk` und braucht seine eigene Importzeile (zwei verschiedene Crates, keine Gegenextraktion möglich, kein Kommentar gekürzt; Konvention wie pipeline.rs 1328 -> 1331). Vorher: 2026-09-20 R3-DENOISE-1 (1501 -> 1398, worker_preview + Helfer nach preview_jobs.rs extrahiert; `denoise_policy` am PreviewJob)
@@ -29,14 +29,14 @@
 1264 crates/lumina-merge/src/bundle.rs  # 2026-10-22 SEC-6 Korrekturrunde 3: Ist-Wert exakt nach `wc -l`; der erweiterte einzige SEC-6-Regressionstest liegt in `bundle/tests/sec6_regression.rs` (unter 500 Zeilen). DNG-Staging und -Publikation liegen in `bundle/publication.rs`, die Integritätsprüfung in `bundle/security.rs`. Vorheriger Korrekturrundenwert 1399; Runde 1 (2026-10-22): 1350 -> 1422 (+72), erstmalige `type: merge`-Schranke; seitdem durch kohärente Bundle-Validierung ersetzt. # 2026-10-18 FRAME-INVARIANT-SEAL-77: 1349 -> 1350 (+1) durch width()/height()-Migration und Guard-Kommentar;
 1331 crates/lumina-core/src/pipeline.rs  # 2026-10-16 PIPELINE-ORDER-DRIFT: der quelltextbasierte Drift-Test `render_stage_order_matches_nominal_pipeline_order` (+ Helper `render_frame_from_base_impl_body`) wurde als reiner Move aus `mod tests` in die neue `pipeline/tests/drift_order_tests.rs` verschrieben (Muster `local_state_tests.rs`; `include_str!("../../render.rs")` ist relativ zur neuen Datei korrekt); in pipeline.rs bleibt nur die reine Verdrahtung (2 Zeilen `#[path]`/`mod`, ohne Kommentar — die Begruendung steht im Test-File). 1328 -> 1334 -> 1331; bewusste Anhebung 1328 -> 1331 (3 Zeilen reine Modul-Vdrahtung, keine Gegenextraktion moeglich — der Test ist bereits extrahiert). Zugleich wurde die nominale Reihenfolge korrigiert (Masks hinter Crop), die Tupel-Formate unveraendert.
 1288 crates/lumina-onnx/src/denoise.rs  # 2026-10-18 FRAME-INVARIANT-SEAL-77: 1281 -> 1288 (+7) durch frame.width()/height()-Migration (onnx-rt-Zaege);
-1059 crates/lumina-onnx/src/face.rs
+650 crates/lumina-onnx/src/face.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1059 -> 650, inline #[cfg(test)] mod tests nach src/face/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht.
 1160 crates/lumina-onnx/src/manifest.rs
 1186 crates/lumina-core/src/masks.rs  # 2026-10-20 nachgezogen: 1201 -> 1186 (Extraktion; der Eintrag stand 15 Zeilen ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur).
 1154 crates/lumina-mcp/tests/mcp.rs  # 2026-10-20 nachgezogen: 1174 -> 1154 (Extraktion; der Eintrag stand 20 Zeilen ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur).
 898 crates/lumina-gui/src/face_gui.rs  # 2026-10-20 nachgezogen: 899 -> 898 (Kuerzung; der Eintrag stand 1 Zeile ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur). # 1095 -> 899 am 2026-09-17: People-Panel nach people_panel.rs extrahiert, create_face_mask instrumentiert (GUI-INSTRDBG-17c-Rest)
-1031 crates/lumina-core/src/denoise.rs  # R5-WARN-2: DenoiseStageInput nach src/denoise/stage_input.rs extrahiert (1084 -> 1031; quiet-Feld additiv)
+522 crates/lumina-core/src/denoise.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1031 -> 522, inline #[cfg(test)] mod tests nach src/denoise/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht. # R5-WARN-2: DenoiseStageInput nach src/denoise/stage_input.rs extrahiert (1084 -> 1031; quiet-Feld additiv)
 1060 crates/lumina-onnx/src/face/backend.rs  # 2026-10-17 Q5: +1 Zeile durch aligned.pixels() statt aligned.pixels.
-1035 crates/lumina-sidecar/src/face.rs
+673 crates/lumina-sidecar/src/face.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (tests extrahiert): 1035 -> 673, inline #[cfg(test)] mod tests nach src/face/tests.rs verschoben; Ratchet-1000-Ausnahme geloescht.
 970 crates/lumina-gpu/src/shaders.rs
 888 crates/lumina-gui/src/denoise_gui.rs  # 2026-10-20 nachgezogen: 947 -> 888 (Extraktion; der Eintrag stand 59 Zeilen ueber dem gemessenen Ist-Wert, Ratchet-Wahrheitskorrektur).
 933 crates/lumina-onnx/src/sam2.rs
@@ -77,3 +77,4 @@
 681 crates/lumina-gpu/src/stages/color.rs  # 2026-10-23 SPLICE-GPU-STAGES-94 (Slice 11): neuer 500er-Eintrag; COLOR-Block wortgleich aus stages.rs verschoben, abgesehen von Importen und crate::GpuError-Pfad.
 526 crates/lumina-cli/src/meta_cli.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100 (meta_cli split): 1405 -> 526 by moving the preset and clipboard handlers to meta_preset_cli.rs/meta_clipboard_cli.rs; Ratchet 1000 exception deleted.
 750 crates/lumina-cli/src/mask_cli.rs  # 2026-10-23 SPLICE-CLI-MAIN-89 (MASK slice): new mask command module, measured after extraction.
+506 crates/lumina-core/src/denoise/tests.rs  # 2026-10-24 FILE-SIZE-1000-ALL-EXCEPTIONS-100: neuer 500er-Eintrag, reiner Move des inline-Testmoduls.
