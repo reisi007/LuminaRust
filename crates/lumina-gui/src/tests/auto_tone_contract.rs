@@ -181,9 +181,12 @@ fn a_gui_auto_tone_recipe_is_fresh_for_the_shared_regenerate_predicate() {
 /// * `lumina-core/src/tone.rs` *produces* the fingerprint's **value**
 ///   (`format!("tone-rgba8-rec709:{hash}")`) — a different string from the
 ///   `algorithm` field, and that crate is its producer by definition.
-/// * `lumina-core/src/render.rs` carries a `#[cfg(test)]` **fixture** inside an
-///   inline test module, which cannot import the constant: `lumina-stages`
-///   depends on `lumina-core`, not the other way round.
+/// * `lumina-core/src/render/tests/pipeline.rs` carries a `#[cfg(test)]`
+///   **fixture** which cannot import the constant: `lumina-stages` depends on
+///   `lumina-core`, not the other way round. That file lives under a `tests`
+///   path component and is therefore already excluded by `production_files`;
+///   the fixture used to sit in an inline `#[cfg(test)]` module of
+///   `render.rs` and needed an allowlist entry only because of that location.
 /// * `lumina-core/src/upright.rs` owns a *different* analysis identity (upright
 ///   rotation), so the tone algorithm is not its business.
 ///
@@ -267,15 +270,12 @@ fn the_tone_algorithm_literal_is_defined_once_and_never_hand_copied() {
     assert_eq!(
         sites_in("lumina-core"),
         vec![
-            // 2x, not 1: the inline #[cfg(test)] fixture names the algorithm in
-            // `algorithm:` AND repeats it inside the `input_fingerprint` value it
-            // fakes. Both are one fixture, not two definitions.
-            ("lumina-core/src/render.rs".to_string(), 2),
+            // The render fixture now lives in render/tests/pipeline.rs, which
+            // production_files excludes by path; only the producer remains.
             ("lumina-core/src/tone.rs".to_string(), 1),
         ],
-        "lumina-core may name the tone algorithm in `tone.rs` (it produces the \
-         fingerprint VALUE) and twice in `render.rs` (one inline #[cfg(test)] \
-         fixture, which cannot import the constant because lumina-stages depends \
-         on lumina-core). A THIRD site here is a competing definition."
+        "lumina-core may name the tone algorithm only in `tone.rs`, which \
+         produces the fingerprint VALUE. A second production site here is a \
+         competing definition; test modules are excluded by production_files."
     );
 }
