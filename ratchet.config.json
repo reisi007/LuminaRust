@@ -160,11 +160,6 @@
           "file": "crates/lumina-sidecar/src/value_types.rs"
         },
         {
-          "id": "crates-lumina-sidecar-src-zdata-rs",
-          "description": "Existing exception: crates/lumina-sidecar/src/zdata.rs",
-          "file": "crates/lumina-sidecar/src/zdata.rs"
-        },
-        {
           "id": "crates-lumina-sidecar-src-zdata-tests-rs",
           "description": "Existing exception: crates/lumina-sidecar/src/zdata/tests.rs",
           "file": "crates/lumina-sidecar/src/zdata/tests.rs"
