@@ -11,9 +11,6 @@
         "crates-lumina-core-src-lib-rs": {
           "value": 2830
         },
-        "crates-lumina-core-src-render-rs": {
-          "value": 2536
-        },
         "crates-lumina-gpu-src-lib-rs": {
           "value": 3018
         },

@@ -35,11 +35,6 @@
           "file": "crates/lumina-core/src/lib.rs"
         },
         {
-          "id": "crates-lumina-core-src-render-rs",
-          "description": "Existing exception: crates/lumina-core/src/render.rs",
-          "file": "crates/lumina-core/src/render.rs"
-        },
-        {
           "id": "crates-lumina-gpu-src-lib-rs",
           "description": "Existing exception: crates/lumina-gpu/src/lib.rs",
           "file": "crates/lumina-gpu/src/lib.rs"
