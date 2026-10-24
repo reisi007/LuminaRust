@@ -80,11 +80,6 @@
           "file": "crates/lumina-gpu/src/lib.rs"
         },
         {
-          "id": "crates-lumina-gpu-tests-parity-rs",
-          "description": "Existing exception: crates/lumina-gpu/tests/parity.rs",
-          "file": "crates/lumina-gpu/tests/parity.rs"
-        },
-        {
           "id": "crates-lumina-gui-src-i18n-rs",
           "description": "Existing exception: crates/lumina-gui/src/i18n.rs",
           "file": "crates/lumina-gui/src/i18n.rs"
