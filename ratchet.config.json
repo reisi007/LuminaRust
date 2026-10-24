@@ -30,11 +30,6 @@
           "file": "crates/lumina-cli/src/main.rs"
         },
         {
-          "id": "crates-lumina-cli-src-meta_cli-rs",
-          "description": "Existing exception: crates/lumina-cli/src/meta_cli.rs",
-          "file": "crates/lumina-cli/src/meta_cli.rs"
-        },
-        {
           "id": "crates-lumina-core-src-denoise-rs",
           "description": "Existing exception: crates/lumina-core/src/denoise.rs",
           "file": "crates/lumina-core/src/denoise.rs"

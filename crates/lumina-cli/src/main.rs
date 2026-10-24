@@ -124,15 +124,19 @@ mod color_cli;
 use color_cli::color;
 mod denoise_cli;
 mod meta_cli;
+mod meta_clipboard_cli;
+mod meta_preset_cli;
 use denoise_cli::{denoise, DenoiseArgs};
 #[cfg(test)]
 use denoise_cli::{denoise_record_id, denoise_status_reason};
 use meta_cli::meta;
 #[cfg(test)]
-pub(crate) use meta_cli::{
+pub(crate) use meta_clipboard_cli::{
     default_meta_clipboard_path, load_meta_clipboard, parse_meta_fields, MetaClipboardFile,
     META_CLIPBOARD_FORMAT, META_CLIPBOARD_VERSION,
 };
+use meta_clipboard_cli::{meta_copy, meta_paste};
+use meta_preset_cli::{meta_preset_apply, meta_preset_list, meta_preset_show, meta_sync};
 // LRPAR-G13-MERGE-15 / MERGE-CLI-1: `merge-hdr` / `merge-pano` commands
 // (orchestration; alignment/merge/DNG live in `lumina-merge`).
 mod merge;
