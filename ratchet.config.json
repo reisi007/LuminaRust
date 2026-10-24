@@ -48,11 +48,6 @@
           "id": "crates-lumina-gui-tests-kittest_snapshots-rs",
           "description": "Existing exception: crates/lumina-gui/tests/kittest_snapshots.rs",
           "file": "crates/lumina-gui/tests/kittest_snapshots.rs"
-        },
-        {
-          "id": "crates-lumina-sidecar-src-value_types-rs",
-          "description": "Existing exception: crates/lumina-sidecar/src/value_types.rs",
-          "file": "crates/lumina-sidecar/src/value_types.rs"
         }
       ]
     }

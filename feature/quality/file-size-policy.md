@@ -20,8 +20,8 @@ so one file's larger exception cannot mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **914** Dateien, davon
-**87** ueber 500 Zeilen und **6** ueber 1000 Zeilen.
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **918** Dateien, davon
+**87** ueber 500 Zeilen und **5** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 
 ## 3. Permanent ceiling and exceptions
@@ -51,7 +51,6 @@ reviewed as an explicit exception.
 | `crates/lumina-gpu/src/lib.rs` | 3018 | 3018 | 3018 |
 | `crates/lumina-gui/src/lib.rs` | 10517 | 10517 | 10517 |
 | `crates/lumina-gui/tests/kittest_snapshots.rs` | 2885 | 2885 | 2885 |
-| `crates/lumina-sidecar/src/value_types.rs` | 1863 | 1863 | 1863 |
 <!-- END GENERATED: file-sizes -->
 
 ## 4. Baseline direction

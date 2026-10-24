@@ -321,10 +321,10 @@ pub type Extras = BTreeMap<String, Value>;
 // `lumina_sidecar::Geometry`, `lumina_sidecar::DecodeFingerprint`, …); the
 // crate-internal `default_color_grading_blending` helper is re-exported here,
 // so the mask-local colour-grading block keeps its
-// `crate::default_color_grading_blending` call site unchanged. The block stays
-// ONE module: `EditRecipe`'s field-accessing impls (`Serialize`, `Deserialize`,
-// `Default`, the inherent impls) must live next to the struct, otherwise every
-// field would have to become `pub(crate)`.
+// `crate::default_color_grading_blending` call site unchanged. That module is
+// grouped into child modules (source/masks/generative/color), but `EditRecipe`
+// and its field-accessing impls (`Serialize`, `Deserialize`, `Default`, the
+// inherent impls) stay together in the root, so no field becomes `pub(crate)`.
 mod value_types;
 pub(crate) use value_types::default_color_grading_blending;
 pub use value_types::{
