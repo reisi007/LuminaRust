@@ -8,9 +8,6 @@
         "crates-lumina-cli-src-main-rs": {
           "value": 4572
         },
-        "crates-lumina-core-src-generative-rs": {
-          "value": 1665
-        },
         "crates-lumina-core-src-lib-rs": {
           "value": 2830
         },
@@ -38,17 +35,8 @@
         "crates-lumina-mcp-tests-mcp-rs": {
           "value": 1119
         },
-        "crates-lumina-merge-src-bundle-rs": {
-          "value": 1264
-        },
-        "crates-lumina-onnx-src-denoise-rs": {
-          "value": 1288
-        },
         "crates-lumina-onnx-src-face-backend-rs": {
           "value": 1060
-        },
-        "crates-lumina-onnx-src-manifest-rs": {
-          "value": 1160
         },
         "crates-lumina-raw-src-lib-rs": {
           "value": 1572

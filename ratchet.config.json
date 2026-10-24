@@ -30,11 +30,6 @@
           "file": "crates/lumina-cli/src/main.rs"
         },
         {
-          "id": "crates-lumina-core-src-generative-rs",
-          "description": "Existing exception: crates/lumina-core/src/generative.rs",
-          "file": "crates/lumina-core/src/generative.rs"
-        },
-        {
           "id": "crates-lumina-core-src-lib-rs",
           "description": "Existing exception: crates/lumina-core/src/lib.rs",
           "file": "crates/lumina-core/src/lib.rs"
@@ -80,24 +75,9 @@
           "file": "crates/lumina-mcp/tests/mcp.rs"
         },
         {
-          "id": "crates-lumina-merge-src-bundle-rs",
-          "description": "Existing exception: crates/lumina-merge/src/bundle.rs",
-          "file": "crates/lumina-merge/src/bundle.rs"
-        },
-        {
-          "id": "crates-lumina-onnx-src-denoise-rs",
-          "description": "Existing exception: crates/lumina-onnx/src/denoise.rs",
-          "file": "crates/lumina-onnx/src/denoise.rs"
-        },
-        {
           "id": "crates-lumina-onnx-src-face-backend-rs",
           "description": "Existing exception: crates/lumina-onnx/src/face/backend.rs",
           "file": "crates/lumina-onnx/src/face/backend.rs"
-        },
-        {
-          "id": "crates-lumina-onnx-src-manifest-rs",
-          "description": "Existing exception: crates/lumina-onnx/src/manifest.rs",
-          "file": "crates/lumina-onnx/src/manifest.rs"
         },
         {
           "id": "crates-lumina-raw-src-lib-rs",
