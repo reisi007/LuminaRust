@@ -145,7 +145,6 @@ mod routing;
 mod validate;
 #[cfg(test)]
 pub(crate) use routing::adjustment_neutral_value;
-#[cfg(feature = "gpu")]
 use routing::validate_camera_white_balance_gains;
 pub use routing::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
