@@ -10,6 +10,22 @@
 
 use super::*;
 
+pub(super) fn process_selected(
+    args: ProcessArgs,
+    quality: u8,
+    virtual_copy: Option<&str>,
+    policy: MaskPolicy,
+    mask_warnings_out: &mut Vec<String>,
+) -> Result<Option<MetadataWritten>, CliError> {
+    super::process_selected_with_report(args, quality, virtual_copy, policy, mask_warnings_out).map(
+        |(metadata_written, _rendered)| {
+            #[cfg(feature = "gpu")]
+            let _discarded_gpu_report = _rendered.gpu_report;
+            metadata_written
+        },
+    )
+}
+
 pub(super) fn process(args: ProcessArgs) -> Result<(), CliError> {
     // `process` has no explicit quality flag; it uses the shared default (90),
     // which is identical to the historical `frame.encode(format)` output.

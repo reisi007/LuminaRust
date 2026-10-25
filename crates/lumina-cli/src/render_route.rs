@@ -99,6 +99,17 @@ impl RenderRoute {
     }
 }
 
+/// Result of the routed standard-render call, including the exact report from
+/// `lumina-gpu` when that backend was entered. An absent report means the CLI
+/// took a CPU route before calling the GPU renderer.
+#[derive(Debug)]
+pub(crate) struct RoutedRender {
+    pub(crate) output: RenderOutput,
+    pub(crate) route: RenderRoute,
+    #[cfg(feature = "gpu")]
+    pub(crate) gpu_report: Option<lumina_gpu::RenderExecutionReport>,
+}
+
 /// Renders `frame` with `recipe`, preferring the GPU when an adapter is bound,
 /// otherwise the full platform-neutral CPU pipeline. Returns the actual route
 /// alongside the result so callers can assert parity (see [`RenderRoute`]).
@@ -114,7 +125,7 @@ impl RenderRoute {
 /// explicitly to the CPU pipeline with a once-per-reason-set log line, so
 /// GPU-enabled builds always produce the same pixels as CPU builds. The GPU is
 /// an accelerator, never a semantic change (Agents.md: no silent fallbacks).
-#[cfg(feature = "gpu")]
+#[cfg(all(test, feature = "gpu"))]
 pub(super) fn render_best_effort(
     ctx: Option<&mut GpuContext>,
     frame: &ImageFrame,
@@ -122,6 +133,18 @@ pub(super) fn render_best_effort(
     render_ctx: &RenderContext<'_>,
     generative: GenerativeCanvasInput<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
+    render_best_effort_with_report(ctx, frame, recipe, render_ctx, generative)
+        .map(|rendered| (rendered.output, rendered.route))
+}
+
+#[cfg(feature = "gpu")]
+pub(super) fn render_best_effort_with_report(
+    ctx: Option<&mut GpuContext>,
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
+) -> Result<RoutedRender, CliError> {
     let mut reasons = gpu_routing_reasons(recipe, render_ctx);
 
     match ctx {
@@ -136,7 +159,11 @@ pub(super) fn render_best_effort(
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
                 let output = render_frame_with_generative(frame, render_ctx, generative)
                     .map_err(|error| CliError::Message(error.to_string()))?;
-                return Ok((output, RenderRoute::Cpu { reasons }));
+                return Ok(RoutedRender {
+                    output,
+                    route: RenderRoute::Cpu { reasons },
+                    gpu_report: None,
+                });
             }
             // CAMERA-WB-WELLE (R2-MCP-01): carry the decoder As-Shot context into
             // the GPU entry like the Lensfun corrector / depth plane. The gains
@@ -150,22 +177,40 @@ pub(super) fn render_best_effort(
                 lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
                 let output = render_frame_with_generative(frame, render_ctx, generative)
                     .map_err(|error| CliError::Message(error.to_string()))?;
-                return Ok((output, RenderRoute::Cpu { reasons }));
+                return Ok(RoutedRender {
+                    output,
+                    route: RenderRoute::Cpu { reasons },
+                    gpu_report: None,
+                });
             }
             // GEN-ONNX-1 Welle 2a: the generative artifact compositing runs on
             // the GPU (mid-geometry `Substitute` steps) — no blanket CPU route.
-            let global = ctx
-                .render_with_gpu_and_generative(frame, recipe, &generative)
+            let (global, gpu_report) = ctx
+                .render_with_gpu_and_generative_report(frame, recipe, &generative)
                 .map_err(|error| CliError::Message(error.to_string()))?;
             // GPU-RENDER-MASK-19 (Slice B2): a pass refusal is a loud CPU route.
-            match local_mask_gpu::composite(ctx, render_ctx, frame, &global) {
-                Ok(output) => Ok((output, RenderRoute::Gpu)),
-                Err(reason) => {
-                    let reasons = vec![reason];
-                    lumina_gpu::log_cpu_routing_once(&reasons, "cli render");
+            let mask_outcome = local_mask_gpu::composite(ctx, render_ctx, frame, &global);
+            let route = route_after_mask_stage(&gpu_report, &mask_outcome);
+            match mask_outcome {
+                Ok(output) => {
+                    if !route.reasons().is_empty() {
+                        lumina_gpu::log_cpu_routing_once(route.reasons(), "cli render");
+                    }
+                    Ok(RoutedRender {
+                        output,
+                        route,
+                        gpu_report: Some(gpu_report),
+                    })
+                }
+                Err(_) => {
+                    lumina_gpu::log_cpu_routing_once(route.reasons(), "cli render");
                     let output = render_frame_with_generative(frame, render_ctx, generative)
                         .map_err(|error| CliError::Message(error.to_string()))?;
-                    Ok((output, RenderRoute::Cpu { reasons }))
+                    Ok(RoutedRender {
+                        output,
+                        route,
+                        gpu_report: Some(gpu_report),
+                    })
                 }
             }
         }
@@ -175,7 +220,34 @@ pub(super) fn render_best_effort(
             }
             let output = render_frame_with_generative(frame, render_ctx, generative)
                 .map_err(|error| CliError::Message(error.to_string()))?;
-            Ok((output, RenderRoute::Cpu { reasons }))
+            Ok(RoutedRender {
+                output,
+                route: RenderRoute::Cpu { reasons },
+                gpu_report: None,
+            })
+        }
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn route_after_mask_stage(
+    report: &lumina_gpu::RenderExecutionReport,
+    masks: &Result<RenderOutput, String>,
+) -> RenderRoute {
+    let mut reasons = match report {
+        lumina_gpu::RenderExecutionReport::GpuPipelineCompleted => Vec::new(),
+        lumina_gpu::RenderExecutionReport::CpuFallback { reason } => {
+            vec![format!("lumina-gpu CPU fallback: {reason:?}")]
+        }
+    };
+    match masks {
+        Ok(_) => match report {
+            lumina_gpu::RenderExecutionReport::GpuPipelineCompleted => RenderRoute::Gpu,
+            lumina_gpu::RenderExecutionReport::CpuFallback { .. } => RenderRoute::Cpu { reasons },
+        },
+        Err(mask_reason) => {
+            reasons.push(mask_reason.clone());
+            RenderRoute::Cpu { reasons }
         }
     }
 }
@@ -229,24 +301,22 @@ pub(super) fn gpu_routing_reasons(
     reasons
 }
 
-/// Non-GPU build: only the CPU pipeline exists, so this is a thin alias to
-/// [`render_frame_with_generative`] returning the (always CPU) route.
 #[cfg(not(feature = "gpu"))]
-pub(super) fn render_best_effort(
+pub(super) fn render_best_effort_with_report(
     _ctx: Option<()>,
     frame: &ImageFrame,
     _recipe: &EditRecipe,
     render_ctx: &RenderContext<'_>,
     generative: GenerativeCanvasInput<'_>,
-) -> Result<(RenderOutput, RenderRoute), CliError> {
+) -> Result<RoutedRender, CliError> {
     let output = render_frame_with_generative(frame, render_ctx, generative)
         .map_err(|error| CliError::Message(error.to_string()))?;
-    Ok((
+    Ok(RoutedRender {
         output,
-        RenderRoute::Cpu {
+        route: RenderRoute::Cpu {
             reasons: Vec::new(),
         },
-    ))
+    })
 }
 
 /// GEN-ONNX-1: [`render_standard_routed`] with caller-supplied generative
@@ -257,8 +327,38 @@ pub(super) fn render_standard_with_generative(
     render_ctx: &RenderContext<'_>,
     generative: GenerativeCanvasInput<'_>,
 ) -> Result<RenderOutput, CliError> {
-    render_standard_routed_with_generative(frame, recipe, render_ctx, generative)
-        .map(|(output, _route)| output)
+    render_standard_with_generative_report(frame, recipe, render_ctx, generative)
+        .map(|rendered| rendered.output)
+}
+
+/// Same standard-render production path as the output-only entry, retaining
+/// the per-call GPU report for diagnostics and routing verification.
+pub(crate) fn render_standard_with_generative_report(
+    frame: &ImageFrame,
+    recipe: &EditRecipe,
+    render_ctx: &RenderContext<'_>,
+    generative: GenerativeCanvasInput<'_>,
+) -> Result<RoutedRender, CliError> {
+    #[cfg(feature = "gpu")]
+    {
+        GPU_CTX.with(|cell| {
+            let mut gpu = cell.borrow_mut();
+            if gpu.is_none() {
+                **gpu = init_render_backend();
+            }
+            match gpu.as_mut() {
+                Some(ctx) => {
+                    render_best_effort_with_report(Some(ctx), frame, recipe, render_ctx, generative)
+                }
+                None => render_best_effort_with_report(None, frame, recipe, render_ctx, generative),
+            }
+        })
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        log_backend("render backend: cpu");
+        render_best_effort_with_report(None, frame, recipe, render_ctx, generative)
+    }
 }
 
 /// [`render_standard`] returning the actual [`RenderRoute`] as well. The
@@ -284,22 +384,10 @@ pub(crate) fn render_standard_routed_with_generative(
     render_ctx: &RenderContext<'_>,
     generative: GenerativeCanvasInput<'_>,
 ) -> Result<(RenderOutput, RenderRoute), CliError> {
-    #[cfg(feature = "gpu")]
-    {
-        GPU_CTX.with(|cell| {
-            let mut gpu = cell.borrow_mut();
-            if gpu.is_none() {
-                **gpu = init_render_backend();
-            }
-            match gpu.as_mut() {
-                Some(ctx) => render_best_effort(Some(ctx), frame, recipe, render_ctx, generative),
-                None => render_best_effort(None, frame, recipe, render_ctx, generative),
-            }
-        })
-    }
-    #[cfg(not(feature = "gpu"))]
-    {
-        log_backend("render backend: cpu");
-        render_best_effort(None, frame, recipe, render_ctx, generative)
-    }
+    render_standard_with_generative_report(frame, recipe, render_ctx, generative)
+        .map(|rendered| (rendered.output, rendered.route))
 }
+
+#[cfg(all(test, feature = "gpu"))]
+#[path = "render_route_execution_report_tests.rs"]
+mod execution_report_tests;

@@ -112,6 +112,241 @@ Es wurde keine GUI-GPU-Suite ausgeführt. Damit ist weder der vollständige
 Hardware-Task `GPU-RENDER-NONDETERMINISM-69-HW` abgeschlossen noch ein Fix oder
 eine GPU-Parität aller Stufen belegt.
 
+### SOLL-Vertrag Welle 2: CLI-Ausführungsreport und Auto-Tone-Diagnose
+
+Der volle CLI-Produktionseinstieg muss denselben pro-Aufruf-Report von
+`lumina-gpu` durch `render_best_effort`, den Standard-Render-Einstieg und
+`process_selected` bis zu einer internen Diagnose-Testnaht weitergeben. Die
+Testnaht ruft genau denselben Produktionspfad auf; sie darf keine zweite
+Renderpipeline, globale „letzte Route"-Probe oder reine Logger-Probe verwenden.
+Eine Adapter-/Diagnose-Testvariante ist opt-in und fügt weder ein sichtbares
+CLI-Flag noch ein Produktfeature hinzu. Bestehende CLI-Einstiege behalten ihre
+Signaturen und ihr Exportverhalten; GPU-freie Builds bleiben ausführbar.
+
+Der an die CLI weitergereichte GPU-Report ist ausschließlich der Report, den
+`GpuContext::render_with_gpu_and_generative_report` für genau diesen Aufruf
+zurückgibt. Wird vor dem GPU-Aufruf auf CPU geroutet oder ist kein Kontext
+vorhanden, ist der GPU-Report abwesend; der äußere CLI-Zweig darf keinen
+`GpuPipelineCompleted`- oder `CpuFallback`-Report erfinden. Die tatsächliche
+CLI-Route ist nur dann GPU, wenn der Report `GpuPipelineCompleted` meldet und
+die nachfolgende lokale Maskenkomposition erfolgreich ist. Ein interner
+`CpuFallback` macht die Gesamt-CLI-Route CPU, auch wenn eine nachfolgende
+Maskenkomposition gelingt. Sein Grund wird neben bereits vorhandenen
+CLI-Routinggründen und Warnungen erhalten und sichtbar protokolliert. Bei einem
+Fehler des GPU-Aufrufs bleibt das Ergebnis ein Fehler ohne Erfolgsreport.
+`render_draft` ist kein Nachweis des vollen GPU-Pfads. Der Report behauptet
+weder, dass alle CLI-Stufen GPU-ausgeführt wurden, noch GPU-Parität oder eine
+Fehlerursache. Der separat über `export_image_with_generative` erzeugte
+`match_total_exposure`-Endexport wird durch den Report des vorherigen
+Standard-Render-Aufrufs nicht klassifiziert.
+
+Die ursprünglichen Auto-Tone-Familien-Assertions und ihre Testnamen bleiben
+erhalten. Eine zusätzliche, explizit gestartete Adaptervariante fährt dieselben
+40 synthetischen Familienmitglieder je dreimal über `process_selected`; alle
+120 Aufrufe müssen je einen echten `GpuPipelineCompleted`-Report und die
+entsprechende CLI-GPU-Route liefern. Fehlender Adapter oder CPU-Fallback ist ein
+harter Testfehler, kein Skip. Der Test bleibt im normalen CPU-/Headless-Lauf
+außerhalb der Ausführung.
+
+Bei einer Abweichung werden das konkrete Familienmitglied und die betroffenen
+Vergleichspaare 1-vs-2 bzw. 2-vs-3 ausgewiesen. PNG-Bytes und separat dekodierte
+RGBA8-Pixel werden unabhängig verglichen; ein PNG-Byte-Mismatch allein ist kein
+Pixel-Mismatch. Für jeden Aufruf des abweichenden Mitglieds werden Report,
+Sidecar-Text und Sidecar-Hash zusammen mit den drei Roh-PNGs und den dekodierten
+Pixeldateien unter
+`target/gpu-render-nondeterminism-69/<dated-run>/` gesichert, bevor dessen
+temporäres Verzeichnis endet. Verwendet werden ausschließlich die synthetischen
+Testquellen; persistierte Sidecars enthalten keine absoluten Pfade.
+
+Die Stabilitätsassertion betrifft die sechs gespeicherten Auto-Tone-Slider-
+Literale, nicht den vollständigen Sidecar-Text: beobachtet wurden angehängte
+History-Einträge zwischen erfolgreichen `process`-Aufrufen. Der vollständige
+Sidecar-Text und sein Hash bleiben pro Aufruf als Diagnoseartefakte erhalten.
+
+Ein roter Adapterlauf bleibt ein Befund und wird nicht durch eine Toleranz,
+einen ignorierten Test oder zufälliges Wiederholen grün gemacht. Drei serielle
+Läufe mit Exitcode, Rohlog und gegebenenfalls Diagnoseartefakten sind getrennt
+zu berichten. Solange der Mechanismus nicht gemessen ist, bleiben Ursache und
+Fix offen.
+
+### Implementierungs- und Adaptermessung Welle 2 (2026-10-25)
+
+`crates/lumina-cli/src/render_route.rs::render_best_effort_with_report` reicht
+den Report des GPU-Aufrufs zusammen mit dem Ergebnis weiter;
+`crates/lumina-cli/src/render_route.rs::render_standard_with_generative_report`
+ist der Report-tragende Standard-Render-Einstieg. Der bestehende
+`process_selected`-Einstieg in `crates/lumina-cli/src/process_cmd.rs` behält sein
+bisheriges Ergebnis und verwirft den Report für gewöhnliche Aufrufer; die
+Diagnose ruft `process_selected_with_report` in
+`crates/lumina-cli/src/main.rs` auf demselben Produktionspfad auf. Vorab-CPU-
+Routen liefern keinen GPU-Report. Die CLI-Route ist GPU genau dann, wenn der
+echte Report `GpuPipelineCompleted` ist und die lokale Maskenkomposition gelingt.
+`route_after_mask_stage` in `crates/lumina-cli/src/render_route.rs` trifft die
+Routen-Entscheidung an **einer** Stelle aus GPU-Report und Maskenergebnis; der
+`Err`-Zweig in `render_best_effort_with_report` wählt keinen eigenen Grund. Die
+vier Tests `completed_gpu_report_with_successful_mask_stage_routes_gpu_without_reasons`,
+`completed_gpu_report_with_failed_mask_stage_uses_exact_mask_reason`,
+`internal_cpu_fallback_with_successful_mask_stage_keeps_exact_internal_reason`
+und `internal_cpu_fallback_with_failed_mask_stage_keeps_both_reasons_in_order`
+in `crates/lumina-cli/src/render_route_execution_report_tests.rs` prüfen alle
+Kombinationen mit exakten Grundlisten. Die Vorab-CPU-Assertion bleibt separat
+durch `pre_routed_cpu_render_has_no_fabricated_gpu_report` erhalten. Dass die
+Kombination „`composite`
+scheitert, CPU-Referenz gelingt“ heute nicht konstruierbar ist, ist eine Aussage
+über die Routing-Vorbedingungen (`mask_layer_routing_reasons`), nicht über die
+getestete Zuordnung. Die Adaptervariante
+`tests::auto_tone_float::adapter_runs_of_the_full_process_path_report_gpu_for_all_120_renders`
+bleibt ignoriert und wird nur explizit gestartet.
+
+Lokale Gates (mit dem freigegebenen `TMPDIR` für die CPU-Tests) bestanden:
+
+- `cargo fmt --all -- --check`
+- `cargo test -p lumina-cli --no-default-features --bin lumina-cli`:
+  **148 passed / 0 failed**
+- `cargo test -p lumina-cli --features gpu --bin lumina-cli execution_report_tests -- --test-threads=1 --nocapture`:
+  **4 passed / 0 failed**
+- `cargo clippy -p lumina-cli --all-targets --features gpu,lensfun -- -D warnings`
+- `sh scripts/check_cli_features.sh`: alle deklarierten CLI-Featuremengen
+- `sh scripts/check_file_sizes.sh`, `sh scripts/check_plan_format.sh` und
+  `git diff --check`
+
+Der Produktionsreport wurde wirksam mutiert, indem der erfolgreiche GPU-Zweig
+`gpu_report: None` statt des echten Reports zurückgab. Die Diagnose endete
+erwartungsgemäß mit Exit **101**: alle 120 äußeren CLI-Routen meldeten GPU,
+aber **0/120** Reports waren `GpuPipelineCompleted` (`left: 0`, `right: 120`).
+Beleg: `target/gpu-render-nondeterminism-69/2026-10-25T193954Z/` mit
+`production-wiring-mutation.patch`, `production-wiring-mutation.log`,
+`production-wiring-mutation.exit` und den SHA-256-verifizierten
+`mutation-artifacts/`. Dieser Mutationslauf verwendete noch den später
+korrigierten Volltext-Sidecarvergleich; dessen Sidecar-Fehlalarme und die dabei
+gemessene Pixelabweichung für Mitglied 26 werden daher nicht in die folgende
+unmutierte Adaptermessung eingerechnet. Die Produktionszuweisung wurde exakt
+aus der vor der Mutation gespeicherten Datei wiederhergestellt.
+
+Der unmutierte Adapterlauf wurde mit
+`LUMINA_GPU_BACKENDS=metal cargo test -p lumina-cli --features gpu --bin lumina-cli tests::auto_tone_float::adapter_runs_of_the_full_process_path_report_gpu_for_all_120_renders -- --ignored --exact --test-threads=1 --nocapture`
+dreimal seriell ausgeführt. Alle drei Läufe endeten mit Exit **101**. In jedem
+Lauf bestanden die vorgelagerten Assertions für **120/120** echte
+`GpuPipelineCompleted`-Reports und CLI-GPU-Routen; der abschließende Fehler war
+die PNG-/Pixel-Reproduzierbarkeit, nicht ein fehlender Adapter oder ein
+CPU-Fallback. Der neue Vergleich meldete:
+
+| Lauf | Abweichende Mitglieder und Paar | Abweichende RGBA8-Pixel |
+|---|---|---:|
+| 1 | 01 (1-vs-2), 12 (1-vs-2), 28 (2-vs-3), 31 (1-vs-2) | 254, 256, 256, 256 |
+| 2 | 01 (1-vs-2), 12 (1-vs-2), 33 (1-vs-2) | 254, 256, 256 |
+| 3 | 01 (1-vs-2), 17 (1-vs-2), 31 (1-vs-2), 33 (1-vs-2), 39 (1-vs-2) | 254, 256, 256, 256, 256 |
+
+Jeder aufgeführte RGBA8-Mismatch hatte auch abweichende PNG-Bytes; nicht
+aufgeführte Vergleichspaare waren innerhalb ihres jeweiligen Mitglieds gleich.
+Für jedes abweichende Mitglied waren die sechs Slider-Literale in allen drei
+Aufrufen gleich, während die vollständigen Sidecar-Hashes voneinander abwichen.
+Die Rohlogs, Exitcodes, vollständigen Sidecars/Hashes, drei PNGs, dekodierten
+Pixel und Per-Call-Reports liegen unter
+`target/gpu-render-nondeterminism-69/2026-10-25T195812Z/`; die Gegenprüfung der
+archivierten PNG-/Pixelpaare steht in `adapter-artifact-review.txt`.
+
+**Beobachtung** (Artefakte: `target/gpu-render-nondeterminism-69/2026-10-25T195812Z/adapter-artifact-review.txt` und die dort archivierten Paarvergleiche): Jedes abweichende Mitglied hat genau ein abweichendes Vergleichspaar, nie beide. Stets weicht entweder das erste Paar (1-vs-2) oder das zweite (2-vs-3) ab; das jeweils andere Paar ist byte- und pixelgleich. Mitglied 01 ist in allen drei Prozessläufen betroffen; die übrigen Mitglieder wechseln zwischen den Läufen (Lauf 1: 01/12/28/31, Lauf 2: 01/12/33, Lauf 3: 01/17/31/33/39). Mitglied 01 hat 254 abweichende Pixel, erster Index 1; alle übrigen aufgeführten Paare haben 256 abweichende Pixel, erster Index 0. Diese Regelmäßigkeit benennt weiterhin keine Ursache.
+
+Der unveränderte Original-Reproducer
+`tests::auto_tone_float::the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move`
+wurde danach einmal separat mit Metal ausgeführt und endete ebenfalls mit Exit
+**101**: **38/40** Mitglieder waren byte-identisch (Erwartung: 40/40). Diese
+Assertion lokalisiert die abweichenden Mitglieder nicht. Der Adapter-Report
+schließt die frühere Beweislücke zur Route des CLI-Prozesses, nicht zur Ursache
+der Pixelabweichungen. Die drei Adapterläufe bleiben rot dokumentiert; es wurde
+weder eine Toleranz eingeführt noch ein Ergebnis durch Wiederholung als grün
+gewertet. Ursache und Fix sind weiterhin offen, und
+`GPU-RENDER-NONDETERMINISM-69-HW` ist nicht abgeschlossen.
+
+Die frühere Aussage, die Quellkopien seien nicht gelöscht worden, wird
+zurückgenommen: der Quellpfad
+`crates/lumina-cli/target/gpu-render-nondeterminism-69/2026-10-25T195812Z/`
+ist heute nicht vorhanden, nachdem die Kopien nach dem Abgleich entfernt wurden.
+Der SHA-256-Abgleich ist damit heute nicht erneut nachprüfbar. Erhalten ist das
+kanonische Archiv `target/gpu-render-nondeterminism-69/2026-10-25T195812Z/`;
+`find target/gpu-render-nondeterminism-69/2026-10-25T195812Z -type f | wc -l`
+ergab **242 Dateien**. Grund der Rücknahme ist der heutige Dateibaum, der der
+früheren Behauptung widerspricht.
+
+### Fixrunde Welle 2: wirksame Routenmutationen (2026-10-25)
+
+Die Fixrunde ergänzte `route_after_mask_stage` in
+`crates/lumina-cli/src/render_route.rs`: die Funktion erhält Report und
+Maskenergebnis gemeinsam und ist die **einzige** Stelle, die daraus die Route
+und Gründe bildet. Der `Err`-Zweig des Renderpfads wählt keinen eigenen Grund.
+Die vier Kombinationen werden mit exakten Grundlisten von
+`completed_gpu_report_with_successful_mask_stage_routes_gpu_without_reasons`,
+`completed_gpu_report_with_failed_mask_stage_uses_exact_mask_reason`,
+`internal_cpu_fallback_with_successful_mask_stage_keeps_exact_internal_reason`
+und `internal_cpu_fallback_with_failed_mask_stage_keeps_both_reasons_in_order`
+im ausgelagerten Testmodul geprüft. Die Kombination „`composite` scheitert,
+CPU-Referenz gelingt“ ist heute nicht konstruierbar; das beschreibt die
+Routing-Vorbedingungen (`mask_layer_routing_reasons`), nicht die getestete
+Zuordnung.
+
+Die Produktionszuordnung wurde mit drei Mutationen geprüft. M1 und M2 liefen
+unter `target/gpu-render-nondeterminism-69/2026-10-25T202856Z/` und richteten
+sich gegen die damalige Form (`crates/lumina-cli/src/render_route.rs` ->
+`route_from_gpu_report`). M1 zwang den `GpuPipelineCompleted`-Fall mit einem
+zusätzlichen Mutationsgrund auf CPU; der Lauf endete mit Exit **101**. Rot
+wurden die damaligen Tests
+`gpu_cli_route_requires_completed_report_and_successful_mask_stage` und
+`completed_gpu_report_with_failed_mask_stage_is_cpu_with_the_mask_reason`;
+letzterer wies den erfundenen Zusatzgrund nach. Beide Tests wurden in der dritten
+Runde durch die vier Kombinationstests ersetzt (siehe oben). M2 zwang
+`CpuFallback` auf die GPU-Route; Exit **101**, wobei
+`internal_cpu_fallback_report_forces_cpu_cli_route` rot wurde. Die Belege heißen
+`M1-production-wiring-mutation.patch`, `.log` und `.exit` sowie
+`M2-production-wiring-mutation.patch`, `.log` und `.exit`.
+
+M3 richtete sich gegen die heutige Form und entfernte in
+`crates/lumina-cli/src/render_route.rs` -> `route_after_mask_stage` den Beitrag
+des Maskengrunds im `Err`-Fall. Der Lauf endete mit Exit **101** und
+**3 passed / 2 failed**; rot wurden
+`completed_gpu_report_with_failed_mask_stage_uses_exact_mask_reason` (erwartete
+`["local mask rejected"]`, gemessen `[]`) und
+`internal_cpu_fallback_with_failed_mask_stage_keeps_both_reasons_in_order`
+(erwartete beide Gründe, gemessen nur der interne). Die Belege liegen unter
+`target/gpu-nondeterminism-69/2026-10-25T210939Z/` — abweichend vom oben
+genannten Muster `target/gpu-render-nondeterminism-69/<dated-run>/`, weil dieser
+Lauf einen Verzeichnisnamen ohne das Segment `render-` verwendet hat; das ist
+eine Namensabweichung, keine inhaltliche. Dort stehen
+`M3-production-wiring-mutation.patch`, `M3-mutated-test.log`, `M3-mutated-test.exit`,
+`M3-restored-test.log`, `M3-restored-test.exit`, `M3-restore-cmp.exit` und die
+Hashdateien.
+
+Vor den Mutationen wurde `render_route.rs` als
+`render_route.rs.unmutated` gesichert (SHA-256
+`487d896510cc3f21c95f18d186b9f4ecad8be53366311f84de7dcbe0b4488151` für M1/M2;
+M3 sicherte die Fassung der dritten Runde mit
+`205f4bbfca69cff1b4ebceb52e7422375ff4d212f63f4c05be1535a5179b1aea`). Nach jeder
+Mutation wurde die jeweils gesicherte Kopie byte-identisch zurückgeschrieben
+(`cmp` Exit 0); die Hashdateien `M1-mutated-source.sha256` /
+`M1-restored-source.sha256`, `M2-mutated-source.sha256` /
+`M2-restored-source.sha256` sowie `M3-source-before.sha256` /
+`M3-source-mutated.sha256` / `M3-source-restored.sha256` dokumentieren die
+jeweiligen Zustände:
+
+- M1-mutiert: `9887e4f2d55c7855c8b87d03273281438eabab56034fd520c63e7862d6beee26`
+- M2-mutiert: `4c5bbb408ca382f9a8d30f8db3d32d8cf5cc503cf600ee5799491b9c4860725c`
+- M3-mutiert: `96ffea539a8915ab50004040756f615a7667f0026ff79de98985d6d3c7b45cda`
+- Restores M1/M2: `487d896510cc3f21c95f18d186b9f4ecad8be53366311f84de7dcbe0b4488151`
+- Restore M3: `205f4bbfca69cff1b4ebceb52e7422375ff4d212f63f4c05be1535a5179b1aea`
+
+Nach jedem Restore liefen `cargo clean -p lumina-cli` und derselbe unmutierte
+GPU-Testlauf erneut: jeweils **5 passed / 0 failed**, Exit 0.
+
+Die abschließenden Gates dieser Fixrunde bestanden: `cargo fmt --all -- --check`,
+`cargo test -p lumina-cli --features gpu --bin lumina-cli execution_report_tests -- --test-threads=1`
+(**5 passed / 0 failed**),
+`cargo test -p lumina-cli --no-default-features --bin lumina-cli`
+(**148 passed / 0 failed**),
+`cargo clippy -p lumina-cli --all-targets --features gpu,lensfun -- -D warnings`,
+`sh scripts/check_file_sizes.sh`, `sh scripts/check_plan_format.sh` und
+`git diff --check`. `render_route.rs` hat **395** Zeilen, das neue Testmodul
+**74**; `crates/lumina-cli/src/main.rs` bleibt bei **889**.
+
 ### Fixrunde Welle 1: Ressourcenloser GPU-Feature-Fallback (2026-10-25)
 
 `resource_less_context_reports_adapter_fallback_for_both_render_entries` ist

@@ -227,6 +227,7 @@ use lumina_sidecar::{AspectPreset, BokehShape};
 mod batch_cmd;
 mod cli_args;
 mod cli_log;
+mod copy_selection;
 mod cull_cmd;
 mod develop_cmd;
 mod face_cmd;
@@ -237,6 +238,7 @@ mod retouch_cmd;
 use batch_cmd::{batch, emit, has_image_extension, reindex};
 use cli_args::*;
 use cli_log::{init_cli_logger, log_backend};
+use copy_selection::active_copy_index;
 use cull_cmd::{cull, CullArgs};
 use develop_cmd::{batch_meta, develop, export, import_file, keywords, previous, render, validate};
 use face_cmd::{face, FaceArgs};
@@ -245,8 +247,13 @@ use inspect_cmd::{
     push_metadata_export_record, reject_protected_output, validate_format, validate_quality,
     write_atomically, MetadataWritten, StagedArtifact,
 };
-use process_cmd::{process, resolve_generative_artifacts, resolve_mask_inference_engine};
-use render_route::{render_standard_routed, render_standard_with_generative};
+use process_cmd::{
+    process, process_selected, resolve_generative_artifacts, resolve_mask_inference_engine,
+};
+use render_route::{
+    render_standard_routed, render_standard_with_generative,
+    render_standard_with_generative_report, RoutedRender,
+};
 use retouch_cmd::{dust_removal, red_eye};
 // Test-only reach into the moved helpers (the in-crate tests call them
 // directly; no production caller in the root uses these names).
@@ -531,37 +538,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
 // Shared helpers for the AI CLI slices (DENOISE / CULL / FACE).
 // ===========================================================================
 
-/// Resolves the active virtual copy. Without `--virtual-copy` the first
-/// (standard) copy is used; an unknown id is a loud error.
-fn active_copy_index(
-    document: &SidecarDocument,
-    virtual_copy: Option<&str>,
-) -> Result<usize, CliError> {
-    match virtual_copy {
-        Some(id) => document
-            .virtual_copies
-            .iter()
-            .position(|copy| copy.id == id)
-            .ok_or_else(|| CliError::Message(format!("unknown virtual copy `{id}`"))),
-        None => {
-            if document.virtual_copies.is_empty() {
-                Err(CliError::Message(
-                    "sidecar has no virtual copies; run `import` first".into(),
-                ))
-            } else {
-                Ok(0)
-            }
-        }
-    }
-}
-
-fn process_selected(
+fn process_selected_with_report(
     args: ProcessArgs,
     quality: u8,
     virtual_copy: Option<&str>,
     policy: MaskPolicy,
     mask_warnings_out: &mut Vec<String>,
-) -> Result<Option<MetadataWritten>, CliError> {
+) -> Result<(Option<MetadataWritten>, RoutedRender), CliError> {
     // REVIEW-CLI-WRITE-1: the guard covers the original itself (path and
     // hard-link identity) plus its `.lumina.json`/`.lumina.zdata` bundle.
     reject_protected_output(&args.input, &args.output)?;
@@ -772,8 +755,9 @@ fn process_selected(
         #[cfg(not(feature = "lensfun"))]
         None,
     )?;
-    let render_output =
-        render_standard_with_generative(&frame, &recipe, &render_ctx, generative.input())?;
+    let render_execution =
+        render_standard_with_generative_report(&frame, &recipe, &render_ctx, generative.input())?;
+    let render_output = &render_execution.output;
     // Surface F-051 (model unavailable / cached fallback) warnings distinctly.
     for warning in &resolved.warnings {
         eprintln!("warning: {warning}");
@@ -898,7 +882,7 @@ fn process_selected(
     }
     save_sidecar(&sidecar_path, &document)?;
     staged.commit()?;
-    Ok(metadata_written)
+    Ok((metadata_written, render_execution))
 }
 
 #[cfg(test)]

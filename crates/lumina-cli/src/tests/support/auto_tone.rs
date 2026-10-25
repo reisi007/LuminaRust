@@ -264,6 +264,27 @@ pub(crate) fn process_auto_tone(
     );
 }
 
+/// Same Auto-Tone command setup, retaining the report from the production
+/// `process_selected` → standard render path for route-focused diagnostics.
+#[cfg(feature = "gpu")]
+pub(crate) fn process_auto_tone_with_report(
+    input: &Path,
+    output: &Path,
+    mutate: impl FnOnce(&mut ProcessArgs),
+) -> RoutedRender {
+    let mut args = process_args(input, output);
+    args.auto_tone = true;
+    mutate(&mut args);
+    let mut warnings = Vec::new();
+    let (_, rendered) =
+        process_selected_with_report(args, 90, None, MaskPolicy::Warn, &mut warnings).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "the Auto-Tone fixture carries no mask work: {warnings:?}"
+    );
+    rendered
+}
+
 /// Writes a `--preset` file whose recipe sets exactly `adjustments`.
 pub(crate) fn write_preset(path: &Path, adjustments: &[(&str, f64)]) {
     let entries: Vec<String> = adjustments

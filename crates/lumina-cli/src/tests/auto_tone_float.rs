@@ -351,3 +351,13 @@ fn the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move() 
         "run 2 and run 3 must render byte-identically ({stable_second}/{members} members)"
     );
 }
+
+/// Explicit adapter-only counterpart to the ordinary headless family test.
+/// Run with `--ignored` and an artifact directory; a missing adapter or any
+/// internal CPU fallback fails the per-call report assertions.
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires a real adapter; invoke explicitly with the artifact-dir environment variable"]
+fn adapter_runs_of_the_full_process_path_report_gpu_for_all_120_renders() {
+    run_adapter_family_diagnostic(FAMILY_MEMBERS);
+}
