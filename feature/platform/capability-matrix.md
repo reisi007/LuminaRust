@@ -339,7 +339,7 @@ Das ist keine Formfrage, sondern die Voraussetzung dafür, dass die Tests die
 Produktion messen: eine frühere Runde führte eine **byte-gleiche Zweitkopie**
 dieser Reihenfolge in `resolve_system_with()`, die nur der Test benutzte — ein
 Löschen von `diag.pin_displaced(…)` oder der ganzen `layer_skipped`-Schleife im
-**echten** Pfad ließ alle 84 Tests grün (Befund MITTEL-3, Runde 4).
+**echten** Pfad ließ alle Tests grün (Befund MITTEL-3, Runde 4; die Testzahl ist gestrichen, weil der Lauf nicht datiert ist).
 Verankert in
 `tests::production_seam::production_emits_pin_displaced_and_layer_skipped_before_the_load` (Reihenfolge),
 `tests::production_seam::a_displaced_pin_is_reported_even_when_the_load_then_fails` (auch im Fehlerfall),
