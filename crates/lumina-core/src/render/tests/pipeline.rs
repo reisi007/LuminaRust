@@ -382,24 +382,6 @@ fn history_recipe_snapshot_reproduces_the_original_render() {
 
 // ---- F-098-N1: Lensfun integration (feature-gated; needs liblensfun) ----
 
-/// A smooth, non-black gradient frame so distortion/vignetting produce
-/// visible differences at the corners and edges (F-098-N1 tests).
-#[cfg(feature = "lensfun")]
-fn lensfun_gradient_frame(width: u32, height: u32) -> ImageFrame {
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    let w = width.max(1);
-    let h = height.max(1);
-    for y in 0..height {
-        for x in 0..width {
-            let r = ((x * 255) / (w - 1).max(1)) as u8;
-            let g = ((y * 255) / (h - 1).max(1)) as u8;
-            let b = (((x + y) * 255) / (w + h - 1).max(1)) as u8;
-            pixels.extend_from_slice(&[r, g, b, 255]);
-        }
-    }
-    ImageFrame::new(width, height, pixels).unwrap()
-}
-
 /// A `RenderContext` without a corrector must render exactly like the
 /// default (no-geometry) pipeline — graceful fallback, no behaviour change
 /// when no Lensfun profile is supplied (F-098-N1).
