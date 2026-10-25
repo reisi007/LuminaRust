@@ -7,8 +7,10 @@ unabhängig prüfbaren Schritten gemäß `Agents.md`.
 **Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
 Plans beziehen sich auf den Commit `87929c7` (Plan-Erstellung 2026-08-23). Die
 Tabellen in §3 nennen ihre Datei im Abschnittskopf; die nackten `lib.rs`-Anker
-wurden auf den vollstaendigen repo-relativen Pfad umgestellt.
-Alle Fundstellen sind ueber `git show `87929c7`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
+wurden auf den vollstaendigen repo-relativen Pfad umgestellt. Der Plan ist
+**historisch**: er wird nicht nachgefuehrt, und seine Aussagen beschreiben den
+Stand `87929c7`, nicht HEAD.
+Alle Fundstellen sind ueber `git show 87929c7:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
 ## 1. Ziel und Umfang
 

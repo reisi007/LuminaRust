@@ -2,6 +2,8 @@
 
 > **Status:** Ideensammlung — keine Umsetzung. Dokumentiert auf Wunsch, vor manuellem Review F-103-N6.
 > CI-Runner: `ubuntu-latest` = 4 vCPUs, 16 GB RAM, 14 GB SSD (GitHub-hosted, Stand 2026). Container-Jobs (`rust`, `bench`) laufen im gepinnten LibRaw-Image `ghcr.io/reisi007/luminarust/lumina-ci:latest`.
+>
+> **Stand der Zeilenangaben (2026-10-25):** das Papier ist historisch (Niederschrift 2026-08-23, Commit `c4abebf`) und wird nicht nachgeführt. Die `.rs`-Zeilenangabe beschreibt den vor `3bb21cd` diskutierten Code, der `ci.yml`-Verweis den Stand der Niederschrift.
 
 ## 1) Warnings im „Run tests"-Schritt — Erklärung
 
