@@ -176,13 +176,14 @@ Er:
 - **Build-Parallelität ist durch den Cargo-Lock begrenzt.** Mehrere Agenten
   dürfen `cargo` zeitgleich aufrufen — Cargo serialisiert den Zugriff auf
   `target/` per Lock.
-- **Abgestürzte/fehlerhafte Subagenten neu starten.** Ein Subagent, der mit
-  einem Fehler zurückkehrt, wird über seine `sessionID` mit Fortsetzung
-  (`continue`) neu gestartet, statt den Kontext neu aufzubauen.
-- **Fortsetzungen begrenzen.** Pro Aufgabe höchstens **einmal** `continue` auf
-  derselben Session; danach wird frisch neu gestartet (neue `sessionID`, voller
-  Auftragskontext im Prompt). Das gilt für Implementierungs- wie
-  Verifizierungs-Agenten.
+- **Frische Session pro Runde — Implementierer und Verifizierer.** Jeder
+  Dispatch ist eine neue Session mit dem vollen Auftrag im Prompt; eine Session
+  wird nie über Runden oder Aufgaben hinweg fortgesetzt. Einzige Ausnahme: eine
+  **Fix-Runde in derselben Aufgabe**, deren zu korrigierende Runde die
+  Session selbst implementiert hat — und auch dann entscheidet der
+  Orchestrator bewusst. Der Grund: ein
+  fortgesetzter Kontext trägt die Defekte der Runde in die nächste, wächst mit
+  jeder Runde und macht aus der unabhängigen Prüfung eine Mitprüfung.
 - **Kein Commit durch Subagenten.** Implementierungs-Agenten committen nicht;
   der Build-Agent committet (wie und wann: Skill `build-verify`).
 
@@ -216,22 +217,30 @@ Der Implementierungs-Agent:
 Der Verifikations-Lauf folgt dem Skill `build-verify`; hier steht nur der
 repo-spezifische Teil. Er:
 
-- prüft die tatsächliche Änderung gegen `feature/README.md` und das betroffene
-  Feature-Dokument;
-- prüft fachliche Korrektheit, Fehlerfälle, Rückwärtskompatibilität und
-  Persistenzfolgen;
-- führt die einschlägigen Kommandos aus „Verifizierung und Tests" aus
-  (`cargo fmt`, Clippy, Tests, Builds) — ein nicht gelaufenes Gate gilt als
-  **nicht geprüft**, nicht als grün;
+- prüft die **Substanz**: die tatsächliche Änderung gegen `feature/README.md`
+  und das betroffene Feature-Dokument (Diff gegen den Auftrag), fachliche
+  Korrektheit, Invarianten, Blast Radius, Fehlerfälle,
+  Rückwärtskompatibilität und Persistenzfolgen — und übernimmt gemeldete
+  Gate-Ergebnisse **mit zitierter Ausgabe**; die mechanischen Gates
+  (u. a. `cargo fmt`, Clippy, Tests, Builds) führt der Implementierer bzw.
+  Orchestrator aus. Vier Ausnahmen, in denen der Verifizierer selbst läuft
+  (Skill `build-verify`, `references/verifier-prompt.md`): kein CI für dieses
+  Repo oder Artefakt (bzw. der Stand wird nie gepusht); die Änderung berührt
+  die Gates selbst (Tests, Konfiguration von Lint/Format — ein „grün" wäre
+  zirkulär); der Bericht deckt die geänderte Fläche nicht ab (dann wenigstens
+  die relevante Teilmenge); es ist **keine Ausgabe zitiert** — dann fordert er
+  die Ausgabe nach, statt sie zu ersetzen (eine Behauptung ist kein Beleg);
 - prüft ausdrücklich, ob die Tests die neue Funktion tatsächlich abdecken;
-- prüft ausdrücklich die Dateigrößen-Regel (Anti-Gaming):
-  `sh scripts/check_file_sizes.sh` grün, neue Logik in neuen/kohärenten Dateien
-  (kein Wachstum in >500-Zeilen-Dateien), keine Kommentar-/Doku-/Test-Löschung
-  zur Kompensation (Diff-Prüfung);
+- prüft die Dateigrößen-Regel (Anti-Gaming) **am Diff**: neue Logik in
+  neuen/kohärenten Dateien, kein Wachstum in >500-Zeilen-Dateien, keine
+  Kommentar-/Doku-/Test-Löschung zur Kompensation — und übernimmt das
+  Gate-Ergebnis `sh scripts/check_file_sizes.sh` aus dem Implementierer-Bericht,
+  statt es selbst zu fahren (Ausnahmen wie oben);
 - darf eine Aufgabe als **nicht bestanden** zurückweisen;
 - liefert einen kurzen Prüfbericht mit bestanden/nicht bestanden, Befunden,
-  Testkommandos und verbleibenden Risiken (Verdict-Format und Schweregrade
-  `critical`/`high`/`medium`/`low`: Skill `build-verify`).
+  Test-/Gate-Kommandos mit zitierter Ausgabe und verbleibenden Risiken
+  (Verdict-Format und Schweregrade `critical`/`high`/`medium`/`low`: Skill
+  `build-verify`).
 
 ## Branch- und Merge-Konvention
 
@@ -462,12 +471,14 @@ kittest-Stand ausdrücklich.
   gibt es KEINEN Modellwechsel.** Es werden ausschließlich freie Subagenten
   eingesetzt — kein deepseek, kein Bezahlmodell, keine Ausnahme.
 - **Ausweg statt Modell:** Aufgabe weiter zerlegen (kleinere, unabhängig
-  prüfbare Einheiten), höchstens einmal `continue` pro Aufgabe, danach frische
-  Session mit vollem Auftragskontext. Hält die Serie an, gehen die Befunde als
-  interaktive Frage an den Eigentümer — drei gleiche Fehlschläge sind ein
-  Signal zum Perspektivwechsel, nicht zur vierten Wiederholung.
+  prüfbare Einheiten); jede Runde eine frische Session mit vollem
+  Auftragskontext (Ausnahme: Fix-Runde derselben Aufgabe, siehe §„Rollen und
+  Delegation"). Hält die Serie an, gehen die Befunde als interaktive Frage an
+  den Eigentümer — drei gleiche Fehlschläge sind ein Signal zum
+  Perspektivwechsel, nicht zur vierten Wiederholung.
 - **Gilt für die Verifikation und alle weiteren Fix-Runden derselben Aufgabe.**
-  Ein frisches `continue` oder eine neue Session ändert nichts daran.
+  Eine frische Session — oder die Ausnahme-Fortsetzung einer Fix-Runde — ändert
+  nichts daran.
 - **Zählung:** aufeinanderfolgende Runden **derselben** Aufgabe. Ein
   zwischenzeitlich bestandener Task setzt die Zählung zurück.
 - **Dokumentation:** die dreifache Niederlage und der auslösende Befund stehen
