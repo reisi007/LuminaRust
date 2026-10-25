@@ -1393,10 +1393,24 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   gibt `None`, also *sofortigen* Commit, wenn `last_edit_time <= 0.0` oder das
   150-ms-Fenster abgelaufen ist. Ein **veralteter** Zeitstempel macht den
   Commit also *eifriger*, nicht strandend; der Debounce kann nur verzoegern,
-  nie abbrechen. Und `pending_full_render` ist am Release-Frame immer gesetzt,
-  weil `crates/lumina-gui/src/slider.rs` → `draw_track` es bei jedem
-  `dragged()`-Frame unbedingt neu bewaffnet.
-  Ein „Edit in einem Frame verliert den entprellten Save" gibt es nicht.
+  nie abbrechen. Und `pending_full_render` ist am Release-Frame gesetzt, weil
+  der **Edit-Pfad** es armt, nicht das Widget: `crates/lumina-gui/src/slider.rs`
+  → `draw_track` setzt bei `response.dragged()` nur das Feld
+  `TrackOutcome { changed }`, `lr_slider` macht daraus
+  `SliderAction::Changed`,
+  `crates/lumina-gui/src/develop_basic.rs` → `adjustment_slider` ruft
+  `set_adjustment`, und `crates/lumina-gui/src/app_develop.rs` → `set_adjustment`
+  setzt `pending_full_render = true`; die mask-local Felder erreichen dasselbe
+  ueber `mark_recipe_dirty` → `mark_dirty` (`crates/lumina-gui/src/dirty.rs`).
+  `schedule_render` laeuft in `crates/lumina-gui/src/app_impl.rs` → `ui` vor
+  den Panels, sieht am Release-Frame also das Flag des letzten Drag-Frames; hat
+  ein Vollrender es schon geloescht, bewaffnet
+  `crates/lumina-gui/src/render_schedule.rs` → `schedule_render` es neu —
+  solange kein Zeiger gedrueckt ist, die Drag-Uhr laeuft und ein
+  Commit-Token armiert ist.
+  Ein „Edit in einem Frame verliert den entprellten Save" gibt es nicht. Diese
+  pro Drag-Frame neu bewaffnete Vollbild-Neuplanung ist der Eingang fuer die
+  Drossel-Entscheidung aus `R2-GUIMOD-04b`/`-04c`.
 
   **Tatsächlich gemessen:** `crates/lumina-gui/src/render_schedule.rs` →
   `schedule_render` haengt den einzigen
