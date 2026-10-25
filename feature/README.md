@@ -187,14 +187,17 @@ Sidecars vollständig wiederherstellbar sein.
 - [security-review-register.md](quality/security-review-register.md):
   Sicherheits-/Risikoregister nach Stage 6 des Skills `security-review` —
   Zwei-Hälften-Form (erst *finden*: alle erreichbaren Oberflächen
-  programmatisch auflisten, jeder Befund mit reproduzierbarem Kommando und
-  Ausgabe belegt; dann *schließen*: Befunde in Wellen, je Welle ein
+  programmatisch auflisten, jeder Befund mit Kommando und Ausgabe belegt;
+  bei zwei Einträgen ist nur das Ergebnis protokolliert und die Lücke
+  benannt; dann *schließen*: Befunde in Wellen, je Welle ein
   Regressionstest), Registertabelle mit Befund-ID, Klasse, Oberfläche,
-  Wellenstatus, Test, Owner, Beleg und Stand, und die Enumerationsbasis des
-  Projekts (die Liste der erreichbaren Oberflächen und ihre Zahl: siehe §5 des
-  Registers). **Bisher null Befunde** — die Form,
-  nicht das Ergebnis; die erste Review-Welle ist die offene Task
-  `SEC-REVIEW-WELLE-1-85` (SECURITY-REVIEW-REGISTER)
+  **Severity**, Wellenstatus, Test, Owner, **Ticket**, Beleg und Stand, und
+  die Enumerationsbasis des Projekts (die Liste der erreichbaren Oberflächen
+  und ihre Zahl: siehe §5 des Registers). **Zehn Einträge** — **sieben
+  geschlossen**, **zwei zurückgenommen** (am Falsch-Positiv-Gate), **einer
+  offen** (`SEC-8`, `in Welle`, Ticket `SEC-WELLE-2D`); Welle 1 und die
+  Wellen 2a, 2b, 2c, 2e sind abgeschlossen; Welle 2d ist mit `SEC-8` offen
+  (SECURITY-REVIEW-REGISTER)
 
 <!-- BEGIN GENERATED: goldens -->
 **66** committete Golden-Dateien in `crates/lumina-gui/tests/snapshots/` (Quelle:
