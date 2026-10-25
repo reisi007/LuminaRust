@@ -1,14 +1,12 @@
-//! Readback render entry points and the draft/fallback paths
-//! (`render_with_gpu`, `render_with_gpu_and_generative`, `render_draft`),
-//! extracted from `lib.rs` (file-size ratchet §8).
+//! Readback render entry points, extracted from `lib.rs` (file-size ratchet §8).
 
 use super::resources::{
     encode_source_action_batches, encode_spot_heal, post_stages_needed, upload_generative_artifacts,
 };
 use super::{
-    geometry, lens_blur, log_cpu_routing_once, readback_texture, render_cpu,
-    render_cpu_with_generative, shaders, unsupported_gpu_stages_for, validate_gpu_recipe, Frame,
-    GpuContext, GpuError, ImageFrame, RenderWithGpuResources, SourceActionBatches,
+    geometry, lens_blur, log_cpu_routing_once, readback_texture, render_cpu_with_generative,
+    shaders, unsupported_gpu_stages_for, validate_gpu_recipe, CpuFallbackReason, Frame, GpuContext,
+    GpuError, ImageFrame, RenderExecutionReport, RenderWithGpuResources, SourceActionBatches,
     UploadedGenerativeArtifact,
 };
 // Doc-link only: the moved docs name the `stages` module and the routing verdicts
@@ -76,6 +74,21 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
     ) -> Result<Frame, GpuError> {
+        self.render_with_gpu_report(frame, recipe)
+            .map(|(frame, _report)| frame)
+    }
+
+    /// Render one frame and report whether this call completed the GPU pipeline
+    /// or returned a CPU-fallback frame, with the internal fallback reason.
+    ///
+    /// `GpuPipelineCompleted` is returned only after the final GPU output has
+    /// been submitted and successfully read back. It is not a pixel-parity
+    /// claim; render and readback failures remain errors with no report.
+    pub fn render_with_gpu_report(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+    ) -> Result<(Frame, RenderExecutionReport), GpuError> {
         self.render_with_gpu_inner(frame, recipe, None)
     }
 
@@ -94,6 +107,17 @@ impl GpuContext {
         recipe: &EditRecipe,
         generative: &lumina_core::GenerativeCanvasInput<'_>,
     ) -> Result<Frame, GpuError> {
+        self.render_with_gpu_and_generative_report(frame, recipe, generative)
+            .map(|(frame, _report)| frame)
+    }
+
+    /// Artifact-aware render with the execution outcome for this output frame.
+    pub fn render_with_gpu_and_generative_report(
+        &self,
+        frame: &ImageFrame,
+        recipe: &EditRecipe,
+        generative: &lumina_core::GenerativeCanvasInput<'_>,
+    ) -> Result<(Frame, RenderExecutionReport), GpuError> {
         self.render_with_gpu_inner(frame, recipe, Some(generative))
     }
 
@@ -102,13 +126,13 @@ impl GpuContext {
         frame: &ImageFrame,
         recipe: &EditRecipe,
         generative: Option<&lumina_core::GenerativeCanvasInput<'_>>,
-    ) -> Result<Frame, GpuError> {
+    ) -> Result<(Frame, RenderExecutionReport), GpuError> {
         // GPU-LENSFUN-PARITY-1: the free `render_cpu` reference does not carry a
         // caller-bound Lensfun map (the corrector is render-context state,
         // F-098-N1), so a fallback would silently drop the correction. Refuse
         // loudly instead — the caller owns the full CPU reference for a bound
         // map (the GUI presents the exact CPU frame itself).
-        let cpu_fallback = |frame: &ImageFrame| {
+        let cpu_fallback = |frame: &ImageFrame, reason: CpuFallbackReason| {
             if self.lensfun_map.is_some() {
                 return Err(GpuError::RenderFailed(
                     "a bound Lensfun map cannot use the internal CPU fallback; \
@@ -123,6 +147,7 @@ impl GpuContext {
                 self.camera_white_balance(),
                 generative,
             )
+            .map(|frame| (frame, RenderExecutionReport::CpuFallback { reason }))
         };
         // CAMERA-WB-WELLE (R2-MCP-01): validate the caller-bound As-Shot context
         // exactly like the CPU oracle (invalid gains abort before any pixel) and
@@ -131,7 +156,7 @@ impl GpuContext {
         // backends (the decoder already applied them).
         self.validate_bound_camera_white_balance()?;
         let Some(resources) = self.resources.as_ref() else {
-            return cpu_fallback(frame);
+            return cpu_fallback(frame, CpuFallbackReason::AdapterOrDeviceUnavailable);
         };
         // R2-GPU-06: a lost device must not panic — degrade to the CPU oracle.
         if resources
@@ -139,7 +164,7 @@ impl GpuContext {
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             log::warn!("GPU device lost; routing render_with_gpu to CPU");
-            return cpu_fallback(frame);
+            return cpu_fallback(frame, CpuFallbackReason::DeviceLost);
         }
         // REVIEW-GPU-DIVERGENCE-1 / GPU-STAGE-1: never let the GPU path drop
         // recipe stages. Route to the CPU oracle loudly instead of rendering
@@ -153,12 +178,12 @@ impl GpuContext {
         let unsupported = unsupported_gpu_stages_for(recipe, sa_bound);
         if !unsupported.is_empty() {
             log_cpu_routing_once(&unsupported, "render_with_gpu");
-            return cpu_fallback(frame);
+            return cpu_fallback(frame, CpuFallbackReason::UnsupportedStages(unsupported));
         }
         self.ensure_pipeline()?;
         let guard = self.pipeline.lock().unwrap();
         let Some(pipeline) = guard.as_ref() else {
-            return cpu_fallback(frame);
+            return cpu_fallback(frame, CpuFallbackReason::PipelineUnavailable);
         };
 
         let width = frame.width();
@@ -497,7 +522,8 @@ impl GpuContext {
                     &blur_texture,
                     plan.output_width,
                     plan.output_height,
-                );
+                )
+                .map(|frame| (frame, RenderExecutionReport::GpuPipelineCompleted));
             }
             drop(cache_guard);
             return readback_texture(
@@ -505,7 +531,8 @@ impl GpuContext {
                 &final_texture,
                 plan.output_width,
                 plan.output_height,
-            );
+            )
+            .map(|frame| (frame, RenderExecutionReport::GpuPipelineCompleted));
         }
         // No geometry: the tone/post result lives in `output_view`. Run the
         // lens blur into a fresh texture (its input is `output_view`, so it
@@ -583,72 +610,13 @@ impl GpuContext {
         drop(guard);
         readback.unmap();
 
-        Ok(Frame {
-            width,
-            height,
-            pixels,
-        })
-    }
-
-    /// Draft render for an interactive viewport (ROI) using the draft pyramid.
-    ///
-    /// Sets up the GPU scaffolding (pipeline + uniforms + ROI tile set) and
-    /// produces real pixels through the CPU reference (the draft path stays
-    /// on the CPU scaffold even though the tone shader stage exists). The
-    /// tile set is logged so the parallel tiling subagent has a concrete
-    /// call site to plug into.
-    pub fn render_draft(
-        &self,
-        frame: &ImageFrame,
-        viewport: crate::tiling::Viewport,
-    ) -> Result<Frame, GpuError> {
-        // No adapter → CPU fallback via lumina-core (keeps the non-GPU path
-        // correct and is the test oracle for the GPU stages).
-        let Some(resources) = self.resources.as_ref() else {
-            return self.render_draft_cpu(frame);
-        };
-
-        // GPU draft-path scaffolding: if a pipeline was built (via
-        // `create_pipeline`/`update_uniforms`), push the current recipe into the
-        // uniform buffer; then compute the ROI tile set against the draft pyramid.
-        if let Some(recipe) = self.recipe.as_ref() {
-            let uniforms = shaders::Uniforms::from_recipe(recipe);
-            if let Some(pipeline) = self.pipeline.lock().unwrap().as_ref() {
-                shaders::write_uniforms(&resources.queue, &pipeline.uniform_buffer, &uniforms);
-            }
-        }
-        let zoom = (frame.width() as f32 / viewport.width.max(1.0)).clamp(0.01, 100.0);
-        let pyramid = crate::tiling::DraftPyramid::new(frame.width(), frame.height());
-        let lvl = pyramid.level_for_zoom(zoom);
-        // REVIEW-GPU-LEVELS-1: the ROI expansion routes through the pyramid, so
-        // the logged level and the produced tile keys can no longer diverge.
-        let cache = crate::tiling::TiledCache::new(64);
-        let keys = cache.keys_for_viewport(&pyramid, &viewport, zoom);
-        log::debug!(
-            "render_draft: gpu scaffold (adapter present), {} tiles for viewport {:?} @ zoom {:.3} (pyramid level {}, cache generation {})",
-            keys.len(),
-            viewport,
-            zoom,
-            lvl,
-            cache.generation()
-        );
-        // Real GPU tile upload + draw is filled in by the shader/tiling subagents.
-        // Bootstrapping: produce real pixels via the CPU reference.
-        self.render_draft_cpu(frame)
-    }
-
-    /// CPU fallback that uses the recipe stored via [`update_uniforms`], or the
-    /// untouched frame when none has been set. Runs the full CPU reference
-    /// chain (the free `render_cpu`), not just `apply_recipe`.
-    fn render_draft_cpu(&self, frame: &ImageFrame) -> Result<Frame, GpuError> {
-        match self.recipe.as_ref() {
-            Some(recipe) => render_cpu(
-                frame,
-                recipe,
-                self.depth_plane.as_ref().map(|plane| &plane.plane),
-                self.camera_white_balance(),
-            ),
-            None => Ok(Frame::from_image_frame(frame.clone())),
-        }
+        Ok((
+            Frame {
+                width,
+                height,
+                pixels,
+            },
+            RenderExecutionReport::GpuPipelineCompleted,
+        ))
     }
 }

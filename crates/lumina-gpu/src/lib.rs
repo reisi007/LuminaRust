@@ -148,7 +148,7 @@ pub(crate) use routing::adjustment_neutral_value;
 use routing::validate_camera_white_balance_gains;
 pub use routing::{
     unsupported_gpu_stages, unsupported_gpu_stages_for, unsupported_gpu_stages_with_context,
-    GpuError, MAX_SOURCE_ACTIONS,
+    CpuFallbackReason, GpuError, RenderExecutionReport, MAX_SOURCE_ACTIONS,
 };
 
 #[cfg(feature = "gpu")]
@@ -205,8 +205,12 @@ mod sharpening_encode;
 
 // Render dispatch, the VRAM present path, the caller-bound render state and the
 // pipeline/backend plumbing live in child modules (file-size ratchet).
+#[cfg(not(feature = "gpu"))]
+mod render_cpu_stub;
 #[cfg(feature = "gpu")]
 mod render_dispatch;
+#[cfg(feature = "gpu")]
+mod render_draft;
 #[cfg(feature = "gpu")]
 mod render_vram;
 #[cfg(feature = "gpu")]
@@ -539,78 +543,6 @@ impl GpuContext {
         if let Some(gains) = self.camera_white_balance() {
             validate_camera_white_balance_gains(&gains)?;
         }
-        Ok(())
-    }
-}
-
-#[cfg(not(feature = "gpu"))]
-impl GpuContext {
-    /// Create a CPU-only context (the `gpu` feature is disabled, so no adapter
-    /// is ever bound). Rendering always uses the CPU fallback.
-    pub fn new() -> Result<Self, GpuError> {
-        Ok(Self {
-            camera_white_balance: std::sync::Mutex::new(None),
-        })
-    }
-
-    /// Always `false` without the `gpu` feature.
-    pub fn is_available(&self) -> bool {
-        false
-    }
-
-    /// Always `None` without the `gpu` feature (no adapter can be bound).
-    pub fn adapter_info(&self) -> Option<String> {
-        None
-    }
-
-    /// CPU fallback render (the only path when the `gpu` feature is off): runs
-    /// the full CPU reference chain (the free `render_cpu`).
-    pub fn render_with_gpu(
-        &self,
-        frame: &ImageFrame,
-        recipe: &EditRecipe,
-    ) -> Result<Frame, GpuError> {
-        render_cpu(frame, recipe, None, self.camera_white_balance())
-    }
-
-    /// GEN-ONNX-1 Welle 2a: without the `gpu` feature every render is the full
-    /// CPU reference; the generative canvas artifacts are carried through so the
-    /// artifact-aware contract is identical to a GPU build.
-    pub fn render_with_gpu_and_generative(
-        &self,
-        frame: &ImageFrame,
-        recipe: &EditRecipe,
-        generative: &lumina_core::GenerativeCanvasInput<'_>,
-    ) -> Result<Frame, GpuError> {
-        render_cpu_with_generative(
-            frame,
-            recipe,
-            None,
-            self.camera_white_balance(),
-            Some(generative),
-        )
-    }
-
-    pub fn perf_log_enabled() -> bool {
-        false
-    }
-    pub fn ensure_vram(&self, _w: u32, _h: u32) -> Result<(), GpuError> {
-        Ok(())
-    }
-    pub fn render_to_vram(&self, _f: &ImageFrame, _r: &EditRecipe) -> Result<(), GpuError> {
-        Ok(())
-    }
-    pub fn upload_mask_tile(
-        &self,
-        _x: u32,
-        _y: u32,
-        _w: u32,
-        _h: u32,
-        _d: &[u8],
-    ) -> Result<(), GpuError> {
-        Ok(())
-    }
-    pub fn copy_vram_to_texture(&self, _d: &(), _overlay_color: [u8; 3]) -> Result<(), GpuError> {
         Ok(())
     }
 }

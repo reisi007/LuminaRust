@@ -1,6 +1,10 @@
 use lumina_sidecar::EditRecipe;
 use thiserror::Error;
 
+#[path = "execution_report.rs"]
+mod execution_report;
+pub use execution_report::{CpuFallbackReason, RenderExecutionReport};
+
 /// Errors produced by the GPU path.
 ///
 /// Every variant carries only `String`/core payloads so the error type is
