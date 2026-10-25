@@ -137,7 +137,7 @@ fi
 # und lokal gruen.
 # ---------------------------------------------------------------------------
 
-FAST_ENTRIES='fast-1|1|Repo-Wurzel|.|keine Infrastruktur|cargo fmt --all -- --check||
+FAST_ENTRIES='fast-1|1|Repo-Wurzel|.|keine Infrastruktur|cargo fmt --all -- --check && sh scripts/check_included_rs_fmt.sh||
 fast-2|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_file_sizes.sh||
 fast-3|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_plan_format.sh||
 fast-4|1|Repo-Wurzel|.|keine Infrastruktur|sh scripts/check_env_gate_reasons.sh||

@@ -185,7 +185,7 @@ Wortgleich mit `sh scripts/gates.sh list`:
 
 | ID | Stufe | Kommando | Arbeitsverzeichnis | Budget | Bedarf |
 | --- | --- | --- | --- | --- | --- |
-| fast-1 | fast | `cargo fmt --all -- --check` | Repo-Wurzel | Sekunden | keine Infrastruktur |
+| fast-1 | fast | `cargo fmt --all -- --check && sh scripts/check_included_rs_fmt.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-2 | fast | `sh scripts/check_file_sizes.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-3 | fast | `sh scripts/check_plan_format.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-4 | fast | `sh scripts/check_env_gate_reasons.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
