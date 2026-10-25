@@ -20,7 +20,7 @@ so one file's larger exception cannot mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **953** Dateien, davon
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **955** Dateien, davon
 **109** ueber 500 Zeilen und **0** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 
