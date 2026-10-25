@@ -855,9 +855,11 @@ fror einen nicht abgewarteten Vorzustand ein — bei `5ba13da` unmittelbar vor d
 Snapshot `status = MaskCreated`, `render_key = None`, `gen = 1` über 10 Frames
 (nie ein Render); bei HEAD `status = Mask-Warnung`, `render_key = Some`,
 `gen = 2`, Render in Frame 0. Ursache ist `46e2917`: `create_mask` ruft
-`push_mask_definition` → `mark_dirty` (`lib.rs:6106`) → `pending_full_render =
-true` (`dirty.rs:47`); die Status-Überschreibung (`render_pipeline.rs:484`) ist
-alt. **SOLL:** Der Test wartet per geteiltem `settle_render`-Helfer im
+`push_mask_definition` (`crates/lumina-gui/src/app_masking.rs`) →
+`transact_mask_mutation` (`crates/lumina-gui/src/mask_persistence.rs`) →
+`mark_dirty` (`crates/lumina-gui/src/dirty.rs`) → `pending_full_render = true`;
+die Status-Überschreibung (`crates/lumina-gui/src/render_pipeline.rs` →
+`render_from`) ist alt. **SOLL:** Der Test wartet per geteiltem `settle_render`-Helfer im
 Support-Modul (Prädikat `render_key.is_some()`, lauter Abbruch, wenn der Render
 nie landet); das Golden wird für genau diesen abgewarteten Zustand neu
 aufgenommen. Ein `record` ohne Warten pinnt frame-zahl-abhängigen Zufall als

@@ -778,7 +778,7 @@ dessen Doc-Kommentar):
 
 | Art | Beispiel | Sichtbar? | Log? |
 | --- | --- | --- | --- |
-| **Capability** | nicht unterstützte Stufen, `geometry (default content crop)`, `lens_correction (Lensfun corrector; …)` | **ja** — gelbes Badge mit exakten Gründen plus Tooltip (`app_frame.rs:148-156`), getestet in `crates/lumina-gui/src/tests/gpu_routing.rs` | ja, `gpu present refused, keeping CPU route: {stage}` |
+| **Capability** | nicht unterstützte Stufen, `geometry (default content crop)`, `lens_correction (Lensfun corrector; …)` | **ja** — gelbes Badge mit exakten Gründen plus Tooltip (`crates/lumina-gui/src/app_frame.rs` → `draw_routing_fallback_badge`), getestet in `crates/lumina-gui/src/tests/gpu_routing.rs` | ja, `gpu present refused, keeping CPU route: {stage}` |
 | **Editorial** | Masken-Gate, Before/After-Ansicht, ROI | **nein** — bewusst: `None`, „wenn nur eine editoriale Ursache vorliegt" | **nein** |
 
 Fuer **B12** ist das die entscheidende Lesart: die Capability-Umleitung ist
