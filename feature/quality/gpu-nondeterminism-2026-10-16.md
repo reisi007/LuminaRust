@@ -458,9 +458,28 @@ hat diese Hypothese nicht bestätigt; siehe den Zusatz oben.
 
 ### Nebenbefund (ehrlich benannt, NICHT als Ursache behauptet)
 
-Der Input-Upload überspringt auf **Pointer-Identität** statt Content-Hash
-(`crates/lumina-gpu/src/lib.rs:3263-3285`) — echtes latentes Risiko, im
-konkreten Test nicht auslösbar (gleiche Quelldatei pro Lauf). **Kein Fix.**
+Der Input-Upload überspringt auf **Pointer-Identität** statt auf einen
+Content-Hash: `crates/lumina-gpu/src/render_dispatch.rs`
+(`input_source_identity`, Schlüssel `(frame.pixels().as_ptr() as usize,
+frame.pixels().len())`) und `crates/lumina-gpu/src/render_vram.rs` (derselbe
+Schlüssel für die VRAM-Basis). **Kein Fix.**
+
+**Korrektur 2026-10-25 — die frühere Begründung wird an dieser Stelle
+zurückgenommen.** Sie lautete „im konkreten Test nicht auslösbar (gleiche
+Quelldatei pro Lauf)". Für den Auto-Tone-Familiensatz trifft diese Begründung
+**nicht** zu: der Test rendert 40 **verschiedene** Quellen im **selben** Prozess,
+alle 16×16 Pixel und 1024 Byte groß
+(`crates/lumina-cli/src/tests/support/auto_tone.rs` → `auto_tone_family_frame`).
+Für einen Schlüssel aus Adresse und Länge ist „anderer Inhalt, gleiche Länge"
+nicht unterscheidbar; eine wiederverwendete Allocation würde den
+Vorgängerinhalt rendern. Damit ist die gefährliche Richtung im Test **erreichbar**
+— die frühere Einordnung betrachtete nur die drei Läufe *eines* Mitglieds.
+
+Ob dieser Mechanismus die beobachtete Abweichung erklärt, ist **nicht gemessen**
+und wird hier nicht behauptet. Er ist eine prüfbare Hypothese mit einem
+benennbaren Kriterium: wird die Upload-Identität inhaltsbasiert (oder wird immer
+hochgeladen), muss der Familiensatz byte-stabil werden; bleibt er es nicht, ist
+die Hypothese widerlegt.
 
 ## Abgeleitet
 
