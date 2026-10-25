@@ -237,7 +237,16 @@ impl LuminaApp {
                         |_| unreachable!("failed CPU render must prevent mask composition"),
                     );
                     if let LiveVramPresent::Refused(reason) = route {
-                        self.note_vram_refusal(&reason);
+                        // Keep the failed CPU render loud in the app error
+                        // state, but do not let the generic failure hide the
+                        // more specific artifact-blind generative refusal.
+                        // `run_live_gpu_present` has already kept freshness
+                        // false and prevented all GPU work.
+                        self.note_vram_refusal(if generative_active {
+                            Self::GENERATIVE_VRAM_REFUSAL_REASON
+                        } else {
+                            &reason
+                        });
                     }
                 } else if generative_active {
                     // The readback-free VRAM present path is artifact-blind

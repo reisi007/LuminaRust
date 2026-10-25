@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[path = "gpu_routing_generative.rs"]
+mod generative;
+
 /// GPU-LENSFUN-PARITY-1: a non-identity Lensfun corrector is **no longer** a
 /// recipe-gate reason. The present path binds its `LensfunMap` on the GPU
 /// (`lensfun_gpu::bind`), and the honest CPU routes (unbindable map, the
@@ -228,55 +231,6 @@ fn artifact_blind_vram_refusal_earns_a_badge() {
     let badge = LuminaApp::format_routing_fallback_reason(&reasons).expect("badge");
     assert!(badge.contains(Str::CpuFallbackUnsupportedStages.t()));
     assert!(badge.contains("generative_edit"));
-}
-
-/// GEN-ONNX-1 Welle 2b (F4): end-to-end — an active generative recipe is
-/// driven through the real drag tick (`render_draft_tick` →
-/// `render_to_vram`), the artifact-blind VRAM refusal is captured and
-/// classified, and `gpu_routing_fallback_badge()` surfaces it as a visible
-/// badge instead of a swallowed `warn!`. The recipe gate itself carries no
-/// generative reason. Skips loudly-commented without a usable adapter.
-#[test]
-#[cfg(feature = "gpu")]
-fn generative_vram_refusal_surfaces_as_badge_end_to_end() {
-    let (png, _frame) = synthetic_8x8_png();
-    let mut app = new_app();
-    app.load_bytes(png.clone(), "gpu-generative-badge.png")
-        .unwrap();
-    let _dir = app_source_path(&mut app, &png, "gpu-generative-badge.png");
-    let Some(gpu) = lumina_gpu::GpuContext::new().ok() else {
-        eprintln!("no GPU adapter; skipping generative VRAM-badge integration test");
-        return;
-    };
-    if !gpu.is_available() {
-        eprintln!("GPU unavailable; skipping generative VRAM-badge integration test");
-        return;
-    }
-    app.gpu = Some(gpu);
-    // Arm expand without an artifact: the render is loud and the VRAM
-    // present path is artifact-blind.
-    app.set_expand_beyond_image(true).unwrap_err();
-    app.render_draft_tick([800, 600]);
-    assert!(
-        app.error().is_some(),
-        "the armed generative recipe must stay loud on the CPU path"
-    );
-    let refusal = app
-        .vram_render_refusal
-        .as_deref()
-        .expect("the artifact-blind VRAM refusal must be captured");
-    assert!(refusal.contains("generative_edit"), "got {refusal:?}");
-    // `update_texture` is the real badge producer (via the present gate).
-    app.update_texture(&egui::Context::default());
-    let badge = app
-        .gpu_routing_fallback_badge()
-        .expect("the captured refusal must surface as a routing badge")
-        .to_owned();
-    assert!(badge.contains("generative_edit"), "got {badge:?}");
-    assert!(
-        app.gpu_unsupported_stage_reasons().is_empty(),
-        "generative_edit must not be a recipe-gate reason"
-    );
 }
 
 /// R3-ROUTING-1 (NIEDRIG-1): the real `render_draft_tick` path drives the

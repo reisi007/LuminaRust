@@ -2196,10 +2196,101 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
     ROI-Previews werden sichtbar verweigert; die CPU-Vorschau bleibt autoritativ,
     und `vram_fresh` bleibt falsch. P1.2 und fehlerhafte oder nicht aktuelle
     Ebenen verweigern ebenfalls laut; ein fehlgeschlagener CPU-Render oder
-    VRAM-Maskenpass kann `vram_fresh` nicht setzen. Headless
-   GUI-Tests prüfen diese Routing- und Frische-Semantik; **keine** Adapter-
-   Pixelparität ist damit behauptet. Der Adapter-E2E-Test bleibt als separates
-   TODO offen.
+    VRAM-Maskenpass kann `vram_fresh` nicht setzen. Ist bei einem fehlgeschlagenen
+    CPU-Referenzrender eine generative Stufe aktiv, benennt die sichtbare
+    Present-Refusal weiterhin `generative_edit` (statt den spezifischen Grund
+    durch „current CPU reference render failed“ zu verdecken); der CPU-Fehler
+    bleibt im App-Fehlerzustand sichtbar und die VRAM-Frische bleibt falsch.
+    Auch bei erfolgreichem CPU-Referenzrender bleibt die artifact-blinde
+    Generative-Refusal sichtbar und `vram_fresh` falsch. Headless
+    GUI-Tests prüfen diese Routing- und Frische-Semantik; **keine** Adapter-
+    Pixelparität ist damit behauptet. Das separate Adapter-E2E-TODO bleibt bis
+    zur unabhängigen Verifizierung offen (inzwischen BESTANDEN, 2026-10-25).
+
+    **Normativer Adapter-E2E-Nachweis (`GPU-RENDER-MASK-19-ADAPTER`):** Ein
+    eigener ignorierter GUI-Integrationstest unter dem GUI-Feature `gpu`
+    verbindet den `Harness::builder().wgpu()`-RenderState über
+    `attach_wgpu_render_state` mit `LuminaApp` und verlangt beim Opt-in einen
+    echten Adapter (kein Skip/Fallback). Er verwendet eine vollständige,
+    deterministische Quelle, eine gültige, tatsächlich ausgewertete Brush-
+    Prompt-Maske und ein nicht-neutrales P0-Exposure-Adjustment. Der Test treibt
+    den echten Masking-UI-Regler mit Pointer-Down und lässt danach den
+    Produktionspfad `LuminaApp::ui` → `schedule_render` → `render_draft_tick` →
+    CPU-Referenzrender → VRAM-Maskenkomposition → `update_texture` → egui-wgpu-
+    Present laufen.
+
+    Der räumliche Pixelvergleich hält Quelle, globales Rezept und den
+    nicht-neutralen lokalen Exposure-Wert identisch und vergleicht den
+    maskierten Present mit demselben Layer bei ausgeblendeter Maske. Ein
+    unabhängiges CPU-Raster-Orakel der verwendeten Brush-Marks belegt die
+    Quellkoordinaten: der innere Photo-Rect-Messbereich hat Alpha > 0, der äußere
+    Alpha = 0. Das ausgewählte Masken-Overlay bleibt für den echten GPU-Present
+    eingeschaltet: bei einer ausgewählten lokalen Ebene verweigert der aktuelle
+    Present-Gate den VRAM-Pfad, wenn das Overlay ausgeblendet ist. Deshalb
+    vergleicht der Test zusätzlich dieselbe sichtbare Matte bei einem kleineren,
+    weiterhin nicht-neutralen lokalen Exposure-Wert. Das gemeinsame Overlay
+    kann diesen Kontrollvergleich nicht allein bestehen; ein übersprungener
+    lokaler GPU-Pass erzeugt zwischen beiden Exposure-Werten keine Änderung.
+    Der Hauptvergleich bleibt dieselbe Quelle, dasselbe globale Rezept und
+    derselbe nicht-neutrale lokale Exposure-Wert bei sichtbarer bzw.
+    ausgeblendeter Maske: innen muss er sich ändern, außen byte-identisch
+    bleiben. Damit wird nicht nur eine Gesamtbilddifferenz geprüft; eine global
+    angewandte lokale Anpassung verletzt den Außenbereichs-Pin und macht den
+    Test rot.
+    Derselbe Frame muss tatsächlich vom VRAM-Present kommen
+    (`gpu_present_frame_size` gesetzt, kein Routing-Badge/keine Refusal); ein
+    Setter-only-, Helper-only- oder `prime_gpu_present`-Test erfüllt diesen
+    Vertrag nicht.
+
+    **Geltungsbereich:** Der Adaptertest belegt GUI-Present-Wirkung nur für
+    P0-Exposure und die konkret gewählte Brush-Matte. Er behauptet weder
+    Present-Parität für alle P0-/P1.1-Adjustment-Klassen noch Sidecar-
+    Save/Reload-Abdeckung; diese Aussagen benötigen ihre jeweiligen Tests.
+    Verbindliches Kommando:
+    `cargo test -p lumina-gui --features gpu --test
+    kittest_local_mask_present -- --ignored`. Das GUI-Feature heißt `gpu`,
+    nicht `gpu-adapter-tests`.
+
+    `kittest_mask_local` bleibt ausschließlich Layout-/Chrome-Abdeckung auf
+    S2: Die dortigen Goldens haben keine angewandte Matte und sind kein
+    Render-, Pixelparitäts- oder Present-Nachweis. Der eigenständige
+    `lumina-gpu`-Oracle-Lauf bleibt zusätzlich erforderlich:
+    `cargo test -p lumina-gpu --features gpu-adapter-tests --test
+    local_mask_parity`.
+
+    **Messstand (lokaler Metal-Lauf 2026-10-25; unabhängig BESTANDEN):**
+    `LUMINA_GPU_BACKENDS=metal cargo test -p lumina-gui
+    --features gpu --test kittest_local_mask_present -- --ignored --nocapture`
+    lief mit **1 passed**; `gpu_present_frame_size=Some([128, 96])`, Badge und
+    App-Fehler waren `None`. Das CPU-Raster-Orakel maß innen `(46, 48)` Alpha
+    **58982** und außen `(110, 48)` Alpha **0**. Innen änderten sich **9/9**
+    Pixel sowohl gegenüber derselben sichtbaren Matte mit kleinerem, nicht-
+    neutralem Exposure als auch gegenüber derselben Matte ausgeblendet; außen
+    änderten sich gegenüber der ausgeblendeten Matte **0/9** Pixel.
+
+    Beide Produktionspfad-Mutationen wurden mit Rohlog ausgeführt und danach
+    zurückgenommen: das Überspringen der lokalen VRAM-Komposition ließ den
+    Inner-vs.-sichtbare-Kontrolle-Pin mit **0/9** Änderungen fehlschlagen; eine
+    global gefüllte Matte verletzte den Außenbereichs-Pin mit **9/9** Änderungen.
+    Der frühere Wert `12.045/113.977` ohne Rohlog bleibt ausdrücklich
+    zurückgenommen. `local_mask_parity` lief mit **6 passed**. Die generative
+    Badge-Regression lief mit **1 passed** für erfolgreichen und fehlgeschlagenen
+    CPU-Referenzrender; der erhaltene Vorher-Log reproduziert den Fehler
+    (`current CPU reference render failed` statt `generative_edit`). GUI-Default-
+    und GPU-`--all-targets`-Suites liefen jeweils mit **963 passed / 0 failed /
+    5 ignored** im lib-Testtarget, die übrigen Targets waren ebenfalls grün. Der
+    CPU-only-Lauf mit `--no-default-features --lib` meldete **897 passed / 0
+    failed / 3 ignored**. Formatierung, GPU-Clippy, Ratchet, Planformat und
+    `git diff --check` waren grün; vollständige Gate-Ergebnisse und Logpfade
+    liegen unter `target/gpu-mask-present-evidence/` (lokale, nicht versionierte
+    Rohlogs und Mutationspatches). Die unabhängige Nachprüfung bestätigte alle
+    drei Fixes: räumliche Gegenprobe, Mutationsbelege und generative Refusal.
+    Reproduktionskommandos der Suite-Gates: `cargo test -p lumina-gui
+    --all-targets --no-fail-fast`, `cargo test -p lumina-gui --features gpu
+    --all-targets`, `cargo test -p lumina-gui --no-default-features --lib --
+    --test-threads=1`, `cargo fmt --all -- --check`, `cargo clippy -p lumina-gui
+    --features gpu --all-targets -- -D warnings`, `sh scripts/check_file_sizes.sh`,
+    `sh scripts/check_plan_format.sh`, `git diff --check`. CI steht noch aus.
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →
@@ -2601,8 +2692,10 @@ geschlossen. **`GPU-RENDER-MASK-19` ist als Pixelpass umgesetzt** (siehe
 „Implementierungsstatus GPU-Pfad"): der GPU-Pass deckt die relative-WB- und
 P0-Basic-Blöcke byte-parität zum CPU-Orakel ab; die P1.2-Blöcke sind ein
 laut benannter CPU-Routing-Grund. Die **CLI ist seit Slice B2 verdrahtet**
-(`crates/lumina-cli/src/local_mask_gpu.rs`); die GUI-Verdrahtung des
-Present-Pfads ist ein eigener, noch offener Slice.
+(`crates/lumina-cli/src/local_mask_gpu.rs`); die GUI-Verdrahtung ist vorhanden.
+Der adapterabhängige Nachweis für den interaktiven GUI-Present-Pfad und die
+räumliche Exposure-Wirkung bleibt als `GPU-RENDER-MASK-19-ADAPTER` bis zur
+unabhängigen Verifizierung offen.
 
 ### Nutzerentscheidungen und Reihenfolge
 

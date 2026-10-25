@@ -369,9 +369,63 @@ Validierungs-/Fehler-vor-Write-Verträge und neutrale Identität; sie belegen
  weder Shader-Ausführung noch Pixelparität. Der headless API-Slice ist am
  2026-10-23 unabhängig verifiziert. Die GUI-Live-Verdrahtung rendert zuerst den
  mask-aware CPU-Preview und verwendet dessen aktuelle Layer für VRAM-Komposition;
- Layer-Pairing-/P1.2-/Renderfehler halten `vram_fresh` falsch und bewahren die
- CPU-Referenz. Headless Routingtests belegen diese Semantik, nicht GPU-Pixel.
- Der separate Adapter-E2E-Test bleibt offen.
+  Layer-Pairing-/P1.2-/Renderfehler halten `vram_fresh` falsch und bewahren die
+  CPU-Referenz. Headless Routingtests belegen diese Semantik, nicht GPU-Pixel.
+  Der separate Adapter-E2E-Nachweis wurde am 2026-10-25 unabhängig bestätigt.
+
+   **Normativer GUI-Adapter-E2E-Vertrag (`GPU-RENDER-MASK-19-ADAPTER`):**
+   `kittest_mask_local` ist ausdrücklich nur Layout-/Chrome-Abdeckung auf S2;
+   seine Goldens enthalten keine angewandte Matte und dürfen nicht als
+   Rendernachweis zitiert werden. Der Rendernachweis ist ein eigener ignorierter
+   GUI-Integrationstest mit dem GUI-Feature `gpu`. Er bindet den
+   `egui_kittest`-WGPU-RenderState via `attach_wgpu_render_state`, verlangt beim
+   Opt-in einen echten Adapter und verwendet eine deterministische Vollbildquelle,
+   eine gültige ausgewertete Brush-Prompt-Maske sowie ein nicht-neutrales
+   P0-Exposure-Adjustment. Eine echte Pointer-Down-Geste am Masking-Regler muss
+   `LuminaApp::ui` und den Scheduler so treiben, dass `render_draft_tick`, die
+   VRAM-Maskenkomposition, `update_texture` und der egui-wgpu-Present im selben
+   Produktionspfad laufen.
+
+   Der Pixelvergleich verwendet denselben Frame, dasselbe globale Rezept und
+   denselben nicht-neutralen lokalen Exposure-Wert in zwei Zuständen: Maske
+   sichtbar und dieselbe Maske ausgeblendet. Ein CPU-Raster-Orakel für die
+   verwendeten Brush-Marks belegt die ausgewählten Quellkoordinaten: der innere
+   Messbereich hat Matte-Alpha > 0, der äußere Alpha = 0. Das ausgewählte
+   Masken-Overlay bleibt eingeschaltet, weil der aktuelle Present-Gate bei einer
+   ausgewählten lokalen Ebene mit ausgeblendetem Overlay den VRAM-Pfad verweigert.
+   Um Overlay-Tint als alleinige Ursache auszuschließen, vergleicht der Test
+   außerdem dieselbe sichtbare Matte bei einem kleineren, weiterhin
+   nicht-neutralen Exposure-Wert. Ein übersprungener lokaler GPU-Pass ändert
+   diese beiden sichtbaren Frames nicht. Im Hauptvergleich muss die lokale
+   Anpassung den inneren Photo-Rect-Bereich verändern und den äußeren Bereich
+   byte-identisch lassen. So belegt der Test sowohl lokale Wirkung als auch
+   räumliche Begrenzung; ein global angewandtes Local-Adjustment macht den
+   Außenbereichsvergleich rot. Der Present muss aus VRAM stammen
+   (`gpu_present_frame_size` gesetzt, kein Routing-Badge/keine Refusal); direkte
+   Render-/Present-Helper-Aufrufe ersetzen diesen Nachweis nicht.
+
+   **Abgrenzung:** Dieser GUI-Test belegt ausschließlich die P0-Exposure-Wirkung
+   am interaktiven VRAM-Present und die räumliche Begrenzung für die konkrete
+   Brush-Matte. Er behauptet weder GUI-Present-Parität für alle P0-/P1.1-Klassen
+   noch Sidecar-Save/Reload-Abdeckung; diese Verträge haben eigene Tests. Gate:
+   `cargo test -p lumina-gui --features gpu --test
+   kittest_local_mask_present -- --ignored` (GUI verwendet `gpu`, nicht
+   `gpu-adapter-tests`) plus
+   `cargo test -p lumina-gpu --features gpu-adapter-tests --test
+   local_mask_parity`.
+
+   **Lokaler Messstand (Metal, 2026-10-25; unabhängig BESTANDEN):**
+   der GUI-Adaptertest lief mit **1 passed**, Present `Some([128, 96])`; die
+   inneren Matte-Alpha-/Änderungswerte waren **58982**, **9/9** gegen die
+   sichtbare Exposure-Kontrolle und **9/9** gegen die ausgeblendete Matte; außen
+   Alpha **0** und **0/9** Änderungen. Beide Produktionspfad-Mutationen wurden
+   zurückgenommen: Pass übersprungen → innerer Kontrollvergleich **0/9** (rot);
+   Matte global gefüllt → Außenbereich **9/9** (rot). Der separate GPU-Oracle
+   lief mit **6 passed**. Rohlogs und Mutationspatches liegen in
+   `target/gpu-mask-present-evidence/`; der vollständige Messbericht steht in
+   `feature/architecture/pipeline.md` §GPU. Die unabhängige Nachprüfung hat die
+   Gegenproben, Mutationsbelege und den generativen Refusal-Fix bestätigt;
+   CI steht noch aus.
 
 ## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
