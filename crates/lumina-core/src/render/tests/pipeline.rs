@@ -425,6 +425,69 @@ fn checker_8x8() -> ImageFrame {
     ImageFrame::new(32, 32, pixels).unwrap()
 }
 
+/// Measurable form of the auto-fill trigger: the number of pixels with
+/// `alpha < 255` (the lens stage's out-of-source samples).
+fn transparent_alpha_count(frame: &ImageFrame) -> usize {
+    frame
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|px| px[3] < 255)
+        .count()
+}
+
+/// CROP-MAXRECT-1: an explicit full-frame crop neutralizes the
+/// maximum-content default, so a test whose subject is the transparent
+/// lens/perspective border keeps it observable in the render output.
+fn full_frame_geometry() -> lumina_sidecar::Geometry {
+    lumina_sidecar::Geometry {
+        version: 1,
+        crop: Some(lumina_sidecar::Crop::Free {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }),
+        rotation_degrees: 0.0,
+        mirror_horizontal: false,
+        mirror_vertical: false,
+    }
+}
+
+/// The manual lens model used by the auto-fill tests. `k1 < 0` maps border
+/// samples outside the source (transparency); `k1 > 0` samples strictly
+/// inside and produces none.
+fn lens_with_k1(k1: f32) -> lumina_sidecar::LensCorrection {
+    lumina_sidecar::LensCorrection {
+        version: 1,
+        profile: None,
+        distortion_k1: Some(k1),
+        distortion_k2: Some(0.0),
+        distortion_k3: Some(0.0),
+        vignette_c0: None,
+        vignette_c1: None,
+        vignette_c2: None,
+        ca_red: None,
+        ca_blue: None,
+    }
+}
+
+/// The auto-fill-only generative edit used by the tests below.
+fn auto_fill_edit(seed: u64) -> lumina_sidecar::GenerativeEdit {
+    lumina_sidecar::GenerativeEdit {
+        version: 1,
+        canvas: None,
+        artifact: None,
+        keep_generative_content: None,
+        auto_fill_transparent: Some(true),
+        expand_beyond_image: None,
+        seed: Some(seed),
+        prompt: None,
+        extras: Default::default(),
+    }
+}
+
 // ---- GEN-ONNX-1: caller-supplied generative canvas artifacts ----
 //
 // The deterministic producer used here is the same heuristic the render
@@ -460,115 +523,96 @@ fn expand_artifact(
 #[test]
 fn auto_fill_transparent_trigger_via_lens() {
     let frame = checker_8x8();
-    let lens = lumina_sidecar::LensCorrection {
-        version: 1,
-        profile: None,
-        distortion_k1: Some(1.0),
-        distortion_k2: Some(0.0),
-        distortion_k3: Some(0.0),
-        vignette_c0: None,
-        vignette_c1: None,
-        vignette_c2: None,
-        ca_red: None,
-        ca_blue: None,
-    };
+    // MUTATION-ANCHOR: a negative k1 maps border samples outside the source,
+    // so the lens stage really produces the transparent border under test
+    // (measured: 304 of 1024 pixels). The former `+1.0` sampled strictly
+    // inside and produced **zero** — which is how the old tautologies passed.
     let recipe_without = EditRecipe {
-        lens_correction: Some(lens.clone()),
+        lens_correction: Some(lens_with_k1(-0.5)),
+        // CROP-MAXRECT-1 would otherwise crop away exactly the wedges under
+        // test (alpha-based maximum-content rect), so the explicit full-frame
+        // crop keeps them in the render output.
+        geometry: Some(full_frame_geometry()),
         ..Default::default()
     };
-    let out_without = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &recipe_without,
-            camera_white_balance: None,
-            source_actions: &[],
-            lensfun: None,
-            depth: None,
-            masks: None,
-        },
-    )
-    .unwrap()
-    .frame;
-    let has_transparent = out_without
-        .pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|px| px[3] < 255 || (px[0] == 0 && px[1] == 0 && px[2] == 0 && px[3] == 0));
-    // assert!(has_transparent, "lens distortion should create transparent/black border");
-    let _ = has_transparent;
-    let mut recipe_with = recipe_without.clone();
-    recipe_with.generative_edit = Some(lumina_sidecar::GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: Some(true),
-        expand_beyond_image: None,
-        seed: Some(42),
-        prompt: None,
-        extras: Default::default(),
-    });
-    let out_with = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &recipe_with,
-            camera_white_balance: None,
-            source_actions: &[],
-            lensfun: None,
-            depth: None,
-            masks: None,
-        },
-    )
-    .unwrap()
-    .frame;
+    // Anker 1: the frame the render hands to `composite_auto_fill`. Lens is the
+    // stage immediately before the fill in `render_frame_from_base_impl`, and
+    // `generative_input_frames` is the production producer's input.
+    let (after_lens, _) =
+        generative_input_frames(&frame, &recipe_without, None, &[], None).unwrap();
+    let transparent_before = transparent_alpha_count(&after_lens);
     assert!(
-        !out_with
-            .pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .any(|px| px[3] < 255),
-        "auto_fill must make all pixels opaque"
+        transparent_before > 0 && crate::generative::has_transparent_pixels(&after_lens),
+        "lens distortion (k1=-0.5) must create alpha-transparent border pixels"
     );
-    // GEN-FILL-01: allow identical when heuristic doesn't change (e.g., no transparent)
-    assert!(out_without.pixels != out_with.pixels || out_without.pixels == out_with.pixels);
-    let out_with2 = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &recipe_with,
-            camera_white_balance: None,
-            source_actions: &[],
-            lensfun: None,
-            depth: None,
-            masks: None,
-        },
-    )
-    .unwrap()
-    .frame;
+    // The same frame on the public render path, with auto-fill switched off:
+    // still transparent, and byte-identical to the pre-fill stage frame.
+    let out_without = render_frame(&frame, &default_context(&recipe_without, None))
+        .unwrap()
+        .frame;
+    assert_eq!(
+        out_without.pixels, after_lens.pixels,
+        "without auto-fill the render output must be the unfilled lens frame"
+    );
+    assert_eq!(transparent_alpha_count(&out_without), transparent_before);
+
+    let mut recipe_with = recipe_without.clone();
+    recipe_with.generative_edit = Some(auto_fill_edit(42));
+    let auto_fill = auto_fill_artifact(&after_lens, 42);
+    let input = crate::generative::GenerativeCanvasInput {
+        auto_fill: Some(&auto_fill),
+        expand: None,
+    };
+    let out_with =
+        render_frame_with_generative(&frame, &default_context(&recipe_with, None), input)
+            .unwrap()
+            .frame;
+    // Anker 2: the fill really ran — transparent before, fully opaque after.
+    assert_eq!(
+        transparent_alpha_count(&out_with),
+        0,
+        "auto-fill must remove every alpha-transparent pixel (before: {transparent_before})"
+    );
+    assert!(
+        !crate::generative::has_transparent_pixels(&out_with),
+        "auto-fill must leave no transparent/black pixel"
+    );
+    assert_ne!(
+        out_without.pixels, out_with.pixels,
+        "auto-fill must change the filled border pixels"
+    );
+    assert_eq!(
+        (out_with.width, out_with.height),
+        (frame.width, frame.height),
+        "a filled frame needs no content crop"
+    );
+    // Seed-pinned determinism.
+    let out_with2 =
+        render_frame_with_generative(&frame, &default_context(&recipe_with, None), input)
+            .unwrap()
+            .frame;
     assert_eq!(out_with.pixels, out_with2.pixels);
+    // The difference is real: an unfilled frame would be byte-identical and
+    // yield an infinite PSNR, so no `||` escape remains.
     let psnr_val = crate::spot_heal::psnr(&out_without, &out_with);
-    assert!(psnr_val > 5.0 || psnr_val.is_infinite(), "psnr {psnr_val}");
+    assert!(
+        psnr_val.is_finite() && psnr_val > 5.0,
+        "auto-fill must visibly change the border, got PSNR {psnr_val}"
+    );
     let h1 = crate::LuminanceHistogram::new(&out_without);
     let h2 = crate::LuminanceHistogram::new(&out_with);
-    assert!(h1.digest() != h2.digest() || h1.digest() == h2.digest());
+    assert_ne!(
+        h1.digest(),
+        h2.digest(),
+        "auto-fill must move the luminance histogram"
+    );
 }
 
 #[test]
 fn auto_fill_without_transparent_is_identity() {
     let frame = checker_8x8();
     let recipe = EditRecipe {
-        generative_edit: Some(lumina_sidecar::GenerativeEdit {
-            version: 1,
-            canvas: None,
-            artifact: None,
-            keep_generative_content: None,
-            auto_fill_transparent: Some(true),
-            expand_beyond_image: None,
-            seed: Some(0),
-            prompt: None,
-            extras: Default::default(),
-        }),
+        generative_edit: Some(auto_fill_edit(0)),
         ..Default::default()
     };
     let out = render_frame(
@@ -590,33 +634,11 @@ fn auto_fill_without_transparent_is_identity() {
 #[test]
 fn auto_fill_seed_changes_output() {
     let frame = checker_8x8();
-    let lens = lumina_sidecar::LensCorrection {
-        version: 1,
-        profile: None,
-        distortion_k1: Some(1.0),
-        distortion_k2: None,
-        distortion_k3: None,
-        vignette_c0: None,
-        vignette_c1: None,
-        vignette_c2: None,
-        ca_red: None,
-        ca_blue: None,
-    };
     let mut base = EditRecipe {
-        lens_correction: Some(lens),
+        lens_correction: Some(lens_with_k1(1.0)),
         ..Default::default()
     };
-    base.generative_edit = Some(lumina_sidecar::GenerativeEdit {
-        version: 1,
-        canvas: None,
-        artifact: None,
-        keep_generative_content: None,
-        auto_fill_transparent: Some(true),
-        expand_beyond_image: None,
-        seed: Some(1),
-        prompt: None,
-        extras: Default::default(),
-    });
+    base.generative_edit = Some(auto_fill_edit(1));
     let mut other = base.clone();
     other.generative_edit.as_mut().unwrap().seed = Some(2);
     let out1 = render_frame(
@@ -660,18 +682,7 @@ fn auto_fill_seed_changes_output() {
 // ---- GEN-PIPELINE-DECOUPLE: Lens → Fill → Perspective → Expand → Crop ----
 
 fn decouple_lens() -> lumina_sidecar::LensCorrection {
-    lumina_sidecar::LensCorrection {
-        version: 1,
-        profile: None,
-        distortion_k1: Some(1.0),
-        distortion_k2: Some(0.0),
-        distortion_k3: Some(0.0),
-        vignette_c0: None,
-        vignette_c1: None,
-        vignette_c2: None,
-        ca_red: None,
-        ca_blue: None,
-    }
+    lens_with_k1(1.0)
 }
 
 fn expand_recipe() -> EditRecipe {
@@ -882,18 +893,7 @@ fn fill_runs_before_perspective_not_after() {
         // CROP-MAXRECT-1: an explicit full-frame crop neutralizes the new
         // maximum-content default so this test isolates the fill/perspective
         // ordering (its actual subject) from the crop stage.
-        geometry: Some(lumina_sidecar::Geometry {
-            version: 1,
-            crop: Some(lumina_sidecar::Crop::Free {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            }),
-            rotation_degrees: 0.0,
-            mirror_horizontal: false,
-            mirror_vertical: false,
-        }),
+        geometry: Some(full_frame_geometry()),
         ..Default::default()
     };
     recipe.generative_edit = Some(lumina_sidecar::GenerativeEdit {
