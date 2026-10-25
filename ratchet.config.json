@@ -30,11 +30,6 @@
           "file": "crates/lumina-cli/src/main.rs"
         },
         {
-          "id": "crates-lumina-gpu-src-lib-rs",
-          "description": "Existing exception: crates/lumina-gpu/src/lib.rs",
-          "file": "crates/lumina-gpu/src/lib.rs"
-        },
-        {
           "id": "crates-lumina-gui-src-lib-rs",
           "description": "Existing exception: crates/lumina-gui/src/lib.rs",
           "file": "crates/lumina-gui/src/lib.rs"
