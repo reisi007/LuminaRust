@@ -1585,8 +1585,9 @@ laut benannte Abwägung und keine stille Optimierung:
   (`FileContentIdentity::from_path` in einer Schleife, die Frames simuliert).
   Damit war der tatsaechliche Frame-Pfad **ungeprueft**. Geschlossen durch
   `tests::scheduling::thumb_hash_frame_path::real_frame_path_hashes_an_unchanged_source_once_across_many_frames`:
-  es treibt `ensure_thumbnail_priority` (`filmstrip_frame.rs:267`, der letzte
-  Schritt jedes Filmstreifen-Frames, `filmstrip_frame.rs:223`) 13-mal mit
+  es treibt `ensure_thumbnail_priority` in
+  `crates/lumina-gui/src/filmstrip_frame.rs` (der letzte Schritt jedes
+  Filmstreifen-Frames, aufgerufen aus `draw_filmstrip`) 13-mal mit
   `raw_entry_indices` und 3 sichtbaren Zellen gegen unveraenderte ~300-KB-Quellen
   und verlangt `hash_count` = `None` vor dem ersten Frame und `Some(1)` je Quelle
   danach — **null** weitere Hashes ueber alle Folgeframes. Die Assertion ist in
@@ -1652,7 +1653,9 @@ laut benannte Abwägung und keine stille Optimierung:
   `render_tick.rs` 500 → **347** (`crates/lumina-gui/src/render_tick/draft_error.rs`, 170 — die
   Draft-Fehlerberichterstattung samt ihrem Testmodul, das ohnehin nur aus genau
   diesen Tests bestand). `take_draft_tick_throttles` blieb bewusst im Parent,
-  weil `timing_instrumentation.rs:359` es über `crate::render_tick::` erreicht
+  weil `draft_tick_throttle_fires_inside_the_budget` in
+  `crates/lumina-gui/src/tests/timing_instrumentation.rs` es über
+  `crate::render_tick::` erreicht
   und der Zähler zu dem Tick gehört, der ihn erhöht. Nachweis: 0 entfernte
   inhaltliche Zeilen (die vier `comm`-Treffer sind drei verschobene Definitionen
   mit `pub(crate)` und ein geteilter `use`-Import), assert-Multiset 45 = 45,
@@ -2749,7 +2752,10 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   Render, FitWidth-Rundung). Recherche-Beleg: Panic stammt aus einem Build 7
   Minuten VOR dem Fix-Commit `bbb0cba` (2026-08-23, „order-independent
   bounds", Guard per `swap`); Guard im aktuellen Code vorhanden
-  (`preview_draws.rs:259-278`), kein zweiter variabler-Clamp-Kandidat im
+  (`crates/lumina-gui/src/preview_draws.rs` → `draw_preview`,
+  `Self::clamp_preview_pan`; Definition in
+  `crates/lumina-gui/src/preview_draws/preview_geometry.rs` →
+  `clamp_preview_pan`), kein zweiter variabler-Clamp-Kandidat im
   Render-/Present-Pfad. Regressionstest `preview_center_clamp_swaps_inverted_bounds_without_panic`
   (verifiziert BESTANDEN 2026-09-19, Mutations-Beweis: ohne Swap panickt er wie Alt-Log).
 
@@ -2764,7 +2770,8 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
   + Full-Res-Upload (→ R3-RENDER-SIZE-1; seit 2026-09-20 durch den
   Viewport-Cap adressiert, s. u.).
 - **R3-GRIDSEL-1 (BEHOBEN 2026-09-19, verifiziert BESTANDEN):** Grid-Highlight folgt der Selektion
-  nicht — `library_grid.rs:206` malte aus `self.path` (geladenes Bild), nicht
+  nicht — `crates/lumina-gui/src/library_grid.rs` → `draw_library_grid` malte
+  aus `self.path` (geladenes Bild), nicht
   aus `filmstrip_selection`. Grid zeigt Landscape (geladen), Filmstrip darunter
   korrekt Portrait (selektiert). Fix: `selected` aus `filmstrip_selection` prüfen.
 - **R3-OPEN-1 (ENTSCHIEDEN 2026-09-19, User: Lightroom-mäßig):** Bei genau

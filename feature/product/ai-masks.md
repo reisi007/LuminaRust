@@ -1253,7 +1253,8 @@ Je mask-local Editor gilt verbindlich **beides**:
    Golden schreibt einen Decode-Fehler als Soll fest. **Anker-Korrektur
    2026-09-26 (Verifikationsbefund 13, vorbestehend seit `2e9827f`):** dieser
    Wächter heißt im Target `assert_no_decode_failure` (lokale Kopie in
-   `kittest_mask_local.rs:181`), **nicht** `assert_no_raw_decode_failure` — das
+   `crates/lumina-gui/tests/kittest_mask_local.rs` →
+   `assert_no_decode_failure`), **nicht** `assert_no_raw_decode_failure` — das
    ist der Helper in `kittest_fixtures_support`, den dieses Target nicht
    aufruft. Die Funktion ist damit gemeint, der Name war falsch. Die
    Mask-local-Editoren laufen auf der S2-Smoke-Fixture und sind damit
@@ -1375,9 +1376,9 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   | dieselbe | `Remove` ignoriert seine Eintrags-id | **rot** (`Remove must delete exactly one entry`) |
   | dieselbe | `Remove` löscht immer den **ersten** Eintrag | **rot** |
   | dieselbe | Per-Bereich-`Reset` ruft den Gesamtblock-Reset | **rot** (`must NOT clear the other ranges`) |
-  | `the_hsl_hue_rail_writes_only_the_hue_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`mask_local_hsl_bands.rs:195`, `must move the stored hue, got 0`) |
-  | dieselbe | nur der Label-`match` 0↔2, `HSL_FIELDS` korrekt | **rot** (`mask_local_hsl_bands.rs:129`, `canonical hue -> saturation -> luminance stack`) |
-  | `the_hsl_luminance_rail_writes_only_the_luminance_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`mask_local_hsl_bands.rs:255`, `must be non-neutral before the luminance drag, got (0.0, 0.0, 0.62…)`) |
+  | `the_hsl_hue_rail_writes_only_the_hue_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band`, `must move the stored hue, got 0`) |
+  | dieselbe | nur der Label-`match` 0↔2, `HSL_FIELDS` korrekt | **rot** (`crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band`, `canonical hue -> saturation -> luminance stack`) |
+  | `the_hsl_luminance_rail_writes_only_the_luminance_field_…` | `HSL_FIELDS` **0↔2** | **rot** (`crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_luminance_rail_writes_only_the_luminance_field_of_the_selected_band`, `must be non-neutral before the luminance drag, got (0.0, 0.0, 0.62…)`) |
   | `a_persisted_mask_local_edit_is_restored_…` | `finish_decode` selektiert die persistierte Layer nicht | **rot** — die drei anderen *mask-local* Ziele bleiben grün. **Zusätzlich** werden drei **vorbestehende** Lib-Tests rot (`brush_lifecycle::invert_uses_the_automatic_slider_save_path_and_reloads`, `brush_management::copy_selection_and_reload_ignore_cross_copy_layers`, `mask_local_previous::previous_transfers_full_local_state_but_sync_keeps_target_layers`); das ist **mehr** Abdeckung, kein Defekt — das fette „nur" wäre irreführend gewesen. |
   | alle vier Interaktionstests | die vier `draw_mask_local_*`-Aufrufe einzeln auskommentiert | **rot**, 1:1 pro Editor |
   | die vier Goldens | `scroll_into_view`-Anker entfernt | **rot** (der Golden darf keinen Editor zeigen) |
@@ -1387,15 +1388,18 @@ benannte Lücke** zu führen, nicht zu beschönigen.
   `render_tick.rs` „absolute-frame or local-mask stage active"). Der Hochstuf
   ist real und wurde bestätigt — er ist aber **nicht** die Ursache.
 
-  **Ausgeschlossen:** `full_render_debounce_remaining` (`render_tick.rs:29-35`)
+  **Ausgeschlossen:** `full_render_debounce_remaining` in
+  `crates/lumina-gui/src/render_tick.rs`
   gibt `None`, also *sofortigen* Commit, wenn `last_edit_time <= 0.0` oder das
   150-ms-Fenster abgelaufen ist. Ein **veralteter** Zeitstempel macht den
   Commit also *eifriger*, nicht strandend; der Debounce kann nur verzoegern,
   nie abbrechen. Und `pending_full_render` ist am Release-Frame immer gesetzt,
-  weil `slider.rs:203-206` es bei jedem `dragged()`-Frame unbedingt neu bewaffnet.
+  weil `crates/lumina-gui/src/slider.rs` → `draw_track` es bei jedem
+  `dragged()`-Frame unbedingt neu bewaffnet.
   Ein „Edit in einem Frame verliert den entprellten Save" gibt es nicht.
 
-  **Tatsächlich gemessen:** `render_schedule.rs:53` haengt den einzigen
+  **Tatsächlich gemessen:** `crates/lumina-gui/src/render_schedule.rs` →
+  `schedule_render` haengt den einzigen
   Commit-Pfad an `pending_full_render`. Jeder Vollrender, der nicht durch
   `commit_pending_slider_save` laeuft — der Fusszeilen-Button `Render / Apply`
   und ~20 weitere `render()`-Aufrufstellen — loescht das Flag in seinem Frame
@@ -1516,16 +1520,18 @@ Schleife gemessen** und nicht gleich:
 | Color (Z. 16/17/18, 20) | Hue (0), Saturation (1) | `local_color_slider` schreibt nicht mehr | **rot** (`got 0`) |
 | HSL (Z. 6/7/8) | Saturation (**1**), Hue (**0**), Luminance (**2**) | `HSL_FIELDS` 0↔1 | **rot** (`crates/lumina-gui/tests/mask_local_color_controls.rs` → `the_remaining_mask_local_color_controls_are_clickable_and_scoped`; zusätzlich `crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band` und `crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_luminance_rail_writes_only_the_luminance_field_of_the_selected_band`) |
 | HSL (Z. 6/8) | Hue (**0**), Luminance (**2**) | `HSL_FIELDS` **0↔2** | **rot** (`crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band` und `crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_luminance_rail_writes_only_the_luminance_field_of_the_selected_band`) — **vor** diesem Test: **grün, 931/931** |
-| HSL (Z. 6/7/8) | Hue (0), Luminance (2) | nur der Label-`match` 0↔2, `HSL_FIELDS` unberührt | **rot** (`mask_local_hsl_bands.rs:129`) |
-| Presence (Z. 23/24) | Dehaze (2) | `PRESENCE_FIELDS` 0↔2 | **rot** (`mask_local_editors.rs:87`) |
-| Sharpening (Z. 28/29/30) | Amount (0) | 0↔3 | **rot** (`mask_local_editors.rs:325`) |
-| Noise Reduction (Z. 32) | Luminance (0) | 0↔1 | **rot** (`mask_local_editors.rs:360`) |
+| HSL (Z. 6/7/8) | Hue (0), Luminance (2) | nur der Label-`match` 0↔2, `HSL_FIELDS` unberührt | **rot** (`crates/lumina-gui/tests/mask_local_hsl_bands.rs` → `the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band`) |
+| Presence (Z. 23/24) | Dehaze (2) | `PRESENCE_FIELDS` 0↔2 | **rot** (`crates/lumina-gui/tests/mask_local_editors.rs` → `the_mask_local_presence_editor_is_clickable_and_writes_through`) |
+| Sharpening (Z. 28/29/30) | Amount (0) | 0↔3 | **rot** (`crates/lumina-gui/tests/mask_local_editors.rs` → `the_mask_local_detail_editor_is_clickable_and_writes_through`) |
+| Noise Reduction (Z. 32) | Luminance (0) | 0↔1 | **rot** (`crates/lumina-gui/tests/mask_local_editors.rs` → `the_mask_local_detail_editor_is_clickable_and_writes_through`) |
 
 **Die dritte HSL-Zeile ist der Komplementärfall und war vorher unbenannt:** die
 Feldindizes können korrekt sein und die **Beschriftungen** trotzdem vertauscht
 (`match index { 0 => Hue, … }` gegenüber `HSL_FIELDS[index]`). Das ist eine
 eigene Achse derselben Schleife und durch einen Wertetest nicht abgedeckt;
-`mask_local_hsl_bands.rs:129` pinnt sie über die Reihenfolge der drei
+`crates/lumina-gui/tests/mask_local_hsl_bands.rs` →
+`the_hsl_hue_rail_writes_only_the_hue_field_of_the_selected_band` pinnt sie
+über die Reihenfolge der drei
 Schienen unterhalb der Bandreihe (Hue → Saturation → Luminance) und über die
 Tatsache, dass der HSL-Block mit **genau einem** `Reset` endet (von beiden
 Blockenden identifiziert). Für **alle** übrigen `nein`-Zeilen ist der

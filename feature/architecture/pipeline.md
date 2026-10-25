@@ -2347,7 +2347,8 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   Erreichbarkeit; `cpu_gpu_path_parity_matrix` (eingeführt `80f80f3`) und
   `lensfun_corrector_cell_presents_gpu_without_badge` (eingeführt `c992525`)
   waren vor diesem Commit grün und sind seither Rückschritte. Beide schlagen
-  an `present.rs:199` fehl, nicht an einem der sieben übrigen Zweige
+  an `crates/lumina-gui/src/present.rs` → `gpu_present_if_ready` fehl, nicht
+  an einem der sieben übrigen Zweige
   (`RUST_LOG=warn` erzeugt keine Zeile, womit die beiden loggenden Zweige
   ausgeschlossen sind). Der Fehler ist **zuständig, nicht zeitabhängig**:
   Frames 1–3 nach dem Prime liefern alle `None`, und sobald der Zustand es
@@ -2379,7 +2380,8 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   (`ensure_vram` schlägt fehl, früher Return; `stamp_live_brush_mark` im Fehlerzweig) —
   dann steht `drawing == true` bei veralteter Plane, ohne dass der Sync
   löscht. Sonst lädt der erste Dab die **ganze** Plane
-  (`brush_plane.rs:172-182`), und `preview_masks.rs:111-115` ruft
+  (`crates/lumina-gui/src/brush_plane.rs` → `stamp_live_brush_mark`), und
+  `crates/lumina-gui/src/preview_masks.rs` → `handle_mask_tool_drag` ruft
   `gpu_upload_brush_tile` im selben Zweig, der `drawing = true` setzt; das
   veraltete Fenster ist also normalerweise geschlossen, bevor ein Render etwas
   compositen kann. Schmal, aber **nicht** abgedeckt.
