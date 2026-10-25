@@ -12,10 +12,17 @@ separate 500-line growth gate and is not changed by this policy.
 ## 1. Scope
 
 The checked population is all `.rs` files below `crates/` and
-`agent-harness/`; build artifacts under `target/` are outside the population.
-Ratchet uses the `line_count` file metric with `aggregate: max` and a ceiling
-direction. Exact exception scopes take precedence over the global fallback,
-so one file's larger exception cannot mask another file's growth.
+`agent-harness/`, excluding every subtree whose directory component is exactly
+`target` (independent of Git ignore status). A file named `target.rs` remains in
+scope. Ratchet's root globs declare the two source roots; the gate materializes
+an effective config with the rule-level `**/target/**` exclusion. The exception
+validator and generated population facts use the same component-based
+enumeration. Git ignore rules are not the population definition: they ignore
+the root `target/` and `agent-harness/target/`, but do not uniformly cover
+nested `crates/.../target/` directories. Ratchet uses the `line_count` file
+metric with `aggregate: max` and a ceiling direction. Exact exception scopes
+take precedence over the global fallback, so one file's larger exception cannot
+mask another file's growth.
 
 ## 2. Population
 
@@ -69,10 +76,12 @@ the 1000-line rule does not replace the 500-line growth rule.
 
 `sh scripts/check_file_ceiling.sh` checks Ratchet v0.5.0, validates active
 exact exceptions, runs `scripts/test_ratchet_file_ceiling.py`, and executes
-Ratchet rule `rust-file-line-ceiling`. The focused tests cover an existing
-exception overrun, an unexcepted oversized file in either population, an
-unreasoned working-tree baseline increase, a reasoned increase attempt that the
-validator rejects, and a stale exception at or below 1000 lines.
+Ratchet rule `rust-file-line-ceiling` against the effective source-only config.
+The focused tests cover generated files below `target/`, source files named
+with `target`, an existing exception overrun, an unexcepted oversized file in
+either population, an unreasoned working-tree baseline increase, a reasoned
+increase attempt that the validator rejects, and a stale exception at or below
+1000 lines.
 
 ## 7. Population facts
 

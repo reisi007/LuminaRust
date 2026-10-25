@@ -5,12 +5,14 @@ import json
 import sys
 from pathlib import Path
 
+from rust_source_population import POPULATION_GLOBS, source_measurements
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "ratchet.config.json"
 BASELINE = "ratchet.baseline.json"
 RULE = "rust-file-line-ceiling"
 CEILING = 1000
-POPULATION = ["crates/**/*.rs", "agent-harness/**/*.rs"]
+POPULATION = POPULATION_GLOBS
 
 
 def validate(root: Path = ROOT) -> list[str]:
@@ -36,12 +38,11 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append(f"stale exception for missing file: {path}")
         elif line_count(source) <= CEILING:
             errors.append(f"stale exception at or below {CEILING} lines: {path}")
-    actual = {}
-    for folder in ("crates", "agent-harness"):
-        base = root / folder
-        if base.exists():
-            actual.update({f.relative_to(root).as_posix(): line_count(f)
-                           for f in base.rglob("*.rs") if line_count(f) > CEILING})
+    actual = {
+        path: count
+        for path, count in source_measurements(root)
+        if count > CEILING
+    }
     for path in sorted(actual.keys() - configured.keys()):
         errors.append(f"missing exact-file exception for oversized Rust file: {path} ({actual[path]} lines)")
     for path in sorted(configured.keys() - actual.keys()):

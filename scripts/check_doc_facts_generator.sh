@@ -23,8 +23,9 @@
 #      Git-Binary brauchen — nachgewiesen durch das Verhalten, nicht durch
 #      ein Grep auf seinen Quelltext (dort steht `git` in den Kommentaren).
 #
-# KEIN `git`, kein `python3`, kein `node`: nur sh/awk/sed/grep/wc/tr/sort/
-# cut/mktemp/diff/find/ln/rm.
+# KEIN `git` und kein `node`: `python3` wird fuer Text-/Dateisystemmessungen
+# verwendet; die uebrigen Werkzeuge sind sh/awk/sed/grep/wc/tr/sort/cut/
+# mktemp/diff/find/ln/rm.
 #
 # Der Generator wird NIE mit Werten aus einem gelesenen Dokument gefuehrt:
 # der Gate startet ausschliesslich `sh scripts/gen_doc_facts.sh` mit

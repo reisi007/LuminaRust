@@ -14,7 +14,17 @@ if [ "$version" != "ratchet 0.5.0" ]; then
     exit 2
 fi
 
+FILTERED_CONFIG=$(mktemp "$ROOT/.ratchet-population.XXXXXX")
+cleanup() { rm -f "$FILTERED_CONFIG"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+python3 "$ROOT/scripts/rust_source_population.py" \
+    --ratchet-config "$ROOT/ratchet.config.json" --output "$FILTERED_CONFIG"
+
 python3 "$ROOT/scripts/check_ratchet_exceptions.py"
 RATCHET_BIN="$RATCHET" python3 "$ROOT/scripts/test_ratchet_file_ceiling.py"
 cd "$ROOT"
-RATCHET_NO_UPDATE_CHECK=1 "$RATCHET" check --rule rust-file-line-ceiling
+RATCHET_NO_UPDATE_CHECK=1 "$RATCHET" check \
+    --config "$FILTERED_CONFIG" --no-config \
+    --rule rust-file-line-ceiling --no-update-check

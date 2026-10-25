@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Focused executable contract tests for the 1000-line Ratchet migration."""
 
+from __future__ import annotations
+
 import json
 import importlib.util
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from rust_source_population import POPULATION_GLOBS, effective_ratchet_config
 
 
 RATCHET = os.environ.get("RATCHET_BIN", "ratchet")
@@ -36,7 +41,7 @@ class CeilingContract(unittest.TestCase):
                 "direction": "ceiling",
                 "aggregate": "max",
                 "count": {"file_metrics": {
-                    "files": ["crates/**/*.rs", "agent-harness/**/*.rs"],
+                    "files": POPULATION_GLOBS,
                     "metric": "line_count",
                 }},
                 "scopes": [{"id": "legacy", "description": "fixture exception", "file": EXCEPTION}],
@@ -66,7 +71,15 @@ class CeilingContract(unittest.TestCase):
         return target
 
     def ratchet(self, ok: bool) -> subprocess.CompletedProcess[str]:
-        return run([RATCHET, "check", "--rule", RULE, "--no-update-check"], self.root, ok, self.env)
+        effective = self.root / ".ratchet-effective-config.json"
+        effective.write_text(json.dumps(effective_ratchet_config(self.root / "ratchet.config.json")))
+        try:
+            return run([
+                RATCHET, "check", "--config", str(effective), "--no-config",
+                "--rule", RULE, "--no-update-check",
+            ], self.root, ok, self.env)
+        finally:
+            effective.unlink(missing_ok=True)
 
     def test_existing_exception_overrun_fails(self) -> None:
         self.source(EXCEPTION, 1002)
@@ -120,6 +133,51 @@ class CeilingContract(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(module)
         self.assertTrue(any("stale exception" in error for error in module.validate(self.root)))
+
+    def test_target_directories_are_excluded_but_target_named_sources_stay_in_scope(self) -> None:
+        self.source("agent-harness/target/debug/generated.rs", 1200)
+        self.source("crates/sample/target/debug/generated.rs", 1300)
+
+        validator = Path(__file__).with_name("check_ratchet_exceptions.py")
+        spec = importlib.util.spec_from_file_location("exception_validator", validator)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        self.assertEqual(module.validate(self.root), [])
+        self.ratchet(True)
+
+        for path in ("crates/target.rs", "agent-harness/targeted.rs"):
+            self.source(path, 1001)
+            with self.subTest(path=path):
+                errors = module.validate(self.root)
+                self.assertTrue(
+                    any(
+                        f"missing exact-file exception for oversized Rust file: {path} (1001 lines)" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+                self.ratchet(False)
+            (self.root / path).unlink()
+
+    def test_doc_population_uses_the_same_target_directory_filter(self) -> None:
+        self.source("crates/target.rs", 1001)
+        self.source("agent-harness/targeted.rs", 1002)
+        self.source("crates/sample/target/generated.rs", 2000)
+        self.source("agent-harness/target/generated.rs", 2001)
+
+        helper = Path(__file__).with_name("rust_source_population.py")
+        result = run([
+            sys.executable, str(helper), "--root", str(self.root), "--jsonl",
+        ], self.root)
+        measured = {
+            record["path"]: record["line_count"]
+            for record in map(json.loads, result.stdout.splitlines())
+        }
+        self.assertEqual(measured["crates/target.rs"], 1001)
+        self.assertEqual(measured["agent-harness/targeted.rs"], 1002)
+        self.assertNotIn("crates/sample/target/generated.rs", measured)
+        self.assertNotIn("agent-harness/target/generated.rs", measured)
 
 
 if __name__ == "__main__":

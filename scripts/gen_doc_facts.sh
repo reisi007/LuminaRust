@@ -15,8 +15,8 @@
 # extrahierten Werten, kein `source` auf einer gelesenen Datei. Die gelesenen
 # Dateien sind Eingabedokumente; wer ein daraus gelesenes Kommando ausfuehrt,
 # baut aus einer Pruefung ein Ausfuehrungs-Freigabegate. Ausgefuehrt werden
-# ausschliesslich Festplatzwerkzeuge (`wc`, `find`, `sort`, `awk`, `sed`,
-# `grep`) mit festen Argumenten.
+# ausschliesslich Festplatzwerkzeuge (`python3`, `wc`, `find`, `sort`, `awk`,
+# `sed`, `grep`) mit festen Argumenten.
 #
 # KEIN `git`: der Generator braucht **kein** Git-Binary. Grund: die Stufe
 # `fast` laeuft in der CI im Container `lumina-ci:latest`, in dem `git` NICHT
@@ -265,43 +265,24 @@ PY
 }
 
 # ---------------------------------------------------------------- population
-# Quelle: das Dateisystem — alle `.rs` unter `crates/` und `agent-harness/`,
-# ohne `target/`. 500 kommt aus dem 500er-Gate, 1000 aus dem Ratchet-Fallback.
+# Quelle: `scripts/rust_source_population.py` — alle `.rs` unter `crates/` und
+# `agent-harness/`, ohne Verzeichnisse namens `target`. 500 kommt aus dem
+# 500er-Gate, 1000 aus dem Ratchet-Fallback.
 gen_population() {
     threshold=$(read_const "$SIZE_GATE" THRESHOLD)
     ceiling=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rules"]["rust-file-line-ceiling"]["value"])' "$RATCHET_BASELINE")
 
-    : > "$WORK/pop.raw"
-    for dir in crates agent-harness; do
-        if [ -d "$ROOT/$dir" ]; then
-            find "$ROOT/$dir" -name '*.rs' -not -path '*/target/*' -exec wc -l {} + >> "$WORK/pop.raw"
-        fi
-    done
-
-    # Die `total`-Zeilen von `wc` (je Batch) fallen weg; der Rest wird nach
-    # Pfad sortiert (feste Reihenfolge, unabhaengig vom Dateisystem). Der Pfad
-    # wird als REST der Zeile gelesen (nicht als Feld), damit ein Pfad mit
-    # Leerzeichen die Population nicht verkleinert.
-    awk -v tab="$TAB" '{ n = $1; $1 = ""; sub(/^[ \t]+/, "");
-        if (n ~ /^[0-9]+$/ && $0 != "total") print n tab $0 }' "$WORK/pop.raw" |
-        LC_ALL=C sort > "$WORK/pop"
-
-    total=$(wc -l < "$WORK/pop" | tr -d ' ')
-    over_threshold=0
-    over_ceiling=0
-    while IFS="$TAB" read -r n path; do
-        [ -n "$path" ] || continue
-        if [ "$n" -gt "$threshold" ]; then
-            over_threshold=$((over_threshold + 1))
-        fi
-        if [ "$n" -gt "$ceiling" ]; then
-            over_ceiling=$((over_ceiling + 1))
-        fi
-    done < "$WORK/pop"
-
-    printf 'Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **%s** Dateien, davon\n' "$total"
-    printf '**%s** ueber %s Zeilen und **%s** ueber %s Zeilen.\n' \
-        "$over_threshold" "$threshold" "$over_ceiling" "$ceiling"
+    python3 "$ROOT/scripts/rust_source_population.py" --root "$ROOT" --jsonl > "$WORK/pop.jsonl"
+    python3 - "$WORK/pop.jsonl" "$threshold" "$ceiling" <<'PY'
+import json, sys
+measurements = [json.loads(line)["line_count"] for line in open(sys.argv[1])]
+threshold, ceiling = map(int, sys.argv[2:4])
+total = len(measurements)
+over_threshold = sum(count > threshold for count in measurements)
+over_ceiling = sum(count > ceiling for count in measurements)
+print(f"Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **{total}** Dateien, davon")
+print(f"**{over_threshold}** ueber {threshold} Zeilen und **{over_ceiling}** ueber {ceiling} Zeilen.")
+PY
 }
 
 # ------------------------------------------------------------------- goldens
