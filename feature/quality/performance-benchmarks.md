@@ -853,8 +853,13 @@ alte Aussage wird daher **nicht** als allgemeine Kostenregel fortgeschrieben.
 
 **Nachmessung 2026-10-25 auf derselben Referenzmaschine:** macOS 27.0.1,
 MacBook Pro Mac17,8, Apple M5 Pro (18 CPU-Kerne, 20 GPU-Kerne, 48 GB), Metal 4;
-`rustc`/`cargo` 1.99.1, `wgpu` 30.0.1, Criterion 0.8.2. Der Benchmark wurde
-seriell einmal ausgeführt mit `LUMINA_GPU_BACKENDS=metal`. `GpuContext::new`
+`rustc`/`cargo` 1.99.1, `wgpu` 30.0.1, Criterion 0.8.2. Zwei serielle
+Fullruns mit `LUMINA_GPU_BACKENDS=metal` sind dokumentiert:
+`criterion-run.log` (Logdatei-Zeitstempel 17:42 CET) und
+`criterion-run-saved.log` (17:48 CET). Beide enden mit `EXIT_CODE=0` und
+enthalten alle sechs IDs mit je 100 Samples. Die folgende Tabelle und
+`summary.json`/`summary.md` stammen ausschließlich aus dem späteren SAVED-Lauf;
+die Läufe wurden nicht zusammengeführt. `GpuContext::new`
 bindet den Adapter und der Bench prüft `ctx.is_available()`; bei Fehlschlag
 kehrt er vor der Benchmarkgruppe mit „GPU adapter unavailable - skipped …“
 zurück. Alle sechs IDs unten wurden tatsächlich gemessen, daher passierte diese
@@ -880,11 +885,21 @@ cargo bench -p lumina-gpu --features gpu --bench mask_plane_clear
 ```
 
 Die relative `CRITERION_HOME`-Angabe wurde vom Cargo-Bench-Prozess relativ zum
-Crate-Arbeitsverzeichnis aufgelöst. Die unveränderten `new/`-Rohdateien wurden
-danach nach `target/gpu-mask-clear-evidence/criterion/` kopiert. Für die Median-
-Spalte wurde jeweils `new/estimates.json` → `median.point_estimate` verwendet,
-nicht die mittlere `time`-Zahl der CLI-Ausgabe (das ist Criterion `slope`). Der
-p95 wurde aus den 100 Paaren in `new/sample.json` als empirisches
+Crate-Arbeitsverzeichnis aufgelöst. Die unter
+`target/gpu-mask-clear-evidence/criterion/` erhaltenen JSON-Dateien reichen zur
+Rechenkontrolle, belegen aber nicht ihre byte-identische Herkunft aus dem
+SAVED-Lauf: Ein separates Original desselben Laufs und ein zeitgenössisches
+Hash-/Kopierprotokoll sind im geprüften Arbeitsbaum nicht vorhanden. Die frühere
+Aussage, die `new/`-Rohdateien seien unverändert kopiert worden, wird
+zurückgenommen; ihre Herkunft ist **ungeprüft**. Die vorhandenen
+`target/criterion/gpu/.../new/{sample,estimates}.json`-Dateien sind vom
+2026-10-02 und haben abweichende SHA-256-Werte; sie gehören zu einer anderen
+Population und belegen diese Herkunft nicht. Separate Quelloriginale des
+SAVED-Laufs sind im geprüften Arbeitsbaum nicht auffindbar; wann oder wodurch
+sie fehlen, ist nicht belegt. Für die Median-Spalte wurde jeweils
+`new/estimates.json` → `median.point_estimate` verwendet, nicht die mittlere
+`time`-Zahl der CLI-Ausgabe (das ist Criterion `slope`). Der p95 wurde aus den
+100 Paaren in `new/sample.json` als empirisches
 Nearest-Rank-Quantil der Batchmittelwerte `time_ns / iters` berechnet
 (Rang `ceil(0,95 × 100) = 95`). Das ist der p95 der **Batchmittelwerte**, keine
 Latenzverteilung einzelner Aufrufe. Skript, JSON und lesbarer Auszug liegen in
