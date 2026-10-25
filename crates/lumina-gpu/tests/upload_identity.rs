@@ -1,6 +1,12 @@
 //! GPU-UPLOAD-IDENTITY-92 regression: a cached input texture must follow the
 //! **frame instance**, not the pixel content and not the allocation address.
 //!
+//! GPU-only by construction: the VRAM path (and therefore
+//! `GpuContext::readback_output_frame`) exists only with the `gpu` feature, so
+//! this file compiles to nothing in the `--no-default-features` build that
+//! `scripts/check_feature_matrix.sh` exercises.
+#![cfg(feature = "gpu")]
+//!
 //! The adapter-free truth table for the decision itself lives next to the
 //! function (`crates/lumina-gpu/src/vram_pool/upload_identity.rs` → tests). This
 //! file pins the same statement on a real adapter: two frames of **different
