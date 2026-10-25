@@ -110,7 +110,7 @@ struct Exception {
 /// are found and named here, with the same standard applied.
 const EXCEPTIONS: [Exception; 4] = [
     Exception {
-        file: "kittest_snapshots.rs",
+        file: "kittest_snapshots/library.rs",
         function: "filmstrip_twenty_dummies",
         reason: "the predicate is an accesskit label query (\"LibRaw opening \
                  input failed\"), not app state: the shared wait re-reads a \
