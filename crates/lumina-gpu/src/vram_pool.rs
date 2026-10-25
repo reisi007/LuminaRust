@@ -2,6 +2,11 @@
 
 use super::{shaders, GpuContext, GpuError};
 
+mod source_upload;
+mod upload_identity;
+pub(crate) use source_upload::upload_source_texture;
+pub(crate) use upload_identity::{should_upload, UploadIdentity};
+
 /// A caller-supplied external depth plane for `recipe.lens_blur.depth_artifact`
 /// (G-05), uploaded once via [`GpuContext::set_depth_plane`].
 ///
@@ -48,9 +53,10 @@ pub(super) struct VramState {
     pub(super) input_view: wgpu::TextureView,
     /// Nearest sampler for the base texture (`textureSampleLevel`, exact texel).
     pub(super) input_sampler: wgpu::Sampler,
-    /// Identity of the last uploaded source frame (`(pixels_ptr, pixels_len)`).
-    /// Lets us skip the re-upload while the same source is dragged.
-    pub(super) input_source_identity: Option<(usize, usize)>,
+    /// Identity of the last uploaded source frame (instance ID plus geometry).
+    /// Lets us skip the re-upload while the same source is dragged
+    /// (`upload_identity`; GPU-UPLOAD-IDENTITY-92).
+    pub(super) input_source_identity: Option<UploadIdentity>,
     /// Overlay present pipelines cached per target format (R2-GPU-02) so the
     /// present shader is not recompiled on every repaint.
     pub(super) overlay_pipelines:

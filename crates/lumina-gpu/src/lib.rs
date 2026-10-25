@@ -786,10 +786,10 @@ struct RenderWithGpuResources {
     output: wgpu::Texture,
     output_view: wgpu::TextureView,
     readback: wgpu::Buffer,
-    /// Identity (`(pixels_ptr, pixels_len)`) of the last frame uploaded into
-    /// `input`, so repeated renders of the same source skip the CPU→GPU upload
-    /// (R2-GPU-04, mirroring R2-GPU-01).
-    input_source_identity: Option<(usize, usize)>,
+    /// Instance identity (`upload_identity::UploadIdentity`) of the last frame
+    /// uploaded into `input`, so repeated renders of the same source skip the
+    /// CPU→GPU upload (R2-GPU-04, mirroring R2-GPU-01).
+    input_source_identity: Option<vram_pool::UploadIdentity>,
 }
 
 /// GEN-ONNX-1 Welle 2a: one caller-supplied generative canvas uploaded to VRAM

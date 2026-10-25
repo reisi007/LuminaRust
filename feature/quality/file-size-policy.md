@@ -27,7 +27,7 @@ mask another file's growth.
 ## 2. Population
 
 <!-- BEGIN GENERATED: population -->
-Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **963** Dateien, davon
+Population (`crates/` + `agent-harness/`, alle `.rs`-Dateien): **967** Dateien, davon
 **109** ueber 500 Zeilen und **0** ueber 1000 Zeilen.
 <!-- END GENERATED: population -->
 

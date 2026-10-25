@@ -2114,6 +2114,32 @@ Rezeptstand gehören.
 Der GPU-Beschleunigungspfad (`crates/lumina-gpu`; DAG-Spezifikation und
 Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
 
+- **Input-Upload-Identität (GPU-UPLOAD-IDENTITY-92, Entscheidung
+  `GPU-UPLOAD-ID`, 2026-10-25):** Ob der gecachte Quelltextur-Upload
+  (`R2-GPU-01` im VRAM-Pfad, `R2-GPU-04` im Readback-Pfad) ausgeführt wird,
+  entscheidet genau eine reine Funktion,
+  `crates/lumina-gpu/src/vram_pool/upload_identity.rs` → `should_upload`
+  (Typ `UploadIdentity { instance_id, width, height }`). Beide Aufrufstellen
+  (`crates/lumina-gpu/src/render_dispatch.rs` und
+  `crates/lumina-gpu/src/render_vram.rs`, Feld `input_source_identity`) rufen
+  sie auf; kein zweiter Vergleich existiert. Übersprungen wird der Upload
+  **nur** bei gleicher **Frame-Instanz** *und* gleicher Zielgeometrie.
+  Die Instanz ist die prozesslokale, monotone `u64`-ID des Core-Typs
+  (`ImageFrame::new` vergibt sie, `Clone` erhält sie,
+  `ImageFrame::instance_id` liest sie; sie ist **nicht** Teil von
+  `PartialEq`/`Eq` und wird nie serialisiert). Das ist ausdrücklich eine
+  **Instanz**-Identität und keine Inhalts- oder Adressidentität: zwei
+  verschiedene Frames mit gleichen Pixeln, gleicher Länge oder derselben
+  Allocation teilen sich **nie** einen Upload; dasselbe Frame-Objekt (auch
+  geklont) teilt ihn. Adresse und Länge sind keine Identität — sie waren die
+  alte, falsche Grundlage (siehe
+  `feature/quality/gpu-nondeterminism-2026-10-16.md` → „Mechanismus
+  lokalisiert"). Am Adapter (Metal, 2026-10-25) sind die beiden
+  adaptergebundenen Regressionstests
+  `readback_path_renders_the_second_frame_with_equal_length` /
+  `vram_path_renders_the_second_frame_with_equal_length` grün, und eine
+  Mutation auf den alten Geometrievergleich macht sie rot; die
+  Messprotokolle stehen im Nichtdeterminismus-Bericht.
 - **Stufen auf GPU:** Tone+WB (Bestand), neu eine dedizierte
   **SourceAction-Stufe** als WGSL-Pass — Compositing gebundener Artefakte
   exakt mit der CPU-Oracle-Semantik (`out = replacement` bei

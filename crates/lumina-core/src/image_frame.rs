@@ -44,11 +44,7 @@ impl ImageFrame {
                 length: pixels.len(),
             });
         }
-        Ok(Self {
-            width,
-            height,
-            pixels,
-        })
+        Ok(Self::with_new_identity(width, height, pixels))
     }
 
     #[must_use]

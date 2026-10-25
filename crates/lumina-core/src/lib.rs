@@ -348,21 +348,12 @@ impl ExportOptions {
     }
 }
 
-/// Row-major RGBA8 frame.
-///
-/// Invariant: `pixels().len() == width() * height() * 4` (checked
-/// multiplication), sealed by construction. [`ImageFrame::new`] is the only
-/// constructor and enforces the relation up front; [`ImageFrame::pixels`],
-/// [`ImageFrame::pixels_mut`] and [`ImageFrame::into_pixels`] can never change
-/// the buffer length, and `width`/`height` are private with read-only
-/// accessors — so neither the buffer side nor the dimensions side of the
-/// relation can be broken from outside the crate after construction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImageFrame {
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
-}
+// Row-major RGBA8 frame: the type, its process-local instance identity and its
+// content-based equality live in `frame_identity` (GPU-UPLOAD-IDENTITY-92,
+// file-size ratchet §8). The re-export keeps the public
+// `lumina_core::ImageFrame` path unchanged.
+mod frame_identity;
+pub use frame_identity::ImageFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeasurementDomain {

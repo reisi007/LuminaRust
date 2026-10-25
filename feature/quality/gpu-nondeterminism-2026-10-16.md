@@ -462,7 +462,8 @@ Der Input-Upload überspringt auf **Pointer-Identität** statt auf einen
 Content-Hash: `crates/lumina-gpu/src/render_dispatch.rs`
 (`input_source_identity`, Schlüssel `(frame.pixels().as_ptr() as usize,
 frame.pixels().len())`) und `crates/lumina-gpu/src/render_vram.rs` (derselbe
-Schlüssel für die VRAM-Basis). **Kein Fix.**
+Schlüssel für die VRAM-Basis). **Kein Fix** (Stand 2026-10-16; am 2026-10-25
+als `GPU-UPLOAD-IDENTITY-92` behoben — siehe „Mechanismus lokalisiert" unten).
 
 **Korrektur 2026-10-25 — die frühere Begründung wird an dieser Stelle
 zurückgenommen.** Sie lautete „im konkreten Test nicht auslösbar (gleiche
@@ -480,6 +481,138 @@ und wird hier nicht behauptet. Er ist eine prüfbare Hypothese mit einem
 benennbaren Kriterium: wird die Upload-Identität inhaltsbasiert (oder wird immer
 hochgeladen), muss der Familiensatz byte-stabil werden; bleibt er es nicht, ist
 die Hypothese widerlegt.
+
+### Mechanismus lokalisiert: Upload-Skip (2026-10-25, Entscheidung `GPU-UPLOAD-ID`)
+
+Der Nebenbefund ist nicht mehr nur eine Hypothese: ein A/B-Lauf grenzt den
+**Mechanismus** ein. Gemessen wurde am 2026-10-25 auf demselben Host wie der
+Adapterbefund (macOS, Apple M5 Pro / Metal, `LUMINA_GPU_BACKENDS=metal`):
+
+- **A (Skip abgeschaltet):** der Upload-Skip wurde an **beiden** Stellen
+  (`crates/lumina-gpu/src/render_dispatch.rs`,
+  `crates/lumina-gpu/src/render_vram.rs`) entfernt, sodass jeder Render die
+  Quelle neu hochlädt; `cargo build -p lumina-cli --features gpu` endete mit
+  Exit **0**. Danach lief der Auto-Tone-Familiensatz
+  (`tests::auto_tone_float::adapter_runs_of_the_full_process_path_report_gpu_for_all_120_renders`,
+  `--ignored --exact --test-threads=1`) dreimal seriell mit Exit **0/0/0** und
+  **0/40** abweichenden Mitgliedern; der Original-Reproducer
+  (`tests::auto_tone_float::the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move`)
+  bestand ebenfalls mit Exit **0**.
+- **B (byte-identischer Restore):** beide Dateien wurden aus den vor der
+  Mutation gesicherten Kopien zurückgeschrieben; `cmp` endete für beide mit
+  Exit **0**, und `source-before.sha256`/`source-after.sha256` nennen dieselben
+  SHA-256-Werte. Der anschließende unmutierte Wiederholungslauf des
+  Familiensatzes endete mit Exit **101**: **1/40** abweichende Mitglieder,
+  Mitglied **31**, Paar **1-vs-2**, **256** abweichende RGBA8-Pixel (erster
+  Index `0`), PNG- und Pixelvergleich beide ungleich.
+- Belege: `target/gpu-render-nondeterminism-69/20261025T214457Z/`
+  (`mutated-build.*`, `mutated-diagnostic-run-1..3.*`,
+  `mutated-original-reproducer.*`, `source-before.sha256`,
+  `source-after.sha256`, `render_dispatch.rs.orig`, `render_vram.rs.orig`,
+  `*.restore-cmp.txt`, `unmutated-confirmation.*`). Ein Mutations-Patchfile
+  wurde in diesem Lauf nicht abgelegt; belegt sind die gesicherten
+  Originalkopien, die SHA-256-Werte und die `cmp`-Exitcodes.
+
+**Damit gilt der ursprüngliche Rotlauf als mechanismisch lokalisiert, nicht als
+vollständig erklärt.** Belegt ist: der Schlüssel `(pixels_ptr, pixels_len)`
+kann bei „anderer Frame, gleiche Länge, wiederverwendete Allocation" einen
+**veralteten** Upload weiterverwenden, und das Abschalten des Skips macht den
+Familiensatz in diesem Lauf byte-stabil. Nicht belegt ist, dass dieser
+Mechanismus **jede** beobachtete Abweichung erklärt: das A/B ist je Zustand ein
+Lauf (A dreifach, B einfach), die Rotläufe vom 2026-10-15/16 haben keine
+Rohartefakte, und ein Beitrag von Treiber/wgpu ist damit nicht ausgeschlossen.
+
+**Entscheidung des Eigentümers (2026-10-25, `GPU-UPLOAD-ID`):** die
+Upload-Identität ist die **Frame-Instanz**, nicht die Adresse, nicht ein
+Inhalts-Hash und nicht ein Aufrufer-Token. `ImageFrame` trägt eine
+prozesslokale, monotone `u64`-ID (`ImageFrame::new` vergibt sie, `Clone` erhält
+sie, `ImageFrame::instance_id` liest sie; **nicht** Teil von `PartialEq`/`Eq`,
+nie persistiert). `should_upload` in
+`crates/lumina-gpu/src/vram_pool/upload_identity.rs` überspringt nur bei
+gleicher Instanz **und** gleicher Geometrie; beide Upload-Stellen rufen genau
+diese Funktion auf (normativ:
+`feature/architecture/pipeline.md` → „Implementierungsstatus GPU-Pfad" →
+„Input-Upload-Identität"). Zwei verschiedene Frames mit gleichem Inhalt oder
+gleicher Länge teilen sich damit nie einen Upload; dasselbe Frame-Objekt (auch
+geklont) schon.
+
+#### Fixstand und Messung (2026-10-25, lokale Gates, keine unabhängige Verifikation)
+
+- **Ort:** die ID liegt in `crates/lumina-core/src/frame_identity.rs` (Typ,
+  Allokation, `instance_id()`, manuelles `PartialEq`/`Eq` über
+  `width`/`height`/`pixels`); die Entscheidung in
+  `crates/lumina-gpu/src/vram_pool/upload_identity.rs` (`should_upload`,
+  `UploadIdentity { instance_id, width, height }`); der gemeinsame Transfer in
+  `crates/lumina-gpu/src/vram_pool/source_upload.rs`
+  (`upload_source_texture`). `crates/lumina-gpu/src/lib.rs` →
+  `RenderWithGpuResources::input_source_identity` und
+  `crates/lumina-gpu/src/vram_pool.rs` → `VramState::input_source_identity`
+  tragen `Option<UploadIdentity>`; kein zweiter Vergleich bleibt.
+- **Tests:** `crates/lumina-core/src/frame_identity.rs` →
+  `new_assigns_a_fresh_instance_id_per_call`, `clone_keeps_the_instance_id`,
+  `equality_ignores_the_instance_id_but_not_the_content`;
+  `crates/lumina-gpu/src/vram_pool/upload_identity.rs` →
+  `same_instance_and_geometry_skips_the_upload`, `cloned_frame_keeps_the_upload`,
+  `another_instance_with_identical_pixels_and_length_uploads` (der Kern-Test
+  gegen den Defekt), `another_geometry_uploads`,
+  `no_previous_upload_uploads`; adaptergebunden
+  `crates/lumina-gpu/tests/upload_identity.rs` →
+  `readback_path_renders_the_second_frame_with_equal_length` und
+  `vram_path_renders_the_second_frame_with_equal_length` (zwei Frames,
+  verschiedene Inhalte, gleiche Länge 16 Byte; das zweite Ergebnis muss dem
+  frischen Kontext entsprechen und darf den ersten Render nicht wiederholen).
+- **Mutationsnachweis:** `should_upload` wurde auf einen reinen
+  Geometrievergleich zurückgebaut (`previous.width != width || previous.height
+  != height`, Instanz ignoriert) — also genau der alte Defekt. Der Kern-Test
+  wurde rot (**4 passed / 1 failed**, Exit **101**), und **beide**
+  adaptergebundenen Tests wurden rot (**0 passed / 2 failed**, Exit **101**):
+  beide meldeten den Pixelinhalt des **ersten** Frames als zweites Ergebnis.
+  Der Patch liegt als `instance-identity-mutation.patch`, die Läufe als
+  `mutated-unit-test.log`/`.exit` und `mutated-adapter-test.log`/`.exit`; der
+  Restore ist byte-identisch (SHA-256
+  `61ed3d047c31cd8afa77fd9b1dc02d614d16513742466ac5900e83b9262706c1` vor und
+  nach der Mutation, `cmp` Exit **0**), danach `cargo clean -p lumina-gpu`
+  (Exit **0**). Artefakte:
+  `target/gpu-render-nondeterminism-69/20261025T223514Z/`.
+- **Adaptermessung nach dem Fix** (Metal, `LUMINA_GPU_BACKENDS=metal`): der
+  Auto-Tone-Familiensatz lief dreimal seriell mit Exit **0/0/0** und meldete
+  **keine** Abweichung (0/40); der Original-Reproducer bestand danach dreimal
+  (Exit **0/0/0**). Belege:
+  `target/gpu-render-nondeterminism-69/20261025T225434Z/` (`run-1..3.*`,
+  `reproducer-1..3.*`).
+- **Grenze dieser Messung:** drei grüne Läufe widerlegen die Resthypothese
+  (Treiber/wgpu-Anteil) nicht, und sie sind kein Beweis für beliebige
+  Frame-Folgen außerhalb dieses Tests; der A/B-Beleg oben bleibt je Zustand
+  eine Stichprobe. `GPU-RENDER-NONDETERMINISM-69-HW` bleibt offen, bis ein
+  unabhängiger Lauf und der manuelle Fahrplan vorliegen.
+- **Portabilitätsfehler im Test-Target von `lumina-cache` — im selben Batch
+  behoben (Nachtrag 2026-10-26):** `cargo check --workspace --all-targets` brach
+  auf macOS in `crates/lumina-cache/src/lib.rs` → `current_umask` ab
+  (`libc::mode_t` ist dort `u16`, deklariert war `-> u32`, E0308). Der Helfer
+  gibt den Wert jetzt als `u64` zurück (`mask as u64`) und die Assertion
+  vergleicht `u64::from(mode & 0o777)` dagegen. Die erste Fassung mit
+  `u32::from(mask)` war auf macOS grün, wäre aber auf Linux eine
+  Identitätskonvertierung und damit unter `-D warnings` ein
+  `clippy::useless_conversion`-Fehler gewesen; `mode_t` ist nie `u64`, also ist
+  die Verbreiterung auf beiden Plattformen eine echte Konvertierung. Gemessen:
+  `cargo clippy -p lumina-cache --all-targets --target
+  x86_64-unknown-linux-gnu -- -D warnings` → Exit 0 (Linux-Ziel lokal
+  installiert, Test-Target eingeschlossen) und `cargo check --workspace
+  --all-targets` → Exit 0. Das Verhalten ist unverändert: der `mode_t`-Wert geht
+  unverändert an das zurücksetzende `libc::umask`.
+
+  Beim ersten Lauf des reparierten Test-Targets wurden zwei
+  `secure_dir_tests` auf macOS rot: `tempfile` legt unter `TMPDIR` ab, und der
+  Standardwert `/var/folders/...` führt über den Symlink `/var` →
+  `/private/var`, den `create_dir_all_nofollow` bauartbedingt ablehnt — eine
+  Umgebungsannahme im Test (DoD §10), die erst sichtbar wurde, weil das
+  Test-Target vorher nicht kompilierte. Beide Tests kanonisieren jetzt ihren
+  Wurzelpfad (`tmp.path().canonicalize()`), ohne eine Assertion zu ändern;
+  `cargo test -p lumina-cache` läuft damit auch **ohne** gesetztes `TMPDIR`
+  grün (11 passed / 0 failed). Die frühere Formulierung, der Befund sei
+  „vorbestehend, nicht Teil dieses Fixes", ist damit **an dieser Stelle
+  zurückgenommen**: sie hätte einen Gate-Fehler als bekannt abgehakt und einen
+  künftigen Leser weiter auf `--exclude lumina-cache` geschickt.
 
 ## Abgeleitet
 

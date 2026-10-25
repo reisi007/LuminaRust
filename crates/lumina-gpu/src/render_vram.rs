@@ -5,6 +5,7 @@
 use super::resources::{encode_source_action_batches, encode_spot_heal, post_stages_needed};
 use super::{
     geometry, lens_blur, shaders, unsupported_gpu_stages_for, validate_gpu_recipe,
+    vram_pool::{should_upload, upload_source_texture, UploadIdentity},
     warn_unsupported_vram_once, warn_vram_dimension_change_once, Frame, GpuContext, GpuError,
     ImageFrame, SourceActionBatches,
 };
@@ -152,35 +153,23 @@ impl GpuContext {
             None
         };
         // R2-GPU-01: reuse the cached base texture and re-upload it only when
-        // the source frame changes. During a slider drag the same source is
-        // passed every tick, so this skips the ~96 MB CPU→GPU upload on all but
-        // the first tick.
+        // the source frame instance or the target geometry changes
+        // (GPU-UPLOAD-IDENTITY-92: instance identity, never address/content).
+        // During a slider drag the same source is passed every tick, so this
+        // skips the ~96 MB CPU→GPU upload on all but the first tick.
         let mut vram_guard = self.vram.lock().unwrap();
         let Some(v) = vram_guard.active() else {
             return Err(GpuError::RenderFailed("vram not ready".into()));
         };
-        let src_identity = (frame.pixels().as_ptr() as usize, frame.pixels().len());
-        if v.input_source_identity != Some(src_identity) {
-            resources.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &v.input,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                frame.pixels(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(frame.width() * 4),
-                    rows_per_image: Some(frame.height()),
-                },
-                wgpu::Extent3d {
-                    width: frame.width(),
-                    height: frame.height(),
-                    depth_or_array_layers: 1,
-                },
-            );
-            v.input_source_identity = Some(src_identity);
+        if should_upload(
+            v.input_source_identity,
+            frame.width(),
+            frame.height(),
+            frame,
+        ) {
+            upload_source_texture(&resources.queue, &v.input, frame);
+            v.input_source_identity =
+                Some(UploadIdentity::of(frame, frame.width(), frame.height()));
         }
         let input_view = &v.input_view;
         let sampler = &v.input_sampler;

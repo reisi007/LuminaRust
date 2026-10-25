@@ -5,9 +5,10 @@ use super::resources::{
 };
 use super::{
     geometry, lens_blur, log_cpu_routing_once, readback_texture, render_cpu_with_generative,
-    shaders, unsupported_gpu_stages_for, validate_gpu_recipe, CpuFallbackReason, Frame, GpuContext,
-    GpuError, ImageFrame, RenderExecutionReport, RenderWithGpuResources, SourceActionBatches,
-    UploadedGenerativeArtifact,
+    shaders, unsupported_gpu_stages_for, validate_gpu_recipe,
+    vram_pool::{should_upload, upload_source_texture, UploadIdentity},
+    CpuFallbackReason, Frame, GpuContext, GpuError, ImageFrame, RenderExecutionReport,
+    RenderWithGpuResources, SourceActionBatches, UploadedGenerativeArtifact,
 };
 // Doc-link only: the moved docs name the `stages` module and the routing verdicts
 // they referred to at the crate root, where all three were in scope.
@@ -225,31 +226,14 @@ impl GpuContext {
             }
         });
         // Upload the current source frame into the pooled input texture — but
-        // only when the source actually changed (R2-GPU-04, mirroring
-        // R2-GPU-01). A benchmark loop or repeated exports of the same frame
-        // skip the ≈16 MB CPU→GPU transfer on every call after the first.
-        let src_identity = (frame.pixels().as_ptr() as usize, frame.pixels().len());
-        if pooled.input_source_identity != Some(src_identity) {
-            resources.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &pooled.input,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                frame.pixels(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width * 4),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            pooled.input_source_identity = Some(src_identity);
+        // only when the frame instance or the target geometry changed
+        // (R2-GPU-04, mirroring R2-GPU-01; GPU-UPLOAD-IDENTITY-92: instance
+        // identity, never address/content). A benchmark loop or repeated
+        // exports of the same frame skip the ≈16 MB CPU→GPU transfer on every
+        // call after the first.
+        if should_upload(pooled.input_source_identity, width, height, frame) {
+            upload_source_texture(&resources.queue, &pooled.input, frame);
+            pooled.input_source_identity = Some(UploadIdentity::of(frame, width, height));
         }
         let input_view = pooled
             .input

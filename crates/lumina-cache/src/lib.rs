@@ -103,10 +103,15 @@ mod secure_dir_tests {
     #[test]
     fn symlink_target_is_untouched_and_normal_directory_is_0755() {
         let tmp = tempfile::tempdir().unwrap();
-        let attacker = tmp.path().join("attacker");
+        // DoD §10: no environment assumption. macOS resolves `TMPDIR` through
+        // the `/var` -> `/private/var` symlink, and this function deliberately
+        // refuses symlink ancestors; canonicalising the root removes that host
+        // artefact without weakening either assertion below.
+        let root = tmp.path().canonicalize().unwrap();
+        let attacker = root.join("attacker");
         std::fs::create_dir(&attacker).unwrap();
         std::fs::write(attacker.join("marker"), b"unchanged").unwrap();
-        let link = tmp.path().join("linked");
+        let link = root.join("linked");
         std::os::unix::fs::symlink(&attacker, &link).unwrap();
         assert!(create_dir_all_nofollow(&link.join("new")).is_err());
         assert_eq!(
@@ -115,15 +120,17 @@ mod secure_dir_tests {
         );
         assert_eq!(std::fs::read_dir(&attacker).unwrap().count(), 1);
 
-        let normal = tmp.path().join("new/under");
+        let normal = root.join("new/under");
         create_dir_all_nofollow(&normal).unwrap();
         assert!(normal.is_dir());
         assert_eq!(
-            std::fs::metadata(tmp.path().join("new"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
+            u64::from(
+                std::fs::metadata(root.join("new"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777
+            ),
             0o777 & !current_umask()
         );
     }
@@ -131,17 +138,24 @@ mod secure_dir_tests {
     #[test]
     fn parent_components_are_resolved_without_following_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
-        let expected = tmp.path().join("created");
-        let path = tmp.path().join("child/../created");
+        let root = tmp.path().canonicalize().unwrap();
+        let expected = root.join("created");
+        let path = root.join("child/../created");
         create_dir_all_nofollow(&path).unwrap();
         assert!(expected.is_dir());
     }
 
-    fn current_umask() -> u32 {
+    /// The process umask, widened to `u64` so the value is comparable on both
+    /// targets: `libc::mode_t` is `u16` on macOS and `u32` on Linux, and a
+    /// `u32::from` / `as u32` at this boundary would be a same-type conversion
+    /// (and therefore `clippy::useless_conversion` / `unnecessary_cast`) on
+    /// Linux. `mode_t` is never `u64`, so this widening carries no lint on
+    /// either platform.
+    fn current_umask() -> u64 {
         // Querying umask requires changing it; restore immediately. This test
         // module has no other umask-mutating tests and asserts policy, not 0755.
         let mask = unsafe { libc::umask(0o777) };
         unsafe { libc::umask(mask) };
-        mask
+        mask as u64
     }
 }

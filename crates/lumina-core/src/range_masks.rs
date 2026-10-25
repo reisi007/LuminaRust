@@ -271,11 +271,8 @@ mod tests {
     use super::*;
 
     fn frame(pixels: &[[u8; 4]], width: u32, height: u32) -> ImageFrame {
-        ImageFrame {
-            width,
-            height,
-            pixels: pixels.iter().flatten().copied().collect(),
-        }
+        ImageFrame::new(width, height, pixels.iter().flatten().copied().collect())
+            .expect("test frame geometry matches its pixel buffer")
     }
 
     #[test]
