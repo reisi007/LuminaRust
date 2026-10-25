@@ -10,9 +10,6 @@
         },
         "crates-lumina-gui-src-lib-rs": {
           "value": 10517
-        },
-        "crates-lumina-gui-tests-kittest_snapshots-rs": {
-          "value": 2885
         }
       }
     }
