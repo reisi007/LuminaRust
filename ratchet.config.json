@@ -22,14 +22,7 @@
           ],
           "metric": "line_count"
         }
-      },
-      "scopes": [
-        {
-          "id": "crates-lumina-gui-src-lib-rs",
-          "description": "Existing exception: crates/lumina-gui/src/lib.rs",
-          "file": "crates/lumina-gui/src/lib.rs"
-        }
-      ]
+      }
     }
   }
 }

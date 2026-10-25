@@ -3,12 +3,7 @@
   "rules": {
     "rust-file-line-ceiling": {
       "value": 1000,
-      "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling",
-      "scopes": {
-        "crates-lumina-gui-src-lib-rs": {
-          "value": 10517
-        }
-      }
+      "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling"
     }
   }
 }
