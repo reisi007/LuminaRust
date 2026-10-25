@@ -313,10 +313,16 @@ Aufbau (`crates/lumina-mcp/src/tools/generative.rs`):
   Ziel-Crate + Modulname ist offen (§13 Punkt 1); fest steht nur, dass er **keine**
   zweite Kopie wird (F6-Dedup, `crates/lumina-stages/src/merge.rs` → Modul-Doku).
 - **`decoder`/`decode_version`/`orientation`** müssen aus **denselben** Quellen
-  kommen wie im CLI (`crates/lumina-stages/src/merge.rs` → `decode_source`): `"libraw"` wenn `raw.is_some()` sonst
-  `"image"`; `libraw_decode_version()` bzw. `CARGO_PKG_VERSION`;
-  `orientation` aus RAW-Metadaten (`crates/lumina-stages/src/merge.rs` → `merge_exif_from_raw`). Das ist die
-  einzige Stelle, an der ein MCP-eigener Decode-Pfad den Digest driften lässt.
+  kommen wie im CLI (`crates/lumina-stages/src/merge.rs` → `decode_source`,
+  das den `MergeDecodeContext` baut): `"libraw"` wenn `raw.is_some()` sonst
+  `"image"`; `lumina_raw::libraw_decode_version()` bei RAW, sonst die gepinnte
+  Konstante `MERGE_IMAGE_DECODER_VERSION` (`"0.1.0"`, in Lockstep mit der
+  CLI-Paketversion); `orientation` aus `raw.orientation` desselben
+  Decode-Schritts (Default `1`) — **kein** EXIF-Feld: `merge_exif_from_raw`
+  mappt nur make/model/lens/exposure/f_number/iso/timestamp. Das ist die
+  einzige Stelle, an der ein MCP-eigener Decode-Pfad die
+  **Decode-Metadaten** des Digests driften lässt (Pixel-Abweichungen
+  erreichen ihn zusätzlich über `alignment.transforms`/`residual_px`).
 - **Kein `output_guard` nötig, `resolve_dng_path`-Parität genügt:** die
   `.dng`-Endung und der Quellen-Treffer werden von `resolve_dng_path` geprüft
   (`crates/lumina-merge/src/bundle.rs` → `resolve_dng_path`) — für beide Frontends über denselben Aufruf
@@ -361,10 +367,13 @@ ergänzt werden — Placeholder, Eigentümer-Entscheid (§13 Punkt 6).
 
 1. **Eine Implementierung:** MCP nutzt `run_merge` (wie CLI `crates/lumina-cli/src/merge.rs` → `merge_hdr`/`merge_pano` → `run_merge`),
    kein eigenes Decode/Blend. F6-Dedup bleibt unangetastet.
-2. **Decode-Kontext spiegelt die Quelle:** CLI-Adapter setzt `decoder` auf
-   `"libraw"` wenn `raw.is_some()` sonst `"image"`, plus `libraw_decode_version()`
-   bzw. `CARGO_PKG_VERSION`, `orientation` aus RAW-Metadaten
-   (`crates/lumina-cli/src/merge.rs` → `run_merge`). MCP-Adapter muss diese Werte aus
+2. **Decode-Kontext spiegelt die Quelle:** der Adapter baut den
+   `MergeDecodeContext` in `crates/lumina-stages/src/merge.rs` → `decode_source`:
+   `decoder` `"libraw"` wenn `raw.is_some()` sonst `"image"`; `decode_version`
+   `lumina_raw::libraw_decode_version()` bei RAW, sonst die gepinnte Konstante
+   `MERGE_IMAGE_DECODER_VERSION` (`"0.1.0"`, Lockstep mit der
+   CLI-Paketversion); `orientation` aus `raw.orientation` desselben Schritts
+   (Default `1`, **kein** EXIF-Feld). MCP-Adapter muss diese Werte aus
    denselben Routen beziehen, sonst driftet der Digest.
 3. **Eingabe-Validierung vor Verarbeitung:** `inputs` ist Pflicht; die
    **Anzahl** prüft allein `validate_source_count` (2..=256,
