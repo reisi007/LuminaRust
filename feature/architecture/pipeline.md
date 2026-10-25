@@ -2290,7 +2290,11 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
     --all-targets`, `cargo test -p lumina-gui --no-default-features --lib --
     --test-threads=1`, `cargo fmt --all -- --check`, `cargo clippy -p lumina-gui
     --features gpu --all-targets -- -D warnings`, `sh scripts/check_file_sizes.sh`,
-    `sh scripts/check_plan_format.sh`, `git diff --check`. CI steht noch aus.
+    `sh scripts/check_plan_format.sh`, `git diff --check`.
+    **Lieferbeleg:** `b05773a` auf `main`, Doku-Drift korrigiert in `136acab`;
+    CI-Lauf `40212313487` bestätigt alle sieben Job-Records als
+    `completed/success`. Matrix-Lauf `40212313470`: Entscheidungsjob erfolgreich,
+    Recipe-Matrix planmäßig übersprungen. Kein GPU-Lauf in CI behauptet.
 - **Paritäts-Stufen (GPU-RENDER-PARITY-1, verifiziert BESTANDEN):** Stufe 1
   (Ton-Domäne: Presence, Curves, HSL, Point Color, Vibrance/Sättigung,
   Color Grading) + Stufe 2 (Detail-Kette: Noise Reduction → Sharpening →

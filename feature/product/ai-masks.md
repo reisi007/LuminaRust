@@ -425,7 +425,8 @@ Validierungs-/Fehler-vor-Write-Verträge und neutrale Identität; sie belegen
    `target/gpu-mask-present-evidence/`; der vollständige Messbericht steht in
    `feature/architecture/pipeline.md` §GPU. Die unabhängige Nachprüfung hat die
    Gegenproben, Mutationsbelege und den generativen Refusal-Fix bestätigt;
-   CI steht noch aus.
+   der gelieferte Stand `136acab` ist CI-grün (Lauf `40212313487`, alle sieben
+   Job-Records erfolgreich). Adapter-Ausführung bleibt ein lokaler Nachweis.
 
 ## P0 SOLL — lokale Mask-Adjustments (`MASK-LOCAL-P0`, Release 1.0)
 
