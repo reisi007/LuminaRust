@@ -319,7 +319,7 @@ diese Thumbnails zeigen.
   (`crates/lumina-core/src/lib.rs` → `downscale`: `width.min(max_width)`).
 
 **Regenerations-Hardware:** Diese Goldens lassen sich **nur** auf der
-gepinnten macOS/Metal-Maschine neu erzeugen (Referenz: macOS 27.0, Apple
+gepinnten macOS/Metal-Maschine neu erzeugen (Referenz: macOS 27.0.1, Apple
 M5 Pro, Metal 4, wgpu 30.0.1, egui 0.36.2, LibRaw 0.22.2;
 `golden-references.md:10-12`, `golden_ref.lock`). Auf diesem Host (Linux)
 koennen sie **nicht** neu aufgenommen werden.

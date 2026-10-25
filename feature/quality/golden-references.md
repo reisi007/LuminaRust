@@ -36,6 +36,7 @@ Verifikationsregeln).
 - [8. Exakte Regenerations-Kommandozeile](#8-exakte-regenerations-kommandozeile)
 - [9. Mismatch-Politik](#9-mismatch-politik)
 - [10. CI-Politik: lokal, nie CI](#10-ci-politik-lokal-nie-ci)
+  - [10.1 Re-Pin-Nachweis GOLDEN-REPIN-R-85 (2026-10-25)](#101-re-pin-nachweis-golden-repin-r-85-2026-10-25)
 - [11. Bekannte Grenzen](#11-bekannte-grenzen)
   - [11.1 Der Guard ist nicht automatisch — die Umgehung im Klartext](#111-der-guard-ist-nicht-automatisch--die-umgehung-im-klartext)
   - [11.2 Weitere Grenzen](#112-weitere-grenzen)
@@ -87,7 +88,7 @@ Ausdrücklich **nicht** Gegenstand dieses Dokuments:
 
 | Merkmal | Wert der Referenz |
 | --- | --- |
-| OS | macOS **27.0** (Produktversion via `sw_vers -productVersion`) |
+| OS | macOS **27.0.1** (Produktversion via `sw_vers -productVersion`) |
 | Architektur | `arm64` (Apple Silicon) |
 | CPU / SoC | **Apple M5 Pro** |
 | GPU / wgpu-Adapter | **Apple M5 Pro** (Metal-Gerät, via `system_profiler SPDisplaysDataType` erfasst) |
@@ -1009,6 +1010,52 @@ Daraus folgt:
 4. Jeder Merge eines geänderten Goldens muss im Abschlussbericht die
    `record`-Begründung und die Diff-Belege nennen. Zusammen mit §4.1 ist das die
    einzige Review-Schranke, die es für Goldens gibt.
+
+### 10.1 Re-Pin-Nachweis GOLDEN-REPIN-R-85 (2026-10-25)
+
+Die sechs seit dem bilinearen Resampler-Wechsel veralteten `R`-Goldens wurden
+am **2026-10-25** auf der gepinnten Referenzmaschine einzeln erneuert:
+
+`library_compare`, `library_loupe`, `library_rated_badges`,
+`library_subfolder_badges`, `library_survey`, `library_stack_membership`.
+
+**Referenz:** macOS 27.0.1, arm64, Apple M5 Pro, Metal 4, wgpu 30.0.1,
+`rustc 1.98.0`, egui 0.36.2, LibRaw 0.22.2. Vor dem ersten Update bestand
+`golden_ref.sh gate` mit `MATCH`. Das Gate wurde für den ersten Update-Lauf
+verwendet; nach dessen PNG-Änderung ist der alte `goldens.digest` erwartungsgemäß
+veraltet, daher liefen die übrigen fünf gezielten Updates auf demselben
+unveränderten Referenzhost direkt. Der neue Digest wurde erst nach den sechs
+Vergleichsläufen aufgezeichnet. Fixtures und Vergleichstoleranzen blieben
+unverändert.
+
+**Gezielte Updates** (jeder Lauf: 1 bestanden, 0 fehlgeschlagen):
+
+```sh
+PATH="$HOME/.cargo/bin:$PATH" sh scripts/golden_ref.sh gate -- env UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact
+```
+
+**Vergleich ohne Update-Flag** (jeder Lauf: 1 bestanden, 0 fehlgeschlagen):
+
+```sh
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact
+```
+
+Anschließend wurde der Lock atomar mit dem begründeten `record`-Aufruf
+aktualisiert; `golden_ref.sh check` meldete `MATCH`. `sh
+scripts/golden_ref_test.sh` bestand mit **254 passed / 0 failed**; darin bestanden
+alle sechs erneuerten `R`-Goldens die unveränderten Schranken (je mindestens
+10 000 Farben, Rotanteil höchstens 0,02). Ein externer CI-Lauf wird hier nicht
+behauptet; er bleibt dem Commit-/Build-Agent-Ablauf vorbehalten.
 
 > **CI-GOLDEN-GATE-75 (Job `GUI goldens (ignored)`).** Der geplante
 > Linux-Lauf dieses Gates ist ein **benanntes Runnability-/Sichtbarkeits-Gate,

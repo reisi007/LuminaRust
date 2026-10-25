@@ -311,7 +311,7 @@ prueft dieses Lockfile gegen den Git-Index, `golden_ref.sh check` gegen die Lauf
 - GUI-Technologie ist egui/eframe.
 - **Golden-Referenzplattform (GOLDEN-REF-30, User-Entscheid 2026-09-25):**
   Die `egui_kittest`-Goldens sind nur auf **macOS/Metal** reproduzierbar
-  (Referenz: macOS 27.0, Apple M5 Pro, Metal 4, wgpu 30.0.1, egui 0.36.2,
+  (Referenz: macOS 27.0.1, Apple M5 Pro, Metal 4, wgpu 30.0.1, egui 0.36.2,
   gebundener egui-Font-Stack, `pixels_per_point` 1.0, 1024×720, LibRaw
   0.22.2). Der Fingerabdruck liegt in `scripts/golden_ref.lock`;
   `scripts/golden_ref.sh` vergleicht ihn zur Laufzeit und verweigert **seine
