@@ -25,11 +25,6 @@
       },
       "scopes": [
         {
-          "id": "crates-lumina-cli-src-main-rs",
-          "description": "Existing exception: crates/lumina-cli/src/main.rs",
-          "file": "crates/lumina-cli/src/main.rs"
-        },
-        {
           "id": "crates-lumina-gui-src-lib-rs",
           "description": "Existing exception: crates/lumina-gui/src/lib.rs",
           "file": "crates/lumina-gui/src/lib.rs"

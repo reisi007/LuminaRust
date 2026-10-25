@@ -5,9 +5,6 @@
       "value": 1000,
       "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling",
       "scopes": {
-        "crates-lumina-cli-src-main-rs": {
-          "value": 4572
-        },
         "crates-lumina-gui-src-lib-rs": {
           "value": 10517
         }
