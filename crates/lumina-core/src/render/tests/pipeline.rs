@@ -634,49 +634,48 @@ fn auto_fill_without_transparent_is_identity() {
 #[test]
 fn auto_fill_seed_changes_output() {
     let frame = checker_8x8();
+    // MUTATION-ANCHOR: the old `k1 = +1.0` sampled strictly inside the source
+    // and gave zero transparent pixels, so `composite_auto_fill` was the
+    // identity; `k1 = -0.5` really hands the fill a template (304 of 1024).
     let mut base = EditRecipe {
-        lens_correction: Some(lens_with_k1(1.0)),
+        lens_correction: Some(lens_with_k1(-0.5)),
+        geometry: Some(full_frame_geometry()),
         ..Default::default()
     };
     base.generative_edit = Some(auto_fill_edit(1));
+    let (after_lens, _) = generative_input_frames(&frame, &base, None, &[], None).unwrap();
+    let transparent_before = transparent_alpha_count(&after_lens);
+    assert!(
+        transparent_before > 0,
+        "k1=-0.5 must hand a transparent template to the fill, got {transparent_before}"
+    );
     let mut other = base.clone();
     other.generative_edit.as_mut().unwrap().seed = Some(2);
-    let out1 = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &base,
-            camera_white_balance: None,
-            source_actions: &[],
-            lensfun: None,
-            depth: None,
-            masks: None,
-        },
-    )
-    .unwrap()
-    .frame;
-    let out2 = render_frame(
-        &frame,
-        &RenderContext {
-            recipe: &other,
-            camera_white_balance: None,
-            source_actions: &[],
-            lensfun: None,
-            depth: None,
-            masks: None,
-        },
-    )
-    .unwrap()
-    .frame;
-    assert!(!out1.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255));
-    assert!(!out2.pixels.as_chunks::<4>().0.iter().any(|px| px[3] < 255));
-    assert_ne!(
-        blake3::hash(&serde_json::to_vec(&base).unwrap())
-            .to_hex()
-            .to_string(),
-        blake3::hash(&serde_json::to_vec(&other).unwrap())
-            .to_hex()
-            .to_string()
-    );
+    // Artifact built like the sibling trigger test; the seed comes from the
+    // recipe, never from an extra literal.
+    let render_with_recipe = |recipe: &EditRecipe| {
+        let seed = recipe.generative_edit.as_ref().unwrap().seed.expect("seed");
+        let artifact = auto_fill_artifact(&after_lens, seed);
+        render_frame_with_generative(
+            &frame,
+            &default_context(recipe, None),
+            crate::generative::GenerativeCanvasInput {
+                auto_fill: Some(&artifact),
+                expand: None,
+            },
+        )
+        .unwrap()
+        .frame
+    };
+    let out1 = render_with_recipe(&base);
+    let out1_again = render_with_recipe(&base);
+    let out2 = render_with_recipe(&other);
+    // Anker 2: no transparent pixel survives the fill.
+    assert_eq!(transparent_alpha_count(&out1), 0, "fill left transparency");
+    assert_eq!(transparent_alpha_count(&out2), 0, "fill left transparency");
+    assert_eq!(out1.pixels, out1_again.pixels, "same seed, same pixels");
+    // An ignored fill seed makes these two byte-identical again.
+    assert_ne!(out1.pixels, out2.pixels, "different seed, same pixels");
 }
 
 // ---- GEN-PIPELINE-DECOUPLE: Lens → Fill → Perspective → Expand → Crop ----
