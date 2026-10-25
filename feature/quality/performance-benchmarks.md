@@ -796,7 +796,7 @@ eingeschalteter Stufe, nicht der Preis einer inerten Stufe. (2) Der
 Vorher/Nachher-Gewinn einer **umgestellten** Pipeline ist hier **nicht**
 messbar; gemessen ist ausschließlich der unveränderte Ist-Zustand.
 
-### F-074-N10 — Masken-Plane-Clear: Queue-Seite gemessen (`GPU-MASKPLANE-CLEAR-PERF-51`, 2026-10-02)
+### F-074-N10 — Masken-Plane-Clear: Queue-Submission gemessen (`GPU-MASKPLANE-CLEAR-PERF-51`, 2026-10-02; Nachmessung 2026-10-25)
 
 Der Sync `sync_mask_plane_to_vram` in `lumina-gui` schreibt bei einem Render
 **ohne** Maskenebene eine Null-Plane über die aktive VRAM-`R16Uint`-Maske
@@ -804,7 +804,10 @@ Der Sync `sync_mask_plane_to_vram` in `lumina-gui` schreibt bei einem Render
 in Bändern der vollen Breite (`zero_band_rows(width, 1 MiB)`) über
 `upload_mask_tile` → `shaders::write_mask_tile` → `queue.write_texture`. Bis
 hierhin war nur die **Host-Seite** gemessen (0,004 ms, auflösungsunabhängig);
-genau deshalb war die **Queue-Seite** offen. Diese Messung schließt sie.
+genau deshalb war die **Queue-Seite** offen. Der Bench misst den hostseitigen
+Aufrufpfad für diese Queue-Writes und die umgebende CPU-Arbeit. Er ruft weder
+`device.poll` noch eine Queue-Completion-Warteschranke oder Readback auf: Die
+Zahlen sind **keine GPU-Completion-Zeit**.
 
 Implementiert in `crates/lumina-gpu/benches/mask_plane_clear.rs`
 (`harness = false`, eigenes `[[bench]]`-Target **dieses** Crates). Der Bench
@@ -814,16 +817,26 @@ liegt bewusst **nicht** in `lumina-bench`: die Produktionsnaht
 Bandformel ist als wörtliche Kopie (`zero_band_rows` / `ZERO_BAND_BYTES`)
 enthalten; die Gegenprobe unten bestätigt die Bandrechnung des Tasks.
 
-Kommando:
+Für den Band-Bench gehört die Allokation und Nullinitialisierung des
+Zero-Band-Puffers innerhalb jedes gemessenen Aufrufs zur Messmenge;
+`ensure_vram` liegt davor. Die Single-Write-Kontrolle verwendet eine vorab
+allokierte Null-Plane und misst einen Aufruf von `upload_mask_plane` statt der
+Bandzerlegung. Beide Mengen schreiben dasselbe `width * height * 2`-Byte-Volumen;
+keine enthält eine Wartezeit bis zum Abschluss der GPU-Arbeit.
+
+Kommando der Erfassung vom 2026-10-02:
 `cargo bench -p lumina-gpu --bench mask_plane_clear`
 
-**Erfassung 2026-10-02 auf der Referenzmaschine (`MacBook-Pro-von-Florian.local`,
-Darwin/arm64, Apple M5 Pro, Metal-Adapter, rustc 1.98.0), 100 Samples je
-Bench.** Die Maschine stand **unter Fremdlast** (Spielprozess
-`TransportFever3`, ~140–270 % CPU, Load Average 5–18) — die Absolutzahlen sind
-dadurch **nach oben verzerrt** (dieselben Benches lagen bei Load ≈ 17 rund
-40–50 % höher als bei Load ≈ 5). Eine quieszente Maschine war nicht verfügbar;
-das ist eine benannte Grenze, keine stille.
+**Historischer Erstlauf 2026-10-02** auf der Referenzmaschine
+(`MacBook-Pro-von-Florian.local`, Darwin/arm64, Apple M5 Pro, Metal-Adapter,
+rustc 1.98.0), 100 Samples je Bench. Die Maschine stand unter Fremdlast:
+Spielprozess `TransportFever3` (~140–270 % CPU), Load Average 5–18. Der damalige
+Bericht schätzte die Werte als nach oben verzerrt und nannte 40–50 % Unterschied
+zwischen Load ≈ 17 und Load ≈ 5. Das bleibt ein historischer Messbericht, kein
+kalibrierter Korrekturfaktor: die zugehörige Rohstichprobe und die genaue
+Estimator-/p95-Methode sind hier nicht festgehalten. Die Nachmessung unten ist
+ebenfalls nicht quieszent und erlaubt keinen prozentualen A/B- oder
+Kausalvergleich mit dieser Tabelle.
 
 | Benchmark-ID | Median | p95 | Bytes | Bänder |
 | --- | ---: | ---: | ---: | ---: |
@@ -831,49 +844,104 @@ das ist eine benannte Grenze, keine stille.
 | `gpu/mask_plane_clear__1280x853` | 722 µs | 845 µs | 2 183 680 | 3 |
 | `gpu/mask_plane_clear__6000x4000` | 15,21 ms | 19,73 ms | 48 000 000 | 46 |
 
-**Kontrolle (ein Aufruf statt Bänder):** `mask_plane_clear_singlewrite__*`
-schreibt dasselbe Null-Volumen in **einem** `write_texture` (Naht
-`upload_mask_plane`, GPU-STAGE-1): 39,2 µs / 620 µs / 12,98 ms. Die Bänderung
-kostet also nur **~10–20 %** Aufschlag — die Kosten sind **volumengetrieben**
-(Host→Staging-Kopie + GPU-Submit der Bytes), nicht bandzahlgetrieben. Damit ist
-die Kostenzuordnung belegt: wer sparen will, muss **Bytes** sparen, nicht
-Aufrufe.
+**Kontrolle des Erstlaufs (ein Aufruf statt Bänder):**
+`mask_plane_clear_singlewrite__*` schrieb dasselbe Null-Volumen in einem
+`write_texture` (Naht `upload_mask_plane`, GPU-STAGE-1): 39,2 µs / 620 µs /
+12,98 ms. Die damalige Aussage eines **~10–20 %** Band-Aufschlags gilt nur für
+diesen Lauf. Die Nachmessung reproduziert keinen gleichmäßigen Aufschlag; die
+alte Aussage wird daher **nicht** als allgemeine Kostenregel fortgeschrieben.
 
-**Befund:** Der Clear ist **nicht billig**. Bei voller Kameraauflösung
-(6000×4000, ~24 MP) kostet er **~15 ms pro Render ohne Maskenebene** — rund
-**13×** ein vollständiger `gpu/render_with_gpu__2048` (Baseline 1,08 ms). Auch
-bei 1280×853 (~0,7 ms) liegt er in der Größenordnung eines 2048er
-GPU-Vollrenders. Der Betrag fällt bei **jedem** Render ohne Evaluierte-Ebene
-an, also im häufigen Fall „Bild ohne aktive Maske, Regler bewegt".
+**Nachmessung 2026-10-25 auf derselben Referenzmaschine:** macOS 27.0.1,
+MacBook Pro Mac17,8, Apple M5 Pro (18 CPU-Kerne, 20 GPU-Kerne, 48 GB), Metal 4;
+`rustc`/`cargo` 1.99.1, `wgpu` 30.0.1, Criterion 0.8.2. Der Benchmark wurde
+seriell einmal ausgeführt mit `LUMINA_GPU_BACKENDS=metal`. `GpuContext::new`
+bindet den Adapter und der Bench prüft `ctx.is_available()`; bei Fehlschlag
+kehrt er vor der Benchmarkgruppe mit „GPU adapter unavailable - skipped …“
+zurück. Alle sechs IDs unten wurden tatsächlich gemessen, daher passierte diese
+Adapterprüfung. Der Bench gibt keinen Adapter-Deskriptor aus; `system_profiler`
+bestätigte den Apple-M5-Pro-Metal-Adapter auf dem Host.
 
-**Entscheidung (offen, an den Projekteigentümer):** Die naheliegende Abhilfe —
-Clear nur beim **Übergang** „Ebene resident → keine Ebene" statt bei jedem
-Render — lebt in `crates/lumina-gui/src/present_mask_plane.rs` und ist damit
-**außerhalb des Umfangs** dieses Mess-Agenten (nur `crates/lumina-gpu/**`).
-Zwei Gründe machen sie zur echten Entscheidung, nicht zum Selbstläufer:
-(1) `present_mask_plane.rs` hat die Residenz-Buchführung **bewusst verworfen**
-(„there is no residency bookkeeping that can drift") — der Übergangspfad
-führt genau diese Buchführung ein und muss mit `live_brush_plane_stale`,
-`KeepLiveBrush` und dem Pool-LRU zusammenspielen; (2) ein GPU-seitiges
-`clear_texture` wäre die zweite Abhilfe, ist aber **kein Drop-in**: das Gerät
-wird mit `Features::empty()` angefordert (`crates/lumina-gpu/src/lib.rs` -> `init_gpu_resources`),
-`CommandEncoder::clear_texture` verlangt die `CLEAR_TEXTURE`-Erweiterung und
-würde ohne Feature-Aushandlung paniken — bei geteiltem eframe-Gerät ist das
-ein breiterer Eingriff. Die Messung liefert die **Obergrenze der Ersparnis**
-(die vollen 15 ms @24 MP pro betroffenem Render); sie wird hier **nicht**
-implementiert.
+**Last beim Lauf (nicht quieszent):** Snapshot 17:47:51 CET: Load Average
+5,96 / 5,20 / 6,12; CPU 22,36 % user / 11,30 % system / 66,59 % idle.
+`ps` sah gleichzeitig mehrere fremde `rustc`-Prozesse (29,8 %, 24,6 %, 22,6 %,
+14,8 % und 12,0 % CPU) sowie einen Steam-CEF-`--type=gpu-process`-Helfer
+(15,7 %), einen Adobe-Renderer (6,5 %) und Adobe-GPU-Helfer (0,6 %). Diese
+Fremdlast wurde nicht beendet; deshalb sind die Zahlen ausdrücklich **keine
+quieszente Messung**. Es lief kein weiterer Lumina-Benchmark parallel.
+
+Kommando (Exitcode 0; vollständiger Aufruf in
+`target/gpu-mask-clear-evidence/criterion-run-saved.log`):
+
+```text
+LUMINA_GPU_BACKENDS=metal LUMINA_MASKPLANE_VERBOSE=1 \
+CARGO_TARGET_DIR=target/gpu-mask-clear-evidence/cargo-target \
+CRITERION_HOME=target/gpu-mask-clear-evidence/criterion \
+cargo bench -p lumina-gpu --features gpu --bench mask_plane_clear
+```
+
+Die relative `CRITERION_HOME`-Angabe wurde vom Cargo-Bench-Prozess relativ zum
+Crate-Arbeitsverzeichnis aufgelöst. Die unveränderten `new/`-Rohdateien wurden
+danach nach `target/gpu-mask-clear-evidence/criterion/` kopiert. Für die Median-
+Spalte wurde jeweils `new/estimates.json` → `median.point_estimate` verwendet,
+nicht die mittlere `time`-Zahl der CLI-Ausgabe (das ist Criterion `slope`). Der
+p95 wurde aus den 100 Paaren in `new/sample.json` als empirisches
+Nearest-Rank-Quantil der Batchmittelwerte `time_ns / iters` berechnet
+(Rang `ceil(0,95 × 100) = 95`). Das ist der p95 der **Batchmittelwerte**, keine
+Latenzverteilung einzelner Aufrufe. Skript, JSON und lesbarer Auszug liegen in
+`target/gpu-mask-clear-evidence/analyze_criterion.py`, `summary.json` und
+`summary.md`.
+
+| Benchmark-ID | Median (`estimates.json`) | p95 Batchmittel | Bytes | Bänder / Writes | Samples |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gpu/mask_plane_clear__160x120` | 46,291 µs | 55,163 µs | 38 400 | 1 Band | 100 |
+| `gpu/mask_plane_clear__1280x853` | 643,890 µs | 845,316 µs | 2 183 680 | 3 Bänder | 100 |
+| `gpu/mask_plane_clear__6000x4000` | 16,452 ms | 18,691 ms | 48 000 000 | 46 Bänder | 100 |
+| `gpu/mask_plane_clear_singlewrite__160x120` | 70,525 µs | 83,407 µs | 38 400 | 1 Write | 100 |
+| `gpu/mask_plane_clear_singlewrite__1280x853` | 746,876 µs | 858,403 µs | 2 183 680 | 1 Write | 100 |
+| `gpu/mask_plane_clear_singlewrite__6000x4000` | 15,101 ms | 20,085 ms | 48 000 000 | 1 Write | 100 |
+
+Criterion meldete für die beiden 1280×853-Benches, dass 100 Samples das
+angeforderte Zeitfenster von 3 s überschritten; es verlängerte die Erfassung
+automatisch auf ca. 3,22 s bzw. 4,22 s. Beide Datensätze enthalten trotzdem
+je 100 Samples. Die Bandrechnung wurde im Lauf ausgegeben: 160×120 = 1 Band /
+38 400 B; 1280×853 = 3 / 2 183 680 B; 6000×4000 = 46 / 48 000 000 B.
+
+**Kontrollvergleich (Definitionen geprüft):** Die drei `mask_plane_clear__*`
+IDs sind Beobachtungen des vollständigen CPU-seitigen Bandpfads einschließlich
+Zero-Band-Allokation, Loop, Lock/Bounds-Checks und wiederholter
+`queue.write_texture`-Aufrufe. Die `singlewrite`-IDs sind derselbe Byteumfang,
+aber eine vorab allokierte Plane und ein `upload_mask_plane`-Aufruf. Beide
+Mengen werden von demselben seriellen Criterion-Lauf mit 100 Samples erzeugt;
+keine enthält GPU-Completion. Die Bandmediane waren bei 160×120 und 1280×853
+niedriger als die Single-Write-Mediane, bei 6000×4000 höher. Damit ist kein
+konstanter Band-Aufschlag belegt; auch eine genaue Ursache für die Unterschiede
+wird aus diesem nicht quieszenten Lauf nicht abgeleitet.
+
+**Einordnung und Entscheidung:** Bei 6000×4000 (~24 MP) beträgt der neu
+gemessene Median weiterhin **16,452 ms** und das p95 der Batchmittelwerte
+**18,691 ms**. Das bestätigt die ms-Größenordnung, nicht aber einen direkten
+Prozentvergleich zum Erstlauf oder eine GPU-Completion-Zeit. Der
+Eigentümerentscheid `GPU-CLEAR-TRANSITION` vom 2026-10-02 bleibt daher
+**unverändert**: der Null-Write läuft nur beim Übergang „Nicht-Null-Plane
+resident → keine Ebene“ (geltender Stand siehe
+`feature/architecture/pipeline.md`, Abschnitt „Masken-Plane-Clear“). Die
+Nachmessung ändert weder Architektur noch Code und misst nicht den Gewinn der
+bereits umgestellten Strategie.
 
 **Budgets:** keine. Die IDs werden **nicht** in `perf/baseline.json` /
 `perf/budgets.json` registriert und von `scripts/perf/compare.mjs` **nicht**
 eingelesen — wie die F-074-N9-Crop-Klasse eine einmalige Entscheidungsmessung,
 kein Regressions-Gate.
 
-**Bekannte Grenzen:** (1) **Fremdlast** (Spielprozess) — Absolutzahlen
-nach oben verzerrt, deshalb zusätzlich die Wiederholung bei niedrigerer Last
-als Stabilitätskontrolle; (2) gemessen ist die **Queue-Seite des Ist-Zustands**,
-nicht der Gewinn einer umgestellten Clear-Strategie; (3) die Zahl ist an den
-M5-Pro-Metal-Adapter gebunden („keine absoluten Vergleiche über Maschinen
-hinweg").
+**Bekannte Grenzen:** (1) Der Erstlauf stand unter Spiel-/GPU-Fremdlast; die
+Nachmessung stand unter parallel laufenden Compiler- und Desktop-GPU-Helfern.
+Keine der beiden ist quieszent und der Last-Bias ist nicht als Korrekturfaktor
+quantifiziert. (2) Die Erstlauf-Tabelle und die neue Tabelle haben keine
+belegte gemeinsame Median-/p95-Schätzerdefinition; deshalb kein prozentualer
+A/B-Vergleich. (3) Gemessen ist der hostseitige Queue-Write-Aufrufpfad des
+Ist-Zustands, nicht die GPU-Completion und nicht der Gewinn der umgestellten
+Clear-Strategie. (4) Die Zahlen sind an den M5-Pro-Metal-Adapter gebunden; keine
+absoluten Vergleiche über Maschinen hinweg.
 
 ### Bekannte Grenzen / Limitationen (F-074-N3 / N5)
 
