@@ -629,10 +629,18 @@ geklont) schon.
 
 ## Nicht-Behauptungen
 
-- **Keine Aussage**, ob der GPU-Pfad auf Adapter-Hardware wirklich
-  nichtdeterministisch ist.
-- **Keine Aussage**, der Test sei auf Adapter-Hardware grün.
-- **Kein Fix** vorgeschlagen.
+**Stand 2026-10-16; am 2026-10-26 an dieser Stelle überholt und ersetzt.** Die
+damaligen Sätze („keine Aussage, ob der GPU-Pfad auf Adapter-Hardware wirklich
+nichtdeterministisch ist", „keine Aussage, der Test sei auf Adapter-Hardware
+grün", „kein Fix vorgeschlagen") beschrieben den headless Stand. Heute gilt:
+
+- Der Test war auf Adapter-Hardware **rot** und ist es reproduzierbar gewesen
+  (drei serielle Läufe, `target/gpu-render-nondeterminism-69/2026-10-25T195812Z/`);
+  nach der Behebung des Upload-Skips ist er **grün** (Abschnitt „Mechanismus
+  lokalisiert").
+- Weiterhin **nicht** behauptet wird: eine allgemeine Determinismusgarantie des
+  GPU-Renderpfads über alle Stufen, Backends, Treiber und Prozesse. Belegt ist
+  der konkrete Reproducer und der Mechanismus, der ihn erklärt.
 
 ## Benannte Grenze
 
@@ -658,5 +666,18 @@ grün und belegt nichts über die GPU-Route.
 
 - Ein **vorher rotes, reproduzierbares** Kommando auf Adapter-Hardware,
   danach grün **oder** eine belegte, benannte Grenze inkl. Adapter-Referenz.
+
+**Erfüllt am 2026-10-26.** Das rote Kommando ist
+`cargo test -p lumina-cli --features gpu --bin lumina-cli tests::auto_tone_float::the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move`
+(Metal, Exit 101 mit 38/40 bzw. 39/40 Mitgliedern in mehreren Läufen) und
+`…::adapter_runs_of_the_full_process_path_report_gpu_for_all_120_renders
+-- --ignored` (dreimal Exit 101). Nach `GPU-UPLOAD-IDENTITY-92` sind beide grün:
+drei serielle Läufe des Familiensatzes und je einmal der Original-Reproducer
+durch den Implementierer, dazu ein unabhängiger Lauf je Kommando durch den
+Verifizierer, alle Exit 0 und ohne abweichende Mitglieder
+(`target/gpu-render-nondeterminism-69/20261025T225434Z/`). Die
+Adapter-Gesamtsuite meldete **122 passed / 0 failed / 0 ignored**. Die Abnahme
+ist damit über den **Reproducer** geführt, nicht über eine allgemeine
+Determinismusgarantie.
 - Verbindliches Kommando: `cargo test -p lumina-gpu --features gpu-adapter-tests`
   plus die betroffenen GUI-GPU-Tests (Regel `GPU-E2E`).
