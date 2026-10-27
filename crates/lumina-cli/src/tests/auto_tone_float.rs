@@ -215,6 +215,63 @@ fn three_runs(k: u32) -> (Vec<Vec<u8>>, [[String; 6]; 3]) {
     (outputs, texts.try_into().unwrap())
 }
 
+/// Whether the raw six-slider literals differ across each adjacent run pair.
+fn literal_drift(texts: &[[String; 6]; 3]) -> [bool; 2] {
+    let first_to_second = texts[0]
+        .iter()
+        .zip(texts[1].iter())
+        .any(|(first, second)| first != second);
+    let second_to_third = texts[1]
+        .iter()
+        .zip(texts[2].iter())
+        .any(|(second, third)| second != third);
+    [first_to_second, second_to_third]
+}
+
+fn assert_no_literal_drift(
+    first_to_second_literal_drift: u32,
+    second_to_third_literal_drift: u32,
+    members: u32,
+) {
+    assert_eq!(
+        first_to_second_literal_drift, 0,
+        "run 1 and run 2 must persist identical text ({first_to_second_literal_drift}/{members} members drifted)"
+    );
+    assert_eq!(
+        second_to_third_literal_drift, 0,
+        "run 2 and run 3 must persist identical text ({second_to_third_literal_drift}/{members} members drifted)"
+    );
+}
+
+#[test]
+fn literal_drift_identifies_the_transition_that_changed() {
+    let texts = [
+        std::array::from_fn(|_| String::from("1.25")),
+        std::array::from_fn(|_| String::from("1.25")),
+        std::array::from_fn(|_| String::from("1.250")),
+    ];
+
+    assert_eq!(
+        literal_drift(&texts),
+        [false, true],
+        "a text-only change in run 3 belongs to the run 2 -> run 3 transition"
+    );
+}
+
+#[test]
+#[should_panic(expected = "run 2 and run 3 must persist identical text (1/1 members drifted)")]
+fn literal_stability_assertion_rejects_a_third_run_only_text_change() {
+    let texts = [
+        std::array::from_fn(|_| String::from("1.25")),
+        std::array::from_fn(|_| String::from("1.25")),
+        std::array::from_fn(|_| String::from("1.250")),
+    ];
+    let [first_to_second, second_to_third] = literal_drift(&texts);
+    assert_eq!([first_to_second, second_to_third], [false, true]);
+
+    assert_no_literal_drift(u32::from(first_to_second), u32::from(second_to_third), 1);
+}
+
 /// How many significant decimal digits a literal carries. A value whose
 /// shortest representation needs **17** of them carries a `u64` significand
 /// above 2^53 (≥ 10^16), so it sits **inside** the true loss class — the
@@ -308,7 +365,8 @@ fn the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move() 
     let mut stable_first = 0u32;
     let mut stable_second = 0u32;
     let mut members = 0u32;
-    let mut literal_drift = 0u32;
+    let mut first_to_second_literal_drift = 0u32;
+    let mut second_to_third_literal_drift = 0u32;
     let mut lossy_class = 0u32;
 
     for k in 0..FAMILY_MEMBERS {
@@ -320,12 +378,12 @@ fn the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move() 
         if outputs[1] == outputs[2] {
             stable_second += 1;
         }
-        let per_member: bool = texts[0]
-            .iter()
-            .zip(texts[1].iter())
-            .any(|(first, second)| first != second);
-        if per_member {
-            literal_drift += 1;
+        let [first_to_second, second_to_third] = literal_drift(&texts);
+        if first_to_second {
+            first_to_second_literal_drift += 1;
+        }
+        if second_to_third {
+            second_to_third_literal_drift += 1;
         }
         if texts[0].iter().any(|l| significant_digits(l) >= 17) {
             lossy_class += 1;
@@ -333,9 +391,10 @@ fn the_rendered_output_stays_byte_stable_and_the_persisted_text_does_not_move() 
     }
 
     assert_eq!(members, FAMILY_MEMBERS);
-    assert_eq!(
-        literal_drift, 0,
-        "run 1 and run 2 must persist identical text ({literal_drift}/{members} members drifted)"
+    assert_no_literal_drift(
+        first_to_second_literal_drift,
+        second_to_third_literal_drift,
+        members,
     );
     assert!(
         lossy_class > 0,

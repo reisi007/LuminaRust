@@ -257,6 +257,14 @@ impl VramPool {
 
 #[cfg(feature = "gpu")]
 impl GpuContext {
+    /// Number of source-frame uploads issued on the calling thread.
+    ///
+    /// This adapter-test diagnostic counts the shared source upload choke-point
+    /// only with `gpu-adapter-tests`; otherwise it returns zero.
+    pub fn source_frame_upload_count(&self) -> u64 {
+        source_upload::source_frame_upload_count()
+    }
+
     /// Ensure the VRAM-resident interactive textures exist for `width`×`height`
     /// and make them the active pool entry. Lazily (re)creates `output`
     /// (RGBA8, tone result) + `mask` (R16Uint, brush coverage) textures and

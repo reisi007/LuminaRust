@@ -7,6 +7,26 @@
 
 use lumina_core::ImageFrame;
 
+#[cfg(feature = "gpu-adapter-tests")]
+thread_local! {
+    static SOURCE_FRAME_UPLOAD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of source-frame uploads issued on the calling thread.
+///
+/// This diagnostic counts calls only when `gpu-adapter-tests` is enabled. It
+/// is thread-local so parallel tests cannot affect one another's deltas.
+pub(super) fn source_frame_upload_count() -> u64 {
+    #[cfg(feature = "gpu-adapter-tests")]
+    {
+        SOURCE_FRAME_UPLOAD_COUNT.with(std::cell::Cell::get)
+    }
+    #[cfg(not(feature = "gpu-adapter-tests"))]
+    {
+        0
+    }
+}
+
 /// Uploads `frame` into `texture` through `queue`.
 ///
 /// The caller has already decided that the upload is needed (see
@@ -36,4 +56,6 @@ pub(crate) fn upload_source_texture(
             depth_or_array_layers: 1,
         },
     );
+    #[cfg(feature = "gpu-adapter-tests")]
+    SOURCE_FRAME_UPLOAD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 }
