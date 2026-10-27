@@ -932,16 +932,97 @@ niedriger als die Single-Write-Mediane, bei 6000×4000 höher. Damit ist kein
 konstanter Band-Aufschlag belegt; auch eine genaue Ursache für die Unterschiede
 wird aus diesem nicht quieszenten Lauf nicht abgeleitet.
 
-**Einordnung und Entscheidung:** Bei 6000×4000 (~24 MP) beträgt der neu
+**Einordnung und derzeitiger Stand:** Bei 6000×4000 (~24 MP) beträgt der neu
 gemessene Median weiterhin **16,452 ms** und das p95 der Batchmittelwerte
-**18,691 ms**. Das bestätigt die ms-Größenordnung, nicht aber einen direkten
-Prozentvergleich zum Erstlauf oder eine GPU-Completion-Zeit. Der
-Eigentümerentscheid `GPU-CLEAR-TRANSITION` vom 2026-10-02 bleibt daher
-**unverändert**: der Null-Write läuft nur beim Übergang „Nicht-Null-Plane
-resident → keine Ebene“ (geltender Stand siehe
-`feature/architecture/pipeline.md`, Abschnitt „Masken-Plane-Clear“). Die
-Nachmessung ändert weder Architektur noch Code und misst nicht den Gewinn der
-bereits umgestellten Strategie.
+**18,691 ms**. Das ist ein Stress-/Obergrenzenwert, kein Produkt-Erfolgskriterium
+für Vorschau oder 1:1-Ausschnitt. Er bestätigt weder deren Laufzeit noch einen
+direkten Prozentvergleich zum Erstlauf oder eine GPU-Completion-Zeit. Der
+Eigentümerentscheid `GPU-CLEAR-TRANSITION` vom 2026-10-02 ist weiterhin der
+dokumentierte Stand: der Null-Write läuft nur beim Übergang „Nicht-Null-Plane
+resident → keine Ebene“ (siehe `feature/architecture/pipeline.md`, Abschnitt
+„Masken-Plane-Clear“). Seine erneute Prüfung für die interaktiven Fälle stützt
+sich auf die noch offene ruhige Messung von Vorschau und 1:1-Ausschnitt samt
+Single-Write-Kontrollen, nicht auf den 24-MP-Wert allein. Die Nachmessung ändert
+weder Architektur noch Produktionscode und misst nicht den Gewinn der bereits
+umgestellten Strategie.
+
+**Dritter Lauf 2026-10-27 (weiterhin nicht quieszent — die Aufgabe bleibt
+offen).** Referenzplattform (Apple M5 Pro, Metal 4, wgpu 30.0.1). Das
+Repository-`rust-toolchain.toml` wählte `stable`, hier `rustc 1.99.1`; es wurde
+kein abweichendes `RUSTUP_TOOLCHAIN` gesetzt; dies ist nicht der gepinnte
+Golden-Toolchainlauf. **Kommando und Umgebung:**
+
+```text
+LUMINA_GPU_BACKENDS=metal cargo bench -p lumina-gpu --bench mask_plane_clear --features gpu
+```
+
+100 Samples je ID. Der Rohlog
+`target/gpu-mask-clear-evidence/2026-10-27/bench.log` und die Lastdateien
+`target/gpu-mask-clear-evidence/2026-10-27/load-before.txt` /
+`target/gpu-mask-clear-evidence/2026-10-27/load-after.txt` liegen unter dem
+ignorierten Pfad `target/gpu-mask-clear-evidence/2026-10-27/`; diese Artefakte
+sind lokal-only und nicht committet. Die Tabelle unten ist die dauerhafte Kopie
+der Bench-Ausgabe. Die Lastdateien bewahren nur Uptime und Load-Averages, keine
+Prozessattribution oder Prozessdetails. Die kopierten Start-/Endausgaben lauten:
+
+```text
+2026-10-27T15:00:17Z
+16:00  up 3 days,  3:18, 1 user, load averages: 11.24 10.79 26.10
+2026-10-27T15:00:57Z
+16:00  up 3 days,  3:19, 1 user, load averages: 6.38 9.58 24.86
+```
+
+Damit ist die Maschine als nicht quieszent dokumentiert; die Messung ist ein
+dritter belasteter Datenpunkt, nicht die Abnahme.
+
+| Benchmark-ID | Median | 95 %-CI |
+| --- | ---: | ---: |
+| `gpu/mask_plane_clear__160x120` | 65,53 µs | 64,31–66,65 µs |
+| `gpu/mask_plane_clear__1280x853` | 734,19 µs | 721,71–747,26 µs |
+| `gpu/mask_plane_clear__6000x4000` | **18,674 ms** | 17,711–20,053 ms |
+| `…_singlewrite__160x120` | 74,25 µs | 72,56–75,85 µs |
+| `…_singlewrite__1280x853` | 762,33 µs | 731,09–792,30 µs |
+| `…_singlewrite__6000x4000` | 16,026 ms | 15,743–16,307 ms |
+
+Alle sechs Werte liegen **über** der Nachmessung vom 2026-10-25; aus diesem
+nicht quieszenten Vergleich folgt keine Ursache und kein Laufzeitbefund für die
+interaktiven Fälle. Die 24-MP-Werte bleiben als Stressmessung dokumentiert:
+15,21 ms (2026-10-02), 16,452 ms (2026-10-25) und 18,674 ms (2026-10-27).
+Dieser Trend ist kein Produkt-Erfolgskriterium und trägt die Entscheidung
+`GPU-CLEAR-TRANSITION` für Vorschau oder 1:1-Ausschnitt nicht allein.
+
+**Eigentümerentscheid 2026-10-27:** `GPU-MASKPLANE-CLEAR-REMEASURE` bleibt
+**offen**. Die wörtliche Abnahme verlangt eine ruhige Session. Die aufgezeichneten
+Load-Averages waren erhöht; die Messung war nicht quieszent. Eine
+Prozessattribution liegt nicht vor.
+Offen ist die **quieszente Messung durch einen Menschen** für repräsentative
+Fenster-Vorschau und 1:1-Ausschnitt, einschließlich ihrer tatsächlichen
+Ausgabe-/VRAM-Abmessungen und Single-Write-Kontrollen, sowie die daran
+ausgerichtete Prüfung von `GPU-CLEAR-TRANSITION`. Die 24-MP-Stressmessung ersetzt
+diese Abnahme nicht.
+
+**Maßstab (Eigentümer-Weisung 2026-10-27, Entscheidung `GPU-CLEAR-VIEWPORT`):**
+gebraucht werden die **Vorschau im Fenster** und der **1:1-Ausschnitt**. Dafür
+muss nicht das vollständige Bild in nativer Auflösung verarbeitet werden; ein
+1:1-Ausschnitt kann innerhalb seines ROI weiterhin Pixel in nativer Auflösung
+verwenden. Die GUI begrenzt Preview-Renderings nach Viewport ×
+DPR und routet Zoom über einen
+source-space ROI (`crates/lumina-gui/src/preview_size.rs` → `preview_size_cap`,
+`crates/lumina-gui/src/render_entry.rs` → `LuminaApp::render_full`); die dort
+dokumentierten absoluten Frame-Ausnahmen bleiben bestehen. Der Clear ist an die
+gerenderte VRAM-Größe gebunden
+(`crates/lumina-gui/src/present_mask_plane.rs` → `clear_active_vram_mask_plane`
+liest `GpuContext::vram_dimensions`), also an die tatsächlich gerenderte
+VRAM-Geometrie. Für die Bestätigungsmessung werden daher die tatsächlichen
+Ausgabe-/VRAM-Abmessungen eines repräsentativen Fenster-Preview-Renderings und
+eines 1:1-Ausschnitts festgehalten; sie werden weder aus der Quellauflösung noch
+aus dem festen Benchwert 1280×853 abgeleitet. Entscheidungsrelevant sind diese
+beiden interaktiven Fälle und jeweils ihr Single-Write-Kontrolllauf. Die bestehenden
+Benchgrößen sind 160×120, 1280×853 und 6000×4000; 6000×4000 bleibt optionaler
+Stress-/Obergrenzenwert und ist kein Produkt-Erfolgskriterium. Falls die festen
+Benchgrößen die erfassten interaktiven Abmessungen nicht treffen, dürfen
+Benchfälle ausschließlich für die Messung angepasst oder ergänzt werden; das
+ändert kein Produktionsverhalten.
 
 **Budgets:** keine. Die IDs werden **nicht** in `perf/baseline.json` /
 `perf/budgets.json` registriert und von `scripts/perf/compare.mjs` **nicht**
@@ -949,9 +1030,11 @@ eingelesen — wie die F-074-N9-Crop-Klasse eine einmalige Entscheidungsmessung,
 kein Regressions-Gate.
 
 **Bekannte Grenzen:** (1) Der Erstlauf stand unter Spiel-/GPU-Fremdlast; die
-Nachmessung stand unter parallel laufenden Compiler- und Desktop-GPU-Helfern.
-Keine der beiden ist quieszent und der Last-Bias ist nicht als Korrekturfaktor
-quantifiziert. (2) Die Erstlauf-Tabelle und die neue Tabelle haben keine
+Nachmessung vom 2026-10-25 stand unter parallel laufenden Compiler- und
+Desktop-GPU-Helfern. Die Lastaufzeichnung vom 2026-10-27 bewahrt nur Uptime und
+Load-Averages, keine Prozesszuordnung. Keine dieser Messungen ist quieszent und
+der Last-Bias ist nicht als Korrekturfaktor quantifiziert. (2) Die
+Erstlauf-Tabelle und die neuen Tabellen haben keine
 belegte gemeinsame Median-/p95-Schätzerdefinition; deshalb kein prozentualer
 A/B-Vergleich. (3) Gemessen ist der hostseitige Queue-Write-Aufrufpfad des
 Ist-Zustands, nicht die GPU-Completion und nicht der Gewinn der umgestellten
