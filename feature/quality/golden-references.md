@@ -894,13 +894,13 @@ prüfen, während sie in der aufrufenden Shell noch gar nicht gesetzt ist.
 
 ```sh
 UPDATE_SNAPSHOTS=1 sh scripts/golden_ref.sh gate -- sh -c '
-  cargo test -p lumina-gui --test kittest_snapshots      -- --ignored &&
-  cargo test -p lumina-gui --test kittest_spot_tool     -- --ignored &&
-  cargo test -p lumina-gui --test kittest_crop_overlay  -- --ignored &&
-  cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored &&
-  cargo test -p lumina-gui --test kittest_library_stack -- --ignored &&
-  cargo test -p lumina-gui --lib mask_management_controls_have_a_representative_kittest_golden -- --ignored &&
-  cargo test -p lumina-gui --features gpu --test kittest_parity -- --ignored
+  cargo test -p lumina-gui --test kittest_snapshots      -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --test kittest_spot_tool     -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --test kittest_crop_overlay  -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --test kittest_library_stack -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --lib mask_management_controls_have_a_representative_kittest_golden -- --ignored --test-threads=1 &&
+  cargo test -p lumina-gui --features gpu --test kittest_parity -- --ignored --test-threads=1
 '
 ```
 
@@ -908,7 +908,7 @@ UPDATE_SNAPSHOTS=1 sh scripts/golden_ref.sh gate -- sh -c '
 
 ```sh
 UPDATE_SNAPSHOTS=1 sh scripts/golden_ref.sh gate -- \
-  cargo test -p lumina-gui --test kittest_snapshots -- --ignored
+  cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1
 ```
 
 Beide Formen setzen die Variable in der aufrufenden Shell, `gate` sieht sie
@@ -921,8 +921,38 @@ Commit.
 
 ```sh
 sh scripts/golden_ref.sh check &&
-cargo test -p lumina-gui --test kittest_snapshots -- --ignored
+cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1
 ```
+
+**`--test-threads=1` ist Pflicht, nicht Geschmack** (Messung 2026-10-27 auf der
+gepinnten Plattform). Der geteilte Decode-Wartehelfer (§7.1) hat eine
+**Wanduhr**-Schranke von 300 s je Wartevorgang. Die sechs Goldens, die echte
+CR3-Thumbnails abwarten (`library::filmstrip_counter_reflects_selection`,
+`library::library_compare`, `library::library_loupe`, `library::library_survey`,
+`metadata::library_rated_badges`, `metadata::library_subfolder_badges`), laufen
+im Debug-Profil mit unoptimiertem LibRaw. Parallel gestartet konkurrieren 56
+Tests um dieselben Kerne, und die sechs überschreiten die Schranke, obwohl
+nichts fehlerhaft ist:
+
+| Lauf | Kommando | Ergebnis | Dauer |
+| --- | --- | --- | --- |
+| parallel (56 Threads) | `… -- --ignored` | **50 passed / 6 failed**, alle sechs mit `decode_pending=true` und `the wall-clock bound of 300s elapsed` | 339,51 s |
+| einzeln | `… -- --ignored --test-threads=1 library::filmstrip_counter_reflects_selection` | **1 passed** | 22,84 s |
+| seriell | `… -- --ignored --test-threads=1` | **56 passed / 0 failed** | 129,95 s (2:10 Wanduhr) |
+
+Umgebung: gepinnte Referenz (Apple M5 Pro, Metal 4, wgpu 30.0.1, rustc
+**1.98.0** über `RUSTUP_TOOLCHAIN=1.98.0`), Fremdlast `uptime` ≈ 3,0
+(Chrome/Renderer, WindowServer, `appstoreagent` aktiv, keine Spiele, keine
+parallelen GPU-Jobs). Der Unterschied zwischen 50/6 und 56/0 ist damit
+**ausschließlich** die Parallelität — kein Pixel- und kein Logikbefund. Ein
+Goldens-Lauf, der parallel startet, ist ein **Umgebungsbefund** (DoD §10) und
+kein Gate-Ergebnis; §8.1/§8.2 tragen dieselbe Auflage.
+
+> **Der Toolchain-Pin gilt auch für den Aufruf.** `sh scripts/golden_ref.sh
+> check` meldet auf dem lokalen `stable` (1.99.1) `verdict: MISMATCH` mit genau
+> einer Differenz (`toolchain.rustc`) und verweigert den Lauf. Der gepinnte
+> Stand ist über `rustup toolchain install 1.98.0` plus
+> `RUSTUP_TOOLCHAIN=1.98.0` herstellbar; danach meldet `check` `verdict: MATCH`.
 
 Ein rotes Snapshot erzeugt `<name>.diff.png` neben dem Golden (gitignoriert).
 Diese Datei ist **die** Begründungsgrundlage für jeden `record`-Lauf.

@@ -26,6 +26,9 @@ agent-harness/target/
 *.lumina.json
 *.lumina.zdata
 *.lumina-preset.json
+# Sidecar lock files (held while a writer is active; left behind by a killed run)
+*.lumina.json.lock
+*.lumina.zdata.lock
 
 # Benchmark reports and outputs
 /perf/results/
