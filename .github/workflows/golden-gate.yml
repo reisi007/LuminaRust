@@ -60,7 +60,7 @@ jobs:
         run: |
           set -o pipefail
           LOG="$PWD/golden-gate.log"
-          cargo test -p lumina-gui --test kittest_snapshots -- --ignored 2>&1 | tee "$LOG"
+          cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1 2>&1 | tee "$LOG"
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Upload golden-gate report

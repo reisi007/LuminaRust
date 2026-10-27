@@ -74,7 +74,7 @@ fn build_harness() -> Harness<'static, LuminaApp> {
 /// the document is loaded, so the empty state the rejection test asserts can
 /// only come from the rejection.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_sidecar_identity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_sidecar_identity -- --ignored --test-threads=1"]
 fn sidecar_with_real_identity_is_adopted() {
     let dir = tempfile::tempdir().expect("temp dir");
     let photo = seed_metadata_history_sidecar(dir.path(), |_| {});
@@ -114,7 +114,7 @@ fn sidecar_with_real_identity_is_adopted() {
 /// neither can regress unnoticed. `byte_length: 0` is the exact defect the
 /// `library_meta_history` seed carried.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_sidecar_identity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_sidecar_identity -- --ignored --test-threads=1"]
 fn stale_sidecar_identity_is_rejected() {
     let cases: [(&'static str, Corrupt); 2] = [
         ("content_hash", |identity: &mut SourceIdentity| {

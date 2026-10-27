@@ -91,7 +91,7 @@
 //! (`feature/quality/golden-references.md` §10). Locally:
 //!
 //! ```text
-//! cargo test -p lumina-gui --test kittest_mask_local -- --ignored
+//! cargo test -p lumina-gui --test kittest_mask_local -- --ignored --test-threads=1
 //! ```
 
 use egui_kittest::kittest::Queryable;
@@ -210,7 +210,7 @@ fn assert_no_decode_failure(harness: &Harness<'static, LuminaApp>) {
 /// fixture has a mask layer without a mask artifact, and the frame records
 /// that instead of hiding it (see the module docs).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored --test-threads=1"]
 fn mask_local_tone_curve() {
     let mut harness = build_harness();
     open_masking(&mut harness, "Mask local tone curve");
@@ -234,7 +234,7 @@ fn mask_local_tone_curve() {
 /// a different reason: they are only painted for a non-empty entry list, and
 /// this frame carries no edit.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored --test-threads=1"]
 fn mask_local_color() {
     let mut harness = build_harness();
     open_masking(&mut harness, "Mask local color");
@@ -256,7 +256,7 @@ fn mask_local_color() {
 /// block was out of frame, which understates what the PNG shows — the same
 /// error direction F-5 was raised for.)
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored --test-threads=1"]
 fn mask_local_presence() {
     let mut harness = build_harness();
     open_masking(&mut harness, "Mask local presence");
@@ -275,7 +275,7 @@ fn mask_local_presence() {
 /// version of this comment claimed the block reset "may sit at the fold" — the
 /// frame shows all three, so the claim was wrong and is corrected here.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_mask_local -- --ignored --test-threads=1"]
 fn mask_local_detail() {
     let mut harness = build_harness();
     open_masking(&mut harness, "Mask local detail");

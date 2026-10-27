@@ -9,7 +9,7 @@
 //! default (same policy as `kittest_snapshots`). Run locally with:
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored
+//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored --test-threads=1
 //! ```
 //!
 //! Kept in its own integration-test file so the oversized
@@ -152,7 +152,7 @@ fn assert_crop_overlay_visible(harness: &mut Harness<'_, LuminaApp>) {
 /// overlay paints the darkening bands, thirds grid and corner handles. The
 /// draft is driven through the real pointer path (no recipe crop committed).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored --test-threads=1"]
 fn develop_overlay_crop_interactive() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
@@ -197,7 +197,7 @@ fn develop_overlay_crop_interactive() {
 /// surface). Pins the rotation affordance inside the crop tool
 /// (UX-LOOK-CROP-18b), not any wording (Namen-Vorbehalt).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_crop_overlay -- --ignored --test-threads=1"]
 fn develop_overlay_crop_rotation() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();

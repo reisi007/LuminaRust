@@ -557,7 +557,7 @@ einer späteren Architekturentscheidung erneut bewertet werden.
 > committete Goldens unter `crates/lumina-gui/tests/snapshots/`. Die Tests sind
 > standardmäßig `#[ignore]` (headless GPU nötig), damit CI ohne GPU grün bleibt.
 > Goldens erzeugen/aktualisieren:
-> `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored`
+> `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1`
 > Ein **roter Snapshot** bedeutet, dass der gerenderte Frame vom committeten
 > Golden abweicht — meist eine beabsichtigte UI-Änderung (Golden via
 > `UPDATE_SNAPSHOTS=true` refreshen) oder eine Regression (Diff unter
@@ -940,7 +940,7 @@ folgenden Regeln benötigen eine dokumentierte Produktentscheidung.
     Audit-Arm).
   - **Kommandos:** `cargo test -p lumina-gui` (Vollständigkeitstest
     `gpu_audit_exception_table_is_complete_without_gpu`, läuft ohne GPU) und
-    `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (Metal-Audit;
+    `cargo test -p lumina-gui --lib gpu_audit -- --ignored --test-threads=1` (Metal-Audit;
     ohne Adapter SKIP statt Rot, wie `kittest_*`; CI-Gap kein Metal in CI).
   - **Historisches Ergebnis (lokaler Metal-Lauf, 2026-09-18):** Damals wurde
     der zu diesem Zeitpunkt vorhandene Aktionsstand mit echtem
@@ -2597,7 +2597,7 @@ Navigator und Filmstreifen. Header/Modulleiste und der Preview bleiben sichtbar,
 sodass der Zustand verlassen werden kann. Ein Headless-Test misst vor/nach dem
 Toggle `preview_pane_rect`/`preview_screen_rect`; der absichtliche Native-Golden
 `mask_view_visibility` ist bei `1024×720` und wird separat mit
-`cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored` geprüft.
+`cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored --test-threads=1` geprüft.
 Von den bestehenden Goldens wird absichtlich nur `develop_overlay_pins` für die
 neuen Tool-overlay/Panels-Zeilen aktualisiert; alle anderen Snapshots und
 Toleranzen bleiben unverändert. Die unabhängige Metal-/Vulkan-/DPI-/Pointer-
@@ -2678,7 +2678,7 @@ Masken, Cache und Mehrbild-Synchronisierung bleiben ausdrücklich offen.
 > **Korrektur 2026-09-28 (Build-Agent, `KITT-IGNORED-PANIC-56`):** der
 > „optionale echte CR3-Nachweis über das Env-Gate `LUMINA_RAW_FIXTURE`" ist
 > **nicht mehr optional und nicht mehr env-gegatet**. Er läuft unter
-> `cargo test -p lumina-gui --lib -- --ignored` aus dem **committeten**
+> `cargo test -p lumina-gui --lib -- --ignored` (GOLDEN-SERIAL-HISTORICAL: 2026-09-28 measured CR3 invocation preserved verbatim) aus dem **committeten**
 > Inventar `sample-data/raw/` **ohne jede Umgebungsvariable** und dekodiert
 > beide CR3 real; `#[ignore]` trägt er allein wegen der Decode-Kosten
 > (zwei 12-MB-CR3, gemessen 3,2–4,1 s gegenüber `0,00 s` beim Überspringen).

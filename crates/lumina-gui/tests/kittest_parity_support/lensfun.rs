@@ -75,7 +75,7 @@ fn synthetic_lensfun_corrector(
 /// same scene without it (non-vacuous cell). A silent GPU→CPU fallback would
 /// leave `gpu_present_frame_size()` `None` (the matrix's present assertion).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn lensfun_corrector_cell_presents_gpu_without_badge() {
     let mut harness = parity_harness();
     if !harness.state_mut().gpu_adapter_available() {

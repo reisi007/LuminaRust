@@ -60,7 +60,7 @@ genau diese Lücken.
   sichtbar sind (`trace!` ist unter INFO unsichtbar). Der Befundbericht nennt
   den Log-Ausschnitt.
 - **KI-Validierungs-Loop (GUI, verpflichtend nach jedem GUI-Batch):**
-  1. `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` erzeugt
+  1. `cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1` erzeugt
      aktuelle Frames (Goldens + `.diff.png`/`.new.png` bei Abweichung).
   2. Alle neuen/geänderten Snapshots legt der Build-Agent **dem konfigurierten
      Modell selbst** vor (max. 10 Bilder je Durchgang) mit der Frage nach

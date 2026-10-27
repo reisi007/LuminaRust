@@ -7,7 +7,7 @@ use super::*;
 /// `load_sample` is path-less, so embedded reads stay on the deterministic
 /// "unavailable" note.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_metadata() {
     let presets = tempfile::tempdir().expect("temp dir");
     let mut harness = build_harness();
@@ -109,7 +109,7 @@ fn ensure_library_badges_fixture() -> Vec<StagedEntry> {
 /// visible relative-path badge (`sub`, `sub/nested`; empty for top-level).
 /// Golden regression for the badge state (H1).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_subfolder_badges() {
     let entries = ensure_library_badges_fixture();
     let mut harness = build_harness();
@@ -228,7 +228,7 @@ fn assert_badge_chips_painted(harness: &mut Harness<'_, LuminaApp>) {
 /// filmstrip cells both paint the LR-01 badge, proven by the golden plus the
 /// exact-fill pixel count. Badge text is asserted through the public accessor.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_rated_badges() {
     let entries = ensure_library_rated_fixture();
     let mut harness = build_harness();
@@ -370,7 +370,7 @@ fn open_meta_section_and_scroll_to(
 /// the section-unique content label. Draft stays collapsed, so its
 /// per-field `Embedded: …` overlay labels are absent.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_meta_embedded() {
     let (_tmp, photo) = embedded_jpeg_fixture("Eingebettet", &["k1", "k2"]);
     let mut harness = build_harness();
@@ -399,7 +399,7 @@ fn library_meta_embedded() {
 /// History subpanel expanded with 10 fixed-timestamp entries (newest
 /// first). The scroll target is the oldest row at the bottom.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_meta_history() {
     let dir = tempfile::tempdir().expect("temp dir");
     let photo = seed_metadata_history_sidecar(dir.path(), |_| {});
@@ -440,7 +440,7 @@ fn library_meta_history() {
 /// `library_metadata`): no machine-global preset name leaks into the
 /// golden — the path itself is never rendered, only preset names.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_meta_preset() {
     let presets = tempfile::tempdir().expect("temp dir");
     let mut harness = build_harness();
@@ -468,7 +468,7 @@ fn library_meta_preset() {
 /// render checked by default (`default_meta_sync_fields`; the checked
 /// pixels are the golden's signal, the Vision check confirms them).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_meta_sync() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -511,7 +511,7 @@ fn library_meta_sync() {
 /// asserted on disk (dialog-cancel state semantics themselves are covered
 /// by the lib `iptc_gui_dynamic_preset_requires_vars` test).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn draw_meta_preset_dialog() {
     let dir = tempfile::tempdir().expect("temp dir");
     let png = dir.path().join("photo.png");
@@ -617,7 +617,7 @@ fn draw_meta_preset_dialog() {
 /// in a tempdir only; `open_file_and_restore_fixture` keeps tmp prefixes out of
 /// the golden.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_metadata_copy_paste() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();

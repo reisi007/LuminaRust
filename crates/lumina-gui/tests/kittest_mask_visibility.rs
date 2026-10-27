@@ -20,7 +20,7 @@ fn build_harness() -> Harness<'static, LuminaApp> {
 }
 
 #[test]
-#[ignore = "native wgpu adapter required; run: cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored"]
+#[ignore = "native wgpu adapter required; run: cargo test -p lumina-gui --test kittest_mask_visibility -- --ignored --test-threads=1"]
 fn mask_view_visibility() {
     let mut harness: Harness<'static, LuminaApp> = build_harness();
     harness.state_mut().set_module(lumina_gui::Module::Develop);

@@ -175,7 +175,7 @@ fn compare(
 /// readback-free path and is pixel-equal there, and the divergent state (a
 /// prompted mask in the document, none selected) stays on the CPU path.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn mask_gate_states_stay_pixel_equal() {
     let mut vram = parity_harness();
     if !vram.state_mut().gpu_adapter_available() {
@@ -248,7 +248,7 @@ fn mask_gate_states_stay_pixel_equal() {
 /// the reachability regression; `mask_gate_states_stay_pixel_equal` guards that
 /// half).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn mask_gate_stale_pooled_mask_plane_is_an_open_finding() {
     let mut vram = parity_harness();
     if !vram.state_mut().gpu_adapter_available() {

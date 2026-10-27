@@ -280,7 +280,7 @@ damit ein Guard, der auf eine beliebige Datei zeigen könnte, sichtbar bleibt.
 
 > **Warum es das braucht.** `scripts/golden_ref.sh` kann einen Aufruf, der an
 > ihm **vorbeiläuft**, nicht abfangen. Der natürlichste Befehl eines Entwicklers
-> — `UPDATE_SNAPSHOTS=1 cargo test -p lumina-gui -- --ignored` — berührt das
+> — `UPDATE_SNAPSHOTS=1 cargo test -p lumina-gui -- --ignored --test-threads=1` — berührt das
 > Skript nicht und setzt die Umgebungsvariable ohne Beteiligung des Skripts.
 > Solange nicht §11.1 im Hinterkopf bleibt, ist der Mechanismus damit umgangen.
 > Das Pre-Commit-Gate schließt genau diese Lücke, indem es **das, was in die
@@ -954,6 +954,45 @@ kein Gate-Ergebnis; §8.1/§8.2 tragen dieselbe Auflage.
 > Stand ist über `rustup toolchain install 1.98.0` plus
 > `RUSTUP_TOOLCHAIN=1.98.0` herstellbar; danach meldet `check` `verdict: MATCH`.
 
+**Maschinelle Serienauflage (`fast-10`).** `sh scripts/gates.sh fast` führt
+`sh scripts/check_golden_serial_test.sh` und danach
+`sh scripts/check_golden_serial.sh` aus. Der Textscan umfasst aktive Dateien in
+`scripts/` und `feature/` sowie Rust-Quelldateien unter
+`crates/lumina-gui/tests/`, `DoD.md`,
+`.github/workflows/golden-gate.yml` sowie ausschließlich die aktiven, nicht
+abgehakten Einträge in `Agents.todo.md`. Rust-Doc-Kommentare und `#[ignore]`-
+Reason-Strings in den GUI-Testquellen werden als Text geprüft, damit aktuelle
+Anweisungen und die dokumentierten Einzeltest-Läufe serial bleiben.
+Historische Planprosa außerhalb dieser Einträge wird nicht als aktuelle
+Anweisung behandelt. Jede logische Zeile mit `cargo test`, `-p lumina-gui` und
+`--ignored` muss das literale `--test-threads=1` innerhalb derselben
+Cargo-Test-Invocation beziehungsweise ihrer Test-Runner-Argumente enthalten.
+Shell-Backslash-Fortsetzungen werden verbunden; `&&`, `||`, `;`, `&` und Pipes
+trennen Invocations. Ein Flag in einem folgenden Shell-Kommando zählt nicht.
+Markdown-Inline-Code-Spans dürfen physische Zeilen überspannen; benachbarte
+Code-Spans werden nur dann zu einem Kommando verbunden, wenn sie im selben
+Absatz ausschließlich durch Whitespace getrennt sind und die Fragmente eine
+`cargo test`-Invocation bilden. In Markdown werden außerdem Shell-Befehle in
+Fenced Blocks geprüft. Bei der Optionsprüfung wird unquotierter Shell-
+Kommentartext ignoriert. Der Checker und sein Regressionstest werden selbst
+nicht gescannt, da der Test absichtlich verbotene Kommandos als Fixtures enthält.
+
+Der **negative Beweis** läuft mit `sh scripts/check_golden_serial_test.sh`.
+Die 16 Fälle decken die bisherigen Shell- und Markdown-Prüfungen, Kommentar-
+und Folgekommando-Bypässe, getrennte Inline-Code-Fragmente sowie nichtserielle
+und serielle Rust-Doc-Kommentare und `#[ignore]`-Reason-Strings ab. Zusätzlich
+prüft die Suite den aktuellen GUI-Testquelltext direkt. Fixture-Inhalte werden
+nie ausgeführt; historische Ausnahmen werden einzeln gemeldet.
+
+`GOLDEN-SERIAL-HISTORICAL: <Grund/Datum>` ist ausschließlich eine enge Ausnahme
+für unveränderte historische Belege. Der Marker braucht einen nichtleeren Grund
+und muss auf derselben Shell-Zeile beziehungsweise Markdown-Logikzeile wie der
+ignorierte GUI-Aufruf stehen. Die Optionsprüfung ignoriert Shell-Kommentare,
+aber der Marker wird separat erkannt; jede Ausnahme wird pro Aufruf im
+Gate-Bericht ausgegeben. Die markierten Einträge in §10.1 und
+`feature/quality/golden-fixtures.md` §6 bewahren damalige Messkommandos und
+Ergebnisse — sie sind keine aktuelle Ausführungsanweisung.
+
 Ein rotes Snapshot erzeugt `<name>.diff.png` neben dem Golden (gitignoriert).
 Diese Datei ist **die** Begründungsgrundlage für jeden `record`-Lauf.
 
@@ -1061,23 +1100,23 @@ unverändert.
 **Gezielte Updates** (jeder Lauf: 1 bestanden, 0 fehlgeschlagen):
 
 ```sh
-PATH="$HOME/.cargo/bin:$PATH" sh scripts/golden_ref.sh gate -- env UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" sh scripts/golden_ref.sh gate -- env UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
+PATH="$HOME/.cargo/bin:$PATH" UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded re-pin invocation
 ```
 
 **Vergleich ohne Update-Flag** (jeder Lauf: 1 bestanden, 0 fehlgeschlagen):
 
 ```sh
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_compare -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_loupe -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_subfolder_badges -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots metadata::library_rated_badges -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_snapshots library::library_survey -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p lumina-gui --features gpu --test kittest_library_stack library_stack_membership -- --ignored --exact  # GOLDEN-SERIAL-HISTORICAL: 2026-10-25 recorded comparison invocation
 ```
 
 Anschließend wurde der Lock atomar mit dem begründeten `record`-Aufruf
@@ -1110,7 +1149,7 @@ behauptet; er bleibt dem Commit-/Build-Agent-Ablauf vorbehalten.
 > das man **aufruft**. Der natürlichste Befehl eines Entwicklers,
 >
 > ```sh
-> UPDATE_SNAPSHOTS=1 cargo test -p lumina-gui -- --ignored
+> UPDATE_SNAPSHOTS=1 cargo test -p lumina-gui -- --ignored --test-threads=1
 > ```
 >
 > **umgeht den gesamten Mechanismus vollständig**: Das Skript läuft nicht, wird

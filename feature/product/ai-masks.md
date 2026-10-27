@@ -409,7 +409,7 @@ Validierungs-/Fehler-vor-Write-Verträge und neutrale Identität; sie belegen
    Brush-Matte. Er behauptet weder GUI-Present-Parität für alle P0-/P1.1-Klassen
    noch Sidecar-Save/Reload-Abdeckung; diese Verträge haben eigene Tests. Gate:
    `cargo test -p lumina-gui --features gpu --test
-   kittest_local_mask_present -- --ignored` (GUI verwendet `gpu`, nicht
+   kittest_local_mask_present -- --ignored --test-threads=1` (GUI verwendet `gpu`, nicht
    `gpu-adapter-tests`) plus
    `cargo test -p lumina-gpu --features gpu-adapter-tests --test
    local_mask_parity`.
@@ -1841,7 +1841,7 @@ Heal bleibt ein getrenntes, weiterhin exklusiv armiertes Werkzeug.
   Size/Softness/Flow-Regler, mehrere Masken, Eye, Rename, Delete, Move und
   Copy/Duplicate über den bestehenden `egui_kittest::snapshot`-Vergleich; der
   beabsichtigte Snapshot ist `tests/snapshots/mask_management_controls.png`.
-  Manueller Lauf: `cargo test -p lumina-gui --lib mask_management_controls_have_a_representative_kittest_golden -- --ignored`
+  Manueller Lauf: `cargo test -p lumina-gui --lib mask_management_controls_have_a_representative_kittest_golden -- --ignored --test-threads=1`
   (mit `UPDATE_SNAPSHOTS=true` nur für diesen absichtlich geänderten Snapshot).
   Der Ignore gilt nur für diesen adapterabhängigen Golden, nicht für die
   strukturelle oder die CPU-/No-GPU-Suite.

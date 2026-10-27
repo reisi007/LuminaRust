@@ -7,7 +7,7 @@
 //! by default. CI without a GPU therefore stays green. Run them locally with:
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored
+//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1
 //! ```
 //!
 //! `UPDATE_SNAPSHOTS=true` writes/updates the goldens; without it the tests
@@ -86,7 +86,7 @@ fn ready_rendered_with_embedded_iptc() -> DecodeSettled<impl FnMut(&LuminaApp) -
 }
 
 /// Documented reason for `#[ignore]` so CI without a GPU stays green:
-/// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"
+/// "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"
 /// (repeated inline on each `#[ignore]` attribute below, since the attribute
 /// requires a string literal).
 ///

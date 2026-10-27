@@ -106,7 +106,7 @@ const REPORT_FIELDS: &[&str] = &[
 /// Run through the **production** wrapper with the production 300 s bound: a
 /// stand-in bound would only prove the mechanism, not the shipped default.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_decode_bound -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_decode_bound -- --ignored --test-threads=1"]
 fn settled_decode_with_unmet_predicate_is_reported_at_once() {
     let (_dir, photo) = png_fixture();
     let mut harness = build_harness();
@@ -164,7 +164,7 @@ fn settled_decode_with_unmet_predicate_is_reported_at_once() {
 /// returns before arming the receiver, so no decode, no banner and no render
 /// ever arrive — `is_settled` stays false and pumping changes nothing.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_decode_bound -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_decode_bound -- --ignored --test-threads=1"]
 fn decode_in_flight_waits_for_the_bound() {
     let mut harness = build_harness();
     let bound = Duration::from_secs(2);

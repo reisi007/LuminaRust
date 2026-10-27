@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_basic() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -12,7 +12,7 @@ fn develop_basic() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_sections_expanded() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -23,7 +23,7 @@ fn develop_sections_expanded() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_color() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -37,7 +37,7 @@ fn develop_section_color() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_masking() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -66,7 +66,7 @@ fn develop_section_masking() {
 /// (they render on `original.is_some()` from `load_sample`).
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_tone_curve() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -82,7 +82,7 @@ fn develop_section_tone_curve() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_detail() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -98,7 +98,7 @@ fn develop_section_detail() {
 /// controls enabled and the honest `unavailable` status badge (no weights
 /// integrated, F-078 gate). Golden; `#[ignore]`d like every GPU snapshot.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_denoise() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -126,7 +126,7 @@ fn develop_section_denoise() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_effects() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -140,7 +140,7 @@ fn develop_section_effects() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_optics() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -153,7 +153,7 @@ fn develop_section_optics() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_optics2() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -194,7 +194,7 @@ fn develop_section_optics2() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_geometry() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -208,7 +208,7 @@ fn develop_section_geometry() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_presets() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -225,7 +225,7 @@ fn develop_section_presets() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_history() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -272,7 +272,7 @@ fn develop_section_history() {
     harness.snapshot("develop_section_history");
 }
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_section_rating() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -294,7 +294,7 @@ fn develop_section_rating() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn export_module() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Export);
@@ -307,7 +307,7 @@ fn export_module() {
 /// produce a *new* render, i.e. bump `preview_generation` — even outside a
 /// pointer drag (the debounced full render path).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn slider_changes_preview_generation() {
     let mut harness = build_harness();
     load_sample(&mut harness);
@@ -328,7 +328,7 @@ fn slider_changes_preview_generation() {
 /// 256-bin Painter curve with P01/P99 markers) in its own collapsible
 /// Develop-panel section instead of the old clip bar in the module bar.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn histogram_graphic() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -345,7 +345,7 @@ fn histogram_graphic() {
 /// rectangle of the zoomed working area (Custom zoom so the rectangle is
 /// strictly smaller than the overview).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn navigator_viewport() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -367,7 +367,7 @@ fn navigator_viewport() {
 /// closed proof (the "Navigator" label alone is ambiguous — heading and
 /// button share it).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn navigator_closed() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -400,7 +400,7 @@ fn navigator_closed() {
 /// reachably distinct through the rail-only "‹" collapse button plus the
 /// shared "Navigator" label, with real pixels throughout.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn navigator_open_closed_matrix() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -445,7 +445,7 @@ fn navigator_open_closed_matrix() {
 /// so it stays visible when the frame is read back (same trick as the
 /// agent-harness `toast_overlap` probe).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn toast_info() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -474,7 +474,7 @@ fn toast_info() {
 /// button with the default empty destination → the fixed code literal
 /// "Choose an export target first" (machine-independent golden text).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn error_dialog() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Export);
@@ -513,7 +513,7 @@ fn error_dialog() {
 /// Empty Develop state (no image loaded): the centered preview placeholder and
 /// the honest empty filmstrip text — the counterpart to `library_empty`.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_empty() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -528,7 +528,7 @@ fn develop_empty() {
 /// shows "No sidecar loaded". `load_bytes` leaves `document` empty, so no seed
 /// is needed (the existing `develop_section_history` golden seeds one).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_history_no_sidecar() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -547,7 +547,7 @@ fn develop_history_no_sidecar() {
 /// (metadata is a Library concern); the Library metadata copy/paste state is
 /// pinned separately.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn export_module_jpeg() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Export);
@@ -616,7 +616,7 @@ fn ensure_generative_fixture(name: &str, png: Vec<u8>) -> PathBuf {
 /// guard: both toggles are on-screen, so the golden cannot pass on a collapsed
 /// header.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn generative_expand_panel_off() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -640,7 +640,7 @@ fn generative_expand_panel_off() {
 /// persist its sidecar bundle without leaking a tempdir path into the golden;
 /// the non-vacuous guard proves the recipe really generated (`Expand: valid`).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn generative_expand_panel_ready() {
     let source = ensure_generative_fixture("photo.png", LuminaApp::sample_image_png());
     let mut harness = build_harness();
@@ -677,7 +677,7 @@ fn generative_expand_panel_ready() {
 /// panel shows `AutoFillTransparent: valid`. Proves the auto-fill toggle +
 /// generate path is pixel-visible, not just the expand role.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn generative_auto_fill_panel() {
     // 64x64 with an 8px fully transparent frame: deterministic, no lens model.
     let mut pixels = Vec::with_capacity(64 * 64 * 4);

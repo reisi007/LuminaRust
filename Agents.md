@@ -356,10 +356,10 @@ Prüfungen zu verwenden:
   kompiliert; der onnx-rt-Link (glibc 2.36 < 2.38) ist ein Host-Gate, das
   `cargo check` nicht trifft.
 - **Lokale Gate-Stufen:** `sh scripts/gates.sh fast` (Sekunden, ohne Codegen:
-  Formatter plus acht Textgates — Quelle: `sh scripts/gates.sh list`) und
+  Formatter plus neun Textgates — Quelle: `sh scripts/gates.sh list`) und
   `sh scripts/gates.sh slow` (Minuten, CI-Mirror, Fail fast). Die schnelle Stufe
-  meldet grün nur, wenn mindestens 9 Checks gestartet wurden (Floor:
-  `scripts/gates.sh`, `MIN_CHECKS=9`); eine leere Auswahl ist ein Fehler, kein
+  meldet grün nur, wenn mindestens 10 Checks gestartet wurden (Floor:
+  `scripts/gates.sh`, `MIN_CHECKS=10`); eine leere Auswahl ist ein Fehler, kein
   Pass. `sh scripts/gates.sh list` ist die Quelle der Wahrheit für die
   Tier-Tabelle; die Lücken zwischen den Stufen (GPU-Adapter, onnx-rt-Link,
   macOS-Golden-Re-Pin, manuelle GUI-Läufe) stehen mit Grund, Owner und

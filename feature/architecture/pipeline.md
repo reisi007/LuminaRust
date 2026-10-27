@@ -2273,8 +2273,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
     Present-Parität für alle P0-/P1.1-Adjustment-Klassen noch Sidecar-
     Save/Reload-Abdeckung; diese Aussagen benötigen ihre jeweiligen Tests.
     Verbindliches Kommando:
-    `cargo test -p lumina-gui --features gpu --test
-    kittest_local_mask_present -- --ignored`. Das GUI-Feature heißt `gpu`,
+    `cargo test -p lumina-gui --features gpu --test kittest_local_mask_present -- --ignored --test-threads=1`. Das GUI-Feature heißt `gpu`,
     nicht `gpu-adapter-tests`.
 
     `kittest_mask_local` bleibt ausschließlich Layout-/Chrome-Abdeckung auf
@@ -2286,7 +2285,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
 
     **Messstand (lokaler Metal-Lauf 2026-10-25; unabhängig BESTANDEN):**
     `LUMINA_GPU_BACKENDS=metal cargo test -p lumina-gui
-    --features gpu --test kittest_local_mask_present -- --ignored --nocapture`
+    --features gpu --test kittest_local_mask_present -- --ignored --nocapture` (GOLDEN-SERIAL-HISTORICAL: 2026-10-25 measured Metal invocation preserved verbatim)
     lief mit **1 passed**; `gpu_present_frame_size=Some([128, 96])`, Badge und
     App-Fehler waren `None`. Das CPU-Raster-Orakel maß innen `(46, 48)` Alpha
     **58982** und außen `(110, 48)` Alpha **0**. Innen änderten sich **9/9**
@@ -2616,7 +2615,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   `kittest_parity`-Zelle `lensfun_corrector_cell_presents_gpu_without_badge`
   (CPU↔GPU `maxAbsDiff=0`). Der adapter-unabhängige Vollständigkeitstest läuft
   in `cargo test -p lumina-gui`; der Metal-Lauf ist
-  `cargo test -p lumina-gui --lib gpu_audit -- --ignored` (lokales Timing
+  `cargo test -p lumina-gui --lib gpu_audit -- --ignored --test-threads=1` (lokales Timing
   report-only, kein Gate).
 - **F7 CLI-Wiring (2026-09-18, verifiziert BESTANDEN):** Der CLI-GPU-Renderpfad
   bindet die `LensfunMap` analog (`crates/lumina-cli/src/lensfun_gpu.rs`;

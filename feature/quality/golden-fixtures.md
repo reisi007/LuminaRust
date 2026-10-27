@@ -500,7 +500,7 @@ vertrautes Werkzeugaufruf.
 
 ## 6. Offene Messfrage: Laufzeit der R1-Fixtures
 
-`cargo test -p lumina-gui --test kittest_snapshots -- --ignored` (macOS,
+`cargo test -p lumina-gui --test kittest_snapshots -- --ignored` GOLDEN-SERIAL-HISTORICAL: historical measured run in §6 (macOS,
 Apple M5 Pro, Debug-Profil, LibRaw 0.22.2):
 
 | | vorher (Sentinel-Bytes) | nachher (echte CR3) |

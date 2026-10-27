@@ -100,7 +100,7 @@ fn assert_mask_overlay_visible(harness: &mut Harness<'_, LuminaApp>) {
 /// `commit_gradient` API (`ensure_selected_mask` auto-creates "Mask 1"; the
 /// sidecar write lands in the tempdir only).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_overlay_mask() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
@@ -177,7 +177,7 @@ fn develop_overlay_mask() {
 /// the Masking section needs to render the "Edit pins" control. No prompt
 /// is seeded, hence no mask pin — the single spot pin is the `>= 1` pin.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_overlay_pins() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -248,7 +248,7 @@ fn develop_overlay_pins() {
 /// debounced save path, hence the tempdir-backed harness (the save lands in
 /// the tempdir only).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_overlay_crop() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();
@@ -338,7 +338,7 @@ fn open_lens_blur_subgroup(harness: &mut Harness<'_, LuminaApp>) {
 /// setters route through the debounced save path, hence the tempdir-backed
 /// harness (saves land in the tempdir only).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn develop_overlay_lens_blur() {
     let (tmp, photo) = photo_png_fixture();
     let mut harness = build_harness();

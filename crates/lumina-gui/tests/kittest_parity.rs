@@ -35,7 +35,7 @@
 //! Metal machine with:
 //!
 //! ```text
-//! cargo test -p lumina-gui --test kittest_parity -- --ignored
+//! cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1
 //! ```
 //!
 //! Regenerating goldens (Metal baseline): `UPDATE_SNAPSHOTS=true cargo test -p
@@ -287,7 +287,7 @@ fn run_cpu_gpu_path_parity_matrix(harness: &mut Harness<'_, LuminaApp>) -> Matri
 /// Full `scenes × paths` parity matrix. Without a usable adapter the run prints
 /// the explicit SKIP verdict and returns (never a silently green parity check).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn cpu_gpu_path_parity_matrix() {
     let mut harness = parity_harness();
     let available = harness.state().gpu_adapter_available();
@@ -312,7 +312,7 @@ fn cpu_gpu_path_parity_matrix() {
 /// to stderr — and must not execute a single scene (no load, no render), so a
 /// missing adapter can never pass as a green matrix.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn parity_matrix_skips_loudly_without_adapter() {
     let mut harness = parity_harness();
     let real_available = harness.state().gpu_adapter_available();
@@ -375,7 +375,7 @@ fn adapter_probe_without_gpu_context_reports_unavailable() {
 /// the photo). It stays part of the same file/matrix so the absolute checks
 /// cannot silently rot when the matrix grows.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_parity -- --ignored --test-threads=1"]
 fn path_parity_geometry_cpu_draft() {
     let mut harness = parity_harness();
     if !harness.state_mut().gpu_adapter_available() {

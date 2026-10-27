@@ -280,7 +280,7 @@ benannte Grenzen, kein Streichgrund — beide als Lücke geführt (F2/F3):
 
 - **G1 — ERLEDIGT, ersetzt.** Nicht gestrichen, sondern durch ein Gate abgelöst:
   `.github/workflows/golden-gate.yml` (schedule/dispatch) fährt
-  `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` und
+  `cargo test -p lumina-gui --test kittest_snapshots -- --ignored` (GOLDEN-SERIAL-HISTORICAL: 2026-10-19 dated audit record preserved verbatim) und
   protokolliert ein nicht-stilles Rot (Schritt „Record a non-silent result“ in
   `.github/workflows/golden-gate.yml`); dokumentiert in
   `feature/quality/golden-references.md` §10. Task `CI-GOLDEN-GATE-75`

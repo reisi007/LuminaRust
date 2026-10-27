@@ -12,7 +12,7 @@
 //! default (same policy as `kittest_snapshots`). Run locally with:
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_library_stack -- --ignored
+//! UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_library_stack -- --ignored --test-threads=1
 //! ```
 
 use egui_kittest::Harness;
@@ -134,7 +134,7 @@ fn assert_stack_amber_painted(harness: &mut Harness<'_, LuminaApp>) {
 /// membership sign **and** the blue selection frame on the same cells, and the
 /// unstacked neighbor carries neither.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_library_stack -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_library_stack -- --ignored --test-threads=1"]
 fn library_stack_membership() {
     let entries = ensure_fixture();
     let mut harness = build_harness();

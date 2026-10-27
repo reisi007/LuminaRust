@@ -7,7 +7,7 @@
 //!
 //! Like the other kittest goldens they need a headless wgpu backend and are
 //! `#[ignore]`d by default:
-//! `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_spot_tool -- --ignored`
+//! `UPDATE_SNAPSHOTS=true cargo test -p lumina-gui --test kittest_spot_tool -- --ignored --test-threads=1`
 //! (or without `UPDATE_SNAPSHOTS` to compare against the committed goldens).
 
 use egui_kittest::kittest::Queryable;
@@ -42,14 +42,14 @@ fn armed_harness() -> Harness<'static, LuminaApp> {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored --test-threads=1"]
 fn develop_spot_tool_options() {
     let mut harness = armed_harness();
     harness.snapshot("develop_spot_tool_options");
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored --test-threads=1"]
 fn develop_spot_tool_options_expanded() {
     let mut harness = armed_harness();
     let clicked = harness
@@ -70,7 +70,7 @@ fn develop_spot_tool_options_expanded() {
 /// status / parameter editor, single delete) — the detail renders only when
 /// a removal is selected, like the selected mask.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_spot_tool -- --ignored --test-threads=1"]
 fn develop_spot_selected() {
     let mut harness = armed_harness();
     // A real file (not `load_bytes`) so the committed dab saves its sidecar

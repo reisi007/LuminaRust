@@ -62,7 +62,7 @@ Dieses Dokument und der Runner `scripts/gates.sh` liefern diese Antwort:
 1. **benannte Stufen** — `fast`, `slow`, `headless`, `gpu` und `full`, mit
    festen Kommando-Mengen und klar getrennter Hardwareabhängigkeit;
 2. **ein Floor für die schnelle Stufe** — sie meldet nur „grün", wenn
-   tatsächlich mindestens neun Checks gelaufen sind (§4);
+   tatsächlich mindestens zehn Checks gelaufen sind (§4);
 3. **eine Lückenliste** — jede Defektklasse, die keine Stufe abdeckt, steht
    mit Grund, Owner und Task-ID hier (§5);
 4. **einen Drift-Gate gegen die CI** — die Tier-Liste wird aus `ci.yml`
@@ -82,11 +82,11 @@ Tabelle ist eine Kopie, kein zweiter Bestand.
 sh scripts/gates.sh fast
 ```
 
-- **Budget:** Sekunden — **unter fünfzehn Sekunden** auf diesem Host (gemessen 2026-10-20: **11 s** für die neun Checks; die Angabe war „unter zehn Sekunden“, bis die Welle 2 den neunten Check und das Hygiene-Gate `fast-9` hinzufügte ✓).
+- **Budget:** Sekunden — **unter fünfzehn Sekunden** auf diesem Host (gemessen 2026-10-20: **11 s** für den damaligen Stand mit neun Checks; die aktuelle Laufzeit mit `fast-10` wurde nicht neu gemessen. Die Angabe war „unter zehn Sekunden“, bis Welle 2 den neunten Check `fast-9` hinzufügte ✓).
 - **Bedarf:** kein Server, keine Datenbank, kein Netz und kein Adapter.
   `ratchet` v0.5.0 muss lokal installiert sein (CI installiert die gepinnte
   Version vor `gates.sh fast`); zusätzlich laufen `cargo fmt` (rustfmt,
-  **kein** Compile) und acht POSIX-Shell-Gates.
+  **kein** Compile) und neun POSIX-Shell-Gates.
 - **Deckt ab:** Formatierung des gesamten Workspace; die vier Textschranken
   (Dateigrößen-Ratchet, Plan-Format, Env-Gate-Begründungen,
   Produktions-Dateisystemfreiheit von `lumina-core`) und den **Drift-Gate**
@@ -100,7 +100,9 @@ sh scripts/gates.sh fast
   (§8), und das **Hygiene-Gate des Generators** (`fast-9`,
   `scripts/check_doc_facts_generator.sh`), das prüft, dass der Generator
   vollständig, deterministisch und **git-frei** ist — derselbe Lauf ohne
-  `git` im PATH muss byteweise dieselbe Ausgabe liefern (§8.5).
+  `git` im PATH muss byteweise dieselbe Ausgabe liefern (§8.5) — sowie das
+  Golden-Seriengate (`fast-10`, Regressionstest plus Textscan), das
+  unthreaded ignorierte GUI-Aufrufe mit dokumentiertem Rotbeweis ablehnt.
 - **Deckt nicht ab:** alles, was kompiliert, linkt, läuft oder einen Adapter
   braucht. `fast` ruft **kein** `cargo build/check/clippy/test/bench` auf; der
   Runner prüft das vor dem Lauf und bricht ab, falls die Definition
@@ -194,6 +196,7 @@ Wortgleich mit `sh scripts/gates.sh list`:
 | fast-7 | fast | `sh scripts/check_file_ceiling.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-8 | fast | `sh scripts/check_doc_facts_drift.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | fast-9 | fast | `sh scripts/check_doc_facts_generator.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
+| fast-10 | fast | `sh scripts/check_golden_serial_test.sh && sh scripts/check_golden_serial.sh` | Repo-Wurzel | Sekunden | keine Infrastruktur |
 | slow-23 | slow | `sh scripts/install_ratchet.sh` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-1 | slow | `cargo check --workspace --all-targets` | Repo-Wurzel | Minuten | Build-Artefakt |
 | slow-2 | slow | `cargo clippy --workspace --all-targets --features "lumina-sidecar/zdata,lumina-bench/raw-bench" -- -D warnings` | Repo-Wurzel | Minuten | Build-Artefakt |
@@ -236,9 +239,9 @@ zu unterscheiden — wer das grüne Gate liest, hat nichts gelernt.
 Der Runner zählt deshalb die **gestarteten** Checks der Stufe `fast` und
 erzwingt einen Mindeststand:
 
-- `MIN_CHECKS=9` — die Zahl der gestarteten Checks muss mindestens 9 sein.
+- `MIN_CHECKS=10` — die Zahl der gestarteten Checks muss mindestens 10 sein.
 - Darunter ist das Ergebnis ein **Fehler** (Exit 1), kein Pass. Meldung:
-  `floor nicht erreicht: nur N von 9 Checks ausgefuehrt`.
+  `floor nicht erreicht: nur N von 10 Checks ausgefuehrt`.
 - Eine **leere Tier-Liste** ist ebenfalls ein Fehler (Exit 1), kein Pass.
 - Ein **fehlendes Prüfskript** zählt als **Fehlschlag** (Exit 127), nicht als
   Überspringen: ein Check, der nicht startet, ist ein toter Check.
@@ -248,7 +251,8 @@ erzwingt einen Mindeststand:
   hinzukam, und von 6 auf 7, als `fast-7` — die Zeilen-Obergrenze 1000 —
   hinzukam, und von 7 auf 8, als `fast-8` — der Drift-Gate der Prosa-Zahlen —
   hinzukam, und von 8 auf 9, als `fast-9` — das Hygiene-Gate des Generators —
-  hinzukam; ein Floor, der unter der Zahl der Checks liegt, würde das
+  hinzukam, und von 9 auf 10, als `fast-10` das Golden-Seriengate hinzukam;
+  ein Floor, der unter der Zahl der Checks liegt, würde das
   Entfernen eines Checks still werden lassen.)
 
 
@@ -361,7 +365,7 @@ tests") und steht deshalb in §5.1.
 
 ## 6. CI-Spiegelung der schnellen Stufe
 
-Die CI führt die neun schnellen Checks **über denselben Runner** wie lokal:
+Die CI führt die zehn schnellen Checks **über denselben Runner** wie lokal:
 der Job „Rust fast checks" in `.github/workflows/ci.yml` hat einen Schritt
 „Run fast tier (scripts/gates.sh fast)". Definition und Ausführung sind
 damit dieselbe — ein Check, der lokal existiert und in der CI fehlt (oder
@@ -375,12 +379,12 @@ umgekehrt), kann nicht mehr unbemerkt auseinanderlaufen.
 „Run fast tier (scripts/gates.sh fast)" → `sh scripts/gates.sh fast`.
 
 Der abgedeckte Kommando-Satz ist damit **identisch**: der Runner führt genau
-`fast-1`…`fast-9` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
+`fast-1`…`fast-10` aus, also die Kommandos der Tier-Tabelle in §3 — dieselbe
 Quelle, aus der der Runner seine Liste liest (`sh scripts/gates.sh list`).
 Die Kommando-Liste steht damit **nur** an einer Stelle; §6 führt sie nicht
-noch einmal auf. Die neun Checks laufen dabei **gebündelt am Job-Anfang**
+noch einmal auf. Die zehn Checks laufen dabei **gebündelt am Job-Anfang**
 (vorher lief „Check formatting" zuerst, die vier Textgates zuletzt); alle
-neun sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
+zehn sind **artefaktfrei** (kein Build, kein Adapter, kein Netz), und ihre
 Reihenfolge **innerhalb** der Stufe ist unverändert.
 
 Die übrigen Jobs der CI („Rust GUI tests", „Rust tests (excluding GUI)",
@@ -650,7 +654,7 @@ Aufrufbeispiele: `sh scripts/gates.sh headless compile`, `... headless gui`,
   `slow-22`, in der CI `continue-on-error`) zählen mit, werden mit
   Exit-Code und Hinweis gemeldet, machen die Stufe aber **nicht** rot. Der
   Floor zählt auch nicht *wie viele* Prüfungen ein Check intern durchführt —
-  die Zahl 9 ist die Zahl der Checks, nicht die Zahl der Einzelprüfungen.
+  die Zahl 10 ist die Zahl der Checks, nicht die Zahl der Einzelprüfungen.
 - Die Budgets in der Tier-Tabelle („Sekunden", „Minuten") sind Größenordnungen
   der Stufen, keine Messwerte aus einer Zeitmessung; der Runner misst die
   Sekunden je Check selbst und zeigt sie in der Zusammenfassung.

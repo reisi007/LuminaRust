@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_empty() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -11,7 +11,7 @@ fn library_empty() {
 }
 
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_with_image() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -24,7 +24,7 @@ fn library_with_image() {
 /// LRPAR-G12-FACE-20 (S5): the Library People view (no analysis state) plus
 /// the new Library view selector. Golden; `#[ignore]`d like every GPU snapshot.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_people_empty() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -107,7 +107,7 @@ fn assert_filmstrip_single_row(harness: &mut Harness<'_, LuminaApp>) -> Vec<efra
 /// The filmstrip is the bottom `Panel::bottom`; this pins the single-row
 /// geometry for a 20-dummy strip (KITTEST-COVERAGE-STATES-1).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn filmstrip_is_single_row_horizontal() {
     let dir = temp_raw_dir(20);
     let mut harness = build_harness();
@@ -123,7 +123,7 @@ fn filmstrip_is_single_row_horizontal() {
 /// driven by the strip selection. Headless state assertion (no golden): the
 /// counter text is a real accesskit label.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn filmstrip_counter_reflects_selection() {
     let mut harness = build_harness();
     let (paths, _) = setup_library_views(&mut harness);
@@ -157,7 +157,7 @@ fn filmstrip_counter_reflects_selection() {
 /// LibRaw failure banner mid-test, so the frame budget below would race a
 /// decode error that has nothing to do with the wiring under test.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_empty_state_cta_picks_folder() {
     let picked = tempfile::tempdir().expect("picked temp dir");
     let staged = stage_raw(picked.path(), "picked.cr3", "aircraft-landscape.cr3");
@@ -214,7 +214,7 @@ fn library_empty_state_cta_picks_folder() {
 /// UX-SLICE-2 (F2): a cancelled folder dialog is a deliberate no-op — the
 /// directory and the empty state stay exactly as they were.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_empty_state_cta_cancel_is_noop() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -247,7 +247,7 @@ fn library_empty_state_cta_cancel_is_noop() {
 /// the Grid (title + "Open Folder" CTA) instead of their former heading-only
 /// text, so no view can drift into a divergent empty presentation.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn non_grid_library_views_share_the_empty_state() {
     for view in [
         LibraryView::Loupe,
@@ -276,7 +276,7 @@ fn non_grid_library_views_share_the_empty_state() {
 /// exact gate `render_hash_visible` used. No heading/tooltip means the internal
 /// key can never be part of the end-user header again.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn render_hash_is_tooltip_only() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Develop);
@@ -308,7 +308,7 @@ fn render_hash_is_tooltip_only() {
 /// clearing it restores both. The underlying `render_key` stays valid; the
 /// tooltip returns with Develop.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_empty_suppresses_render_hash() {
     let mut harness = build_harness();
     harness.state_mut().set_module(Module::Library);
@@ -420,7 +420,7 @@ fn library_empty_suppresses_render_hash() {
 /// `directory` field), not at `$HOME` — the tree root label is the workdir's
 /// basename.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_folders_root_is_workdir() {
     let dir = tempfile::tempdir().expect("temp dir");
     // A subfolder ensures the tree has at least one child node so the root is
@@ -618,7 +618,7 @@ fn setup_library_views(harness: &mut Harness<'_, LuminaApp>) -> (Vec<String>, Ve
 /// as the "Rating-Sektion im Grid-Kontext"/w visible rating UI of the
 /// Library module (the Develop rating section has its own golden).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_loupe() {
     let mut harness = build_harness();
     let (_, staged) = setup_library_views(&mut harness);
@@ -650,7 +650,7 @@ fn library_loupe() {
 /// Compare (`C`): Before/After of the active image side by side (the same real
 /// CR3 thumbnail texture twice, `before_after` held by `set_library_view`).
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_compare() {
     let mut harness = build_harness();
     let (_, staged) = setup_library_views(&mut harness);
@@ -676,7 +676,7 @@ fn library_compare() {
 /// chips (right Metadata panel) are part of this golden: the grid-context
 /// companions the task requires.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn library_survey() {
     let mut harness = build_harness();
     let (paths, staged) = setup_library_views(&mut harness);
@@ -772,7 +772,7 @@ fn library_survey() {
 /// snapshot time. The wait below makes the state deterministic instead of
 /// load-dependent; the rendered image is unchanged.
 #[test]
-#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored"]
+#[ignore = "headless GPU required; run: cargo test -p lumina-gui --test kittest_snapshots -- --ignored --test-threads=1"]
 fn filmstrip_twenty_dummies() {
     let dir = temp_raw_dir(20);
     let mut harness = build_harness();
