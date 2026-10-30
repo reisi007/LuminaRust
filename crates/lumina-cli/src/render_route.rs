@@ -124,7 +124,7 @@ pub(crate) struct RoutedRender {
 /// map via [`lensfun_gpu::bind`]. Any unsupported stage routes the whole render
 /// explicitly to the CPU pipeline with a once-per-reason-set log line, so
 /// GPU-enabled builds always produce the same pixels as CPU builds. The GPU is
-/// an accelerator, never a semantic change (Agents.md: no silent fallbacks).
+/// an accelerator, never a semantic change (AGENTS.md: no silent fallbacks).
 #[cfg(all(test, feature = "gpu"))]
 pub(super) fn render_best_effort(
     ctx: Option<&mut GpuContext>,

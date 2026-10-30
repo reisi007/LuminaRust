@@ -2,7 +2,7 @@
 
 Status: **Plan (SOLL), Version 0.1** — noch nicht implementiert.
 Umfang: strukturiertes Logging über alle Crates; Umsetzung in kleinen,
-unabhängig prüfbaren Schritten gemäß `Agents.md`.
+unabhängig prüfbaren Schritten gemäß `AGENTS.md`.
 
 **Stand der Zeilenangaben (2026-10-20 nachgeprueft):** alle Zeilenangaben dieses
 Plans beziehen sich auf den Commit `87929c7` (Plan-Erstellung 2026-08-23). Die
@@ -37,7 +37,7 @@ Ziele des Loggings:
 - **Testbarkeit**: Log-Aufrufe dokumentieren Entscheidungen (Cache-Hit/Miss,
   Masken-Fallbacks) und machen sie in Integrationstests prüfbar.
 - **Keine stillen Fallbacks**: Logging ergänzt die sichtbare Meldung
-  (`Agents.md` §„Änderungsregeln": „Keine stillen Fallbacks bei veralteten
+  (`AGENTS.md` §„Änderungsregeln": „Keine stillen Fallbacks bei veralteten
   Rezepten, Farbprofilen, Masken oder fehlenden Artefakten"), ersetzt sie aber
   nie.
 
@@ -71,7 +71,7 @@ Bibliotheks-Crates (`lumina-core`, `lumina-sidecar`, `lumina-raw`,
 `lumina-onnx`, `lumina-gui`). Keine konkrete Logger-Implementierung in
 Bibliotheken.
 
-Begründung gegen die Architekturgrenzen (Agents.md):
+Begründung gegen die Architekturgrenzen (AGENTS.md):
 
 - `lumina-core` darf keine GUI-, Dateisystem- oder nativen Abhängigkeiten
   erzwingen. `log` hat keine Abhängigkeiten und kompiliert auf `wasm32`.
@@ -95,7 +95,7 @@ mit dem Feature `console`
 (`crates/lumina-gui/Cargo.toml`, Block `[target.'cfg(target_arch = "wasm32")'.dependencies]`;
 genutzt in `crates/lumina-gui/src/lib.rs:3668` `web_sys::console::error_1`). Ein eigener
 `log::Log`-Mapper (`error_1/warn_1/info_1/log_1`) vermeidet jede neue
-Dependency im WASM-Pfad und erfüllt die Capability-Regel aus Agents.md
+Dependency im WASM-Pfad und erfüllt die Capability-Regel aus AGENTS.md
 („Keine native Dependency im WASM-kompatiblen Pfad ohne dokumentierte
 Capability-Entscheidung"). `console_log` ist als fertige Alternative
 zulässig, zieht aber zusätzliche Crates nach sich.

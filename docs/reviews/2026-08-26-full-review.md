@@ -220,7 +220,7 @@ die Map**, statt den Key zu entfernen. Einmal Vibrance/Saturation berührt (auch
 wieder zurück auf 0) → Rezept bleibt dauerhaft GPU-unerlaubt (CPU-Route +
 CPU-Present) bis zum Dateiwechsel, obwohl die Pixel identisch wären.
 *Lösung:* Wert-Neutralität prüfen (Key == 0.0 überspringen). Key-Removal wäre
-eine Sidecar-Schema-Entscheidung gemäß Agents.md. *Aufwand S · MVP-blockierend: nein.*
+eine Sidecar-Schema-Entscheidung gemäß AGENTS.md. *Aufwand S · MVP-blockierend: nein.*
 
 **R2-RAW-01 · hoch · ARCHITEKTUR/Robustheit (falsche öffentliche API) ·
 `crates/lumina-raw/src/lib.rs:20-33`** — Re-verifiziert.
@@ -282,13 +282,13 @@ Relative-Exposure-Validierung ist korrekt umgesetzt (auto-tone-Kopplung beidseit
 (Dateiformat, Scope), dann Preset-File-I/O implementieren — oder Matrix-Eintrag bewusst auf
 Post-MVP verschieben. *Aufwand M · MVP-blockierend: nein, aber Doku-Code-Divergenz.*
 
-**R2-GPU-11 · niedrig · DOKU/ARCHITEKTUR · `Agents.md` (Architekturgrenzen) vs.
-Workspace** — `Agents.md` listet die Crate-Grenzen core/sidecar/raw/onnx/cli/gui;
+**R2-GPU-11 · niedrig · DOKU/ARCHITEKTUR · `AGENTS.md` (Architekturgrenzen) vs.
+Workspace** — `AGENTS.md` listet die Crate-Grenzen core/sidecar/raw/onnx/cli/gui;
 **`lumina-gpu` fehlt** (ebenso `lumina-bench`, `lumina-lensfun`,
 `lumina-mcp`), obwohl das Crate Shader-Bildverarbeitung trägt und
-`docs/gpu-bootstrap.md` seine Grenze „per Agents.md" herleitet. Verstoß gegen
+`docs/gpu-bootstrap.md` seine Grenze „per AGENTS.md" herleitet. Verstoß gegen
 „Der Plan darf niemals stillschweigend veralten".
-*Lösung:* Grenzen der vier fehlenden Crates in Agents.md ergänzen.
+*Lösung:* Grenzen der vier fehlenden Crates in AGENTS.md ergänzen.
 *Aufwand S · MVP-blockierend: nein.*
 
 **R2-GPU-10 · niedrig · ARCHITEKTUR (totes Gerüst) ·
@@ -349,7 +349,7 @@ Batch über Fixture-Dir findet RAF. *Aufwand S · MVP-blockierend: JA.*
 `crates/lumina-gui/src/i18n.rs` (grep „GPU": 0 Treffer)**
 CPU↔GPU-Routing, Shared-Device-Fail und die VRAM-Divergenz-Warnung
 („Interactive preview may diverge") erscheinen **ausschließlich im stderr-Log**
-— kein i18n-String, kein Statusbadge. Agents.md fordert „keine stillen
+— kein i18n-String, kein Statusbadge. AGENTS.md fordert „keine stillen
 Fallbacks"; log-seitig erfüllt, benutzer-sichtbar nicht. Besonders relevant, da
 nach einer Divergenz-Warnung trotzdem weiter im VRAM gerendert wird.
 *Lösung:* Statusbadge „GPU: `<adapter>`" / „CPU-Fallback: `<Grund>`" (i18n).

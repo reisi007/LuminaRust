@@ -374,7 +374,7 @@ fn resolve_default_matrix_dir() -> Result<PathBuf, StageError> {
 
 /// Verifies the declared `expected_route` against the route the render port
 /// actually used. Any mismatch is a loud GPU-parity failure
-/// (`Agents.md`: no silent CPU fallback), including an unavailable adapter or a
+/// (`AGENTS.md`: no silent CPU fallback), including an unavailable adapter or a
 /// CPU route for a different reason than the documented exemption.
 pub(crate) fn check_expected_route(
     recipe_id: &str,

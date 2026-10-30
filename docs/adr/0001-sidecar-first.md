@@ -48,4 +48,4 @@ Maskenartefakte ausschließlich dort speichern.
 
 - `feature/architecture/sidecar.md`
 - `feature/README.md` (Invarianten, Festgelegte Entscheidungen)
-- `Agents.md` (Persistenz und Sidecars)
+- `AGENTS.md` (Persistenz und Sidecars)

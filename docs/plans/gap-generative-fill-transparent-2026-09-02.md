@@ -8,7 +8,7 @@ Plans beziehen sich auf den Commit `28b7782` (Analyse vom 2026-09-02); nackte
 `lib.rs`/`render.rs`/`pipeline.rs`-Anker wurden auf den vollstaendigen
 repo-relativen Pfad umgestellt; die crate-abgekuerzten GUI-Anker (2026-10-20) ebenso
 auf den vollstaendigen repo-relativen Pfad.
-**Bezug:** `Agents.md`, `Agents.todo.md` (Phase 10b GEN-EXPAND-1 46f6baf), `feature/README.md`, `feature/product/generative-expand.md`, `feature/architecture/pipeline.md`, `feature/architecture/sidecar.md`, `feature/product/ai-masks.md`, `feature/product/export.md`, `feature/platform/capability-matrix.md`, `feature/platform/wasm-limits.md`, `feature/quality/fixtures-licensing.md`, `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-core/src/**`, `crates/lumina-gui/src/lib.rs`, `crates/lumina-mcp/src/tools/dust_removal.rs`, `crates/lumina-raw`, `crates/lumina-onnx` (inpaint)
+**Bezug:** `AGENTS.md`, `Agents.todo.md` (Phase 10b GEN-EXPAND-1 46f6baf), `feature/README.md`, `feature/product/generative-expand.md`, `feature/architecture/pipeline.md`, `feature/architecture/sidecar.md`, `feature/product/ai-masks.md`, `feature/product/export.md`, `feature/platform/capability-matrix.md`, `feature/platform/wasm-limits.md`, `feature/quality/fixtures-licensing.md`, `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-core/src/**`, `crates/lumina-gui/src/lib.rs`, `crates/lumina-mcp/src/tools/dust_removal.rs`, `crates/lumina-raw`, `crates/lumina-onnx` (inpaint)
 Alle Fundstellen sind ueber `git show `28b7782`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
 ---

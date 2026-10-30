@@ -62,7 +62,7 @@ impl DemosaicMethod {
     /// | 12          | AAHD      |
     ///
     /// Any other value falls through the dispatch chain without selecting an
-    /// algorithm (a silent fallback — forbidden by Agents.md). Before this fix
+    /// algorithm (a silent fallback — forbidden by AGENTS.md). Before this fix
     /// the mapping was shifted by +1 (`Linear→1 … Aahd→13`), so every explicit
     /// non-default choice ran the wrong algorithm and `Aahd` silently degraded
     /// to AHD. The table is pinned byte-exactly by

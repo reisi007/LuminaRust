@@ -139,9 +139,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Build the exact Ratchet v0.5.0 source revision used by the repository
+      # Build the exact Ratchet v0.6.1 source revision used by the repository
       # config. Do not depend on a preinstalled binary or a moving release tag.
-      - name: Install Ratchet v0.5.0
+      - name: Install Ratchet v0.6.1
         run: sh scripts/install_ratchet.sh
 
       - name: Cache Cargo
@@ -455,7 +455,7 @@ jobs:
 
       - name: Verify required planning documents
         run: |
-          test -f Agents.md
+          test -f AGENTS.md
           test -f Agents.todo.md
           test -f feature/README.md
           test -f feature/architecture/sidecar.md

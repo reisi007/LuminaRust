@@ -1,7 +1,7 @@
 # LuminaRust — Gestaffelte Batch-Ausführung
 
 Strategie: gestaffelte Batches (Abhängigkeitsreihenfolge), innerhalb einer Stufe
-parallel pro Crate. Jeder Subagent liest vorher `Agents.md`, `feature/README.md`
+parallel pro Crate. Jeder Subagent liest vorher `AGENTS.md`, `feature/README.md`
 und das betroffene Feature-Dokument, implementiert nur die echten Lücken, baut
 und testet **nur sein Crate** grün (`cargo build` / `cargo test -p <crate>`,
 `PATH="$HOME/.cargo/bin:$PATH"`) und lässt fremde Crates unangetastet.

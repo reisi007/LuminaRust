@@ -7,7 +7,7 @@
 //! how a GPU refusal is classified into a visible badge, and the diagnostic
 //! adapter/readback/prime hooks the parity tests drive. The pixels are
 //! unchanged — every routing decision that would diverge silently instead
-//! keeps the exact CPU present route (Agents.md: kein stiller Fallback).
+//! keeps the exact CPU present route (AGENTS.md: kein stiller Fallback).
 //!
 //! Methods called from other GUI modules (the present path, the draft tick) are
 //! `pub(crate)`; the diagnostic parity hooks stay `pub` for the integration
@@ -358,7 +358,7 @@ impl LuminaApp {
     ///
     /// GUI-LENSFUN-GATE-2: the returned badge names every precise reason from
     /// [`Self::gpu_unsupported_stage_reasons`] — not just the generic headline —
-    /// so the user can see *why* the CPU route was taken (Agents.md: kein
+    /// so the user can see *why* the CPU route was taken (AGENTS.md: kein
     /// stiller Fallback). Reuses the memoized verdict, so calling it every frame
     /// is cheap once the render key is stable.
     ///

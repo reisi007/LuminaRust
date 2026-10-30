@@ -2,7 +2,7 @@
 //!
 //! `lumina-onnx` encapsulates native ONNX inference, model management and mask
 //! artifacts so the portable, platform-neutral [`lumina_core`] is never burdened
-//! with native dependencies. It is the crate described in `Agents.md`
+//! with native dependencies. It is the crate described in `AGENTS.md`
 //! ("`lumina-onnx` kapselt native Inferenz, Modellverwaltung und
 //! Maskenartefakte") and the F-047 adapter for `BiRefNet` as the first automatic
 //! subject model, with an exchangeable backend surface.

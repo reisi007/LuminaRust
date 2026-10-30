@@ -3,9 +3,9 @@
 **Datum:** 2026-09-02  
 **Status:** Analyse (Doku-first, kein Code)  
 **Vorgänger:** `docs/plans/gap-lightroom-parity-2026-09-02.md` (153d4ba), `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md`  
-**Bezug:** `Agents.md` (Muss: headless GUI-Test je sichtbarem Feature), `feature/README.md`, `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/architecture/pipeline.md` (F-089..099), `feature/architecture/sidecar.md` (F-001), `feature/platform/capability-matrix.md` (F-006), `feature/platform/cli-gui-wasm.md` (F-100), `crates/lumina-gui/src/lib.rs` (Shortcuts, Module, Sections)
+**Bezug:** `AGENTS.md` (Muss: headless GUI-Test je sichtbarem Feature), `feature/README.md`, `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/architecture/pipeline.md` (F-089..099), `feature/architecture/sidecar.md` (F-001), `feature/platform/capability-matrix.md` (F-006), `feature/platform/cli-gui-wasm.md` (F-100), `crates/lumina-gui/src/lib.rs` (Shortcuts, Module, Sections)
 
-> **Pflicht neu in `Agents.md`:** Jede sichtbare GUI-Funktion (Regler, Modul, Shortcut, Preview, Sidecar-Persistenz) braucht automatischen headless GUI-Test (`egui::Context` + `LuminaApp`, `tempdir`, ohne GPU/WASM) + bei visueller Änderung zusätzlich kittest Golden/PSNR/Histogram-Digest (byte-identisch/PSNR, kein stiller Fallback). `cargo test -p lumina-gui` muss ohne `--ignored` grün bleiben. Kein manueller Screenshot als einziges Gate.
+> **Pflicht neu in `AGENTS.md`:** Jede sichtbare GUI-Funktion (Regler, Modul, Shortcut, Preview, Sidecar-Persistenz) braucht automatischen headless GUI-Test (`egui::Context` + `LuminaApp`, `tempdir`, ohne GPU/WASM) + bei visueller Änderung zusätzlich kittest Golden/PSNR/Histogram-Digest (byte-identisch/PSNR, kein stiller Fallback). `cargo test -p lumina-gui` muss ohne `--ignored` grün bleiben. Kein manueller Screenshot als einziges Gate.
 
 ---
 
@@ -152,7 +152,7 @@ Fazit MVP-Pflicht: `1-5/P/X/U` + `K/M/Q/R` + Copy/Paste + `Cmd+'` vor Post-MVP S
 
 ## 6 Headless Test-Gap — fehlende Tests (≥13 neu, T-LR-01..13)
 
-Pflicht nach `Agents.md`: je sichtbarer GUI-Funktion ein `cargo test -p lumina-gui` grüner Headless-Test. Bestehend: 95 `crates/lumina-gui/src/lib.rs` + 7 `preview_ctrl` + 5 `filmstrip` + 8 `viewport` + 7 `theme` + 14 `presets`. Kittest Goldens decken nur 5 Module ab; **keine** Slider/Kurve/HSL/ColorGrading/Presence/Mask/Library-Headless-Outcome.
+Pflicht nach `AGENTS.md`: je sichtbarer GUI-Funktion ein `cargo test -p lumina-gui` grüner Headless-Test. Bestehend: 95 `crates/lumina-gui/src/lib.rs` + 7 `preview_ctrl` + 5 `filmstrip` + 8 `viewport` + 7 `theme` + 14 `presets`. Kittest Goldens decken nur 5 Module ab; **keine** Slider/Kurve/HSL/ColorGrading/Presence/Mask/Library-Headless-Outcome.
 
 | ID | Feature | Fehlender Headless-Test (SOLL) | kittest/PSNR/Histogram Vorschlag | Crate | Aufw | Risiko |
 |---|---|---|---|---|---|---|

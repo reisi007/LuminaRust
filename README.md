@@ -56,7 +56,7 @@ Zieldefinition.
   Plattformgrenzen, CLI, native GUI und optionaler Index
 - [`feature/quality/conflicts-and-acceptance.md`](feature/quality/conflicts-and-acceptance.md):
   Konflikte, Abnahmeszenarien und Testanforderungen
-- [`Agents.md`](Agents.md): verbindliche Regeln für Build-, Implementierungs-
+- [`AGENTS.md`](AGENTS.md): verbindliche Regeln für Build-, Implementierungs-
   und Verifizierungs-Agenten
 - [`Agents.todo.md`](Agents.todo.md): lebender Umsetzungsplan mit offenen
   Aufgaben

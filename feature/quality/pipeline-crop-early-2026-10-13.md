@@ -123,7 +123,7 @@ Ohne diese Freigabe ist E2b nicht wertbar ("nein-Bytes sind Abnahmevertrag").
   vor Crop).
 - Perspective + Crop bewusst dokumentiert als geänderte Bytes, mit der messbasierten
   Klasse (14,58 % @ max Δ12 @ 10 % crop) als Verweiswert in `pipeline.md` und
-  `Agents.md`.
+  `AGENTS.md`.
 - Crop 50 / 25 / 10 % vor/nach-Bench auf der Referenzmaschine neu.
 - `check_file_sizes.sh` grün; keine Baseline-Anhebung;
   `crates/lumina-core/src/pipeline.rs` → `GEOMETRY_STAGE_ORDER`-Docs-als-

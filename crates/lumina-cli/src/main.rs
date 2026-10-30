@@ -38,7 +38,7 @@ use lumina_raw::RawError;
 // GPU-first rendering path (wgpu/Metal). Optional capability: when the `gpu`
 // feature is on, render/export/batch prefer the GPU adapter and fall back to the
 // CPU pipeline when no adapter is present. Never compiled unless the feature is
-// enabled, so the default build stays CPU-only (per `Agents.md` capability
+// enabled, so the default build stays CPU-only (per `AGENTS.md` capability
 // separation).
 #[cfg(feature = "gpu")]
 use lumina_gpu::{unsupported_gpu_stages_with_context, GpuContext};
@@ -627,7 +627,7 @@ fn process_selected_with_report(
     // are ONE-SHOT requests persisted into the recipe options by
     // develop/batch/mask/export. They are consumed here and dropped from the
     // recipe before it is written back, so a confirmably valid persisted mask
-    // stops triggering re-inference on every future run (Agents.md
+    // stops triggering re-inference on every future run (AGENTS.md
     // persistence invariant: a valid mask is reused, never silently
     // recomputed). The sidecar is saved only after a successful render below,
     // so a failed run keeps the pending request intact for the next attempt.

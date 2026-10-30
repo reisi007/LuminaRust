@@ -10,7 +10,7 @@
 //! ## Model decision (Welle 1, see `feature/product/generative-expand.md`)
 //!
 //! No license-clean inpaint/outpaint weights are committed in the workspace and
-//! the project doctrine forbids spontaneous downloads (Agents.md). Welle 1
+//! the project doctrine forbids spontaneous downloads (AGENTS.md). Welle 1
 //! therefore delivers:
 //!
 //! * a **deterministic fixture model** ([`fixture_manifest`]) whose

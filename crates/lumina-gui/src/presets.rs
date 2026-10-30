@@ -7,7 +7,7 @@
 //! around the sidecar `Preset` structure, so the recipe model stays identical
 //! to the sidecar while the preset schema evolves independently.
 //!
-//! Failure policy (Agents.md): invalid or foreign artifacts are rejected
+//! Failure policy (AGENTS.md): invalid or foreign artifacts are rejected
 //! loudly — nothing is silently normalized, skipped, or re-created. The
 //! directory scan reports every failing file individually instead of hiding
 //! it.

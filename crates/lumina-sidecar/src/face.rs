@@ -13,12 +13,12 @@
 //! JSON: they are referenced with a portable relative path, format, checksum,
 //! resolution/channel type and data version, and live in the binary sidecar
 //! (`<original>.lumina.zdata`). See `feature/architecture/sidecar.md`
-//! § Persistenzregeln and `Agents.md` § Persistenz und Sidecars.
+//! § Persistenzregeln and `AGENTS.md` § Persistenz und Sidecars.
 //!
 //! Scope: schema + validation + roundtrip only. Detection/embedding models,
 //! clustering evaluation, CLI and GUI are later slices (FACE-20-S2 … S6).
 //!
-//! Failure policy (Agents.md): every deviation from the contract is rejected
+//! Failure policy (AGENTS.md): every deviation from the contract is rejected
 //! loudly — never silently clamped, defaulted, deduplicated or reinterpreted.
 //! Pre-MVP: additive schema field, `schema_version` stays 2; an absent `face`
 //! section is the valid legacy state ("no face analysis"), not an error.

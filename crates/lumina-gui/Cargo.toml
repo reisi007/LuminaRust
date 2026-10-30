@@ -12,7 +12,7 @@ blake3 = "1"
 # → registered egui user texture). The lumina-gpu capability stays
 # feature-gated (see `gpu` below).
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 # F-009: the `<name>.lumina-preset.json` envelope (`presets::PresetFile`) is
 # defined in the GUI and derives Serialize/Deserialize around the sidecar
 # `Preset` structure.
@@ -30,7 +30,7 @@ lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features
 lumina-sidecar = { path = "../lumina-sidecar", features = ["zdata"] }
 # LRPAR-G09-CULL-25 (GUI slice): the Library badges/filter/adopt action consume
 # the same deterministic Stage-1 heuristic analyzer the CLI uses — no second
-# culling implementation in the GUI (Agents.md: no GUI-specific image logic).
+# culling implementation in the GUI (AGENTS.md: no GUI-specific image logic).
 lumina-cull = { path = "../lumina-cull" }
 # LRPAR-G13-MERGE-15 (GUI slice): the `Cmd/Ctrl+H`/`Cmd/Ctrl+M` actions call the
 # same `lumina-merge` alignment/merge/DNG entry points as the CLI commands; the

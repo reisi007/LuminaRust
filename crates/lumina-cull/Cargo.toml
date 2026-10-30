@@ -14,7 +14,7 @@ lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 thiserror = "2"
 
 [dev-dependencies]

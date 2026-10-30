@@ -36,7 +36,7 @@
 //! returns. This keeps the harness green on machines without a GPU while still
 //! running the real comparison wherever a GPU exists.
 //!
-//! Per `Agents.md` (no silent fallback), initialization failures are surfaced
+//! Per `AGENTS.md` (no silent fallback), initialization failures are surfaced
 //! loudly: `GpuContext::new` returns a `GpuError` (e.g. `AdapterUnavailable`)
 //! and the caller logs a `[WARN]` ("GPU initialization failed, falling back to
 //! CPU rendering"). The equivalence check itself only runs when a real adapter

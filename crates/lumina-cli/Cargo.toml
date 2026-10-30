@@ -33,7 +33,7 @@ lumina-lensfun = { path = "../lumina-lensfun", optional = true, default-features
 # enabled, render/export/batch prefer the GPU adapter and fall back to the CPU
 # pipeline otherwise. Disabled by default so headless CI stays dependency-light.
 lumina-gpu = { path = "../lumina-gpu", optional = true }
-# Logging for visible backend selection (see `Agents.md` capability separation).
+# Logging for visible backend selection (see `AGENTS.md` capability separation).
 # `std` is required for `log::set_boxed_logger` (log 0.4 has no default features).
 log = { version = "0.4", features = ["std"] }
 # F-101-F1: `lumina mcp` subcommand runs the MCP server over stdio. Optional
@@ -47,7 +47,7 @@ lumina-mcp = { path = "../lumina-mcp", optional = true }
 # `crates/lumina-stages/src/` (the logic).
 lumina-stages = { path = "../lumina-stages" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 tempfile = "3"
 thiserror = "2"
 

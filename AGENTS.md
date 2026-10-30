@@ -146,7 +146,7 @@ eine automatische Neuberechnung darf nicht die einzige Option sein.
 Der Build-Agent ist der verantwortliche Orchestrator. Der Build-/Verify-Flow
 steht im Skill `build-verify` (agents-skills); der Skill wird über seinen
 Trigger in die Session geladen. Den verbindlichen Rahmen setzt das Projekt-
-`Agents.md` (dieses Dokument), das der Build-Agent vor jeder Aufgabe liest;
+`AGENTS.md` (dieses Dokument), das der Build-Agent vor jeder Aufgabe liest;
 der repo-spezifische Teil steht nur hier — was in **diesem** Repo wann grün
 sein muss (siehe „Verifizierung und Tests" und [`DoD.md`](DoD.md)). Die
 Minimalregeln des Flows stehen in `.agents/rules/build-verify.md`
@@ -154,7 +154,7 @@ Minimalregeln des Flows stehen in `.agents/rules/build-verify.md`
 
 Er:
 
-- liest vor jeder Aufgabe `Agents.md`, `Agents.todo.md`, `feature/README.md` und
+- liest vor jeder Aufgabe `AGENTS.md`, `Agents.todo.md`, `feature/README.md` und
   das betroffene Feature-Dokument;
 - zerlegt Arbeit in kleine, unabhängig prüfbare Aufgaben und delegiert sie an
   passende Subagenten;
@@ -269,7 +269,7 @@ repo-spezifische Teil. Er:
   dauerhaft in `feature/`/`docs/` (Quelle der Wahrheit für Datenmodell,
   Event-Regeln, GUI-Verhalten, Persistenz und SOLL-Zielsemantik) und, solange
   offen, in `Agents.todo.md`. Entscheidungen, Begründungen und Messwerte stehen
-  **nicht** in `Agents.md`.
+  **nicht** in `AGENTS.md`.
 - **Jede Entscheidung mit echten Wahlmöglichkeiten wird als interaktive Frage
   gestellt** (Werkzeug `question`), **niemals** als Frage im Fließtext. Echte
   Wahlmöglichkeiten sind z. B.: Alternative ja/nein, Datenmodell, Event-Form,
@@ -319,7 +319,7 @@ Umgebung und der reproduzierbare Verifikationslauf
    `scripts/check_file_sizes.sh` + die betroffenen Gates → committen → holen →
    mergen. Nach dem Merge: die gelieferten Tests laufen lassen, das Ratchet
    erneut prüfen und den Merge-Stand im Abschlussbericht nennen.
-1. `Agents.md`, `Agents.todo.md`, `feature/README.md`, das betroffene
+1. `AGENTS.md`, `Agents.todo.md`, `feature/README.md`, das betroffene
    Feature-Dokument und relevante ADRs lesen.
 2. Die betroffene Funktion anhand einer stabilen Feature-ID identifizieren.
 3. Prüfen, ob die geplante Änderung dem SOLL widerspricht oder einen neuen
@@ -621,3 +621,15 @@ erst fertig, wenn:
   Beschleunigung, nie Voraussetzung (kein GPU-only-Weg).
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor
   Integration geprüft und dokumentiert.
+
+## Gates
+
+Regeln dieser Ebene. Was nur ein Verzeichnis betrifft, gehört in die
+`AGENTS.md` **dieses** Verzeichnisses — sie wird geladen, wenn eine Datei
+daraus gelesen wird.
+
+Ein Plan in `docs/plans/` beginnt mit `**Status:** Plan | In Arbeit | Done |
+Empfehlung, nicht implementiert`.
+
+Die kanonischen Agent-Regeln laufen über `ratchet` (Preset `agent-rules`):
+`ratchet check` vor jedem Commit und in der CI.

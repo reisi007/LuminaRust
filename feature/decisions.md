@@ -84,5 +84,5 @@ ADRs unter `docs/adr/` festgehalten (siehe `docs/adr/README.md`).
 ## Arbeitsweise
 
 - Lizenzbedingungen von RAW-Backends, ONNX-Runtime und Modellen werden vor
-  Integration geprüft und dokumentiert (Agents.md, Änderungsregeln).
+  Integration geprüft und dokumentiert (AGENTS.md, Änderungsregeln).
 - Abweichungen von diesen Entscheidungen werden als neue ADR dokumentiert.

@@ -28,7 +28,7 @@
 //! refused loudly (`InferenceFailed` listing the available tensors) — no silent
 //! re-shaping, no stub substitution. Tests run against deterministic stubs and
 //! the hash-pinned crafted behavior fixtures; **no weights are committed and
-//! nothing is downloaded** (Agents.md).
+//! nothing is downloaded** (AGENTS.md).
 //!
 //! ## No silent fallback
 //!

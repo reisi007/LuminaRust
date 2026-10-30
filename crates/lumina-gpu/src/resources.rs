@@ -23,7 +23,7 @@ impl GpuContext {
         match init_gpu_resources() {
             Ok(resources) => Ok(Self::from_resources(Some(resources))),
             // Degrade gracefully to the CPU fallback rather than failing the
-            // app — but never silently (REVIEW-GPU-N1, Agents.md: no silent
+            // app — but never silently (REVIEW-GPU-N1, AGENTS.md: no silent
             // fallbacks): the adapter/device failure is logged loudly so
             // headless or misconfigured machines stay diagnosable.
             Err(err) => {

@@ -9,7 +9,7 @@ description = "GPU-first rendering path for Lumina (wgpu/Metal), with a CPU fall
 # reference (`lumina_core::render_frame`, via the local `render_cpu`), which
 # `lumina-gpu` relies on whenever no GPU adapter is available (or when the
 # `gpu` feature is disabled). The core crate stays free of any GPU/native
-# dependency per `Agents.md`.
+# dependency per `AGENTS.md`.
 lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 # GPU-LENSFUN-PARITY-1: the strict Lensfun corrector map builder (hermetic tests)
@@ -23,7 +23,7 @@ log = "0.4"
 # GPU entry (validate.rs), parsed with the same `serde_json::Value` type the
 # sidecar recipe stores it in. Already a `lumina-sidecar` dependency resolved in
 # the workspace lockfile.
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 # GPU backend dependencies. Optional + feature-gated so a
 # `--no-default-features` build stays dependency-light for headless CI.
 wgpu = { version = "30", optional = true }

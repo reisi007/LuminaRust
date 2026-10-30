@@ -122,7 +122,7 @@ behavior fixture (SHA-256 pin in `tests/fixtures/README.md`): a minimal,
 deterministically generated ReduceMax graph (no downloads, no model weights)
 that exercises the real ORT load/verify/infer code paths under a pinned
 identity. Real BiRefNet/SAM-2 model weights remain `pending-integration`
-(Agents.md: no spontaneous downloads; hash-pinned fixtures required).
+(AGENTS.md: no spontaneous downloads; hash-pinned fixtures required).
 
 ## Generative outpaint (GEN-EXPAND-1, local vs. Cloud)
 

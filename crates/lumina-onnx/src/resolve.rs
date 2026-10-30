@@ -67,7 +67,7 @@ impl std::fmt::Debug for OnnxEngine {
 ///
 /// There is **no fallback to `StubBackend` under any error condition** — a
 /// missing/stale/mismatched artifact is surfaced to the caller, which must
-/// report it visibly (Agents.md: „Fehlende oder inkompatible Artefakte werden
+/// report it visibly (AGENTS.md: „Fehlende oder inkompatible Artefakte werden
 /// sichtbar als veraltet oder nicht verfügbar gemeldet").
 #[cfg_attr(not(feature = "onnx-rt"), allow(unused_variables))]
 pub fn try_load_onnx_engine(

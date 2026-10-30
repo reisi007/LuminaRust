@@ -22,7 +22,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// Documented placeholder for `model_hash` until real, hash-pinned ONNX
-/// fixtures are committed (no spontaneous downloads — see `Agents.md`). A
+/// fixtures are committed (no spontaneous downloads — see `AGENTS.md`). A
 /// manifest carrying this value **cannot** be verified yet; verification
 /// reports [`ModelHashStatus::Pending`] instead of guessing.
 pub const PENDING_INTEGRATION_HASH: &str = "pending-integration";

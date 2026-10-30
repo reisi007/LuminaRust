@@ -42,7 +42,7 @@
 //! `mask_local_slider_support`, the directional label lookups in
 //! `mask_local_label_support`, the curve-graph gestures in
 //! `mask_local_curve_graph_support`. A helper only one target calls would be
-//! dead code, and `Agents.md` forbids closing a `-D warnings` gate with an
+//! dead code, and `AGENTS.md` forbids closing a `-D warnings` gate with an
 //! `allow` attribute.
 //!
 //! No GPU and no wgpu adapter are needed: the harness only has to lay out and
@@ -50,7 +50,7 @@
 //! `cargo test -p lumina-gui` run (the kittest **goldens** for all four
 //! surfaces live in the separate `kittest_mask_local` target).
 //!
-//! # Explicit boundary (Agents.md, User-Regel 2026-09-26)
+//! # Explicit boundary (AGENTS.md, User-Regel 2026-09-26)
 //!
 //! This is the only kind of GUI verification the project has: headless
 //! `egui` + `LuminaApp` + a tempdir, plus `egui_kittest` goldens over the wgpu

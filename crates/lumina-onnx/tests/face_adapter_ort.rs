@@ -1,7 +1,7 @@
 //! LRPAR-G12-FACE-ADAPTER-25 integration tests for the real ONNX Runtime face
 //! adapter (`onnx-rt` feature).
 //!
-//! The shipped face weights are neither committed nor downloadable (Agents.md:
+//! The shipped face weights are neither committed nor downloadable (AGENTS.md:
 //! no spontaneous downloads), so — exactly like `ort_backend.rs` /
 //! `face_ort.rs` — these tests drive the adapter with **crafted, hash-pinned
 //! behavior fixtures**:

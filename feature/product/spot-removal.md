@@ -48,7 +48,7 @@ Beide Modi sind nicht-destruktiv: Das Original wird niemals überschrieben. Vors
 
 ## Normative Invarianten
 
-Für SPOT-REMOVE-1 gelten `Agents.md` unverändert, konkretisiert:
+Für SPOT-REMOVE-1 gelten `AGENTS.md` unverändert, konkretisiert:
 
 - **Original unverändert:** Quelldatei wird nie überschrieben/verschoben/ersetzt; Export schreibt neue Datei.
 - **Sidecar ist Quelle der Wahrheit:** Rezept (`spot_removals`) + Artefaktverweis (nur generativ) leben ausschließlich im Sidecar (`<original>.lumina.json` + `<original>.lumina.zdata`). Optionale Index-DB darf nur spiegeln, muss aus Sidecars rekonstruierbar sein.
@@ -59,7 +59,7 @@ Für SPOT-REMOVE-1 gelten `Agents.md` unverändert, konkretisiert:
 
 ## Rezeptmodell
 
-Die Stufe wird als additive, versionierte Rezept-Operation der jeweiligen virtuellen Kopie gespeichert (analog `source_actions`, additive Schema-Erweiterung, Migrationsentscheidung vor Einführung, Agents.md Änderungsregeln). Empfohlen als neues Top-Level-Feld `spot_removals: Vec<SpotRemoval>` (alternativ Erweiterung von `source_actions` mit `kind = "heuristic_clone" | "generative_inpaint"` — Entscheidung vor Implementierung zu dokumentieren; in beiden Fällen additives Schema-v2-Feld, Migration dokumentiert, unbekannte Version abgelehnt).
+Die Stufe wird als additive, versionierte Rezept-Operation der jeweiligen virtuellen Kopie gespeichert (analog `source_actions`, additive Schema-Erweiterung, Migrationsentscheidung vor Einführung, AGENTS.md Änderungsregeln). Empfohlen als neues Top-Level-Feld `spot_removals: Vec<SpotRemoval>` (alternativ Erweiterung von `source_actions` mit `kind = "heuristic_clone" | "generative_inpaint"` — Entscheidung vor Implementierung zu dokumentieren; in beiden Fällen additives Schema-v2-Feld, Migration dokumentiert, unbekannte Version abgelehnt).
 
 ```json
 {
@@ -200,7 +200,7 @@ Nach GUI-STAGE-1/GUI-WGPU-PRESENT-1 (Native Desktop), Develop-Modul:
 2. **Schnell (heuristisch):** **Size-Slider** in der Tool-Leiste (Größe in Quellpixeln, `1..=512`, sichtbar als px-Wert) plus `[`/`]`-Alias; Feather/Opacity optional. Size/Feather/Opacity liegen panel-breiten-sicher in zwei kompakten Zeilen und bleiben bei 1024×720 **je mit Label** sichtbar (kein Überlauf in das Histogramm-Panel). Der **Kreis-Cursor** am Zeiger zeigt die Live-Größe (`radius × aktuelle Ansichts-Skala`). **Klick auf das Bild** setzt einen Spot (Dab); die Quelle wird automatisch per deterministischem Offset gewählt (`1.5 × Radius` zur Bildmitte hin, `spot_auto_offset`), optional Alt-Ziehen (Post-MVP). Vorschau heilt **instant** (kein Job, kein Modell). Der Dab persistiert die Rezeptparameter über `commit_spot_heal` (`info!`-Log, Sidecar-Save); „Rückgängig" entfernt Spot (`Clear spots`).
 3. **Generativ lokal:** Maske malen (Pinsel/Box, analog `generative-expand.md`/`ai-masks.md` Prompt-Typen), optional Prompt/Negativ-Prompt/Seed eingeben, „Generieren" starten. Läuft als sichtbarer Job (Jobstatus, kein Hintergrund-Stilllauf); fehlendes Modell/Artefakt (`missing`/`stale`/`corrupt`) wird angezeigt, nicht gefälscht. Ergebnis als Artefakt (`.lumina.zdata`, `kind = "spot_heal_generative"`) persistiert und im Sidecar referenziert; Vorschau rendert über gemeinsame Pipeline. „Verwerfen" löscht nur Rezept/Artefakt, nie Original.
 4. **Status sichtbar:** Jeder Spot trägt Badge `valid`/`stale`/`missing`/`corrupt` (generativ) bzw. `valid`/`stale` (schnell). Veraltete/fehlende generativ-Spots blockieren Export nicht still — GUI warnt, bietet Neuberechnung an; CLI analog `--update-masks` (`strict` vs. Warn-and-continue).
-5. **Virtuelle Kopien:** `spot_removals` gehört zur jeweiligen virtuellen Kopie (eigenes Rezept, stabile ID). Artefakt-Sharing auf Quell-Ebene nur bei identischer Identität; Masken-Layer bleiben kopienspezifisch (Agents.md „Virtuelle Kopien").
+5. **Virtuelle Kopien:** `spot_removals` gehört zur jeweiligen virtuellen Kopie (eigenes Rezept, stabile ID). Artefakt-Sharing auf Quell-Ebene nur bei identischer Identität; Masken-Layer bleiben kopienspezifisch (AGENTS.md „Virtuelle Kopien").
 
 ## Visuelle Analyse automatisch
 
@@ -220,7 +220,7 @@ Alle Spot-Ergebnisse sind automatisch visuell verifizierbar — keine manuelle P
 
 ## Testanforderungen je Modus
 
-Jede Implementierung muss vor Verifizierung mindestens diese Prüfungen bestehen (Agents.md § Verifizierung und Tests; Analogie zu AI-Masken/virtuellen Kopien/Source-Actions; Gap G5/G6):
+Jede Implementierung muss vor Verifizierung mindestens diese Prüfungen bestehen (AGENTS.md § Verifizierung und Tests; Analogie zu AI-Masken/virtuellen Kopien/Source-Actions; Gap G5/G6):
 
 - **Roundtrip und Schema:** JSON-Roundtrip für `SpotRemoval` je Modus (alle Felder, inkl. `mode`/`center`/`radius`/`feather`/`source_offset` bzw. `mask_reference`/`model`/`prompt`/`seed`/`artifact`), unbekannte Felder bleiben erhalten, ungültige `version`/Bereiche abgelehnt; gegenseitige Ausschlussvalidierung (heuristisch darf kein `artifact` tragen, generativ muss `artifact` nach Generierung tragen); Migration v1→v2 mit Backup/`migrate` sobald verschachtelte Felder hinzukommen.
 - **Nicht-Destruktion:** Originalbytes unverändert nach Heilen, Speichern, Löschen, Re-Generierung; Export schreibt neue Datei.

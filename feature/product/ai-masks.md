@@ -263,7 +263,7 @@ Geräteklasse reproduzierbar bleiben.
 (092824, Apache-2.0) ODER fertige, versionierte Community-ONNX-Artefakte
 (Redistribution Apache-2.0); `model_hash` bleibt `pending-integration`, bis
 lokale, hash-gepinnte Fixtures committet sind (keine spontanen Downloads in
-Tests, Agents.md). Prompt-Kontrakt: `point_coords` (absolute Pixel im
+Tests, AGENTS.md). Prompt-Kontrakt: `point_coords` (absolute Pixel im
 1024²-Raum), `point_labels` (1 positiv / 0 negativ / −1 Padding / 2 Box-TL /
 3 Box-BR), `input_masks`/`has_input_masks` (Pinsel/Polygon), Ausgabe `masks`
 auf Originalgröße + `iou_predictions` + `low_res_masks` (4×-Upsampling);
@@ -1142,7 +1142,7 @@ sichtbar CPU-routen oder verweigern.
 
 > **Warum dieser Abschnitt existiert.** P1.2a–d wurden **headless** geliefert
 > (Schema, `lumina-core`, `lumina-cli`, `lumina-sidecar`). Die mask-local
-> Editoren sind aber sichtbare Funktionen, und `Agents.md` verlangt für jede
+> Editoren sind aber sichtbare Funktionen, und `AGENTS.md` verlangt für jede
 > sichtbare Funktion einen klickbaren headless GUI-Test **und** einen
 > kittest-Golden. Dieser Abschnitt legt den GUI- und kittest-Vertrag fest, **bevor**
 > die Integration implementiert wird — die Semantik oben (Reihenfolge, Versionen,
@@ -1622,7 +1622,7 @@ der Absatz nennt keine offene Lücke mehr.)
 
 - **Kein echter Fenster-Test.** DPI, Multi-Monitor, echte Maus-Hardware und ein
   für den Menschen sichtbares Bild sind **nicht** belegt — und werden nach
-  `Agents.md` auch nicht verlangt. Alles Above-the-Fold in den Goldens ist
+  `AGENTS.md` auch nicht verlangt. Alles Above-the-Fold in den Goldens ist
   Layout, nicht Interaktion.
 - **Bekannte Grenze der Goldens (Klasse C, Layout) — je Golden einzeln, nicht
   pauschal (Korrektur 2026-09-26, Verifikationsbefund F-5).** Eine frühere

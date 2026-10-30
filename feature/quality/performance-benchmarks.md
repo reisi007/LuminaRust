@@ -670,7 +670,7 @@ einen späteren Performance-Task; die Signatur (`similarity_signature`
 
 **GUI-Headless:** Bewusst **nicht** als eigene IDs gemessen. GUI und CLI
 orchestrieren ausschließlich die hier gemessenen `lumina-core`-/
-`lumina-cull`-Einstiegspunkte (Agents.md: keine zweite Bildlogik in der GUI);
+`lumina-cull`-Einstiegspunkte (AGENTS.md: keine zweite Bildlogik in der GUI);
 ein headless egui-Benchmark würde den UI-Frame-/Widget-Overhead messen, nicht
 die Denoise-/Cull-Arbeit. Prozessstart-/Frame-Overhead bleibt, wie in
 „Batch/Ende-zu-Ende“ beschrieben, einem separaten CLI-/GUI-Lauf vorbehalten.

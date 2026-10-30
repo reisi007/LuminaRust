@@ -162,7 +162,7 @@ obligations that MUST be honored in any distributed build:
      `pending-integration` candidate state was waiting for (it is not merely a
      code licence). Upstream: `opencv/opencv_zoo` `main` @ `47534e27…`
      (LICENSE blobs `4cdf89a4…` / `d6456956…`). **No weight binaries are
-     committed and no download occurs at test time** (Agents.md); consumers
+     committed and no download occurs at test time** (AGENTS.md); consumers
      supply artifacts via `--detector`/`--embedder`
      (`LUMINA_FACE_DETECT_MODEL_PATH` / `LUMINA_FACE_EMBED_MODEL_PATH`).
      **Real I/O adapter (LRPAR-G12-FACE-ADAPTER-25, 2026-09-20):** the shipped

@@ -4,7 +4,7 @@
 //! # Why a separate target
 //!
 //! `tests/kittest_snapshots.rs` is ratchet-baselined at its exact current size
-//! and must not grow (`scripts/file_size_baseline.txt`, `Agents.md` / DoD §8),
+//! and must not grow (`scripts/file_size_baseline.txt`, `AGENTS.md` / DoD §8),
 //! and these four surfaces are one feature's coverage rather than a slice of
 //! the general Develop-section sweep. A feature-specific target is the pattern
 //! the other feature-bound goldens already use (`kittest_spot_tool`,

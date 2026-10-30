@@ -10,7 +10,7 @@ lumina-core = { path = "../lumina-core" }
 lumina-sidecar = { path = "../lumina-sidecar" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 # Model-artifact identity hash. SHA-256 is the documented `model_hash`
 # algorithm for mask identity (feature/product/ai-masks.md, F-082:
 # "`model_hash` = Artefakt-SHA256"). Computed locally from committed/local

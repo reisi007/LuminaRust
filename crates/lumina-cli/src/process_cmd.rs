@@ -57,7 +57,7 @@ pub(super) fn process(args: ProcessArgs) -> Result<(), CliError> {
 ///
 /// The deterministic [`StubBackend`] is only ever wired in default builds:
 /// under `onnx-rt` a requested real engine is **never** downgraded to the stub
-/// (Agents.md: „Fehlende oder inkompatible Artefakte werden sichtbar als
+/// (AGENTS.md: „Fehlende oder inkompatible Artefakte werden sichtbar als
 /// veraltet oder nicht verfügbar gemeldet"; ai-masks.md F-082-FOLLOWUP).
 #[cfg(not(feature = "onnx-rt"))]
 pub(super) fn resolve_mask_inference_engine(

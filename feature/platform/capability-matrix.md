@@ -396,7 +396,7 @@ Ein Aufrufer, der diese Bindung braucht, zählt folglich **nicht** neben seinem
 Aufruf, sondern in seiner Senke — die einzige Stelle unterhalb des eigenen Memos,
 die der Load wirklich erreicht.
 
-**Auflösungsentscheidung zum Level (2026-09-26, `Agents.md` § *SOLL zuerst*).**
+**Auflösungsentscheidung zum Level (2026-09-26, `AGENTS.md` § *SOLL zuerst*).**
 Die Aufgabenstellung verlangte wörtlich eine `warn!` für den Miss. Das ist hier
 **nicht** umgesetzt und wird hiermit bewusst abweichend festgelegt: eine nicht
 auflösbare Lensfun-Datenbank ist **keine Warnung, sondern ein harter
@@ -655,7 +655,7 @@ report/warn/gate). Kurzfassung (implementiert):
 ausschließlich auf diesen Lauf: `R5-MASKVIS-25`, `R5-BRUSH-24`,
 `R5-DUST-23-FOLLOWUP`, `F-103-N6-GUI-COVERAGE-27` (alle `hoch`) und
 `GPU-PARITY-HW-28` (`mittel`). Dieser Abschnitt ist die fehlende Lieferung:
-`Agents.md` R5-LOG-1 definiert das **Verfahren**, aber niemanden, der fährt.
+`AGENTS.md` R5-LOG-1 definiert das **Verfahren**, aber niemanden, der fährt.
 
 ### Was dieser Lauf ist — und was nicht
 

@@ -20,7 +20,7 @@
 //! Field-shape decision (documented deviation from the §5 sketch): the
 //! decision's minimal `artifact` sketch (`path`, `sha256`, `kind`) is
 //! superseded by the normative portable-artifact contract of
-//! `feature/architecture/sidecar.md` § Persistenzregeln / `Agents.md`, which
+//! `feature/architecture/sidecar.md` § Persistenzregeln / `AGENTS.md`, which
 //! requires relative path, format, checksum, resolution, channel type and
 //! data version for every binary artifact reference. This module therefore
 //! carries the full reference plus `kind = "denoise_rgb"` (the decision's

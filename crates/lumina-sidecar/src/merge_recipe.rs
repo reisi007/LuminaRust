@@ -10,7 +10,7 @@
 //! Scope: schema + validation + digest only. No DNG writer, no alignment
 //! computation, no CLI/GUI (follow-up waves MERGE-CORE-1 … MERGE-GOLDEN-1).
 //!
-//! Failure policy (Agents.md): every deviation is rejected loudly — never
+//! Failure policy (AGENTS.md): every deviation is rejected loudly — never
 //! silently clipped, defaulted, or reinterpreted. Pre-MVP schema decision:
 //! `merge_version` is pinned to 1; foreign versions are rejected, there is
 //! no silent migration.

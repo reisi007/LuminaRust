@@ -270,7 +270,7 @@ fn merge_hdr_produces_dng_bundle_and_reimportable_dng() {
         serde_json::Value::from(blake3_file(&dng))
     );
 
-    // Standard copy with its own recipe (Agents.md virtual-copy rule).
+    // Standard copy with its own recipe (AGENTS.md virtual-copy rule).
     assert!(document
         .virtual_copies
         .iter()

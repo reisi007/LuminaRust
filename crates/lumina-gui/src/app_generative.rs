@@ -160,7 +160,7 @@ impl LuminaApp {
     // (`classify_vram_refusal`) into a visible routing badge, so the CPU route is
     // never silent. A future VRAM generative present path would replace this
     // refusal with an artifact-aware VRAM entry; until then CPU is the complete
-    // reference (Agents.md: GPU is acceleration only, never a requirement).
+    // reference (AGENTS.md: GPU is acceleration only, never a requirement).
 
     /// GEN-ONNX-1 Welle 2b: enable/disable the auto-fill-transparent role
     /// (fills transparent pixels after Lens correction). The role flag alone

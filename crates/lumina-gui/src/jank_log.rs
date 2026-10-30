@@ -1,7 +1,7 @@
 //! GUI-JANKLOG-19 (Release 1.0): Ruckel-Attribution. Debug-only and gated
 //! behind the opt-in Cargo feature `janklog` — without the feature (and in
 //! every release build) this module does not exist, so the instrumentation is
-//! zero-overhead by construction (`Agents.md`: keine sichtbare Funktion ohne
+//! zero-overhead by construction (`AGENTS.md`: keine sichtbare Funktion ohne
 //! Spez, kein stiller Fallback; Freigabe 2026-09-18 U2/U5).
 //!
 //! Standardbetrieb bleibt im Log still: genau **eine** Zeile pro nachweislich

@@ -503,7 +503,7 @@ pub(super) fn previous(args: PreviousArgs) -> Result<(), CliError> {
 /// `lumina_sidecar::migrate_sidecar_file` so every migration takes the
 /// per-sidecar write lock and writes a `.bak` backup before the atomic
 /// replace. There is no silent in-place rewrite: a locked or failing
-/// migration is an explicit error (Agents.md: no silent fallbacks).
+/// migration is an explicit error (AGENTS.md: no silent fallbacks).
 fn migrate_sidecar(path: &Path) -> Result<(), CliError> {
     lumina_sidecar::migrate_sidecar_file(path)?;
     Ok(())

@@ -27,7 +27,7 @@ hinter nicht-default Feature `index` (siehe F-065).
 
 Eine zentrale Datenbank ist **optional** und beschleunigt ausschließlich Suche,
 Index und Jobsteuerung. Sie ist weder Voraussetzung noch Quelle der Wahrheit
-(Agents.md § „Persistenz und Sidecars", § „Architekturgrenzen";
+(AGENTS.md § „Persistenz und Sidecars", § „Architekturgrenzen";
 `feature/README.md` Invarianten: „Das Sidecar ist die autoritative Persistenz",
 „Der optionale Index ist aus Sidecars vollständig neu aufbaubar"). Das
 Sidecar-Bundle (`<original>.lumina.json` + `<original>.lumina.zdata`) bleibt die
@@ -77,10 +77,10 @@ Cache-Metadaten. Der Umfang ist bewusst minimal und geschlossen:
 Jeder Eintrag trägt eine Index-Schemaversion (DB-Schema über
 `PRAGMA user_version`), eine Quellidentität (Pfad + Quellhash) und einen
 Zeitstempel der letzten Aktualisierung. Der Pfad ist relativ zur Index-Root;
-**absolute Pfade sind in persistenten Indexdaten verboten** (Agents.md,
+**absolute Pfade sind in persistenten Indexdaten verboten** (AGENTS.md,
 Änderungsregeln) und werden beim Anlegen/Umhängen des Indexes neu aufgelöst.
 `schema_version` des Sidecars und Schemaversion des Indexes werden getrennt
-migriert und validiert (Agents.md, Architekturgrenzen).
+migriert und validiert (AGENTS.md, Architekturgrenzen).
 
 ### Bewusst NICHT im Index (F-064, negativer Umfang)
 
@@ -93,7 +93,7 @@ migriert und validiert (Agents.md, Architekturgrenzen).
 
 Alle diese Daten bleiben ausschließlich im Sidecar-Bundle
 (`<original>.lumina.json` / `<original>.lumina.zdata`). Ein Index-Eintrag, der
-ohne Sidecar nicht wiederherstellbar wäre, ist verboten (Agents.md: „Keine
+ohne Sidecar nicht wiederherstellbar wäre, ist verboten (AGENTS.md: „Keine
 zentrale DB-Funktion, die ohne Sidecar-Datenverlust verursachen würde";
 `sidecar.md` § Ziel).
 
@@ -300,7 +300,7 @@ Fehlerfälle sind laut: `Corrupt`, `Conflict`, `InvalidSidecar` — nie still.
 - Ein Reindex-/Rebuild-Lauf mit korrupten Sidecars endet mit Exit ≠ 0 und
   listet die betroffenen Pfade (Verhalten von `reindex` bleibt erhalten).
 - `schema_version` des Sidecars und Schemaversion des Indexes werden getrennt
-  migriert und validiert (Agents.md, Architekturgrenzen).
+  migriert und validiert (AGENTS.md, Architekturgrenzen).
 - Relative Bezüge bleiben beim Verschieben eines Sidecar-Bundles gültig;
   absolute Pfade sind in persistenten Index- und Rezeptdaten verboten.
 - Reproduzierbarkeit vor stillem Fallback (`feature/README.md` §„Invarianten"):

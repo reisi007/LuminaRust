@@ -104,7 +104,7 @@ Decodierung trägt.
    Zustand, bevor er snapshottet. Die frühere, absolute Formulierung widersprach
    damit dem eigenen Golden und wurde durch die klassenspezifische ersetzt.
    **Dies hebt die Widersprüchlichkeit zwischen `golden-fixtures.md` Regel 5 und
-   `Agents.md` §Definition of Done auf:** `Agents.md` erlaubt Chrome-Goldens mit
+   `AGENTS.md` §Definition of Done auf:** `AGENTS.md` erlaubt Chrome-Goldens mit
    Fehlerzustand; die geklärte Regel 5 erlaubt genau das und verbietet es nur
    Klasse R.
 6. **Fremde Änderungen am Ordnerbaum sind Kopplungen.** Der Ordnerbaum zählt
@@ -164,7 +164,7 @@ einer Klasse zugeordnet:
   UI-Chrome und Layout (Smoke, Panel, Scrollposition, Empty State, Dialog, Toast,
   über dem Preview gezeichnete Overlays). **Eine Chrome-Invariante darf niemals
   als Beleg für eine Bildpipeline-Regression zitiert werden** (siehe
-  `Agents.md` „Keine stillen Fallbacks“ und die DoD-Prüfung auf
+  `AGENTS.md` „Keine stillen Fallbacks“ und die DoD-Prüfung auf
   tatsächliche Testabdeckung).
 
 Die Spalte **Nachweis-Scope** sagt zusätzlich, *worauf* eine Render-Invariante
@@ -556,7 +556,7 @@ Worker-Pool läuft in eigenen Threads) — dadurch sank die Einzeltestzeit von
 
 ## 7. Verweise
 
-- `Agents.md` (Verifikationsregeln, Anti-Gaming), `DoD.md` §7
+- `AGENTS.md` (Verifikationsregeln, Anti-Gaming), `DoD.md` §7
 - `scripts/golden_inventory.txt` — die **maschinenlesbare Quelldatei** des
   Inventars (eine Zeile je Golden: Dateiname, Klasse `R`/`C`, Test-Target).
   Die Klassifikation dieses Abschnitts ist eine menschliche Entscheidung; diese

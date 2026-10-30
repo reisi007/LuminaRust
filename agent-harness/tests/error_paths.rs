@@ -1,7 +1,7 @@
 //! AGENT-HARNESS-3 Fehlerpfade: fehlendes Bild, fehlendes Sidecar,
 //! fehlendes Modell → laut (Status/Fehlertext), nie stiller Fallback.
 //!
-//! Produktregel (Agents.md): Reproduzierbarkeit vor stillem Fallback;
+//! Produktregel (AGENTS.md): Reproduzierbarkeit vor stillem Fallback;
 //! fehlende/inkompatible Artefakte werden sichtbar als veraltet oder nicht
 //! verfügbar gemeldet.
 

@@ -12,7 +12,7 @@
 //!   requires **all** placeholder variables; undeclared references, missing or
 //!   unknown variables and values violating registry limits are loud errors.
 //!
-//! Failure policy (Agents.md): every deviation is rejected loudly — never
+//! Failure policy (AGENTS.md): every deviation is rejected loudly — never
 //! silently normalized, skipped, or defaulted. No absolute paths are stored.
 
 use std::collections::{BTreeMap, BTreeSet};

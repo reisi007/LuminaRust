@@ -14,7 +14,7 @@ name: Matrix (nightly)
 # Honest scope on GitHub-hosted runners: there is no Metal/GPU adapter, so this
 # job proves the **CPU reference regression** (the committed PSNR goldens) only.
 # GPU parity is proven locally with `lumina matrix --require-gpu` (see the SOLL
-# and `Agents.md` § GPU-Tests); this workflow never claims a GPU verdict — the
+# and `AGENTS.md` § GPU-Tests); this workflow never claims a GPU verdict — the
 # runner would report every `gpu`-expected recipe as an unexpected CPU route.
 on:
   schedule:

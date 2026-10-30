@@ -1,7 +1,7 @@
 //! LRPAR-G14-DENOISE-IMPL-20 integration tests for the real ONNX Runtime
 //! denoise path (`onnx-rt` feature).
 //!
-//! Real denoise weights are neither committed nor downloadable (Agents.md: no
+//! Real denoise weights are neither committed nor downloadable (AGENTS.md: no
 //! spontaneous downloads), so — exactly like `face_ort.rs` / `ort_backend.rs` —
 //! these tests use the committed, hash-pinned behavior fixture
 //! `fixtures/lumina-crafted-reducemax.onnx` (a minimal deterministic ReduceMax

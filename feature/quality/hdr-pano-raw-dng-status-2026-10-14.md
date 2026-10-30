@@ -235,4 +235,4 @@ braucht `scripts/check_test_orphans.sh lumina-cli` einen frischen
   `feature/quality/fixtures-licensing.md` §4
 - Nachbar-Status: `feature/quality/pipeline-crop-early-2026-10-13.md`
   (PIPELINE-CROP-EARLY-9, E1)
-- DoD §9 (Wanduhr-/Messungskonvention), `Agents.md` (Hardware-Gate)
+- DoD §9 (Wanduhr-/Messungskonvention), `AGENTS.md` (Hardware-Gate)

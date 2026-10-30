@@ -1,7 +1,7 @@
 # Definition of Done (DoD) — normativ
 
 Diese Datei ist die verbindliche Prüfliste für „fertig" in LuminaRust. Sie wird
-von `Agents.md` (§ Definition of Done, § Verifizierung) referenziert und ist
+von `AGENTS.md` (§ Definition of Done, § Verifizierung) referenziert und ist
 für Implementierungs- und Verifizierungs-Agenten gleichermaßen bindend.
 Begründung: Manueller GUI-Test 2026-09-04 (Histogramm-Attrappe, Slider ohne
 Sidecar-Save) fiel durch alle bestehenden Gates — die Regeln unten schließen
@@ -117,7 +117,7 @@ beantwortet sind:
   Tabellensummen und Klassenbilanzen werden **maschinell ausgezählt** und die
   Herleitung genannt. Fakten, die sich ohne Zutun ändern (Dateigroessen, Zaehlungen
   aus dem Code), werden **erzeugt und per Drift-Gate geprueft** statt von Hand
-  hingesrieben — die Regeln dazu stehen in `Agents.md` §„Dokumentations- und
+  hingesrieben — die Regeln dazu stehen in `AGENTS.md` §„Dokumentations- und
   Todo-Regeln“.
 - Eine Coverage-Angabe („Control X ist angeklickt") verweist auf den Test **und
   die Geste** — nicht auf den Testnamen allein. Existiert der Test, führt er die

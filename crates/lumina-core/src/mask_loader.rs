@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// This is a **cross-crate contract** with `lumina_onnx::manifest::
 /// INPUT_SPEC_DIGEST_KEY`; the two string literals MUST stay identical.
 /// `lumina-core` intentionally does not depend on `lumina-onnx` (platform-
-/// neutral domain crate, see `Agents.md` architecture boundaries), so the key
+/// neutral domain crate, see `AGENTS.md` architecture boundaries), so the key
 /// is mirrored here rather than imported. ai-masks.md lists
 /// "Vorverarbeitung und Inferenzauflösung" explicitly as mask-identity
 /// components; the digest lets the decision layer detect a changed inference

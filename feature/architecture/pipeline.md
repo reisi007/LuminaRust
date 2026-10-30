@@ -2534,7 +2534,7 @@ Detailstatus in `docs/gpu-bootstrap.md`) ist auf folgenden Stand gebracht:
   (2) >45-MP-Zoom nutzt weiterhin Volltextur-Pooling statt 512²-Tile-Cache
   (M2); (3) der Present-Pfad ist headless nicht automatisiert testbar und
   braucht den nächsten manuellen GUI-Test (Block C).
-- **User-Entscheid 2026-09-12 (volle GPU-Parität, Agents.md
+- **User-Entscheid 2026-09-12 (volle GPU-Parität, AGENTS.md
   Änderungsregeln):** Jede Renderstufe muss auch GPU-tauglich sein — nichts
   bleibt CPU-only. Ein CPU-Fallback wegen nicht implementierter GPU-Stufen
   („Render routed to CPU") ist ein Fail mit Fix-Pflicht (Task

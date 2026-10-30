@@ -14,7 +14,7 @@
 //! image-processing implementation and neither the sidecar schema nor the
 //! merge math changes.
 //!
-//! Failure policy (Agents.md, no silent fallback): every deviation is loud
+//! Failure policy (AGENTS.md, no silent fallback): every deviation is loud
 //! on stderr with exit code 1 — `merge missing:` (a source, the DNG or the
 //! sidecar is gone), `merge stale:` (an existing bundle no longer matches
 //! the sources, only `--force` re-merges), `merge unsupported:` (decode,

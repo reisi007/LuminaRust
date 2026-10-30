@@ -389,7 +389,7 @@ fn g16_the_state_repair_preserves_a_later_manual_value() {
 ///
 /// The earlier version of this test called `clear_stale_auto_tone` itself and
 /// stayed green even when the load path dropped the call — a test seam is not a
-/// production test (`Agents.md`). This one persists a hand value that differs
+/// production test (`AGENTS.md`). This one persists a hand value that differs
 /// from its auto mirror, makes the analysis stale by changing the target
 /// luminance, and reopens the file: only the loaded recipe is asserted on.
 ///

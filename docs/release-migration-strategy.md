@@ -31,7 +31,7 @@ Verwandte, nicht veränderte Quelldokumente (per Link, nicht dupliziert):
 - `docs/adr/0001-sidecar-first.md` →
   [Konsequenzen](adr/0001-sidecar-first.md) (Migration erfordert Backup,
   Bestätigung, CLI-Flag)
-- `Agents.md` → [Persistenz und Sidecars](../Agents.md#persistenz-und-sidecars)
+- `AGENTS.md` → [Persistenz und Sidecars](../AGENTS.md#persistenz-und-sidecars)
   (Sidecar = Quelle der Wahrheit, atomare Writes, keine stillen Fallbacks)
 
 ---
@@ -54,7 +54,7 @@ Verwandte, nicht veränderte Quelldokumente (per Link, nicht dupliziert):
 LuminaRust ist ein nicht-destruktiver RAW-Prozessor. Das Sidecar
 (`<original>.lumina.json` + `<original>.lumina.zdata`) ist die **vollständige,
 portable und autoritative Persistenz** für Lumina-Bearbeitungen
-(`Agents.md` → Persistenz; `feature/README.md` → Invarianten;
+(`AGENTS.md` → Persistenz; `feature/README.md` → Invarianten;
 `docs/adr/0001-sidecar-first.md`). Daraus folgen die harten Regeln für jede
 Schema-/Pipeline-Migration:
 
@@ -64,18 +64,18 @@ Schema-/Pipeline-Migration:
 - **Migration ist explizit, bestätigt, gesichert und atomar.** Sie läuft nie
   automatisch im Hintergrund. Sie erfordert eine ausdrückliche Benutzeraktion
   (CLI-Flag / GUI-Bestätigung), schreibt vorher ein `.bak`-Backup des Originals
-  und ersetzt das Ziel erst durch einen **atomaren Rename** (`Agents.md`,
+  und ersetzt das Ziel erst durch einen **atomaren Rename** (`AGENTS.md`,
   ADR 0001, `feature/README.md` Festgelegte Entscheidungen).
 - **Das Originalbild bleibt immer unberührt.** Eine Migration verändert nur das
   Sidecar; die RAW-Datei wird niemals gelesen-geschrieben.
 - **Kein zentraler Index als Quelle.** Eine optionale SQLite-DB (Phase 9,
   F-064…F-067) darf nie Rezept-, virtuelle-Kopien- oder Maskendefinitionen
   ausschließlich enthalten; sie ist jederzeit vollständig aus Sidecars neu
-  aufbaubar (`Agents.md`, ADR 0001). Dies gilt unverändert für Migrationen:
+  aufbaubar (`AGENTS.md`, ADR 0001). Dies gilt unverändert für Migrationen:
   Ein Rezept wird immer aus dem Sidecar migriert, nie aus dem Index.
 - **Reproduzierbarkeit vor Komfort.** Fehlende oder inkompatible Artefakte
   werden sichtbar als veraltet/nicht verfügbar gemeldet; ein automatischer
-  stiller Fallback ist verboten (`Agents.md` → Änderungsregeln).
+  stiller Fallback ist verboten (`AGENTS.md` → Änderungsregeln).
 
 ---
 
@@ -211,7 +211,7 @@ Ziel wird erst durch den Rename ersetzt. Verwaiste Temparteien werden über
 ## 3. Schema-Versions-Split
 
 Es gibt **zwei unabhängige Versionsachsen**, die bewusst getrennt behandelt
-werden (`feature/README.md` Festgelegte Entscheidungen; `Agents.md` →
+werden (`feature/README.md` Festgelegte Entscheidungen; `AGENTS.md` →
 Architekturgrenzen; `feature/architecture/sidecar.md` → Manifest;
 `feature/architecture/pipeline.md` → Bearbeitungsregler):
 
@@ -303,7 +303,7 @@ Flag“) und ADR 0001.
   umdeuten.
 - Dokumentiere die Semantik des Bumps **zuerst** im betroffenen Feature-Dokument
   (`feature/architecture/*.md`) und verlinke ihn, bevor Code landet
-  (`Agents.md` Arbeitsablauf Schritt 4; `feature/README.md` Arbeitsweise).
+  (`AGENTS.md` Arbeitsablauf Schritt 4; `feature/README.md` Arbeitsweise).
 
 ### 5.2 Sichern (Backup)
 
@@ -387,7 +387,7 @@ Was Konsumenten (CLI, GUI, zukünftige Releases) **annehmen dürfen**:
 
 ## 7. Test-/Verifikationserwartungen
 
-Gemäß `Agents.md` (Verifizierung und Tests) und den bestehenden Tests in
+Gemäß `AGENTS.md` (Verifizierung und Tests) und den bestehenden Tests in
 `crates/lumina-sidecar/src/lib.rs`:
 
 - **JSON-Roundtrip- und Schema-Migrationstests** (vorhanden):
@@ -411,7 +411,7 @@ Gemäß `Agents.md` (Verifizierung und Tests) und den bestehenden Tests in
   zu schreiben (Roundtrip + Atomic-Write + Recovery/Conflict), der die neue
   Funktion tatsächlich abdeckt (Pre-MVP-Ausnahme entfällt, §4). Der
   unabhängige Verifizierungs-Agent prüft ausdrücklich, ob die Tests die
-  Migration abdecken (`Agents.md` → Verifizierungs-Agent).
+  Migration abdecken (`AGENTS.md` → Verifizierungs-Agent).
 - **Richtlinie für künftige Bumps:** Jeder neue `migrate_json`-Zweig wird im
   selben Commit mit (a) Roundtrip-Test, (b) Datei-Migrations-Test inkl.
   `.bak`-Nachweis und (c) „neuere Version wird abgelehnt“-Test ausgeliefert.

@@ -79,7 +79,7 @@ pub const MAX_SOURCE_ACTIONS: usize = 7;
 /// `|mean signed error| ≤ 0.05`. A non-empty result means running the GPU path
 /// would **silently drop** those stages and produce different pixels than every
 /// CPU build — callers must route such renders to the CPU pipeline instead
-/// (Agents.md: no silent fallbacks). Schema-invalid recipes are not "unsupported
+/// (AGENTS.md: no silent fallbacks). Schema-invalid recipes are not "unsupported
 /// stages": [`validate_gpu_recipe`] rejects them at the GPU entry with the CPU
 /// oracle's own error.
 ///

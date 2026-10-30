@@ -83,7 +83,7 @@ dass jeder geschlossene Befund **zwei** Dinge bekommt:
 2. einen **Eintrag in einem Sicherheits-/Risikoregister des Repos**.
 
 LuminaRust hatte beides nicht: es gab kein Register und keine
-Security-Review-Pflicht in `Agents.md`/`DoD.md`. Die Eigentümerentscheid vom
+Security-Review-Pflicht in `AGENTS.md`/`DoD.md`. Die Eigentümerentscheid vom
 2026-10-20 nimmt den Flow an und beauftragt dieses Dokument als
 **Register-Ort**.
 
@@ -1284,7 +1284,7 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   Für die geprüften Oberflächen gilt das Gegenteil: dort stehen die Ergebnisse
   in §3 — „geprüft" heißt dort „gemessen und belegt", **nicht** „sicher".
 - **Kein Aufgaben- und kein Bug-Tracker.** Aufgaben, Entscheidungen und
-  Folgearbeiten stehen in `Agents.todo.md` (Regel in `Agents.md`, Abschnitt
+  Folgearbeiten stehen in `Agents.todo.md` (Regel in `AGENTS.md`, Abschnitt
   „Dokumentations- und Todo-Regeln").
 
 ---
@@ -1296,7 +1296,7 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   ein eigener Vorgang und wird durch dieses Register weder ersetzt noch
   verändert.
 - **CI-Red, Golden-Tests und der Build-/Verify-Ablauf** bleiben unberührt. Der
-  Build-/Verify-Flow (`build-verify`-Skill, `Agents.md`, Rollen
+  Build-/Verify-Flow (`build-verify`-Skill, `AGENTS.md`, Rollen
   „Implementierungs-Agent"/„Verifizierungs-Agent") ist der Ablauf, in dem
   spätere Wellen laufen; dieses Register hängt sich als Nachweisliste daran
   (Stage 6), ohne ihn zu verändern.
@@ -1350,7 +1350,7 @@ stehen** (Kandidaten für eine **weitere** Basis-Erweiterung):
   Implementierungs- und Verifizierungs-Agenten; Welle 1 ist gelaufen, ihr
   Ergebnis steht in §3.
 - Die **Ablage im Feature-Index** (`feature/README.md`) macht der Build-Agent.
-- Ob und wo eine **Security-Review-Pflicht** in `Agents.md`/`DoD.md` verankert
+- Ob und wo eine **Security-Review-Pflicht** in `AGENTS.md`/`DoD.md` verankert
   wird, ist eine **eigene** Entscheidung des Eigentümers; dieses Dokument
   nimmt sie nicht vorweg.
 - Die **Scope-Frage GUI** (Datei-Eingabe/-Ausgabe über `lumina-gui`) ist am

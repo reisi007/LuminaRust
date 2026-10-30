@@ -7,7 +7,7 @@ currently falls back to the CPU pipeline in `lumina-core`. This document is the
 plan that parallel subagents implement against; it is the source of truth for the
 GPU DAG until a dedicated feature doc is split out.
 
-## Architecture boundary (per `Agents.md`)
+## Architecture boundary (per `AGENTS.md`)
 
 - `lumina-core` stays **platform-neutral** and CPU-only (`Vec<u8>` frames). It is
   never allowed to depend on `wgpu`, `lumina-raw`, or any native/GPU crate.
@@ -245,7 +245,7 @@ Therefore:
 - `GpuContext::render_with_gpu` validates before rendering: with an adapter
   bound and an unsupported recipe it **explicitly routes the render to the full
   CPU pipeline** and logs once per unique reason set (`log::info!`, never per
-  frame). The GPU is an accelerator, never a semantic change (Agents.md: no
+  frame). The GPU is an accelerator, never a semantic change (AGENTS.md: no
   silent fallbacks).
 - The CLI routing layer (`render_best_effort` in `lumina-cli`) additionally
   checks context-level features that exist only on the CPU path — active-copy
@@ -306,7 +306,7 @@ GPU adapter unavailable - skipped equivalence check
 and returns, so the suite stays green on GPU-less machines while still performing
 the real comparison wherever a GPU exists.
 
-### No silent fallback (per `Agents.md`)
+### No silent fallback (per `AGENTS.md`)
 
 Since REVIEW-GPU-DIVERGENCE-1, `render_with_gpu` validates the recipe and
 explicitly CPU-routes anything its tone stage cannot render (see "Recipe

@@ -274,7 +274,7 @@ ungültiges Rezept-Set); `2` = clap-Nutzungsfehler. Jeder Fehler nennt Grund und
 betroffenes (Sample, Rezept).
 
 **GPU-Parität und CPU-Routen (Slice 1).** Es gilt die No-Fallback-Doktrin aus
-`Agents.md`: GPU-Fehler werden **hart propagiert** (CLI und MCP identisch); ein
+`AGENTS.md`: GPU-Fehler werden **hart propagiert** (CLI und MCP identisch); ein
 GPU→CPU-Fallback bei Laufzeitfehlern existiert nicht — ein GPU-Fehler ist ein
 Fail mit Fix-Pflicht. Die zuvor beobachtete 24-MP-Dehaze-Grenze war ein
 **4×-Überallokations-Bug** im Dark-Channel-Staging

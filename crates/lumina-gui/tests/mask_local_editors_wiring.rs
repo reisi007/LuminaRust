@@ -4,7 +4,7 @@
 //!
 //! # What this file claims — and what it does not
 //!
-//! `Agents.md` is explicit that "a module with tests that is never drawn
+//! `AGENTS.md` is explicit that "a module with tests that is never drawn
 //! anywhere is **not integrated**", and that a painted-but-not-clickable
 //! control proves nothing. Those are two different claims, so they live in two
 //! files:

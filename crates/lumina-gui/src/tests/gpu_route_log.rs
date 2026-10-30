@@ -3,7 +3,7 @@
 //!
 //! Own file rather than a slice of `tests/gpu_routing.rs`: that module sits at
 //! its committed size under the file-size ratchet, and the project rule is to
-//! extract a new thematic module instead of growing one (`Agents.md`, ratchet
+//! extract a new thematic module instead of growing one (`AGENTS.md`, ratchet
 //! note in `crop_display_and_denoise_policy.rs`).
 //!
 //! What is under test, and what is deliberately *not*:

@@ -356,7 +356,7 @@ pub fn render_copy(
 /// via [`GpuContext::set_camera_white_balance`] (validated there with the
 /// oracle's error, never re-applied), so identical source + sidecar produce
 /// identical pixels across feature sets. The GPU is an accelerator, never a
-/// semantic change (Agents.md: no silent fallbacks).
+/// semantic change (AGENTS.md: no silent fallbacks).
 #[cfg(feature = "gpu")]
 fn render_best_effort(
     ctx: Option<&GpuContext>,
@@ -627,7 +627,7 @@ mod routing_tests {
 
     /// Invariant of both routing fixes: the CPU branch stays byte-identical to
     /// the reference pipeline — routing changes never alter CPU pixels
-    /// (`Agents.md`: CPU is the oracle).
+    /// (`AGENTS.md`: CPU is the oracle).
     #[test]
     fn cpu_branch_matches_render_frame_byte_identically() {
         let frame = gradient_frame(16, 16);

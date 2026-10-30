@@ -227,7 +227,7 @@ Beim Aktivieren von Bild N wird ein **asymmetrisches Fenster** vorbereitet:
 
 ## Kein stiller Fallback, Veraltung sichtbar
 
-Es gelten die Agents.md-Invarianten:
+Es gelten die AGENTS.md-Invarianten:
 
 - Ein Cache-Miss ist ein **Performance-Ereignis, kein Fallback**: Die Zelle
   zeigt den Lade-/Berechnungszustand sichtbar an („wird vorbereitet"), bis

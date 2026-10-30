@@ -211,7 +211,7 @@ impl TiledCache {
     /// that was rendered from a different one.
     ///
     /// Returns the number of purged entries so callers can log/report the
-    /// invalidation loudly rather than leaving it implicit (Agents.md: no silent
+    /// invalidation loudly rather than leaving it implicit (AGENTS.md: no silent
     /// fallbacks).
     pub fn set_generation(&mut self, generation: u64) -> usize {
         self.core.set_generation(generation)

@@ -2,7 +2,7 @@
 
 Verbindliche Arbeitsregeln für die Umsetzung und Verifikation dieses Workspaces
 auf **headless** Maschinen: kein Display, kein wgpu-Adapter, gemeinsam
-genutzter Build-Host. Ergänzt `Agents.md` (Arbeitsregeln) und `DoD.md`
+genutzter Build-Host. Ergänzt `AGENTS.md` (Arbeitsregeln) und `DoD.md`
 (normative Verifikation); es ersetzt nichts davon.
 
 **Für wen diese Datei gilt:** jeden Build- oder Verifikations-Agenten auf so

@@ -14,7 +14,7 @@ CI **nie** verifiziert.
 `feature/platform/capability-matrix.md` (LibRaw-Pin, native Fähigkeiten),
 `feature/quality/fixtures-licensing.md` (F-073/F-078 Fixture- und
 Lizenzregeln), `feature/quality/performance-benchmarks.md` (F-074 Baseline- und
-Budget-Stores als Vorbild für gepinnte Stores), `Agents.md` (Dateigrößen- und
+Budget-Stores als Vorbild für gepinnte Stores), `AGENTS.md` (Dateigrößen- und
 Verifikationsregeln).
 
 ---
@@ -1041,7 +1041,7 @@ sh scripts/golden_ref.sh record --confirm "GOLDEN-BASELINE-32: <Plattform> / <To
    Golden-Diffs die eigentlichen Schranken sind — nicht der Zahlenvergleich.
 4. **Jedes `record` ist ein eigener, begründeter Commit** mit der Begründung
    als Kommentarzeile im Lock. Der Build-Agent committet; ein Implementierungs-
-   Agent committet nie (`Agents.md`).
+   Agent committet nie (`AGENTS.md`).
 5. **Keine stillen Anpassungen.** Es gibt keine Toleranz, keinen
    „close enough"-Modus und kein Feld, das bei Abweichung stillschweigend
    übersprungen wird.
@@ -1064,7 +1064,7 @@ sh scripts/golden_ref.sh record --confirm "GOLDEN-BASELINE-32: <Plattform> / <To
 Begründung: GitHub-Actions-Runner haben keinen GPU-Zugriff (kein
 Metal-Compute), alle `egui_kittest`-Tests sind deshalb `#[ignore]`, und der
 `lumina-gpu`-Pfad kann in CI nur kompiliert, nicht ausgeführt werden
-(`Agents.md`, `feature/platform/capability-matrix.md`). Ein CI-Job, der die
+(`AGENTS.md`, `feature/platform/capability-matrix.md`). Ein CI-Job, der die
 Goldens „prüft", würde entweder dauerhaft grün sein, ohne etwas zu prüfen, oder
 bei jedem Runner-Drift rot werden und als Produktfehler fehlgedeutet.
 

@@ -286,7 +286,7 @@ pub use validate::validate_gpu_recipe;
 /// yields the identity plane.
 ///
 /// Errors carry the offending layer index/dimensions instead of silently
-/// resampling or cropping (`Agents.md`: no silent fallbacks). An empty slice
+/// resampling or cropping (`AGENTS.md`: no silent fallbacks). An empty slice
 /// is `Ok(None)` — "no effective mask" is a valid state, distinct from an
 /// error.
 pub fn combine_mask_planes(planes: &[MaskPlane]) -> Result<Option<MaskPlane>, String> {
@@ -556,7 +556,7 @@ impl GpuContext {
 /// not just
 /// `ImageFrame::apply_recipe`. That keeps the CPU fallback a *complete*
 /// reference for every recipe-driven stage the GPU reports as unsupported
-/// (Agents.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
+/// (AGENTS.md: CPU bleibt vollständige Referenz; kein stiller Fallback).
 ///
 /// Render-context inputs the recipe-only GPU API does not carry (mask layers,
 /// Lensfun correctors) are `None`/empty here; a caller that owns them must

@@ -8,7 +8,7 @@
 //!
 //! 1. A cache miss emits exactly one greppable `trace!` line, a hit emits none.
 //!    That is the seam the SOLL names for a manual `RUST_LOG=trace`
-//!    acceptance run (Agents.md R5-LOG-1), so it is pinned rather than
+//!    acceptance run (AGENTS.md R5-LOG-1), so it is pinned rather than
 //!    promised.
 //! 2. The TOCTOU guard: a file mutated *while* it is being hashed yields a
 //!    torn digest that belongs to no key, and the memo's single write path

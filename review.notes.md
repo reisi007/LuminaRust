@@ -307,7 +307,7 @@
   Kopie, ungesicherter Recipe-Draft) ist von diesem Todo **bewusst
   ausgeklammert** — falls überhaupt, gehört das in eine separate, klar
   abgegrenzte Persistenz (z. B. Draft/Session-Datei, nicht das autoritative
-  Sidecar; keine stillen Overwrites gemäß Agents.md). Dieses Todo betrifft NUR
+  Sidecar; keine stillen Overwrites gemäß AGENTS.md). Dieses Todo betrifft NUR
   das reine Layout/UI-State.
 - **Lösungsrichtung (konzeptionell, nicht implementiert):** UI-Layout-State über
   egui `ctx.storage()` / `Persistence` (Viewport) oder eine kleine portable

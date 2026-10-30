@@ -42,7 +42,7 @@ Nicht-Destruktion und Reproduzierbarkeit haben Vorrang vor stillen Fallbacks:
 Eine Generative-Edit-Operation ist nur dann „aktuell", wenn Quelle,
 Decode-Kontext, Modellkontext, Prompt, Seed, Canvas-Geometrie und
 Artefakt-Prüfsumme übereinstimmen (analog zu den Regeln für AI-Masken,
-Agents.md „AI-Masken").
+AGENTS.md „AI-Masken").
 
 ## Ist-Stand
 
@@ -199,7 +199,7 @@ Bis dahin wird **kein Crate-Code** angelegt.
 ## Normative Invarianten
 
 Für GEN-EXPAND-1 gelten die Produktprinzipien und Invarianten aus
-`feature/README.md` (§„Invarianten") sowie die Persistenzregeln aus `Agents.md`
+`feature/README.md` (§„Invarianten") sowie die Persistenzregeln aus `AGENTS.md`
 (§„Persistenz und Sidecars") unverändert und werden hier für die generative
 Stufe konkretisiert:
 
@@ -232,7 +232,7 @@ Stufe konkretisiert:
 
 Die Stufe wird als additive, versionierte Rezept-Operation der jeweiligen
 virtuellen Kopie gespeichert (analog `source_actions` als Pre-MVP-Muster;
-Schema- und Migrationsentscheidung vor Einführung, Agents.md
+Schema- und Migrationsentscheidung vor Einführung, AGENTS.md
 Änderungsregeln). Struktur (normativ, Felder siehe Tabelle):
 
 ```json
@@ -493,7 +493,7 @@ zugeschnitten wird.
 
 Eine Generative-Edit-Operation ist **gültig** (`valid`), wenn alle folgenden
 Punkte übereinstimmen; jede Abweichung markiert sie als `stale` (sichtbar, keine
-automatische Re-Generierung als einzige Option, Agents.md „AI-Masken").
+automatische Re-Generierung als einzige Option, AGENTS.md „AI-Masken").
 Die Identität ist analog zu AI-Masken vollständig und umfasst:
 
 - **Quelle:** `source.content_hash` (BLAKE3 über Quellbytes) und relevante
@@ -643,7 +643,7 @@ manueller Expand **vor** Crop (und nach Perspective).
   virtuellen Kopie (eigenes Rezept, stabile ID). Das generierte Artefakt kann
   auf Quellbild-Ebene geteilt werden, wenn Quellkontext, Modellkontext und
   Canvas-Geometrie identisch sind; Masken-Layer, Invertierung und lokale
-  Anpassungen bleiben kopienspezifisch (Agents.md, „Virtuelle Kopien").
+  Anpassungen bleiben kopienspezifisch (AGENTS.md, „Virtuelle Kopien").
 - **History/Reproduzierbarkeit:** Ein Rezept-Snapshot rendert byte-identisch
   erneut, wenn alle obigen Identitätsbestandteile (inkl. der drei neuen Flags)
   unverändert sind.
@@ -787,7 +787,7 @@ Nach GUI-STAGE-1/GUI-WGPU-PRESENT-1 (Native Desktop):
 ## Testanforderungen
 
 Jede Implementierung von GEN-EXPAND-1 muss vor Verifizierung mindestens diese
-Prüfungen bestehen (Agents.md § Verifizierung und Tests; Analogie zu
+Prüfungen bestehen (AGENTS.md § Verifizierung und Tests; Analogie zu
 AI-Masken/virtuellen Kopien):
 
 - **Roundtrip und Schema:** JSON-Roundtrip für `GenerativeEdit` (alle Felder,

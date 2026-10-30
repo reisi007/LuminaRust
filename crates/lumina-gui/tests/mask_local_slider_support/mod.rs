@@ -7,7 +7,7 @@
 //!
 //! Extracted from `mask_local_editors_support` (the shared core) because the
 //! tone-curve test target does not drag sliders — keeping a helper in the core
-//! that only one consumer calls would be dead code, and `Agents.md` forbids
+//! that only one consumer calls would be dead code, and `AGENTS.md` forbids
 //! closing a `-D warnings` gate with an `allow` attribute.
 
 use super::mask_local_editors_support::{nodes, settle};

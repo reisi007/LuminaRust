@@ -21,7 +21,7 @@
 //!
 //! Platform-neutral by design (plain RAM). A GPU/VRAM variant is deliberately
 //! out of scope here (`lumina-core` must stay GPU-free; see GPU-STAGE-1 /
-//! Agents.md).
+//! AGENTS.md).
 
 use crate::ImageFrame;
 use std::collections::HashMap;

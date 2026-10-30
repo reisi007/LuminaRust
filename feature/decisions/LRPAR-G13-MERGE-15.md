@@ -88,7 +88,7 @@ Golden-Gates unverändert (Hasher/Re-Import-Anker).
 ## Normative Invarianten
 
 Für G-13 gelten die Produktprinzipien und Invarianten aus `feature/README.md`
-(§„Invarianten") sowie die Persistenzregeln aus `Agents.md` (§„Persistenz und
+(§„Invarianten") sowie die Persistenzregeln aus `AGENTS.md` (§„Persistenz und
 Sidecars") unverändert und werden hier für den Merge konkretisiert:
 
 - **Originale unverändert:** Keine Quelldatei wird überschrieben,
@@ -141,7 +141,7 @@ Konsequenzen:
   Renderpipeline implementiert.
 - `lumina-core` bleibt plattformneutral (keine Dateisystem-/DNG-IO im
   Core; IO liegt in `lumina-merge`/`lumina-cli`).
-- Rezeptversion und Pipelineversion werden getrennt validiert (Agents.md,
+- Rezeptversion und Pipelineversion werden getrennt validiert (AGENTS.md,
   Architekturgrenzen); die Merge-Stufe erhält eine eigene Version
   (`merge_version`, s. Rezept-Vorschlag).
 - Shortcuts `Cmd/Ctrl+H` (HDR) und `Cmd/Ctrl+M` (Panorama) sind GUI-Aktionen,
@@ -257,7 +257,7 @@ Folge-Task fest):
 
 Neues, additives Merge-Rezept (Version 1, eigene `merge_version`,
 getrennt von `recipe_schema_version`/`pipeline_version`). Vorschlag für
-den Folge-Task (Schema-Entscheid vor Code, Agents.md Änderungsregeln):
+den Folge-Task (Schema-Entscheid vor Code, AGENTS.md Änderungsregeln):
 
 ```json
 {
@@ -334,12 +334,12 @@ Der Schema-Folge-Task (`lumina-sidecar`, Modul `merge_recipe`) legt fest:
   darin liegt das Merge-Rezept (Provenienz: Quell-Hashes, Decode-Kontexte,
   Alignment, DNG-Prüfsumme). Die Quell-Sidecars werden **nicht** verändert.
 - **Virtuelle Kopien:** Das Merge-DNG erhält mindestens die
-  Standardkopie mit eigenem vollständigem Rezept (Agents.md-Regel);
+  Standardkopie mit eigenem vollständigem Rezept (AGENTS.md-Regel);
   Merge-Provenienz liegt auf Quellbild-Ebene und darf kopienübergreifend
   geteilt werden, lokale Anpassungen gehören zur jeweiligen Kopie.
 - **Artefaktverweise:** DNG-Verweis mit relativem Pfad, Format, Prüfsumme
   (BLAKE3), Auflösung, Kanaltyp, Datenversion (analog Masken-Artefakt-
-  Metadaten, Agents.md). Absolute Pfade verboten.
+  Metadaten, AGENTS.md). Absolute Pfade verboten.
 - **Veraltung:** Merge-DNG ist gültig, wenn Quell-Hashes, Decode-Kontexte
   und DNG-Prüfsumme übereinstimmen. Bei Abweichung → Status `stale`
   (sichtbar in CLI/GUI), Re-Merge nur auf Anforderung. Fehlendes DNG oder

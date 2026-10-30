@@ -62,7 +62,7 @@ die Anker-Form, nicht die Aussage.
 `crates/lumina-mcp/Cargo.toml` (Abschnitte `[package]`, `[dependencies]`,
 `[features]`, `[dev-dependencies]`), `scripts/check_file_sizes.sh`,
 `scripts/file_size_baseline.txt`, `Agents.todo.md` → Eintrag `MCP-PARITY-C`,
-`Agents.md` § „Änderungsregeln" (Regel „Volle GPU-Parität"),
+`AGENTS.md` § „Änderungsregeln" (Regel „Volle GPU-Parität"),
 `feature/platform/mcp-server.md` (Kopf-Status-Block und § „CLI-Abdeckung — Ist-Stand
 und offene Lücke").
 
@@ -305,7 +305,7 @@ Befund aus den Quellen:
 **Einordnung (SOLL-Entscheid):** der MCP-Pfad braucht den GPU-Paritätsbeweis
 **nicht**, und er darf ihn auch nicht behaupten. Der Merge-Teil hat genau dieselbe
 Grenze gezogen (Merge-SOLL §8 „Gates, die ausdrücklich **nicht** behauptet
-werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `Agents.md`
+werden": „GPU/Adapter: nicht berührt, Merge ist CPU/pure-Rust"; `AGENTS.md`
 § „Verifizierung und Tests" (Regel „GPU-Tests (lumina-gpu)": ein GPU-Thema gilt
 ohne lokalen Lauf als nicht getestet). Die Matrix ist
 CPU-reproduzierbar gebaut — das nightly beweist die CPU-Referenz-Regression

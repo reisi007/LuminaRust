@@ -3169,7 +3169,7 @@ verwaltet und analysiert das Terminal-Log. Kein Befund ohne Log-Stelle.
 #### F-103-N6 Runde 6 Befunde (2026-09-20, manueller Akzeptanz-Run, Release `a3a2e5c`, 164-MB-Trace, EXIT 0)
 
 - **R5-LOG-1 (GESCHLOSSEN):** Trace läuft (`level=TRACE`), Switch-/Warmup-/
-  Folder-Traces sind da — die Agents.md-Regel wirkt.
+  Folder-Traces sind da — die AGENTS.md-Regel wirkt.
 - **R6-SCAN-1 (hoch, neu):** Der Library-Erst-Paint-Block ist bewiesen der
   synchrone Folder-Walk: 20× `folder raw count`, Summe **4257,5 ms** gegen
   `switch_to_paint_ms=4258,7 ms` (R4-SWITCH-2-Instrumentierung zahlt sich aus).

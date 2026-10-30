@@ -247,7 +247,7 @@ impl LuminaApp {
         // caller-supplied canvas artifacts. The core frame is the preview — a
         // second post-render expand must not run here (the canvas no longer
         // matches the frame and `validate_with_source` would fail), and the GUI
-        // keeps no generative pixel logic of its own (Agents.md: keine
+        // keeps no generative pixel logic of its own (AGENTS.md: keine
         // GUI-spezifische Bildlogik außerhalb der Pipeline).
         let mask_warnings = output.mask_warnings;
         let mut preview = output.frame;

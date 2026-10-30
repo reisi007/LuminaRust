@@ -9,7 +9,7 @@ Fundstelle berichtigt.)*
 **Referenzen (normativ, unverändert):** `feature/product/ai-masks.md` (F-004, gelesen, nicht geändert),
 `feature/README.md`, `feature/platform/capability-matrix.md`, `feature/quality/fixtures-licensing.md` (F-073/F-078),
 `feature/decisions.md`, `.goal/Goal.md` G-12 (~0 %)
-**Regeln:** `Agents.md` (Sidecar-first, kein stiller Fallback, keine absoluten Pfade, keine privaten Daten,
+**Regeln:** `AGENTS.md` (Sidecar-first, kein stiller Fallback, keine absoluten Pfade, keine privaten Daten,
 Lizenzprüfung vor Integration, Capability-Matrix)
 
 ## 1. Ziel und Nicht-Ziele
@@ -63,7 +63,7 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   (`feature/product/ai-masks.md` Maskenidentität, `fixtures-licensing.md` §5).
 - Tests nutzen ausschließlich lokale, hash-gepinnte Fixtures oder
   deterministische Stubs; kein spontaner Modell-Download, kein Netzwerk
-  (Agents.md-Verifizierungsregeln).
+  (AGENTS.md-Verifizierungsregeln).
 - Bekannte Falle: Export-/Helper-Pakete mit starker Copyleft-Lizenz
   (Analogon zur `ultralytics`-AGPL-Falle in `fixtures-licensing.md` §5) sind
   für Export und Inferenz verboten; zulässig ist nur der direkte Weg
@@ -121,7 +121,7 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   vergeben, wenn er nicht mit F-100-Konventionen kollidiert.
 - Jede sichtbare Funktion braucht vor Implementierung ihren SOLL-Satz im
   betroffenen Feature-Dokument und danach einen headless GUI-Test
-  (`cargo test -p lumina-gui`, ohne GPU), analog Agents.md-GUI-Regel.
+  (`cargo test -p lumina-gui`, ohne GPU), analog AGENTS.md-GUI-Regel.
 
 ### 3.1 Umsetzungsnotiz S5 (2026-09-16, Rework F1–F4/F8/F9)
 
@@ -265,7 +265,7 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
 ## 4. Persistenz-Scope (Sidecar-first)
 
 - **Source of truth ist das Sidecar** (`<name>.lumina.json` + `<name>.lumina.zdata`,
-  relativ, portabel, atomar, keine absoluten Pfade — Agents.md).
+  relativ, portabel, atomar, keine absoluten Pfade — AGENTS.md).
 - **Quellbild-Ebene (geteilt):** Detektionen (Boxen, Landmarken, Scores),
   Embeddings und Cluster-Zuordnungen gehören zur Quelle, nicht zu einer
   Kopie. Begründung: gleiche Pixel, gleiche Gesichter — Re-Inferenz pro
@@ -280,7 +280,7 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
 - **Virtuelle Kopien:** Masken-Layer, Invertierung, Feathering/Blur/Density
   und lokale Regler aus Gesichtsregionen gehören zur jeweiligen virtuellen
   Kopie (eigene vollständige Rezepte, stabile Kopie-IDs, Standardkopie
-  unlöschbar — Agents.md). Die Quellmatte wird pro Kopie unterschiedlich
+  unlöschbar — AGENTS.md). Die Quellmatte wird pro Kopie unterschiedlich
   moduliert, nie in die Quellmatte gebrannt (analog ai-masks.md § Lokale
   Anpassungen).
 - **Identität pro Face-Artefakt (analog AI-Masken):** Quell-Content-Hash +
@@ -299,7 +299,7 @@ ein Wechsel genau einer Stufe invalidiert nur deren abhängige Artefakte
   → `corrupt`. Modellwechsel → keine stille Neuberechnung.
 - **Optionaler Index:** darf Face-Suchdaten cachen, muss aus Sidecars
   vollständig rebuildbar sein und darf nie alleinige Quelle für Personen,
-  Cluster oder Rezepte sein (Agents.md, `feature/architecture/index.md`).
+  Cluster oder Rezepte sein (AGENTS.md, `feature/architecture/index.md`).
 
 ## 5. Abgrenzung Karten/GPS (nie Ziel)
 
@@ -385,6 +385,6 @@ BESTANDEN-Checkliste (`DoD.md` §7).
 - [ ] Keine privaten Daten, keine echten Pfade, keine absoluten Pfade,
       keine Screenshot-/Katalognamen im Dokument.
 - [ ] Unabhängiger Verifizierungs-Agent bestätigt: Entscheid vollständig,
-      widerspruchsfrei zu `Agents.md` / `feature/README.md` /
+      widerspruchsfrei zu `AGENTS.md` / `feature/README.md` /
       `feature/product/ai-masks.md` / `.goal/Goal.md` G-12, und der
       Folge-Task-Vorschlag ist umsetzbar.

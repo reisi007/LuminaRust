@@ -156,7 +156,7 @@ pub fn composite_expand(
 // every rendering. This cache reuses a completed BFS result for an identical
 // generative identity.
 //
-// Identity (analogous to the AI-mask identity in `Agents.md`) is *complete*: it
+// Identity (analogous to the AI-mask identity in `AGENTS.md`) is *complete*: it
 // is the digest of the exact input frame (which already folds in source
 // content, decode context and the full geometry/lens/perspective context)
 // combined with the role discriminator, the `seed`, the target `canvas` **and

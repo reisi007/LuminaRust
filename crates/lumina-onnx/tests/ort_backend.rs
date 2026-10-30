@@ -1,7 +1,7 @@
 //! Integration tests for the real ONNX Runtime backend (`onnx-rt` feature).
 //!
 //! Every test below needs a **loadable** `.onnx` artifact, but real model
-//! weights are neither committed nor downloadable (Agents.md: no spontaneous
+//! weights are neither committed nor downloadable (AGENTS.md: no spontaneous
 //! downloads; fixtures must be reproducible). Instead this file generates the
 //! bytes of a tiny, deterministic ONNX graph by hand — raw protobuf, no
 //! `onnx` crate dependency:

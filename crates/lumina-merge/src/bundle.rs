@@ -26,7 +26,7 @@
 //! full [`SidecarDocument`] plus document-level extras (`"type": "merge"`,
 //! `merge_recipe`, `merge_artifact`).
 //!
-//! Failure policy (Agents.md, no silent fallback): every deviation is loud via
+//! Failure policy (AGENTS.md, no silent fallback): every deviation is loud via
 //! [`MergeRunError`] with the stable prefixes `merge missing:` (a source, the
 //! DNG or the sidecar is gone), `merge stale:` (an existing bundle no longer
 //! matches the sources; only `force` re-merges), `merge unsupported:` (decode,

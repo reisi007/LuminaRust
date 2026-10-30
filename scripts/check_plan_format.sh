@@ -1,7 +1,7 @@
 #!/bin/sh
 # Plan-Format-Schranke (2026-09-28).
 #
-# `Agents.todo.md` darf laut `Agents.md` ausschliesslich **offene, umsetzbare**
+# `Agents.todo.md` darf laut `AGENTS.md` ausschliesslich **offene, umsetzbare**
 # Aufgaben enthalten. Abgeschlossene Punkte werden nach bestaetigter Verifikation
 # **komplett aus der Datei entfernt** — "niemals nur abhaken und niemals in einen
 # neuen Bereich/Block (z. B. 'Erledigt', 'Verifiziert', 'Done') verschieben".
@@ -72,7 +72,7 @@ status=0
 checked=$(grep -c '^- \[x\]' "$plan" || true)
 if [ "$checked" -ne 0 ]; then
     echo "plan_format FEHLER: $checked Eintrag/Eintraege als '- [x]' in $plan" >&2
-    echo "  Agents.md: abgeschlossene Punkte werden nach bestaetigter Verifikation" >&2
+    echo "  AGENTS.md: abgeschlossene Punkte werden nach bestaetigter Verifikation" >&2
     echo "  vollstaendig entfernt, niemals abgehakt. Der erledigte Zustand lebt" >&2
     echo "  in der Git-Historie und in den Feature-Dokumenten." >&2
     grep -n '^- \[x\]' "$plan" | cut -c1-100 >&2

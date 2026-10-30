@@ -33,7 +33,7 @@ ihre Belege aber seit der Anker-Welle 2026-10-25 als Pfad + Symbol):**
 `feature/platform/cli-gui-wasm.md` §HDR/Panorama :278-325,
 `feature/platform/mcp-server.md` :12-15, `feature/quality/golden-fixtures.md`
 §2 :40-69, `sample-data/raw/README.md`, `Agents.todo.md` :409,
-`Agents.md` :317 (Hardware-Gate), `scripts/file_size_baseline.txt`.
+`AGENTS.md` :317 (Hardware-Gate), `scripts/file_size_baseline.txt`.
 
 ## 1. Ziel
 

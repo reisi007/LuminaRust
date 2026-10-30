@@ -28,7 +28,7 @@ lumina-raw = { path = "../lumina-raw" }
 # never on `lumina-mcp`.
 lumina-merge = { path = "../lumina-merge" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (Agents.md, entschieden 2026-10-02)
+serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 blake3 = "1"
 # Logging for backend selection + the `LUMINA_MCP_LOG` level filter.
 # `std` is required for `log::set_boxed_logger` (log 0.4 has no default features).

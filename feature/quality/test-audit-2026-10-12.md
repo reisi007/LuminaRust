@@ -236,7 +236,7 @@ prüfen Listen↔Dispatch-Verhalten.
   kittest-Ziele, insgesamt 77 ignorierte GUI-Tests) hat **kein
   CI-Ausführgate** — gemessen: komplett `#[ignore]` auf GPU-losen Runnern, kein
   Workflow läuft `--ignored` dafür. Nach `DoD.md` §12 und der GPU-Policy
-  (`Agents.md`) ist das „nicht getestet", nicht „grün". Aufgabe: explizites Gate
+  (`AGENTS.md`) ist das „nicht getestet", nicht „grün". Aufgabe: explizites Gate
   (GPU-Runner-Job oder dokumentierter manueller Lauf mit Protokoll) — **nicht**
   Streichen der Tests.
 - **G2:** Die Polarität der cull-Fixture-Generatoren ist unverankert (M-C:

@@ -1,6 +1,6 @@
 # JSON-FLOAT-ROUNDTRIP — Migrations- und Golden-Plan
 
-Normative Grundlage: `Agents.md` Entscheidung `JSON-ROUNDTRIP` (2026-10-02,
+Normative Grundlage: `AGENTS.md` Entscheidung `JSON-ROUNDTRIP` (2026-10-02,
 Variante (a)) und Task `JSON-FLOAT-ROUNDTRIP` in `Agents.todo.md`. Abnahme:
 Feature im Workspace aktivieren, **vor** der Aktivierung diesen Plan aufstellen,
 **danach** nachweisen, dass kein Rezept-Digest sich unbeabsichtigt ändert.

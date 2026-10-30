@@ -33,7 +33,7 @@
 //! [`OnnxError::InferenceFailed`] (`decode_denoise_rgb`), never a silent
 //! reshape.
 //!
-//! Real denoise weights remain `pending-integration` (Agents.md: no downloads),
+//! Real denoise weights remain `pending-integration` (AGENTS.md: no downloads),
 //! so numeric correctness against a real checkpoint is validated when weights
 //! land; the load/verify/tensor-name/contract paths are exercised against the
 //! committed behavior fixture in `tests/denoise_ort.rs`.

@@ -1,7 +1,7 @@
 //! LRPAR-G12-FACE-20 / FACE-20-S2 integration tests for the real ONNX Runtime
 //! face path (`onnx-rt` feature).
 //!
-//! Real face weights are neither committed nor downloadable (Agents.md: no
+//! Real face weights are neither committed nor downloadable (AGENTS.md: no
 //! spontaneous downloads), so — exactly like the subject-model tests in
 //! `ort_backend.rs` — these tests use the committed, hash-pinned behavior
 //! fixture `fixtures/lumina-crafted-reducemax.onnx` (a minimal, deterministic

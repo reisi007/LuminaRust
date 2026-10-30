@@ -1,4 +1,16 @@
 #!/bin/sh
+
+# Agent-rule gates — the preset from ratchet.
+if command -v ratchet >/dev/null 2>&1; then
+  RATCHET_BIN=ratchet
+elif [ -x "$HOME/.local/bin/ratchet" ]; then
+  RATCHET_BIN="$HOME/.local/bin/ratchet"
+else
+  RATCHET_BIN=
+fi
+if [ -n "$RATCHET_BIN" ]; then
+  "$RATCHET_BIN" check --tier fast -q || exit 1
+fi
 # Pre-commit hook. Two independent gates with deliberately different failure
 # modes:
 #

@@ -40,7 +40,7 @@ pub(super) fn init_cli_logger() {
 }
 
 /// Logs the chosen render backend exactly once per process so GPU-vs-CPU
-/// selection is always visible (Agents.md: no silent fallback).
+/// selection is always visible (AGENTS.md: no silent fallback).
 pub(crate) fn log_backend(message: &str) {
     use std::sync::OnceLock;
     static LOGGED: OnceLock<()> = OnceLock::new();

@@ -147,7 +147,7 @@ Rundengeschichte beachten, die dort steht.
 Betreiberwunsch.** `documented`-Quellen unterscheiden die beiden Fälle:
 aus dem Inventar stammend und **fehlend** → **Fail** (Exit ≠ 0) mit konkretem
 Pfad; aus `LUMINA_RAW_FIXTURE` stammend und **fehlend** → `SKIPPED` + Exit 0.
-„Keine stillen Fallbacks bei fehlenden Artefakten" (`Agents.md`) gilt hier
+„Keine stillen Fallbacks bei fehlenden Artefakten" (`AGENTS.md`) gilt hier
 wörtlich: die Fußnote ändert die Klasse nicht, denn ein Gate, das auf den
 Exit-Code schließt, sieht grün.
 
@@ -304,7 +304,7 @@ PSNR-Toleranzen stehen normativ in
   BiRefNet/SAM-2-Gewichte bleiben `pending-integration`. Die Face-Manifeste
   (YuNet/SFace) tragen seit FACE-20-S6 (2026-09-20) verifizierte
   `sha256:<hex>`-Pins, aber die Gewichte werden weiterhin **nicht** committet
-  und **nicht** zur Testzeit geladen (keine spontanen Downloads, Agents.md).
+  und **nicht** zur Testzeit geladen (keine spontanen Downloads, AGENTS.md).
 - Regenerierung: `scripts/regenerate_onnx_fixture.sh`; ein Drift zwischen
   Encoder und Fixture bzw. vom Pin ist ein harter Testfehler.
 

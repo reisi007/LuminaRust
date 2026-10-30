@@ -13,7 +13,7 @@
 //!   resulting coverage. Positive marks blend with `max`; negative marks blend
 //!   with the smaller complementary value, so strokes accumulate cumulatively.
 //!
-//! No GPU, filesystem or GUI dependency in this module (Agents.md: core stays
+//! No GPU, filesystem or GUI dependency in this module (AGENTS.md: core stays
 //! platform-neutral).
 
 use lumina_sidecar::{BrushMark, BrushMarkSign};

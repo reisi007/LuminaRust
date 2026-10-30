@@ -106,7 +106,7 @@ pub(super) fn raw_fixtures() -> Vec<CommittedFixture> {
 /// could decide the file's origin — an absent committed file is always a
 /// failure, and a message can therefore never claim an origin that is not its
 /// own (`DoD.md` §10). A missing, licensed artifact is a failure rather than a
-/// fallback (`Agents.md`), and a committed fixture that is missing is a broken
+/// fallback (`AGENTS.md`), and a committed fixture that is missing is a broken
 /// tree, not an operator request (§3.2.1 **Regel 3**).
 pub(super) fn accept_committed_fixture(fixture: &CommittedFixture) {
     let path = &fixture.path;

@@ -266,7 +266,7 @@ impl ModelManifest {
     /// keep cached masks `valid` despite changed inference semantics
     /// (R2-ONNX-01).
     ///
-    /// # Sidecar impact (documented decision per Agents.md)
+    /// # Sidecar impact (documented decision per AGENTS.md)
     ///
     /// * The digest is an **additive optional** extras entry. Sidecars written
     ///   before this change keep parsing unchanged (`extras` is
@@ -399,7 +399,7 @@ pub const SAM2_INFERENCE_HEIGHT: u32 = 1024;
 /// The family is the Meta "SAM 2.1" release (checkpoint family `092824`,
 /// Apache-2.0). `model_hash` stays `pending-integration` until real,
 /// hash-pinned ONNX fixtures are committed (no spontaneous downloads — see
-/// `Agents.md`).
+/// `AGENTS.md`).
 pub const SAM2_RELEASE_VERSION: &str = "2.1.0";
 
 /// SAM 2.1 model-family variants (F-082).

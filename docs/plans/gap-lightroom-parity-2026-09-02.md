@@ -10,7 +10,7 @@ Plans (Spalte „Datei" der Shortcut-Tabelle) beziehen sich auf den Commit `153d
 `crates/lumina-gui/src/lib.rs` umgestellt; der Store-Verweis (2026-10-20) auf das
 Baseline-/Budgets-Paar `scripts/perf/preview-cache-baseline.json` +
 `scripts/perf/preview-cache-budgets.json` mit `scripts/perf/compare.mjs` umgestellt.
-**Bezug:** `Agents.md`, `Agents.todo.md` (Block A/C, F-103-INTEGRATION-PREVIEW-SIDECAR 43b1b73, CI-ONNX-RT 953987e), `feature/README.md`, `feature/platform/cli-gui-wasm.md` (F-100, F-103, F-010), `feature/architecture/pipeline.md` (F-089..099, F-036, F-042), `feature/architecture/sidecar.md` (F-001), `feature/product/virtual-copies.md` (F-002/F-014/F-009), `feature/product/ai-masks.md` (F-004/F-079..F-083), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/export.md` (F-037), `feature/platform/capability-matrix.md` (F-006/F-069..F-071), `feature/platform/wasm-limits.md`, `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-gui/src/lib.rs` (Module, Shortcuts, Library/Develop Slices), `crates/lumina-core` (`pipeline.rs`, `render.rs`), `crates/lumina-cli`, `crates/lumina-mcp`
+**Bezug:** `AGENTS.md`, `Agents.todo.md` (Block A/C, F-103-INTEGRATION-PREVIEW-SIDECAR 43b1b73, CI-ONNX-RT 953987e), `feature/README.md`, `feature/platform/cli-gui-wasm.md` (F-100, F-103, F-010), `feature/architecture/pipeline.md` (F-089..099, F-036, F-042), `feature/architecture/sidecar.md` (F-001), `feature/product/virtual-copies.md` (F-002/F-014/F-009), `feature/product/ai-masks.md` (F-004/F-079..F-083), `feature/product/spot-removal.md` (SPOT-REMOVE-1), `feature/product/generative-expand.md` (GEN-EXPAND-1), `feature/product/export.md` (F-037), `feature/platform/capability-matrix.md` (F-006/F-069..F-071), `feature/platform/wasm-limits.md`, `docs/plans/gap-generative-fill-transparent-2026-09-02.md` (28b7782), `docs/plans/gui-tests-2026-09-02.md` (T01-T10), `crates/lumina-gui/src/lib.rs` (Module, Shortcuts, Library/Develop Slices), `crates/lumina-core` (`pipeline.rs`, `render.rs`), `crates/lumina-cli`, `crates/lumina-mcp`
 Alle Fundstellen sind ueber `git show `153d4ba`:<pfad> | sed -n '<zeile>p'` rekonstruierbar.
 
 ---
@@ -157,7 +157,7 @@ Wellen-Vorschlag (Ein-Crate-Regel):
 
 ## 5 Visuelle Auto-Verifikation je Gap (keine manuelle Prüfung)
 
-Grundsatz: Deterministische Fixture + Seed + Golden/PSNR-Gate + Histogram-Digest; `UPDATE_SNAPSHOTS=true` nur lokal (GPU), CI nur `cargo test` (ohne `--ignored`), `wasm32` `cargo check` grün halten (Agents.md Verifizierung).
+Grundsatz: Deterministische Fixture + Seed + Golden/PSNR-Gate + Histogram-Digest; `UPDATE_SNAPSHOTS=true` nur lokal (GPU), CI nur `cargo test` (ohne `--ignored`), `wasm32` `cargo check` grün halten (AGENTS.md Verifizierung).
 
 | Gap | Ansatz | Crate | Toleranz/Gate |
 |---|---|---|---|
@@ -189,7 +189,7 @@ Kein manueller Screenshot als Gate: Jeder visuelle Test braucht committeten Gold
 3. **Modell-Lizenz Inpaint/Outpaint:** Viele SOTA Inpaint-Modelle CC BY-NC/AGPL (Analogon `ultralytics` in `fixtures-licensing.md` §5) — kein Code vor Hash/Lizenz-Pin (F-078), `pending-integration` bis LIZ.
 4. **Performance:** 24 MP Canvas Expand 96 MiB + 45 MP Desktop Voll-Canvas 180 MiB + Preview-Cache 7 Slots 1.5 GiB + VRAM 1024/4 → 8 GB GUI Budget nur knapp nicht gerissen — F-074 `compare.mjs gate:true` erst nach Kalibrierung.
 5. **Seed-Pflicht:** Inpaint ohne `seed: u64` Pflicht nicht deterministisch — Golden flakey (LR-11 Gate braucht Seed-Pin).
-6. **WASM Parity:** `zdata`/`zstd` native-only, generatives Canvas auf WASM `not available` — Capability-Anzeige muss `inpaint` als nicht verfügbar ausweisen, sonst stiller Fallback (Agents.md).
+6. **WASM Parity:** `zdata`/`zstd` native-only, generatives Canvas auf WASM `not available` — Capability-Anzeige muss `inpaint` als nicht verfügbar ausweisen, sonst stiller Fallback (AGENTS.md).
 7. **Shortcut-Kollision:** `Cmd+H/M` (HDR/Pano) kollidiert mit macOS Hide/Minimize — alternative Belegung oder Menü-only prüfen.
 
 ---

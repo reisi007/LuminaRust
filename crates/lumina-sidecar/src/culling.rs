@@ -8,7 +8,7 @@
 //! any other recipe field — adopting a proposal is an explicit user action per
 //! virtual copy through the normal save/render path.
 //!
-//! Persistence rules (Agents.md, `feature/architecture/sidecar.md`):
+//! Persistence rules (AGENTS.md, `feature/architecture/sidecar.md`):
 //!
 //! - The proposal lives on the **source level** (shared analysis, like the
 //!   shared mask matte); rating/flag/label stay per virtual copy.

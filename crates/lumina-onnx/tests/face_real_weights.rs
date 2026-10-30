@@ -1,7 +1,7 @@
 //! LRPAR-G12-FACE-ADAPTER-25 — optional real-weight smoke test (ignored).
 //!
 //! The real OpenCV Zoo YuNet/SFace artifacts are neither committed nor
-//! downloadable (Agents.md). When the operator supplies them via
+//! downloadable (AGENTS.md). When the operator supplies them via
 //! `LUMINA_FACE_DETECT_MODEL_PATH` / `LUMINA_FACE_EMBED_MODEL_PATH`, this
 //! ignored test loads the **pinned** descriptors against the real graphs and
 //! runs one inference each — the end-to-end proof that the adapter's declared

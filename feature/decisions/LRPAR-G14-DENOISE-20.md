@@ -26,7 +26,7 @@
 
 Stand: **keine Modellfestlegung, keine Gewichte, kein Download** — dieser Abschnitt entscheidet das Verfahren und die Kandidatenklasse, nicht das konkrete Gewicht.
 
-- **Verfahren (verbindlich, aus `fixtures-licensing.md` §§5–6/8 + Agents.md-Änderungsregeln):**
+- **Verfahren (verbindlich, aus `fixtures-licensing.md` §§5–6/8 + AGENTS.md-Änderungsregeln):**
   1. Kandidatenfamilie wählen (s. §4) → konkrete Checkpoint-Quelle (Upstream-Repo + Commit/Tag + Datei) benennen.
   2. Lizenz an der Gewichtsquelle verifizieren (Code-Lizenz ≠ Gewichts-Lizenz; AGPL-/NC-Fallen wie `ultralytics`-Pfad bei SAM 2 oder non-commercial-Denoise-Checkpoints schließen eine Bündelung aus — vgl. `fixtures-licensing.md` §5 „SAM-2-Export-Pfad").
   3. Erst danach: Hash-Pin (`sha256` über exakte `.onnx`-Bytes), `input_spec_digest`, Version, Quell-URL und Lizenz in `fixtures-licensing.md` §5 + `THIRD-PARTY-NOTICES.md` erfassen; Manifest-`model_hash` von `pending-integration` auf Pin umstellen.

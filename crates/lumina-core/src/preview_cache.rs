@@ -87,7 +87,7 @@ impl Default for PreviewEncode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PreviewKey {
     /// BLAKE3 content hash of the source bytes (the critical operation that may
-    /// use the full hash, per Agents.md).
+    /// use the full hash, per AGENTS.md).
     pub source_content_hash: String,
     /// Decode version + geometry/ROI context of the RAW/raster decode.
     pub decode_context: String,
