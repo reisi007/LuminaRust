@@ -18,8 +18,8 @@
       "value": 1
     },
     "rust-file-line-ceiling": {
-      "value": 976,
-      "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling"
+      "value": 1000,
+      "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling — a policy constant, not a measurement; a baseline update must not lower it"
     },
     "unverified-commits": {
       "value": 756
