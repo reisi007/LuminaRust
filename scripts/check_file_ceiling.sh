@@ -1,16 +1,16 @@
 #!/bin/sh
-# Compatibility entry point for the Ratchet v0.6.1 1000-line gate.
+# Compatibility entry point for the Ratchet v0.6.2 1000-line gate.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RATCHET="${RATCHET_BIN:-ratchet}"
 
 if ! command -v "$RATCHET" >/dev/null 2>&1; then
-    echo "ERROR: Ratchet v0.6.1 is required (set RATCHET_BIN or install ratchet on PATH)." >&2
+    echo "ERROR: Ratchet v0.6.2 is required (set RATCHET_BIN or install ratchet on PATH)." >&2
     exit 2
 fi
 version=$("$RATCHET" --version)
-if [ "$version" != "ratchet 0.6.1" ]; then
-    echo "ERROR: expected Ratchet v0.6.1, got: $version" >&2
+if [ "$version" != "ratchet 0.6.2" ]; then
+    echo "ERROR: expected Ratchet v0.6.2, got: $version" >&2
     exit 2
 fi
 

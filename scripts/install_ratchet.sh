@@ -3,4 +3,4 @@
 set -eu
 cargo install --git https://github.com/all-the-rest/ratchet-cli \
     --tag v0.6.1 --locked ratchet
-test "$(ratchet --version)" = "ratchet 0.6.1"
+test "$(ratchet --version)" = "ratchet 0.6.2"

@@ -2,7 +2,7 @@
   "version": 1,
   "rules": {
     "gates-untouched": {
-      "value": 1,
+      "value": 0,
       "reason": "the AGENTS.md rename touches gate scripts and Rust comments in one mechanical commit; the ceiling returns to 0 in the next commit"
     },
     "plan-status-line": {
@@ -18,11 +18,11 @@
       "value": 1
     },
     "rust-file-line-ceiling": {
-      "value": 1000,
+      "value": 976,
       "reason": "RATCHET-CLI-1K-MIGRATION-99: global fallback is fixed at the commissioned 1000-line ceiling"
     },
     "unverified-commits": {
-      "value": 763
+      "value": 756
     }
   }
 }
