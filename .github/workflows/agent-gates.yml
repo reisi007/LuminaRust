@@ -30,5 +30,7 @@ jobs:
         uses: all-the-rest/ratchet-cli@v1
         with:
           mode: validate
+          # This repository names its config ratchet.config.json.
+          config: ratchet.config.json
           version: v0.6.2
           tier: fast
