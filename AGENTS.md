@@ -189,18 +189,11 @@ Er:
 
 ### Direkte Änderungen des Build-Agenten
 
-Der Build-Agent darf kleine, risikoarme Änderungen selbst durchführen:
-
-- reine Dokumentationskorrekturen ohne Änderung des Zielzustands;
-- das Aktualisieren von Inhaltsverzeichnissen und internen Links;
-- einfache `.gitignore`-, CI- und Agentenregel-Anpassungen;
-- das Anlegen oder Aktualisieren von Planpunkten;
-- mechanische Formatkorrekturen ohne Verhaltensänderung.
-
-Auch bei direkten Änderungen prüft der Build-Agent die betroffenen Dateien
-selbst. Betrifft eine Änderung Codeverhalten, Datenformat, Migration,
-Persistenz, Pipeline, Sicherheitsverhalten oder Tests, wird sie wie eine normale
-Implementierungsaufgabe delegiert und **unabhängig verifiziert**.
+Bis 5 Dateien / ~80 Diff-Zeilen implementiert der Build-Agent selbst; darüber
+delegiert er an einen Implementierungs-Agenten (frische Session, voller Auftrag).
+Jede Änderung — auch die eigene — durchläuft Review und CI; was Verhalten,
+Datenformat, Migration, Persistenz, Pipeline oder Sicherheit betrifft, wird
+zusätzlich fachlich geprüft (Skill `build-verify`).
 
 ### Implementierungs-Agent
 
@@ -327,12 +320,17 @@ Umgebung und der reproduzierbare Verifikationslauf
 4. Bei einem Konflikt zuerst `feature/README.md`, das betroffene
    Feature-Dokument und gegebenenfalls ein ADR aktualisieren. Ohne klare
    Zielentscheidung beginnt keine Implementierung.
-5. Die Aufgabe mit Umfang, betroffenen Modulen und Abnahmekriterien an einen
-   Implementierungs-Agenten delegieren.
-6. Implementierung und Tests ausführen lassen.
-7. Einen anderen Subagenten mit unabhängiger Verifizierung beauftragen.
-8. Bei Befunden die Aufgabe an den Implementierungs-Agenten zurückgeben und
-   danach erneut verifizieren lassen.
+5. Implementieren — bis 5 Dateien / ~80 Diff-Zeilen selbst, darüber ein
+   Implementierungs-Agent mit frischer Session und vollem Auftrag (Skill
+   `build-verify`, Schritt 2). Die Schwelle ist Kontext, nicht Kompetenz.
+6. Genau einen Commit pro Aufgabe schreiben (Conventional, explizite Pfade,
+   `Verify:`-Footer nach dem Review). Implementierungs-Agenten committen
+   nicht.
+7. Einen anderen Subagenten mit der Prüfung des **gesamten unpushed Ranges**
+   beauftragen (`git diff origin/main...HEAD`), nicht nur des letzten Commits.
+8. Bei Befunden korrigieren, `git commit --amend`, den Range erneut prüfen
+   lassen. Erst nach `APPROVED` nach `main` mergen (kein PR, siehe
+   „Branch- und Merge-Konvention") und die CI beobachten.
 9. Erst nach bestandener Verifizierung die offene Aufgabe aus
    `Agents.todo.md` entfernen.
 10. Das betroffene Feature-Dokument um den tatsächlich erreichten Status, neue
