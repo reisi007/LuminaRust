@@ -100,7 +100,7 @@ lumina-testskip = { path = "../lumina-testskip" }
 # state. Same crate/version as the normal dependency above.
 blake3 = "1"
 # F-103-N9: headless UI snapshot regression tests via egui_kittest.
-egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 # PREVIEW-CACHE-FEATURE (F-074): Criterion bench for the hybrid neighbor preview
 # cache primitives (WebP hit/miss, RAM-LRU hit, prefetch-window planning). The
 # harness is a native-only target (`harness = false`, ADR 0003 spirit — see
