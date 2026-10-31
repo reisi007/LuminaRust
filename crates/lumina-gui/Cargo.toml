@@ -11,7 +11,7 @@ blake3 = "1"
 # swapchain — enabling the readback-free present path (`copy_vram_to_texture`
 # → registered egui user texture). The lumina-gpu capability stays
 # feature-gated (see `gpu` below).
-eframe = { version = "0.36", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
 serde_json = { version = "1", features = ["float_roundtrip"] } # JSON-ROUNDTRIP (AGENTS.md, entschieden 2026-10-02)
 # F-009: the `<name>.lumina-preset.json` envelope (`presets::PresetFile`) is
 # defined in the GUI and derives Serialize/Deserialize around the sidecar
