@@ -11,6 +11,21 @@ updates:
     schedule: {interval: "weekly"}
     open-pull-requests-limit: 8
     labels: ["dependencies"]
+    # egui 0.37 ist eine Neufassung der App-Schnittstelle, kein Minor-Bump:
+    # `eframe::App::update(ctx, frame)` heißt jetzt `ui(&mut Ui, &mut Frame)`,
+    # `TopBottomPanel`/`SidePanel` liegen in `egui::containers::panel`,
+    # `egui::popup` ist entfernt, `Context::screen_rect`/`Context::style`
+    # ebenso, `Id::new` ist durch `Id::unique`/`IdSalt::new` ersetzt und
+    # `WidgetType` durch `Role`. Der Bump EINER Kiste der Familie macht es
+    # zusätzlich schlimmer: eframe 0.37 zieht egui 0.37, egui_kittest 0.36
+    # aber egui 0.36 — zwei egui-Versionen, `eframe::epi::App` passt dann auf
+    # keinen App-Typ. Die Portierung der GUI ist eine eigene Aufgabe; bis
+    # dahin bleibt die Familie auf 0.36.
+    ignore:
+      - dependency-name: eframe
+        versions: [">= 0.37.0, < 0.38.0"]
+      - dependency-name: egui_kittest
+        versions: [">= 0.37.0, < 0.38.0"]
     groups:
       minor-and-patch:
         applies-to: version-updates
