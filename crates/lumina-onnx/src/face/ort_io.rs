@@ -72,7 +72,7 @@ pub(super) fn load_session(
             path: model_path.display().to_string(),
         });
     }
-    let session = ort::session::Session::builder()
+    let session = ort::session::Session::builder(crate::ort_env::environment()?)
         .and_then(|mut builder| builder.commit_from_file(model_path))
         .map_err(|error| OnnxError::InferenceFailed {
             name: manifest.model_name.clone(),

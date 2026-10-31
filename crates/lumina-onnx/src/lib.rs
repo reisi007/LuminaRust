@@ -76,6 +76,8 @@ pub mod sam2;
 
 #[cfg(feature = "onnx-rt")]
 pub mod ort_backend;
+#[cfg(feature = "onnx-rt")]
+pub(crate) mod ort_env;
 
 pub use backend::{StubBackend, SubjectInference};
 pub use denoise::{

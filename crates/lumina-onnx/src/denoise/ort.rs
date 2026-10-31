@@ -112,7 +112,7 @@ impl OrtDenoiser {
                 name: manifest.model_name.clone(),
             });
         }
-        let session = ort::session::Session::builder()
+        let session = ort::session::Session::builder(crate::ort_env::environment()?)
             .and_then(|mut builder| builder.commit_from_file(&path))
             .map_err(|error| OnnxError::InferenceFailed {
                 name: manifest.model_name.clone(),
