@@ -114,7 +114,7 @@ impl OrtBackend {
             });
         }
         let hash_status = verify_model_file(&model_path, &manifest.model_hash)?;
-        let session = ort::session::Session::builder()
+        let session = ort::session::Session::builder(crate::ort_env::environment()?)
             .and_then(|mut builder| builder.commit_from_file(&model_path))
             .map_err(|e| OnnxError::InferenceFailed {
                 name: manifest.model_name.clone(),
