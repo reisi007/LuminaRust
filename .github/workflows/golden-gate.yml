@@ -18,6 +18,11 @@ jobs:
   golden:
     name: GUI goldens (ignored)
     runs-on: ubuntu-latest
+    # CI-GOLDEN-GATE-75: this runner has no wgpu adapter, so the ignored
+    # golden tests fail here by definition — that is the *result*, not a
+    # broken build. The job stays visibly red; only the run does not turn
+    # the repository red every night for an environment it cannot have.
+    continue-on-error: true
     timeout-minutes: 180
     container:
       image: ghcr.io/reisi007/luminarust/lumina-ci:latest
