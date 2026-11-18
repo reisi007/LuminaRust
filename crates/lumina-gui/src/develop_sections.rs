@@ -68,9 +68,9 @@ impl LuminaApp {
         }
         self.solo_mode = enabled;
         if enabled {
-            if let Some(first) = (0..SECTION_COUNT).find(|&i| self.section_open[i]) {
-                for i in 0..SECTION_COUNT {
-                    self.section_open[i] = i == first;
+            if let Some(first) = self.section_open.iter().position(|&open| open) {
+                for (i, open) in self.section_open.iter_mut().enumerate() {
+                    *open = i == first;
                 }
             }
         }
@@ -98,9 +98,7 @@ impl LuminaApp {
             return;
         }
         if open && self.solo_mode {
-            for i in 0..SECTION_COUNT {
-                self.section_open[i] = false;
-            }
+            self.section_open.fill(false);
         }
         if self.section_open[index] != open {
             self.section_open[index] = open;
