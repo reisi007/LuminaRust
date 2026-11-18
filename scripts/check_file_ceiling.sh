@@ -27,4 +27,4 @@ RATCHET_BIN="$RATCHET" python3 "$ROOT/scripts/test_ratchet_file_ceiling.py"
 cd "$ROOT"
 RATCHET_NO_UPDATE_CHECK=1 "$RATCHET" check \
     --config "$FILTERED_CONFIG" --no-config \
-    --rule rust-file-line-ceiling --no-update-check
+    --rule rust-file-line-ceiling --no-update-check --no-ratchet
