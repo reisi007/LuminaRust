@@ -48,6 +48,16 @@ def effective_ratchet_config(config_path: Path) -> dict:
         raise ValueError("Ratchet rule exclusions must be a list of path globs")
     if TARGET_EXCLUDE_GLOB not in excludes:
         rule["exclude"] = [*excludes, TARGET_EXCLUDE_GLOB]
+
+    # Ratchet v0.8.0 invokes `git check-ignore` for file_metrics whenever
+    # respect_gitignore is true (the default). The pinned CI container has no
+    # git binary, so that call fails with "cannot run git: No such file or
+    # directory" and turns the ceiling gate red. Build output is already
+    # excluded by the explicit glob above; keep the population git-free so the
+    # counter, the exception validator and the CI runner see the same files.
+    metrics = rule.get("count", {}).get("file_metrics", {})
+    if isinstance(metrics, dict):
+        metrics["respect_gitignore"] = False
     return config
 
 

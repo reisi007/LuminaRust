@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rust_source_population import POPULATION_GLOBS, effective_ratchet_config
+from rust_source_population import POPULATION_GLOBS, TARGET_EXCLUDE_GLOB, effective_ratchet_config
 
 
 RATCHET = os.environ.get("RATCHET_BIN", "ratchet")
@@ -178,6 +178,16 @@ class CeilingContract(unittest.TestCase):
         self.assertEqual(measured["agent-harness/targeted.rs"], 1002)
         self.assertNotIn("crates/sample/target/generated.rs", measured)
         self.assertNotIn("agent-harness/target/generated.rs", measured)
+
+    def test_effective_config_is_git_free(self) -> None:
+        # The pinned CI container has no git binary and Ratchet v0.8.0 calls
+        # `git check-ignore` when respect_gitignore is true. Build output is
+        # excluded by the explicit glob instead, so the counter stays git-free.
+        effective = effective_ratchet_config(self.root / "ratchet.config.json")
+        rule = effective["rules"][RULE]
+        metrics = rule["count"]["file_metrics"]
+        self.assertFalse(metrics["respect_gitignore"])
+        self.assertIn(TARGET_EXCLUDE_GLOB, rule["exclude"])
 
 
 if __name__ == "__main__":
