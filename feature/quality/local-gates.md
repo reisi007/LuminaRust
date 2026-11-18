@@ -306,9 +306,15 @@ kompiliert hat. Nicht der *Befehl* ist die tragende Vorbedingung — auch
 Bedingungen, die das Skript **selbst erzwingt**; verletzt ist eine davon,
 endet es mit **Exit 2** („cannot conclude"):
 
-1. unter `target/debug/deps` liegt überhaupt dep-info für `lumina-gui`
-   (`scripts/check_test_orphans.sh:76` — der Default-Suchpfad des Skripts,
-   genau das Verzeichnis, in das `cargo test` seine dep-info ablegt);
+1. in mindestens einem der beiden Artefaktpfade liegt dep-info für
+   `lumina-gui` (`scripts/check_test_orphans.sh` -> `DEP_INFO_DIRS`):
+   `target/debug/deps/` (Cargo ≤ 1.99) **oder**
+   `target/debug/build/lumina-gui/<hash>/out/` (Cargo ≥ 1.100). Cargo 1.100
+   legt Test-dep-info im Build-Script-OUT_DIR ab und erzeugt `deps/` für einen
+   reinen Test-Build nicht mehr; das Skript scannt deshalb beide Pfade statt
+   nur den alten zu hardcoden (Beleg: CI-Run `44350138029`, Job „Rust GUI
+   tests": `cargo test` grün mit 963 bestandenen Tests, Gate Exit 2
+   „target/debug/deps does not exist");
 2. die dep-info ist **frisch** — der Frische-Filter verwirft jede dep-info,
    die älter ist als die Quellen, aus denen sie gebaut wurde;
 3. die dep-info nennt mindestens **eine** Datei unter

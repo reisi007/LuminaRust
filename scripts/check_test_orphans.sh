@@ -36,7 +36,11 @@
 #     the gate cannot tell a lean build from a full one for them.
 #   * The gate can only read what was built. It needs artifacts from a
 #     **default-feature build that includes the test target**; without them it
-#     exits 2 instead of guessing.
+#     exits 2 instead of guessing. Both Cargo layouts that emit such artifacts
+#     are scanned: `target/debug/deps/` (<= 1.99) and the build-script OUT_DIR
+#     `target/debug/build/<crate>/<hash>/out/` (>= 1.100). A THIRD layout needs
+#     an explicit `LUMINA_DEP_INFO_DIR` override — the gate never guesses a
+#     path it has not been told about.
 #   * `crates/lumina-gui/src/tests/lensfun_diagnostics.rs` is reached through
 #     `#[cfg(feature = "lensfun")] mod lensfun_diagnostics;`, so a lean
 #     `--no-default-features` build makes it absent from dep-info. The sentinel
@@ -73,7 +77,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CRATE="${1:-lumina-gui}"
 CRATE_DIR="$ROOT/crates/$CRATE"
 TESTS_DIR="$CRATE_DIR/src/tests"
-DEP_INFO_DIR="${LUMINA_DEP_INFO_DIR:-$ROOT/target/debug/deps}"
+# Cargo <= 1.99 writes test dep-info into `target/debug/deps/`; Cargo >= 1.100
+# writes it into the build-script OUT_DIR (`target/debug/build/<crate>/<hash>/out/`)
+# and need not create `deps/` for a test-only build at all. Scan BOTH layouts:
+# measured in CI run 44350138029 ("Rust GUI tests"), cargo test was green with
+# 963 passed tests yet this gate exited 2 because it only knew the old layout.
+# `LUMINA_DEP_INFO_DIR` remains an explicit single-directory override.
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 # rustc turns `lumina-gui` into the unit prefix `lumina_gui-<hash>.d`.
 PREFIX=$(printf '%s' "$CRATE" | tr '-' '_')
 # Sentinels and feature sensitivity: only lumina-gui carries a test module that
@@ -91,6 +101,21 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
+
+# The dep-info search paths, one per line. Both known Cargo layouts are listed
+# so a mixed/leftover `deps/` from an older toolchain cannot mask the new one.
+DEP_INFO_DIRS="$WORK/dep_dirs"
+if [ -n "${LUMINA_DEP_INFO_DIR:-}" ]; then
+    printf '%s\n' "$LUMINA_DEP_INFO_DIR" > "$DEP_INFO_DIRS"
+else
+    printf '%s\n' "$TARGET_DIR/debug/deps" > "$DEP_INFO_DIRS"
+    # The build directory is named after the PACKAGE (`lumina-gui`), while
+    # $PREFIX above is rustc's unit prefix (`lumina_gui`) used for the .d files.
+    for out in "$TARGET_DIR/debug/build/$CRATE"/*/out; do
+        [ -d "$out" ] || continue
+        printf '%s\n' "$out" >> "$DEP_INFO_DIRS"
+    done
+fi
 
 if [ ! -d "$TESTS_DIR" ]; then
     echo "FAIL  $TESTS_DIR does not exist - did the test tree move?" >&2
@@ -248,8 +273,15 @@ if [ -s "$WORK/ignore" ]; then
 fi
 
 # ------------------------------------------------- 2. which artifacts describe the tree
-if [ ! -d "$DEP_INFO_DIR" ]; then
-    echo "cannot conclude: $DEP_INFO_DIR does not exist - run \`cargo test -p $CRATE\` first" >&2
+dep_dirs_present=0
+while IFS= read -r depdir; do
+    [ -d "$depdir" ] && dep_dirs_present=$((dep_dirs_present + 1))
+done < "$DEP_INFO_DIRS"
+if [ "$dep_dirs_present" -eq 0 ]; then
+    echo "cannot conclude: no dep-info directory exists - run \`cargo test -p $CRATE\` first" >&2
+    while IFS= read -r depdir; do
+        echo "  missing: $depdir" >&2
+    done < "$DEP_INFO_DIRS"
     exit 2
 fi
 
@@ -262,26 +294,32 @@ fresh_count=0
 stale_count=0
 : > "$WORK/deps"
 : > "$WORK/stale"
-for dep in "$DEP_INFO_DIR/$PREFIX"-*.d; do
-    [ -e "$dep" ] || continue
-    stale=$(find "$CRATE_DIR" \( -name '*.rs' -o -name 'Cargo.toml' \) \
-                  -not -path '*/target/*' -newer "$dep" -print | head -n 1)
-    if [ -n "$stale" ]; then
-        printf '  skip (stale): %s is older than %s\n' \
-            "${dep#$ROOT/}" "${stale#$ROOT/}" >> "$WORK/stale"
-        stale_count=$((stale_count + 1))
-        continue
-    fi
-    # dep-info is one line of `<unit>.d: dep1 dep2 ...` followed by a
-    # `dep1:` rule per file. Splitting on spaces keeps both halves usable; the
-    # `# env-dep:` and `# env` trailer lines are dropped by the path filter.
-    tr ' ' '\n' < "$dep" >> "$WORK/deps"
-    fresh_count=$((fresh_count + 1))
-done
+while IFS= read -r depdir; do
+    [ -d "$depdir" ] || continue
+    for dep in "$depdir/$PREFIX"-*.d; do
+        [ -e "$dep" ] || continue
+        stale=$(find "$CRATE_DIR" \( -name '*.rs' -o -name 'Cargo.toml' \) \
+                      -not -path '*/target/*' -newer "$dep" -print | head -n 1)
+        if [ -n "$stale" ]; then
+            printf '  skip (stale): %s is older than %s\n' \
+                "${dep#$ROOT/}" "${stale#$ROOT/}" >> "$WORK/stale"
+            stale_count=$((stale_count + 1))
+            continue
+        fi
+        # dep-info is one line of `<unit>.d: dep1 dep2 ...` followed by a
+        # `dep1:` rule per file. Splitting on spaces keeps both halves usable;
+        # the `# env-dep:` and `# env` trailer lines are dropped by the filter.
+        tr ' ' '\n' < "$dep" >> "$WORK/deps"
+        fresh_count=$((fresh_count + 1))
+    done
+done < "$DEP_INFO_DIRS"
 
 if [ "$fresh_count" -eq 0 ]; then
     cat "$WORK/stale" >&2
-    echo "cannot conclude: no current rustc dep-info under ${DEP_INFO_DIR#$ROOT/} for package $CRATE" >&2
+    echo "cannot conclude: no current rustc dep-info for package $CRATE under any of:" >&2
+    while IFS= read -r depdir; do
+        echo "  ${depdir#$ROOT/}" >&2
+    done < "$DEP_INFO_DIRS"
     echo "  run \`cargo test -p $CRATE\` and re-run this gate" >&2
     exit 2
 fi
